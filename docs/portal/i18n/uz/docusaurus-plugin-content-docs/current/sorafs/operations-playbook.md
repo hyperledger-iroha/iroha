@@ -8,189 +8,191 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Operations Playbook
 sidebar_label: Operations Playbook
 description: Incident response guides and chaos drill procedures for SoraFS operators.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.md`. Keep both copies in sync until the Sphinx documentation set is fully migrated.
+::: Eslatma Kanonik manba
+Bu sahifa `docs/source/sorafs_ops_playbook.md` ostida saqlanadigan runbookni aks ettiradi. Sfenks hujjatlari to'plami to'liq ko'chirilgunga qadar ikkala nusxani ham sinxron holda saqlang.
 :::
 
-## Key References
+## Asosiy havolalar
 
-- Observability assets: refer to the Grafana dashboards under `dashboards/grafana/` and Prometheus alert rules in `dashboards/alerts/`.
-- Metric catalog: `docs/source/sorafs_observability_plan.md`.
-- Orchestrator telemetry surfaces: `docs/source/sorafs_orchestrator_plan.md`.
+- Kuzatish mumkin bo'lgan aktivlar: `dashboards/alerts/` da `dashboards/grafana/` va Prometheus ogohlantirish qoidalari ostidagi Grafana asboblar paneliga qarang.
+- Metrik katalog: `docs/source/sorafs_observability_plan.md`.
+- Orkestr telemetriya sirtlari: `docs/source/sorafs_orchestrator_plan.md`.
 
-## Escalation Matrix
+## Eskalatsiya matritsasi
 
-| Priority | Trigger examples | Primary on-call | Backup | Notes |
+| Ustuvorlik | Trigger misollari | Birlamchi chaqiruv | Zaxira | Eslatmalar |
 |----------|------------------|-----------------|--------|-------|
-| P1 | Global gateway outage, PoR failure rate > 5% (15 min), replication backlog doubling every 10 min | Storage SRE | Observability TL | Engage governance council if impact exceeds 30 min. |
-| P2 | Regional gateway latency SLO breach, orchestrator retry spike without SLA impact | Observability TL | Storage SRE | Continue rollout but gate new manifests. |
-| P3 | Non-critical alerts (manifest staleness, capacity 80–90%) | Intake triage | Ops guild | Address within next business day. |
+| P1 | Global shlyuzning uzilishi, PoR ishlamay qolish darajasi > 5% (15 daqiqa), replikatsiya kechikishi har 10 daqiqada ikki barobar ortadi | Saqlash SRE | Kuzatish qobiliyati TL | Ta'sir 30 daqiqadan oshsa, boshqaruv kengashini jalb qiling. |
+| P2 | Mintaqaviy shlyuzning kechikishi SLO buzilishi, SLA ta'sirisiz orkestratorning qayta urinish ko'tarilishi | Kuzatish qobiliyati TL | Saqlash SRE | Chiqarishni davom ettiring, lekin yangi manifestlarni oching. |
+| P3 | Kritik bo'lmagan ogohlantirishlar (aniq eskirganlik, sig'imi 80–90%) | Qabul qilish triaji | Operatsiya gildiyasi | Keyingi ish kuni ichida manzil. |
 
-## Gateway Outage / Degraded Availability
+## Gateway uzilishi / Mavjudligi yomonlashgan
 
-**Detection**
+**Aniqlash**
 
-- Alerts: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
-- Dashboard: `dashboards/grafana/sorafs_gateway_overview.json`.
+- Ogohlantirishlar: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
+- Boshqaruv paneli: `dashboards/grafana/sorafs_gateway_overview.json`.
 
-**Immediate actions**
+**Tezkor harakatlar**
 
-1. Confirm scope (single provider vs fleet) via request-rate panel.
-2. Switch Torii routing to healthy providers (if multi-provider) by toggling `sorafs_gateway_route_weights` in the ops config (`docs/source/sorafs_gateway_self_cert.md`).
-3. If all providers impacted, enable “direct fetch” fallback for CLI/SDK clients (`docs/source/sorafs_node_client_protocol.md`).
-
-**Triage**
-
-- Check stream token utilisation against `sorafs_gateway_stream_token_limit`.
-- Inspect gateway logs for TLS or admission errors.
-- Run `scripts/telemetry/run_schema_diff.sh` to ensure the gateway exported schema matches the expected version.
-
-**Remediation options**
-
-- Restart only the affected gateway process; avoid recycling the entire cluster unless multiple providers are failing.
-- Increase stream token limit by 10–15% temporarily if saturation is confirmed.
-- Re-run self-cert (`scripts/sorafs_gateway_self_cert.sh`) after stabilisation.
-
-**Post-incident**
-
-- File a P1 postmortem using `docs/source/sorafs/postmortem_template.md`.
-- Schedule follow-up chaos drill if remediation relied on manual interventions.
-
-## Proof Failure Spike (PoR / PoTR)
-
-**Detection**
-
-- Alerts: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
-- Dashboard: `dashboards/grafana/sorafs_proof_integrity.json`.
-- Telemetry: `torii_sorafs_proof_stream_events_total` and `sorafs.fetch.error` events with `provider_reason=corrupt_proof`.
-
-**Immediate actions**
-
-1. Freeze new manifest admissions by flagging the manifest registry (`docs/source/sorafs/manifest_pipeline.md`).
-2. Notify Governance to pause incentives for affected providers.
+1. So'rov tezligi paneli orqali qo'llanilish doirasini tasdiqlang (yagona provayder va flot).
+2. Ops konfiguratsiyasida (`docs/source/sorafs_gateway_self_cert.md`) `sorafs_gateway_route_weights` ni almashtirish orqali Torii marshrutini sog'lom provayderlarga (agar ko'p provayder bo'lsa) o'tkazing.
+3. Agar barcha provayderlar ta'sir qilgan bo'lsa, CLI/SDK mijozlari uchun "to'g'ridan-to'g'ri olish" ni yoqing (`docs/source/sorafs_node_client_protocol.md`).
 
 **Triage**
 
-- Check PoR challenge queue depth vs `sorafs_node_replication_backlog_total`.
-- Validate proof verification pipeline (`crates/sorafs_node/src/potr.rs`) for recent deployments.
-- Compare provider firmware versions with the operator registry.
+- `sorafs_gateway_stream_token_limit` ga qarshi oqim tokenidan foydalanishni tekshiring.
+- TLS yoki qabul qilish xatolari uchun shlyuz jurnallarini tekshiring.
+- Eksport qilingan shlyuz sxemasi kutilgan versiyaga mos kelishiga ishonch hosil qilish uchun `scripts/telemetry/run_schema_diff.sh` ni ishga tushiring.
 
-**Remediation options**
+**Tuzatish imkoniyatlari**
 
-- Trigger PoR replays using `sorafs_cli proof stream` with the latest manifest.
-- If proofs consistently fail, remove provider from active set by updating the governance registry and forcing orchestrator scoreboards to refresh.
+- Faqat ta'sirlangan shlyuz jarayonini qayta ishga tushiring; Agar bir nechta provayderlar muvaffaqiyatsiz bo'lmasa, butun klasterni qayta ishlashdan qoching.
+- Agar toʻyinganlik tasdiqlansa, oqim tokeni chegarasini vaqtincha 10–15% ga oshiring.
+- Stabilizatsiyadan so'ng o'z-o'zini sertifikatlashni qayta ishga tushiring (`scripts/sorafs_gateway_self_cert.sh`).
 
-**Post-incident**
+**Hodisadan keyingi**
 
-- Run the PoR chaos drill scenario before the next production deploy.
-- Capture lessons in the postmortem template and update provider qualification checklist.
+- `docs/source/sorafs/postmortem_template.md` yordamida P1 postmortem fayli.
+- Agar tuzatish qo'lda aralashuvga tayangan bo'lsa, keyingi tartibsizlik mashqlarini rejalashtiring.
 
-## Replication Lag / Backlog Growth
+## Ishonchsizlikni isbotlovchi keskin (PoR / PoTR)
 
-**Detection**
+**Aniqlash**
 
-- Alerts: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Import
-  `dashboards/alerts/sorafs_capacity_rules.yml` and run
+- Ogohlantirishlar: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
+- Boshqaruv paneli: `dashboards/grafana/sorafs_proof_integrity.json`.
+- Telemetriya: `torii_sorafs_proof_stream_events_total` va `sorafs.fetch.error` hodisalari `provider_reason=corrupt_proof` bilan.
+
+**Tezkor harakatlar**
+
+1. Manifest registrini (`docs/source/sorafs/manifest_pipeline.md`) belgilab, yangi manifest qabullarini muzlatib qo'ying.
+2. Ta'sir ko'rsatuvchi provayderlarni rag'batlantirishni to'xtatib turish to'g'risida hukumatga xabar bering.
+
+**Triage**
+
+- `sorafs_node_replication_backlog_total` va PoR sinov navbatining chuqurligini tekshiring.
+- Oxirgi tarqatishlar uchun tasdiqlovchi tekshirish quvur liniyasini (`crates/sorafs_node/src/potr.rs`) tasdiqlang.
+- Provayder proshivka versiyalarini operator registrlari bilan solishtiring.
+
+**Tuzatish imkoniyatlari**
+
+- Eng so'nggi manifest bilan `sorafs_cli proof stream` yordamida PoR takrorlarini ishga tushiring.
+- Agar dalillar doimiy ravishda muvaffaqiyatsiz bo'lsa, boshqaruv registrini yangilash va orkestr ko'rsatkichlari jadvalini yangilashga majburlash orqali provayderni faol to'plamdan olib tashlang.
+
+**Hodisadan keyingi**
+
+- Keyingi ishlab chiqarishni joylashtirishdan oldin PoR xaos matkap stsenariysini ishga tushiring.
+- O'limdan keyingi shablonda darslarni yozib oling va provayderning malakasini tekshirish ro'yxatini yangilang.
+
+## Replikatsiya kechikishi / Orqaga o'sish
+
+**Aniqlash**
+
+- Ogohlantirishlar: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Import
+  `dashboards/alerts/sorafs_capacity_rules.yml` va ishga tushiring
   `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
-  before promotion so Alertmanager reflects the documented thresholds.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
-- Metrics: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
+  rag'batlantirishdan oldin, shuning uchun Alertmanager hujjatlashtirilgan chegaralarni aks ettiradi.
+- Boshqaruv paneli: `dashboards/grafana/sorafs_capacity_health.json`.
+- Ko'rsatkichlar: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
 
-**Immediate actions**
+**Tezkor harakatlar**
 
-1. Verify backlog scope (single provider or fleet) and pause non-essential replication tasks.
-2. If backlog is isolated, temporarily reassign new orders to alternate providers via the replication scheduler.
-
-**Triage**
-
-- Inspect orchestrator telemetry for retry bursts that may cascade backlog.
-- Confirm storage targets have sufficient headroom (`sorafs_node_capacity_utilisation_percent`).
-- Review recent configuration changes (chunk profile updates, proof cadence).
-
-**Remediation options**
-
-- Run `sorafs_cli` with the `--rebalance` option to redistribute content.
-- Scale replication workers horizontally for the impacted provider.
-- Trigger manifest refresh to re-align TTL windows.
-
-**Post-incident**
-
-- Schedule a capacity drill focusing on provider saturation failure.
-- Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
-
-## Repair Backlog & SLA Breaches
-
-**Detection**
-
-- Alerts:
-  - `SoraFSRepairBacklogHigh` (queue depth > 50 or oldest queued age > 4h for 10m).
-  - `SoraFSRepairEscalations` (> 3 escalations/hour).
-  - `SoraFSRepairLeaseExpirySpike` (> 5 lease expiries/hour).
-  - `SoraFSRetentionBlockedEvictions` (retention blocked by active repairs in last 15m).
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
-
-**Immediate actions**
-
-1. Identify affected providers (queue depth spikes) and pause new pins/replication orders for them.
-2. Verify repair worker liveness and increase worker concurrency if safe.
+1. Kechikishlar hajmini (yagona provayder yoki flot) tekshiring va muhim bo'lmagan replikatsiya vazifalarini to'xtatib turing.
+2. Agar kechikish izolyatsiya qilingan bo'lsa, replikatsiya rejalashtiruvchisi orqali muqobil provayderlarga yangi buyurtmalarni vaqtincha qayta tayinlang.
 
 **Triage**
 
-- Compare `torii_sorafs_repair_backlog_oldest_age_seconds` against the 4h SLA window.
-- Inspect `torii_sorafs_repair_lease_expired_total{outcome=...}` for crash/clock-skew patterns.
-- Review escalated tickets for repeated manifest/provider pairs and verify evidence bundles.
+- Orkestrator telemetriyasini qayta urinib ko'ring, ular orqada qolishi mumkin bo'lgan portlashlarni tekshiring.
+- Saqlash maqsadlarida etarli joy mavjudligini tasdiqlang (`sorafs_node_capacity_utilisation_percent`).
+- So'nggi konfiguratsiya o'zgarishlarini ko'rib chiqing (parchalangan profil yangilanishlari, isbot kadanslari).
 
-**Remediation options**
+**Tuzatish imkoniyatlari**
 
-- Reassign or restart stalled repair workers; clear orphaned leases via the normal claim flow.
-- Throttle new pins while repairs drain to prevent additional SLA pressure.
-- Escalate to governance if escalations persist and attach the repair audit artefacts.
+- Kontentni qayta tarqatish uchun `sorafs_cli` ni `--rebalance` opsiyasi bilan ishga tushiring.
+- Ta'sir qilingan provayder uchun replikatsiya ishchilarini gorizontal ravishda masshtablash.
+- TTL oynalarini qayta tekislash uchun manifest yangilanishini ishga tushiring.
 
-## Retention / GC Inspection (Read-only)
+**Hodisadan keyingi**
 
-**Detection**
+- Provayderning to'yinganligi nosozligiga e'tibor qaratgan holda sig'imli matkapni rejalashtiring.
+- `docs/source/sorafs_node_client_protocol.md` da replikatsiya SLA hujjatlarini yangilang.
 
-- Alerts: `SoraFSCapacityPressure` or sustained `torii_sorafs_storage_bytes_used` > 90%.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+## Orqaga tushgan va SLA buzilishlarini tuzatish
 
-**Immediate actions**
+**Aniqlash**
 
-1. Run a local retention snapshot:
+- Ogohlantirishlar:
+  - `SoraFSRepairBacklogHigh` (navbat chuqurligi > 50 yoki eng eski navbat yoshi > 10 m uchun 4 soat).
+  - `SoraFSRepairEscalations` (> 3 eskalatsiya/soat).
+  - `SoraFSRepairLeaseExpirySpike` (> 5 ijara muddati/soat).
+  - `SoraFSRetentionBlockedEvictions` (so'nggi 15 m ichida faol ta'mirlash bilan bloklangan saqlash).
+- Boshqaruv paneli: `dashboards/grafana/sorafs_capacity_health.json`.
+
+**Tezkor harakatlar**
+
+1. Ta'sir ko'rsatuvchi provayderlarni aniqlang (navbat chuqurligining keskin o'zgarishi) va ular uchun yangi pinlar/ko'paytirish buyurtmalarini to'xtatib turing.
+2. Ta'mirlash ishchilarining hayotiyligini tekshiring va agar xavfsiz bo'lsa, ishchilarning bir vaqtda ishlashini oshiring.
+
+**Triage**
+
+- `torii_sorafs_repair_backlog_oldest_age_seconds` ni 4 soatlik SLA oynasi bilan solishtiring.
+- `torii_sorafs_repair_lease_expired_total{outcome=...}`-ni yiqilish/soat qiyshayish naqshlari uchun tekshiring.
+- Takroriy manifest/provayder juftligi uchun oshirilgan chiptalarni ko'rib chiqing va dalillar to'plamini tekshiring.
+
+**Tuzatish imkoniyatlari**
+
+- to'xtab qolgan ta'mirlash ishchilarini qayta tayinlash yoki qayta ishga tushirish; oddiy da'vo oqimi orqali toza yetim ijara.
+- Qo'shimcha SLA bosimiga yo'l qo'ymaslik uchun ta'mirlash paytida drenajni yangi pinlarni gaz bilan o'tkazing.
+- Agar kuchayish davom etsa, boshqaruvga o'ting va ta'mirlash auditi artefaktlarini ilova qiling.
+
+## Saqlash / GC tekshiruvi (faqat o'qish uchun)
+
+**Aniqlash**
+
+- Ogohlantirishlar: `SoraFSCapacityPressure` yoki barqaror `torii_sorafs_storage_bytes_used` > 90%.
+- Boshqaruv paneli: `dashboards/grafana/sorafs_capacity_health.json`.
+
+**Tezkor harakatlar**
+
+1. Mahalliy saqlash snapshotini ishga tushiring:
    ```bash
    iroha app sorafs gc inspect --data-dir /var/lib/sorafs
    ```
-2. Capture an expired-only view for triage:
+2. Triaj uchun faqat muddati o‘tgan ko‘rinishni suratga oling:
    ```bash
    iroha app sorafs gc dry-run --data-dir /var/lib/sorafs
    ```
-3. Attach the JSON outputs to the incident ticket for auditability.
+3. Tekshirish imkoniyati uchun JSON chiqishlarini voqea chiptasiga biriktiring.
 
 **Triage**
 
-- Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
-- Use `retention_sources` in the GC JSON output to see which constraint set the effective
-  retention (`deal_end`, `governance_cap`, `pin_policy`, or `unbounded`). Deal and governance caps
-  are supplied via manifest metadata keys `sorafs.retention.deal_end_epoch` and
+- Qaysi manifest hisoboti `retention_epoch=0` (muddati tugamagan) va muddati o'tgan hisobotlarni tasdiqlang.
+- Qaysi cheklov samarali ekanligini bilish uchun GC JSON chiqishida `retention_sources` dan foydalaning.
+  ushlab turish (`deal_end`, `governance_cap`, `pin_policy` yoki `unbounded`). Bitim va boshqaruv chegaralari
+  `sorafs.retention.deal_end_epoch` manifest metama'lumotlar kalitlari orqali ta'minlanadi va
   `sorafs.retention.governance_cap_epoch`.
-- If `dry-run` reports expired manifests but capacity remains pinned, verify no
-  active repairs or retention policy overrides block eviction.
-  Capacity-triggered sweeps evict expired manifests by least-recently-used order with
-  `manifest_id` tie-breakers.
+- Agar `dry-run` hisobot muddati oʻtgan boʻlsa, lekin sigʻim mahkamlangan boʻlsa, yoʻqligini tekshiring.
+  faol ta'mirlash yoki saqlash siyosati blokdan chiqarishni bekor qiladi.
+  Imkoniyatlar bilan ishga tushirilgan tozalashlar muddati o'tgan manifestlarni eng kam ishlatilgan buyurtma bo'yicha chiqarib tashlaydi.
+  `manifest_id` bog'lovchilar.
 
-**Remediation options**
+**Tuzatish imkoniyatlari**
 
-- The GC CLI is read-only. Do not delete manifests or chunks manually in production.
-- Escalate to governance for retention policy adjustments or capacity expansion
-  when expired data accumulates without automated eviction.
+- GC CLI faqat o'qish uchun mo'ljallangan. Ishlab chiqarishda manifestlar yoki bo'laklarni qo'lda o'chirmang.
+- Saqlash siyosatiga tuzatishlar kiritish yoki imkoniyatlarni kengaytirish uchun boshqaruvga o'tish
+  muddati o'tgan ma'lumotlar avtomatik ravishda ko'chirishsiz to'planganda.
 
 ## Chaos Drill Cadence
 
-- **Quarterly**: Combined gateway outage + orchestrator retry storm simulation.
-- **Biannual**: PoR/PoTR failure injection across two providers with recovery.
-- **Monthly spot-check**: Replication lag scenario using staging manifests.
-- Track drills in the shared runbook log (`ops/drill-log.md`) via:
+- **Har chorakda**: shlyuzning birlashtirilgan uzilishi + orkestrning qayta urinish bo'ron simulyatsiyasi.
+- **Yillik ikki marta**: tiklangan ikkita provayderda PoR/PoTR nosozliklari.
+- **Oylik spot-check**: sahnalashtirish manifestlari yordamida replikatsiya kechikish stsenariysi.
+- Umumiy runbook jurnalida (`ops/drill-log.md`) mashqlarni kuzatib boring:
 
   ```bash
   scripts/telemetry/log_sorafs_drill.sh \
@@ -203,15 +205,15 @@ This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.
     --link "docs/source/sorafs/postmortem_template.md"
   ```
 
-- Validate the log before commits with:
+- Jurnalni amalga oshirishdan oldin tasdiqlang:
 
   ```bash
   scripts/telemetry/validate_drill_log.sh
   ```
 
-- Use `--status scheduled` for upcoming drills, `pass`/`fail` for completed runs, and `follow-up` when action items remain open.
-- Override the destination with `--log` for dry-runs or automated verification; without it the script continues to update `ops/drill-log.md`.
+- Kelgusi mashqlar uchun `--status scheduled`, tugallangan mashqlar uchun `pass`/`fail` va amallar ochiq qolganda `follow-up` dan foydalaning.
+- Quruq yugurish yoki avtomatlashtirilgan tekshirish uchun `--log` bilan belgilangan manzilni bekor qiling; busiz skript `ops/drill-log.md` yangilanishini davom ettiradi.
 
-## Postmortem Template
+## O'limdan keyingi shablon
 
-Use `docs/source/sorafs/postmortem_template.md` for every P1/P2 incident and for chaos drill retrospectives. The template covers timeline, impact quantification, contributing factors, corrective actions, and follow-up verification tasks.
+Har bir P1/P2 hodisasi va xaos matkap retrospektivlari uchun `docs/source/sorafs/postmortem_template.md` dan foydalaning. Shablon vaqt jadvalini, ta'sir miqdorini aniqlash, hissa qo'shadigan omillar, tuzatuvchi harakatlar va keyingi tekshirish vazifalarini o'z ichiga oladi.

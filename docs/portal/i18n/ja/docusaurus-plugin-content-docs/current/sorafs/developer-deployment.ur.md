@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-deployment.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-deployment
-title: SoraFS deployment notes
-sidebar_label: Deployment notes
-description: CI سے production تک SoraFS pipeline promote کرنے کی checklist۔
+ID: 開発者デプロイメント
+タイトル: SoraFS 導入ノート
+Sidebar_label: 導入メモ
+説明: CI の製造プロセス SoraFS パイプラインのプロモート チェックリスト
 ---
 
-:::note مستند ماخذ
+:::note メモ
 :::
 
-# Deployment notes
+# 導入メモ
 
-SoraFS packaging workflow determinism مضبوط کرتا ہے، اس لئے CI سے production پر جانا بنیادی طور پر operational guardrails مانگتا ہے۔ جب آپ ٹولنگ کو حقیقی gateways اور storage providers پر rollout کریں تو یہ checklist استعمال کریں۔
+SoraFS パッケージング ワークフローの決定性 مضبوط کرتا ہے، اس لئے CI سے 生産 پر جانا بنیادی طور پر 運用上のガードレール مانگتا ہے۔ゲートウェイ ストレージ プロバイダー ロールアウト チェックリスト チェックリスト
 
-## Pre-flight
+## 飛行前
 
-- **Registry alignment** — تصدیق کریں کہ chunker profiles اور manifests ایک ہی `namespace.name@semver` tuple کو refer کرتے ہیں (`docs/source/sorafs/chunker_registry.md`).
-- **Admission policy** — `manifest submit` کے لئے درکار signed provider adverts اور alias proofs کا جائزہ لیں (`docs/source/sorafs/provider_admission_policy.md`).
-- **Pin registry runbook** — recovery scenarios (alias rotation, replication failures) کے لئے `docs/source/sorafs/runbooks/pin_registry_ops.md` قریب رکھیں۔
+- **レジストリの調整** — チャンカー プロファイルのマニフェスト `namespace.name@semver` タプルは、(`docs/source/sorafs/chunker_registry.md`) を参照します。
+- **アドミッション ポリシー** — `manifest submit` 署名付きプロバイダー広告、エイリアス証明、 (`docs/source/sorafs/provider_admission_policy.md`)。
+- **ピン レジストリ Runbook** — 回復シナリオ (エイリアスのローテーション、レプリケーションの失敗)
 
-## Environment configuration
+## 環境設定
 
-- Gateways کو proof streaming endpoint (`POST /v1/sorafs/proof/stream`) enable کرنا ہوگا تاکہ CLI telemetry summaries emit کر سکے۔
-- `sorafs_alias_cache` policy کو `iroha_config` defaults یا CLI helper (`sorafs_cli manifest submit --alias-*`) کے ذریعے configure کریں۔
-- Stream tokens (یا Torii credentials) کو ایک محفوظ secret manager سے فراہم کریں۔
-- Telemetry exporters (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) enable کریں اور انہیں اپنے Prometheus/OTel stack میں ship کریں۔
+- ゲートウェイのプルーフ ストリーミング エンドポイント (`POST /v1/sorafs/proof/stream`) により、CLI テレメトリ サマリの出力が有効になります。
+- `sorafs_alias_cache` ポリシー `iroha_config` のデフォルト CLI ヘルパー (`sorafs_cli manifest submit --alias-*`) の構成
+- ストリーム トークン (Torii 資格情報) 秘密マネージャーの秘密マネージャー
+- テレメトリ エクスポータ (`torii_sorafs_proof_stream_*`、`torii_sorafs_chunk_range_*`) は、Prometheus/OTel スタックの出荷を有効にします。
 
-## Rollout strategy
+## ロールアウト戦略
 
-1. **Blue/green manifests**
-   - ہر rollout کے لئے responses archive کرنے کے لئے `manifest submit --summary-out` استعمال کریں۔
-   - `torii_sorafs_gateway_refusals_total` پر نظر رکھیں تاکہ capability mismatches جلدی پکڑ لیں۔
-2. **Proof validation**
-   - `sorafs_cli proof stream` میں failures کو deployment blockers سمجھیں؛ latency spikes اکثر provider throttling یا misconfigured tiers کی نشاندہی کرتے ہیں۔
-   - Post-pin smoke test میں `proof verify` شامل کریں تاکہ یقینی ہو کہ providers پر hosted CAR اب بھی manifest digest سے match کرتا ہے۔
-3. **Telemetry dashboards**
-   - `docs/examples/sorafs_proof_streaming_dashboard.json` کو Grafana میں import کریں۔
-   - Pin registry health (`docs/source/sorafs/runbooks/pin_registry_ops.md`) اور chunk range stats کے لئے اضافی panels لگائیں۔
-4. **Multi-source enablement**
-   - Orchestrator آن کرتے وقت `docs/source/sorafs/runbooks/multi_source_rollout.md` کے staged rollout steps فالو کریں، اور audits کے لئے scoreboard/telemetry artifacts archive کریں۔
+1. **青/緑のマニフェスト**
+   - ロールアウト 回答 アーカイブ 回答 `manifest submit --summary-out` 回答 回答 アーカイブ
+   - `torii_sorafs_gateway_refusals_total` 機能が不一致です 機能が一致しません。
+2. **証拠の検証**
+   - `sorafs_cli proof stream` 失敗と展開ブロッカーの発生レイテンシのスパイク、プロバイダーのスロットリング、層の構成ミス、および問題。
+   - ポストピンスモークテスト `proof verify` 検査結果 検査結果 プロバイダー ホストされた CAR 検査結果 マニフェスト ダイジェスト 検査結果 マッチ検査結果 ہے۔
+3. **テレメトリ ダッシュボード**
+   - `docs/examples/sorafs_proof_streaming_dashboard.json` Grafana インポートする
+   - ピン レジストリの健全性 (`docs/source/sorafs/runbooks/pin_registry_ops.md`) チャンク範囲の統計情報 パネルの情報
+4. **マルチソースの有効化**
+   - オーケストレーターの評価 `docs/source/sorafs/runbooks/multi_source_rollout.md` 段階的なロールアウト ステップの評価 監査の評価 スコアボード/テレメトリ アーティファクトのアーカイブの評価
 
-## Incident handling
+## インシデント処理
 
-- `docs/source/sorafs/runbooks/` میں escalation paths فالو کریں:
-  - `sorafs_gateway_operator_playbook.md` gateway outages اور stream-token exhaustion کے لئے۔
-  - `dispute_revocation_runbook.md` جب replication disputes ہوں۔
-  - `sorafs_node_ops.md` node-level maintenance کے لئے۔
-  - `multi_source_rollout.md` orchestrator overrides، peer blacklisting، اور staged rollouts کے لئے۔
-- Proof failures اور latency anomalies کو GovernanceLog میں موجود PoR tracker APIs کے ذریعے record کریں تاکہ governance provider performance assess کر سکے۔
+- `docs/source/sorafs/runbooks/` エスカレーション パス:
+  - `sorafs_gateway_operator_playbook.md` ゲートウェイの停止とストリーム トークンの枯渇
+  - `dispute_revocation_runbook.md` レプリケーションに関する紛争 ہوں۔
+  - `sorafs_node_ops.md` ノードレベルのメンテナンス
+  - `multi_source_rollout.md` オーケストレーターはピアのブラックリストをオーバーライドし、段階的ロールアウトをオーバーライドします。
+- プルーフ障害、レイテンシ異常、ガバナンスログ、PoR トラッカー API、記録、ガバナンスプロバイダーのパフォーマンス評価、およびガバナンスプロバイダーのパフォーマンス評価
 
-## Next steps
+## 次のステップ
 
-- Multi-source fetch orchestrator (SF-6b) آنے پر orchestrator automation (`sorafs_car::multi_fetch`) integrate کریں۔
-- PDP/PoTR upgrades کو SF-13/SF-14 کے تحت track کریں؛ جب یہ proofs stabilize ہوں تو CLI اور docs deadlines اور tier selection surface کریں گے۔
+- マルチソース フェッチ オーケストレーター (SF-6b) とオーケストレーター自動化 (`sorafs_car::multi_fetch`) の統合
+- PDP/PoTR アップグレード SF-13/SF-14 の追跡プルーフの安定化 テスト CLI ドキュメントの期限 ティア選択サーフェス テスト
 
-ان deployment notes کو quickstart اور CI recipes کے ساتھ ملانے سے ٹیمیں local experiments سے production-grade SoraFS pipelines تک repeatable اور observable process کے ساتھ جا سکتی ہیں۔
+導入ノート クイックスタート CI レシピ ローカル実験 プロダクショングレード SoraFS パイプライン 再現性のある観察可能なプロセスやあ

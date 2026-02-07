@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: نقل أصل بين الحسابات
-description: سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
-source: examples/transfer/transfer.ko
+слаг: /norito/examples/transfer-asset
+Название: نقل أصل بين الحسابات
+описание: Создан для создания SDK-файла, созданного с помощью SDK.
+источник: example/transfer/transfer.ko
 ---
 
-سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
+Используйте его для создания SDK-файла.
 
 ## جولة دفتر الأستاذ
 
-- موّل Alice بالأصل المستهدف مسبقا (على سبيل المثال عبر المقتطف `register and mint` أو تدفقات البدء السريع للـ SDK).
-- نفّذ نقطة الدخول `do_transfer` لنقل 10 وحدات من Alice إلى Bob مع استيفاء إذن `AssetTransferRole`.
-- استعلم عن الأرصدة (`FindAccountAssets`, `iroha_cli ledger assets list`) أو اشترك في أحداث خط الأنابيب لملاحظة نتيجة النقل.
+- В исполнении Элис Бэйлз Миссисипи (в роли Стоуна в фильме "`register and mint` أو") Используйте SDK).
+- В 10-м году от Алисы Боба появился `do_transfer`. `AssetTransferRole`.
+- استعلم عن الأرصدة (`FindAccountAssets`, `iroha_cli ledger assets list`) и في أحداث خط الأنابيب Будьте добры.
 
-## أدلة SDK ذات صلة
+## Использование SDK
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [Загрузка в Rust SDK](/sdks/rust)
+- [Просмотр Python SDK](/sdks/python)
+- [Загрузка JavaScript SDK](/sdks/javascript)
 
 [نزّل مصدر Kotodama](/norito-snippets/transfer-asset.ko)
 

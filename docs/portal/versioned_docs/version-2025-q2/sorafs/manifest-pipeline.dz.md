@@ -7,53 +7,54 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e77b792e19fbfa8e1efeddd042adbe68a48287a582a1be76aa518af7830774e2
 source_last_modified: "2026-01-05T09:28:11.996979+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Chunking → Manifest Pipeline
+# SoraFS ཡན་ལག་བ→ → ངོ་མཚར་ཅན་གྱི་འཕྲུལ་ཆས།
 
-This companion to the quickstart traces the end-to-end pipeline that turns raw
-bytes into Norito manifests suitable for the SoraFS Pin Registry. The content is
-adapted from [`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
-consult that document for the canonical specification and changelog.
+མགྱོགས་འགོ་བཙུགས་པའི་ཆ་རོགས་འདི་ མཇུག་ལས་མཇུག་ཚུན་གྱི་ ཆུ་དུང་འདི་ རྦོབ་རིལ་འགྱོཝ་ཨིན།
+བཱའིཊིསི་གིས་ I18NT00000000000 གིས་ SoraFS Pin ཐོ་བཀོད་ལུ་འོས་འབབ་ཡོད་པའི་ མངོན་གསལ་འབདཝ་ཨིན། ནང་དོན་ནི།
+[`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md) ལས་བདེ་སྒྲིག་བྱས་པ་དང་།
+ཀེ་ནོ་ནིག་གསལ་བཀོད་དང་ བསྒྱུར་བཅོས་ལོག་གི་དོན་ལུ་ ཡིག་ཆ་དེ་ལུ་ གྲོས་བསྟུན་འབད།
 
-## 1. Chunk deterministically
+## 1. དུམ་གྲ་ཅིག།
 
-SoraFS uses the SF-1 (`sorafs.sf1@1.0.0`) profile: a FastCDC-inspired rolling
-hash with a 64 KiB minimum chunk size, 256 KiB target, 512 KiB maximum, and a
-`0x0000ffff` break mask. The profile is registered in
+SoraFS གིས་ ཨེསི་ཨེཕ་-༡ (I18NI0000009X) གསལ་སྡུད་: ཕཱསཊི་སི་ཌི་སི་-སྐུལ་མ་འབད་ཡོད་པའི་བཤུད་སྒྲིལ་ཅིག།
+64KiB ཉུང་མཐའི་ཆ་ཤས་ཚད་དང་ 256KiB དམིགས་ཚད་ 512KiB མཐོ་ཤོས་དེ་ལས་ ཧེ།
+I18NI000000010X བརྡབ་པའི་གདོང་ཁེབས། གསལ་སྡུད་འདི་ ༢༠༠༨ ལུ་ ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན།
 `sorafs_manifest::chunker_registry`.
 
-### Rust helpers
+### རསཊ་རོགས་སྐྱོར་པ།
 
-- `sorafs_car::CarBuildPlan::single_file` – Emits chunk offsets, lengths, and
-  BLAKE3 digests while preparing CAR metadata.
-- `sorafs_car::ChunkStore` – Streams payloads, persists chunk metadata, and
-  derives the 64 KiB / 4 KiB Proof-of-Retrievability (PoR) sampling tree.
-- `sorafs_chunker::chunk_bytes_with_digests` – Library helper behind both CLIs.
+- I18NI000000012X – ཆ་རྐྱེན་ཨོཕ་སེཊི་དང་རིང་ཚད་ དེ་ལས་ འཕེན་ཚད།
+  BLAKE3 གིས་ CAR མེ་ཊ་ཌེ་ཊ་གྲ་སྒྲིག་འབད་བའི་སྐབས་ བཞུ་བཅུགཔ་ཨིན།
+- I18NI000000013X – འབབ་ཁུངས་ཚུ་ བརྐོ་སྟེ་ འཕྲོ་མཐུད་དེ་ ཆ་ཤས་མེ་ཊ་ཌེ་ཊ་ དང་།
+  64KiB / 4KiB བདེན་དཔང་གི་བདེན་ཁུངས་ (PoR) དཔེ་ཚད་ཤིང་འདི་ བཏོནམ་ཨིན།
+- I18NI000000014X – སི་ཨེལ་ཨའི་གཉིས་ཆ་རའི་རྒྱབ་ཁར་དཔེ་མཛོད་གྲོགས་རམ་པ།
 
-### CLI tooling
+### CLI ལག་ཆས།
 
 ```bash
 cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
   > chunk-plan.json
 ```
 
-The JSON contains the ordered offsets, lengths, and chunk digests. Persist the
-plan when constructing manifests or orchestrator fetch specifications.
+JSON ནང་ལུ་ གོ་རིམ་སྒྲིག་ཡོད་པའི་ཨོཕ་སེཊི་དང་ རིང་ཚད་ཚུ་ དེ་ལས་ ཆ་ཤས་ཚུ་ བཞུ་བཅུགཔ་ཨིན། བརྩེགས་པ།
+འཆར་གཞི་བརྩམས་པའི་སྐབས་ གསལ་སྟོན་ཡང་ན་ སྙན་ཆའི་སྡེ་ཚན་ ཕེཆ་ཁྱད་ཆོས།
 
-### PoR witnesses
+### པོར དཔང་པ།
 
-`ChunkStore` exposes `--por-proof=<chunk>:<segment>:<leaf>` and
-`--por-sample=<count>` so auditors can request deterministic witness sets. Pair
-those flags with `--por-proof-out` or `--por-sample-out` to record the JSON.
+`ChunkStore` `--por-proof=<chunk>:<segment>:<leaf>` དང་།
+I18NI000000017X རྩིས་ཞིབ་པ་ཚུ་གིས་ ཐག་བཅད་མི་ དཔང་པོ་ཆ་ཚན་ཚུ་ ཞུ་བ་འབད་ཚུགས། ཆ
+JSON ཐོ་བཀོད་འབད་ནིའི་དོན་ལུ་ `--por-proof-out` ཡང་ན་ `--por-sample-out` ཡོད་པའི་དར་ཆ་དེ་ཚུ།
 
-## 2. Wrap a manifest
+## 2. མངོན་པར་བསྒྲུབ།
 
-`ManifestBuilder` combines chunk metadata with governance attachments:
+I18NI000000020X གིས་ ཅནཀ་མེ་ཊ་ཌེ་ཊ་འདི་ གཞུང་སྐྱོང་མཉམ་སྦྲགས་ཚུ་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་འབདཝ་ཨིན།
 
-- Root CID (dag-cbor) and CAR commitments.
-- Alias proofs and provider capability claims.
-- Council signatures and optional metadata (e.g., build IDs).
+- རྩ་བ་སི་ཨའི་ཌི་ (dag-cbor) དང་ CAR ཁས་བླངས་ཚུ།
+- མིང་གཞན་གྱི་བདེན་ཁུངས་དང་ བྱིན་མི་ལྕོགས་གྲུབ་ཀྱི་ཐོབ་བརྗོད་ཚུ།
+- ཚོགས་སྡེ་མིང་རྟགས་དང་ གདམ་ཁ་ཅན་གྱི་ མེ་ཊ་ཌེ་ཊ་ (དཔེར་ན་ ID བཟོ་བསྐྲུན་)།
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -64,57 +65,57 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --json-out=payload.report.json
 ```
 
-Important outputs:
+གལ་ཆེའི་ཐོན་འབྲས་ཚུ།
 
-- `payload.manifest` – Norito-encoded manifest bytes.
-- `payload.report.json` – Human/automation readable summary, including
-  `chunk_fetch_specs`, `payload_digest_hex`, CAR digests, and alias metadata.
-- `payload.manifest_signatures.json` – Envelope containing manifest BLAKE3
-  digest, chunk-plan SHA3 digest, and sorted Ed25519 signatures.
+- I18NI000000021X – Norito-encoded གསལ་སྟོན་བཱའིཊི།
+- I18NI0000002X – མི་དང་རང་བཞིན་གྱི་ལྷག་ཐུབ་པའི་བཅུད་བསྡུས་དང་།
+  I18NI000000023X, I18NI000000024X, CAR བཞུ་བཅུག་ནི་དང་ མིང་གཞན་མེ་ཊ་ཌེ་ཊ་ཚུ་ཨིན།
+- `payload.manifest_signatures.json` – BLAKE3 ཡོད་པའི་ གསལ་སྡུད་ཡོད་པའི་ཡིག་ཆ།
+  ཌའི་ཇེསཊ་ ཅནཀ་-པེན་ ཨེསི་ཨེཆ་ཨེ་༣ ཟས་བཅུད་ དེ་ལས་ དབྱེ་སེལ་འབད་ཡོདཔ་ ཨེ་ཌི་༢༥༥༡༩ མཚན་རྟགས་ཚུ།
 
-Use `--manifest-signatures-in` to verify envelopes supplied by external
-signatories before writing them back out, and `--chunker-profile-id` or
-`--chunker-profile=<handle>` to lock the registry selection.
+ཕྱིའི་ཐོག་ལས་བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ཡིག་ཤུབས་ཚུ་བདེན་དཔྱད་འབད་ནི་ལུ་ `--manifest-signatures-in` ལག་ལེན་འཐབ།
+མིང་རྟགས་བཀོད་མི་ཚུ་ ལོག་བྲིས་མ་ཚར་བའི་ཧེ་མ་ `--chunker-profile-id` ཡང་ཅིན།
+`--chunker-profile=<handle>` ཐོ་བཀོད་སེལ་འཐུ་འདི་བསྡམ་བཞག་ནིའི་དོན་ལུ་ཨིན།
 
-## 3. Publish and pin
+## 3. དཔར་སྐྲུན་དང་པིན།
 
-1. **Governance submission** – Provide the manifest digest and signature
-   envelope to the council so the pin can be admitted. External auditors should
-   store the chunk-plan SHA3 digest alongside the manifest digest.
-2. **Pin payloads** – Upload the CAR archive (and optional CAR index) referenced
-   in the manifest to the Pin Registry. Ensure the manifest and CAR share the
-   same root CID.
-3. **Record telemetry** – Persist the JSON report, PoR witnesses, and any fetch
-   metrics in release artifacts. These records feed operator dashboards and
-   help reproduce issues without downloading large payloads.
+1. **གཞུང་སྐྱོང་ཕུལ་བ** – གསལ་སྟོན་བཞུ་དང་མིང་རྟགས་བྱིན།
+   ཚོགས་སྡེ་ལུ་ ཡིག་ཤུབས་འདི་ བཙུགས་ཚུགསཔ་ལས་ པིན་འདི་ བཙུགས་ཚུགས། ཕྱིའི་རྩིས་ཞིབ་པ་ཚུ་དགོ།
+   ཆ་ཤས་-པེཔ་ SHA3 བཞུ་བཅོས་འདི་ གསལ་སྟོན་གྱི་ བཞུ་ཁུ་དང་གཅིག་ཁར་ གསོག་འཇོག་འབད།
+2. **པིན་པེ་ལོཌསི་** – སི་ཨར་ཡིག་མཛོད་འདི་ སྐྱེལ་བཙུགས་འབད་ (དང་གདམ་ཁ་ཅན་གྱི་སི་ཨར་ཟུར་ཐོ་) གཞི་བསྟུན་འབད་ཡོདཔ།
+   པིན་ཐོ་བཀོད་ལུ་ མངོན་རྟགས་ནང་། གསལ་སྟོན་དང་ CAR མཉམ་རུབ་འབད་དགོ།
+   རྩ་བའི་སི་ཨའི་ཌི་གཅིག།
+3. **དྲན་ཐོ་བརྡ་འཕྲིན་** – JSON སྙན་ཞུ་དང་ PoR དཔང་པོ་ དེ་ལས་ ཕིཆ་གང་རུང་ཅིག་
+   ཅ་རྙིང་ཚུ་གསར་བཏོན་འབད་ནི་ནང་མེདཔ། དྲན་ཐོ་འདི་ཚུ་གིས་ ཕིཌི་བཀོལ་སྤྱོད་པའི་ ཌེཤ་བོརཌི་དང་།
+   གླ་ཆ་སྦོམ་ཚུ་ཕབ་ལེན་མ་འབད་བར་ གནད་དོན་ཚུ་ བསྐྱར་བཟོ་འབད་ནི་ལུ་ གྲོགས་རམ་འབད།
 
-## 4. Multi-provider fetch simulation
+## 4. སྣ་མང་མཁོ་སྤྲོད་པ་ཕེཆ་གི་ཚད་གཞི།
 
-`cargo run -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
-  --provider=alpha=providers/alpha.bin --provider=beta=providers/beta.bin#4@3 \
-  --output=payload.bin --json-out=fetch_report.json`
+`cargo ran -p sorafs_car --bin sorafs_ftch ----plan=payload.report.json \
+  --བྱིན་མི་=ཨཱལ་ཕ་=མཁོ་སྤྲོད་པ་ཚུ་/ཨཱལ་ཕ། --བྱིན་མི་=བེ་ཊ་=བྱིན་མི་/བེ་ཊ་བིན་#༤@༣ \
+  --ཨའུཊི་པུཊི་=པེ་ལོཌ་.བིན་ --json-out=ftch_report.json`
 
-- `#<concurrency>` increases per-provider parallelism (`#4` above).
-- `@<weight>` tunes scheduling bias; defaults to 1.
-- `--max-peers=<n>` caps the number of providers scheduled for a run when
-  discovery yields more candidates than desired.
-- `--expect-payload-digest` and `--expect-payload-len` guard against silent
-  corruption.
-- `--provider-advert=name=advert.to` verifies provider capabilities before
-  using them in the simulation.
-- `--retry-budget=<n>` overrides the per-chunk retry count (default: 3) so CI
-  can surface regressions faster when testing failure scenarios.
+- I18NI000000029X གིས་ མཁོ་སྤྲོད་འབད་མི་རེ་ལུ་ མཉམ་འགྲོས་ (གོང་ལས་ `#4`) ཡར་སེང་འབདཝ་ཨིན།
+- `@<weight>` སྒྲིག་བཀོད་ཕྱོགས་ལྷུང་།; སྔོན་སྒྲིག་ཚུ་ ༡ ལུ།
+- I18NI000000032X གིས་ ག་དེམ་ཅིག་སྦེ་ གཡོག་བཀོལ་ནིའི་དོན་ལུ་ དུས་ཚོད་བཀོད་ཡོད་མི་ བྱིན་མི་ཚུ་གི་གྱངས་ཁ་འདི་ མཐོ་ཚད་ཨིན།
+  གསར་འཚོལ་གྱིས་ དགོ་འདོད་ལས་ལྷག་སྟེ་ འདེམས་ངོ་མངམ་ཐོབ་ཨིན།
+- `--expect-payload-digest` དང་ I18NI000000034X སྒྲ་མེད་ལུ་འགོག་པ།
+  ངན་ལྷད་ .
+- I18NI000000035X གིས་ ཧེ་མ་ལས་ བྱིན་ཡོད་པའི་ལྕོགས་གྲུབ་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  དེ་ཚུ་ བརྡ་སྟོན་ནང་ལག་ལེན་འཐབ་ཨིན།
+- `--retry-budget=<n>`
+  བརྟག་དཔྱད་འབད་བའི་སྐབས་ ཁ་ཐོག་གི་འགྱུར་ལྡོག་ཚུ་ མགྱོགས་དྲགས་སྦེ་འབད་ཚུགས།
 
-`fetch_report.json` surfaces aggregated metrics (`chunk_retry_total`,
-`provider_failure_rate`, etc.) suitable for CI assertions and observability.
+I18NI000000037X ཁ་ཐོག་བསྡོམས་ཡོད་པའི་མེ་ཊིགསི་ (`chunk_retry_total`,
+`provider_failure_rate` ལ་སོགས་པ་ཚུ་ CI བདེན་བཤད་དང་ བལྟ་བརྟོག་འབད་ཚུགས་པའི་དོན་ལུ་འོས་འབབ་ཡོདཔ་ཨིན།
 
-## 5. Registry updates & governance
+## 5. ཐོ་འགོད་དུས་མཐུན་དང་གཞུང་སྐྱོང་།
 
-When proposing new chunker profiles:
+ཅར་ཀར་གསལ་སྡུད་གསརཔ་ཚུ་ གྲོས་འཆར་བཀོད་པའི་སྐབས།
 
-1. Author the descriptor in `sorafs_manifest::chunker_registry_data`.
-2. Update `docs/source/sorafs/chunker_registry.md` and related charters.
-3. Regenerate fixtures (`export_vectors`) and capture signed manifests.
-4. Submit the charter compliance report with governance signatures.
+1. རྩོམ་པ་པོ། `sorafs_manifest::chunker_registry_data` ནང་།
+2. I18NI00000041 དང་འབྲེལ་ཡོད།
+༣ བསྐྱར་བཟོ་འབད་ (`export_vectors`) དང་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ མངོན་གསལ་ཚུ་ བཟུང་དགོ།
+༤ གཞུང་སྐྱོང་མཚན་རྟགས་དང་བཅས་ བཅའ་ཁྲིམས་དང་འཁྲིལ་བའི་སྙན་ཞུ་ཕུལ་ནི།
 
-Automation should prefer canonical handles (`namespace.name@semver`) and fall
+རང་བཞིན་གྱིས་ ཀེ་ནོ་ནིག་བཤེད་བཟུང་ཚུ་ (I18NI0000043X) དང་ མར་ཕབ་ཚུ་ གདམ་ཁ་རྐྱབ་དགོ།

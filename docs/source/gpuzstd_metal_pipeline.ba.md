@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# GPU Zstd (Металл) торба .
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+Был документта һүрәтләнә детерминистик GPU торбаһы ҡулланылған Metal ярҙамсыһы .
+zstd ҡыҫыу өсөн. Ул проектлау һәм тормошҡа ашырыу өсөн ҡулланма өсөн
+`gpuzstd_metal` ярҙамсыһы, стандарт zstd рамкалар һәм детерминистик байт сығара.
+бирелгән эҙмә-эҙлеклелек ағымы өсөн. Сығыштар процессоры менән roubrip тейеш декодерҙар; байт-с өсөн-
+байт паритеты менән процессор компрессоры кәрәкмәй, сөнки эҙмә-эҙлеклелек генерацияһы
+айырыла.
 
-## Goals
+## Маҡсаттар
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- Стандарт zstd рамкаларын сығарыу, улар процессор zstd менән бер үк рәүештә асыҡлана; байт паритеты
+  процессор компрессоры менән талап ителмәй.
+- Детерминистик сығыштар аша аппарат, драйверҙар, һәм еп планлаштырыу.
+- Асыҡ сиктәрҙе тикшерергә һәм буфер ғүмерҙәре күҙаллана.
 
-## Current implementation note
+## Ағымдағы тормошҡа ашырыу тураһында иҫкәрмә
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- Тап табыу һәм эҙмә-эҙлеклелек генерациялау GPU өҫтөндә эшләй.
+- рамка йыйыу һәм энтропия кодлау (Хаффман/ФСЭ) әлеге ваҡытта хост өҫтөндә эшләй
+  йәшниктәге кодерҙы ҡулланып; GPU Хаффман/ФСЭ ядролары паритет-һынау, әммә түгел
+  әммә тулы кадр юлына проводной.
+- Decode ҡулланып, йәшниктә рамка декодер менән процессор zstd fallback өсөн ярҙамһыҙ рамкалар;
+  тулы GPU блок декод ҡала бара.
 
-## Encoding pipeline (high level)
+## Кодлау торбаһы (юғары кимәлдә)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. Инпут стадиялау
+   - Ҡоролма буферына индереүҙе күсерергә.
+   - Фиксация ҙурлыҡтағы өлөштәргә бүленеш (эҙмә-эҙлеклелек өсөн генерациялау өсөн) һәм блоктар ( өсөн
+     zstd рамка йыйыу).
+2. Табыу һәм эҙмә-эҙлеклелек эмиссияһы тап килгән
+   - GPU ядролары һәр өлөш һәм эҙмә-эҙлеклелектәрҙе сығарыу (һүҙмән оҙонлоғо, матч
+     оҙонлоғо, офсет).
+   - Эҙмә-эҙлеклелек тәртибе тотороҡло һәм детерминистик.
+3. Йәғни әҙерләү
+   - Эҙмә-эҙлеклелектәргә һылтанма яһаған литералдар йыйыу.
+   - туранан-тура гистограммалар төҙөү һәм туранан-тура блок режимын һайларға (сей, RLE, йәки
+     Хаффман) детерминистик.
+4. Хаффман өҫтәлдәре (һүҙмәндәр)
+   - Гистограмманан код генерациялау.
+   - Процессорға тап килгән детерминистик бәйләүсе канон таблицалары төҙөү
+     zstd сығыш.
+5. ФСЭ таблицалары (LL/ML/OF)
+   - Йышлыҡтарҙы нормалләштереү.
+   - ФСЭ расшифровка/кодлау таблицаларын детерминистик яҡтан төҙөү.
+6. Бит ағым яҙыусыһы
+   - Пакет биттар аҙ-андиан (ЛСБ-беренсе).
+   - Байт сиктәре буйынса ҡыйыш; прокладка нулдәр менән генә.
+   - Битлек ҡиммәттәре иғлан ителгән бит киңлектәренә һәм һыйҙырышлылыҡтарҙы тикшерергә.
+7. Блок һәм кадр йыйыу
+   - Блок башлыҡтары (тип, ҙурлыҡ, һуңғы блок флагы).
+   - Ҡыҫылған блоктарға литералдар һәм эҙмә-эҙлеклелекте сериялаштырыу.
+   - Стандарт zstd кадр башлыҡтары һәм факультатив тикшерелгән суммалар.
 
-## Decoding pipeline (high level)
+## Декодлау торбаһы (юғары кимәлдә)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. Кадр анализы
+   - Тылсымлы байттарҙы, тәҙрә параметрҙарын һәм рамканың баш ҡырҙарын раҫлау.
+2. Бит ағым уҡыусы
+   - ЛСБ-беренсе бит эҙмә-эҙлеклелеген ҡәтғи сикләүҙәр менән уҡығыҙ.
+3. Йәғни декод
+   - Һүҙмә-һүҙ блоктарҙы (сей, RLE, йәки Хаффман) туранан-тура буферға бүлергә.
+4. Эҙмә-эҙлеклелек декод
+   - LL/ML/OF ҡиммәттәрен FSE таблицаларын ҡулланып Decode.
+   - тайпылышлы тәҙрә ярҙамында матчтарҙы реконструкциялау.
+5. Сығыш һәм тикшерелгән сумма
+   - Сығыш буферына реконструкцияланған байттар яҙығыҙ.
+   - Өҫтәлгәндә опциональ тикшерелгән суммаларҙы тикшерергә.
 
-## Buffer lifetimes and ownership
+## Буфер ғүмерҙәре һәм милекселек-Инт-буфер: хост -> ҡоролма, уҡыу өсөн генә.
+- Эҙмә-эҙлекле буфер: ҡоролма, матч-табыу юлы менән етештерелгән һәм энтропия ярҙамында ҡулланылған
+  кодлау; бер ниндәй ҙә кросс-блок ҡабаттан ҡулланыу.
+-Литераль буфер: ҡоролма, һәр блок өсөн етештерелгән һәм блоктан һуң сығарылған
+  эмиссия.
+- Сығыш буферы: ҡоролма, һуңғы кадр байттарын тота, тик хост уларҙы күсерә
+  тышта.
+- тырнаҡ буферҙары: ядролар буйынса ҡабаттан ҡулланылған, әммә һәр ваҡыт детерминистик яҡтан артыҡ яҙылған.
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## Ядро яуаплылыҡтары
 
-## Kernel responsibilities
+- Ядроларҙы табыу: таптар табыу һәм эҙмә-эҙлеклелек сығарыу (LL/ML/OF + литералдар).
+- Хаффман ядролар төҙөү: код оҙонлоғон һәм канон таблицаларын сығарыу.
+- ФСЭ төҙөү ядролары: LL/ML/OF таблицалары һәм дәүләт машиналарын төҙөгөҙ.
+- Блок ядроларҙы кодлай: литералдар һәм эҙмә-эҙлеклелекте бит ағымға сериялаштырығыҙ.
+- Ядроларҙы блоклауҙы блоклау: битлектәрҙе анализлау һәм литералдар/эҙмә-эҙлеклелектәрҙе реконструкциялау.
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## Детерминизм һәм паритет сикләүҙәре
 
-## Determinism and parity constraints
-
-- Canonical table builds must use the same ordering and tie-breaking as CPU
+- Канон таблицаһы төҙөүҙәре шул уҡ заказ һәм tie-breaking ҡулланырға тейеш, процессор .
   zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+- Бер ниндәй ҙә атомдар йәки кәметергә, улар теләһә ниндәй сығыш байт өсөн еп планлаштырыу бәйле.
+- Бит ағым ҡаплауы аҙ-анждат, ЛСБ-беренсе; байт тура килтереп прокладкалар менән нулдәр.
+- Бөтә сиктәр тикшерелгән асыҡ; дөрөҫ булмаған индереүҙәр детерминистик яҡтан уңышһыҙлыҡҡа осрай.
 
-## Validation
+## Валидация
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+- Процессор алтын векторҙары өсөн бит ағым яҙыусы/уҡыусы.
+- Корпус паритет һынауҙары сағыштырыу GPU һәм процессор сығыштары.
+- Незарять ҡаплау өсөн дөрөҫ булмаған рамкалар һәм сик шарттары.
 
-## Benchmarking
+## Бенчмаркинг
 
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+`cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` йүгерергә
+сағыштырырға процессор vs GPU кодлау латентлыҡ буйынса файҙалы йөк ҙурлыҡтары. Һынау хужаларҙа һикерә
+Металлға һәләтле ҡоролмаһыҙ; Ҡоролма деталдәре менән бер рәттән сығышты тотоу
+ҡасан көйләү GPU йөкләү сиктәрен өҙөп. Norito 2012 йылда шул уҡ өҙөклөктө үтәй.
+`gpu_zstd::encode_all`, шуға күрә туранан-тура шылтыратыусылар эвристик ҡапҡаға тап килә.

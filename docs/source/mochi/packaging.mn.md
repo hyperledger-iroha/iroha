@@ -7,71 +7,72 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c7ab0877a6f43402d6ec13a44c4a7c2b68e4a49e6103bb50d7469d9e71aaa953
 source_last_modified: "2025-12-29T18:16:35.984945+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Packaging Guide
+# MOCHI баглаа боодлын гарын авлага
 
-This guide explains how to build the MOCHI desktop supervisor bundle, inspect
-the generated artefacts, and tune the runtime overrides that ship with the
-bundle. It complements the quickstart by focusing on reproducible packaging
-and CI usage.
+Энэхүү гарын авлагад MOCHI ширээний супервайзерын багцыг хэрхэн бүтээх, шалгах талаар тайлбарласан болно
+үүсгэсэн олдворууд болон хамт илгээгдэх ажиллах хугацааны хүчингүй болгохыг тааруулах
+багц. Энэ нь дахин үйлдвэрлэх боломжтой сав баглаа боодол дээр анхаарлаа төвлөрүүлснээр хурдан эхлэлийг нөхөж өгдөг
+болон CI хэрэглээ.
 
-## Prerequisites
+## Урьдчилсан нөхцөл
 
-- Rust toolchain (edition 2024 / Rust 1.82+) with workspace dependencies
-  already built.
-- `irohad`, `iroha_cli`, and `kagami` compiled for the desired target. The
-  bundler reuses binaries from `target/<profile>/`.
-- Sufficient disk space for the bundle output under `target/` or a custom
-  destination.
+- Ажлын талбараас хамааралтай Rust хэрэгслийн гинж (2024 оны хэвлэл / Rust 1.82+)
+  аль хэдийн баригдсан.
+- `irohad`, `iroha_cli`, болон `kagami`-ийг хүссэн зорилтод зориулан эмхэтгэсэн. The
+  bundler `target/<profile>/`-ийн хоёртын файлуудыг дахин ашигладаг.
+- `target/` эсвэл захиалгат багцын гаралтад хангалттай дискний зай
+  очих газар.
 
-Build the dependencies once before running the bundler:
+Баглагчийг ажиллуулахын өмнө нэг удаа хамаарлыг бий болго:
 
 ```bash
 cargo build -p irohad -p iroha_cli -p iroha_kagami
 ```
 
-## Building the bundle
+## Багцыг барьж байна
 
-Invoke the dedicated `xtask` command from the repository root:
+Repository root-ээс тусгай зориулалтын `xtask` командыг дуудна уу:
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default this produces a release bundle under `target/mochi-bundle/` with a
-filename derived from the host OS and architecture (for example,
-`mochi-macos-aarch64-release.tar.gz`). Use the following flags to customise
-the build:
+Анхдагчаар энэ нь `target/mochi-bundle/`-ийн дагуу хувилбарын багцыг a
+хост үйлдлийн систем болон архитектураас авсан файлын нэр (жишээлбэл,
+`mochi-macos-aarch64-release.tar.gz`). Өөрчлөхийн тулд дараах тугуудыг ашиглана уу
+бүтээх:
 
-- `--profile <name>` – choose a Cargo profile (`release`, `debug`, or a
-  custom profile).
-- `--no-archive` – keep the expanded directory without creating a `.tar.gz`
-  archive (useful for local testing).
-- `--out <path>` – write bundles to a custom directory instead of
+- `--profile <name>` – ачааны профайлыг сонгоно уу (`release`, `debug`, эсвэл
+  захиалгат профайл).
+- `--no-archive` – өргөтгөсөн лавлахыг `.tar.gz` үүсгэхгүйгээр хадгал
+  архив (орон нутгийн туршилт хийхэд хэрэгтэй).
+- `--out <path>` – оронд нь захиалгат лавлах руу багц бичнэ үү
   `target/mochi-bundle/`.
-- `--kagami <path>` – supply a prebuilt `kagami` executable to include in the
-  archive. When omitted, the bundler reuses (or builds) the binary from the
-  selected profile.
-- `--matrix <path>` – append bundle metadata to a JSON matrix file (created if
-  missing) so CI pipelines can record every host/profile artefact produced in a
-  run. Entries include the bundle directory, manifest path and SHA-256, optional
-  archive location, and the latest smoke-test result.
-- `--smoke` – execute the packaged `mochi --help` as a lightweight smoke gate
-  after bundling; failures surface missing dependencies before publishing an
-  artefact.
-- `--stage <path>` – copy the finished bundle (and archive when produced) into
-  a staging directory so multi-platform builds can deposit artefacts in one
-  location without extra scripting.
+- `--kagami <path>` – программд оруулахын тулд урьдчилан бүтээгдсэн `kagami` гүйцэтгэгчийг нийлүүлнэ.
+  архив. Орхигдуулсан тохиолдолд багцлагч нь хоёртын файлыг дахин ашигладаг (эсвэл бүтээдэг).
+  сонгосон профайл.
+- `--matrix <path>` – багцын мета өгөгдлийг JSON матриц файлд хавсаргах (хэрэв үүсгэсэн бол).
+  байхгүй) тиймээс CI дамжуулах хоолой нь a-д үйлдвэрлэсэн хост/профайлын олдвор бүрийг бүртгэх боломжтой
+  гүйх. Бүртгэлд багцын лавлах, манифестын зам болон SHA-256 орно
+  архивын байршил, хамгийн сүүлийн үеийн утааны шинжилгээний хариу.
+- `--smoke` – савласан `mochi --help`-ийг хөнгөн утааны хаалга болгон ажиллуулна
+  багцалсаны дараа; алдаа нь нийтлэхээс өмнө дутагдаж буй хамаарлыг илрүүлдэг
+  олдвор.
+- `--stage <path>` – бэлэн багцыг (мөн үйлдвэрлэсэн үед архивлах) файл руу хуулна.
+  олон платформ бүтээгдхүүн нь олдворуудыг нэг дор хадгалах боломжтой үе шатлалын лавлах
+  нэмэлт скриптгүйгээр байршил.
 
-The command copies `mochi-ui-egui`, `kagami`, `LICENSE`, the sample
-configuration, and `mochi/BUNDLE_README.md` into the bundle. A deterministic
-`manifest.json` is generated alongside the binaries so CI jobs can track file
-hashes and sizes.
+Тушаал нь `mochi-ui-egui`, `kagami`, `LICENSE`, дээжийг хуулдаг.
+тохиргоо, `mochi/BUNDLE_README.md` багцад оруулна. Детерминист
+`manifest.json` нь хоёртын файлуудтай зэрэгцэн үүсгэгддэг тул CI ажлууд нь файлыг хянах боломжтой.
+хэш болон хэмжээ.
 
-## Bundle layout and verification
+## Багцын зохион байгуулалт, баталгаажуулалт
 
-An expanded bundle follows the layout documented in `BUNDLE_README.md`:
+Өргөтгөсөн багц нь `BUNDLE_README.md`-д бичигдсэн схемийн дагуу байна:
 
 ```
 bin/mochi
@@ -82,56 +83,54 @@ manifest.json
 LICENSE
 ```
 
-The `manifest.json` file lists every artefact with its SHA-256 hash. Verify
-the bundle after copying it to another system:
+`manifest.json` файл нь олдвор бүрийг SHA-256 хэштэй нь жагсаасан. Баталгаажуулах
+өөр систем рүү хуулсаны дараа багцыг:
 
 ```bash
 jq -r '.files[] | "\(.sha256)  \(.path)"' manifest.json | sha256sum --check
 ```
 
-CI pipelines can cache the expanded directory, sign the archive, or publish
-the manifest alongside release notes. The manifest includes the generator
-profile, target triple, and creation timestamp to aid provenance tracking.
+CI дамжуулах хоолой нь өргөтгөсөн лавлахыг кэшлэх, архивт гарын үсэг зурах эсвэл нийтлэх боломжтой
+хувилбарын тэмдэглэлийн хамт манифест. Манифест нь генераторыг агуулдаг
+гарал үүслийг хянахад туслахын тулд профайл, зорилтот гурвалсан болон бүтээх цагийн тэмдэг.
 
-## Runtime overrides
+## Ажиллах хугацааг хүчингүй болгосон
 
-MOCHI discovers helper binaries and runtime locations through CLI flags or
-environment variables:
-
-- `--data-root` / `MOCHI_DATA_ROOT` – override the workspace used for peer
-  configs, storage, and logs.
-- `--profile` – switch between topology presets (`single-peer`,
+MOCHI CLI тугуудаар дамжуулан туслах хоёртын файлууд болон ажиллах цагийн байршлуудыг илрүүлдэг
+орчны хувьсагч:- `--data-root` / `MOCHI_DATA_ROOT` – үе тэнгийнхэнд ашигладаг ажлын талбарыг хүчингүй болгох
+  тохиргоо, хадгалалт, бүртгэл.
+- `--profile` – топологийн урьдчилсан тохируулгууд хооронд шилжих (`single-peer`,
   `four-peer-bft`).
-- `--torii-start`, `--p2p-start` – change the base ports used when allocating
-  services.
-- `--irohad` / `MOCHI_IROHAD` – point at a specific `irohad` binary.
-- `--kagami` / `MOCHI_KAGAMI` – override the bundled `kagami`.
-- `--iroha-cli` / `MOCHI_IROHA_CLI` – override the optional CLI helper.
-- `--restart-mode <never|on-failure>` – disable automatic restarts or force the
-  exponential backoff policy.
-- `--restart-max <attempts>` – override the number of restart attempts when
-  running in `on-failure` mode.
-- `--restart-backoff-ms <millis>` – set the base backoff for automatic restarts.
-- `MOCHI_CONFIG` – provide a custom `config/local.toml` path.
+- `--torii-start`, `--p2p-start` – хуваарилахдаа ашигласан үндсэн портуудыг өөрчлөх
+  үйлчилгээ.
+- `--irohad` / `MOCHI_IROHAD` – тодорхой `irohad` хоёртын тоонд цэг тавина.
+- `--kagami` / `MOCHI_KAGAMI` – багцалсан `kagami`-г хүчингүй болгох.
+- `--iroha-cli` / `MOCHI_IROHA_CLI` – нэмэлт CLI туслахыг хүчингүй болгох.
+- `--restart-mode <never|on-failure>` – автоматаар дахин эхлүүлэхийг идэвхгүй болгох эсвэл хүчээр асаах
+  экспоненциал ухрах бодлого.
+- `--restart-max <attempts>` – дахин эхлүүлэх оролдлогын тоог хүчингүй болгох
+  `on-failure` горимд ажиллаж байна.
+- `--restart-backoff-ms <millis>` – автоматаар дахин эхлүүлэх үндсэн буцаалтыг тохируулна.
+- `MOCHI_CONFIG` – захиалгат `config/local.toml` замыг өгнө.
 
-The CLI help (`mochi --help`) prints the full flag list. Environment overrides
-take effect on launch and can be combined with the Settings dialog inside the
+CLI тусламж (`mochi --help`) нь тугны жагсаалтыг бүрэн хэвлэдэг. Байгаль орчин давамгайлдаг
+эхлүүлэх үед хүчин төгөлдөр болох ба доторх Тохиргоо харилцах цонхтой нэгтгэж болно
 UI.
 
-## CI usage hints
+## CI ашиглалтын зөвлөмжүүд
 
-- Run `cargo xtask mochi-bundle --no-archive` to generate a directory that can
-  be zipped with platform-specific tooling (ZIP for Windows, tarballs for
+- боломжтой лавлах үүсгэхийн тулд `cargo xtask mochi-bundle --no-archive`-г ажиллуул
+  платформд зориулсан хэрэглүүр (ZIP for Windows, tarballs
   Unix).
-- Capture bundle metadata with `cargo xtask mochi-bundle --matrix dist/matrix.json`
-  so release jobs can publish a single JSON index listing every host/profile
-  artefact produced in the pipeline.
-- Use `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (or similar) on each
-  build agent to upload the bundle and archive into a shared directory that the
-  publishing job can consume.
-- Publish both the archive and `manifest.json` so operators can verify bundle
-  integrity.
-- Store the generated directory as a build artefact to seed smoke tests that
-  exercise the supervisor with deterministically packaged binaries.
-- Record bundle hashes in release notes or in the `status.md` log for future
-  provenance checks.
+- `cargo xtask mochi-bundle --matrix dist/matrix.json` ашиглан багцын мета өгөгдлийг авах
+  Тиймээс суллах ажлууд нь хост/профайл бүрийг жагсаасан нэг JSON индексийг нийтлэх боломжтой
+  дамжуулах хоолойд үйлдвэрлэсэн олдвор .
+- Тус бүр дээр `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (эсвэл ижил төстэй) ашиглана уу
+  багцыг байршуулж, архивын дундын лавлах руу оруулах агент бүтээх
+  хэвлэн нийтлэх ажил идэж болно.
+- Архив болон `manifest.json` хоёуланг нь нийтлүүлснээр операторууд багцыг шалгах боломжтой болно.
+  бүрэн бүтэн байдал.
+- Үүсгэсэн лавлахыг үрийн утааны шинжилгээнд зориулж бүтээх олдвор болгон хадгална
+  хянагчийг тодорхой багцалсан хоёртын файлуудаар дасгалжуулах.
+- Багцын хэшийг хувилбарын тэмдэглэл эсвэл ирээдүйн `status.md` бүртгэлд тэмдэглэ.
+  гарал үүслийн шалгалт.

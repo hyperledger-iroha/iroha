@@ -4,10 +4,12 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-profile-authoring.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-profile-authoring
+מזהה: chunker-profile-authoring
 title: دليل تأليف ملفات chunker في SoraFS
 sidebar_label: دليل تأليف chunker
 description: قائمة تحقق لاقتراح ملفات chunker جديدة و fixtures في SoraFS.
@@ -34,7 +36,7 @@ description: قائمة تحقق لاقتراح ملفات chunker جديدة و
 - الإعلان عن معلمات CDC حتمية وإعدادات multihash متطابقة عبر المعماريات؛
 - شحن fixtures قابلة لإعادة التشغيل (JSON Rust/Go/TS + corpora fuzz + شهود PoR) يمكن لـ SDKs downstream
   التحقق منها دون tooling مخصص؛
-- تضمين بيانات جاهزة للحوكمة (namespace, name, semver) مع إرشادات الهجرة ونوافذ التوافق؛ و
+- تضمين بيانات جاهزة للحوكمة (namespace, name, semver) مع إرشادات الهجرة ونوافذ التوافق؛ ו
 - اجتياز حزمة diff الحتمية قبل مراجعة المجلس.
 
 اتبع قائمة التحقق أدناه لإعداد مقترح يستوفي هذه القواعد.
@@ -66,8 +68,8 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 
 ## البيانات المطلوبة
 
-| الحقل | الوصف | مثال (`sorafs.sf1@1.0.0`) |
-|-------|-------|---------------------------|
+| الحقل | אוטו | מאול (`sorafs.sf1@1.0.0`) |
+|-------|-------|--------------------------------|
 | `namespace` | تجميع منطقي للملفات ذات الصلة. | `sorafs` |
 | `name` | تسمية مقروءة للبشر. | `sf1` |
 | `semver` | سلسلة نسخة دلالية لمجموعة المعلمات. | `1.0.0` |
@@ -82,9 +84,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 | `chunk_multihash.code` | كود multihash لِـ digests لكل chunk. | `0x1f` (BLAKE3-256) |
 | `chunk_multihash.digest` | Digest لحزمة fixtures المعتمدة. | `13fa...c482` |
 | `fixtures_root` | مسار نسبي يحتوي على fixtures المعاد توليدها. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
-| `por_seed` | Seed لعيّنات PoR الحتمية (`splitmix64`). | `0xfeedbeefcafebabe` (مثال) |
-
-يجب أن تظهر البيانات الوصفية في وثيقة المقترح وداخل fixtures المولدة حتى يتمكن السجل
+| `por_seed` | Seed لعيّنات PoR الحتمية (`splitmix64`). | `0xfeedbeefcafebabe` (מדי) |يجب أن تظهر البيانات الوصفية في وثيقة المقترح وداخل fixtures المولدة حتى يتمكن السجل
 و tooling الـ CLI وأتمتة الحوكمة من تأكيد القيم دون مطابقة يدوية. عند الشك، شغّل
 CLIs الخاصة بـ chunk-store و manifest مع `--json-out=-` لبث البيانات المحسوبة إلى
 ملاحظات المراجعة.
@@ -120,7 +120,7 @@ CLIs الخاصة بـ chunk-store و manifest مع `--json-out=-` لبث الب
 5. **Dry run للـ CI** — شغّل `ci/check_sorafs_fixtures.sh` محلياً؛ يجب أن ينجح
    مع fixtures الجديدة و `manifest_signatures.json` الحالي.
 6. **تأكيد cross-runtime** — تأكد من أن ربط Go/TS يستهلك JSON المُعاد توليده ويُخرج
-   حدود chunk و digests متطابقة.
+   נתח ועיכול.
 
 وثّق الأوامر والـ digests الناتجة في المقترح كي يستطيع Tooling WG إعادة تشغيلها دون تخمين.
 
@@ -174,11 +174,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
    ظرف الملف المخزن مع fixtures.
 4. **نشر السجل.** يؤدي الدمج إلى تحديث السجل والوثائق والـ fixtures. يظل CLI الافتراضي
    على الملف السابق حتى تعلن الحوكمة أن الهجرة جاهزة.
-   وأبلغ المشغلين عبر migration ledger.
+   ספר חשבונות העברה.
 
-## نصائح التأليف
-
-- فضّل حدوداً من قوى اثنين زوجية لتقليل سلوك chunking في الحالات الطرفية.
+## نصائح التأليف- فضّل حدوداً من قوى اثنين زوجية لتقليل سلوك chunking في الحالات الطرفية.
 - تجنب تغيير كود multihash دون تنسيق مع مستهلكي manifest و gateway؛ وأضف ملاحظة توافق عند ذلك.
 - اجعل seeds لجدول gear قابلة للقراءة لكنها فريدة عالمياً لتسهيل التدقيق.
 - خزّن أي artefacts قياس أداء (مثل مقارنات throughput) ضمن

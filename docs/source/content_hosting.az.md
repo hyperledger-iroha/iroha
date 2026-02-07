@@ -7,60 +7,59 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4c0c7f98dbd9f49c573302f0b5cbe2e7a663d7fe35a1a9eea8da4f24c6f9bc8b
 source_last_modified: "2026-01-05T18:22:23.402176+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 % Content Hosting Lane
-% Iroha Core
+% Iroha Əsas
 
-# Content Hosting Lane
+# Məzmun Hosting Lane
 
-The content lane stores small static bundles (tar archives) on-chain and serves
-individual files directly from Torii.
+Məzmun zolağı kiçik statik paketləri (tar arxivləri) zəncirdə saxlayır və xidmət göstərir
+fərdi fayllar birbaşa Torii-dən.
 
-- **Publish**: submit `PublishContentBundle` with a tar archive, optional expiry
-  height, and an optional manifest. The bundle ID is the blake2b hash of the
-  tarball. Tar entries must be regular files; names are normalised UTF-8 paths.
-  Size/path/file-count caps come from `content` config (`max_bundle_bytes`,
+- **Nəşr et**: tar arxivi ilə `PublishContentBundle` təqdim edin, isteğe bağlı istifadə müddəti
+  hündürlük və isteğe bağlı manifest. Paket ID-si blake2b hash-dir
+  tarbol. Tar girişləri adi fayllar olmalıdır; adlar normallaşdırılmış UTF-8 yollarıdır.
+  Ölçü/yol/fayl sayı qapaqları `content` konfiqurasiyasından gəlir (`max_bundle_bytes`,
   `max_files`, `max_path_len`, `max_retention_blocks`, `chunk_size_bytes`).
-  Manifests include the Norito-index hash, dataspace/lane, cache policy
-  (`max_age_seconds`, `immutable`), auth mode (`public` / `role:<role>` /
-  `sponsor:<uaid>`), retention policy placeholder, and MIME overrides.
-- **Deduping**: tar payloads are chunked (default 64 KiB) and stored once per
-  hash with reference counts; retiring a bundle decrements and prunes chunks.
-- **Serve**: Torii exposes `GET /v1/content/{bundle}/{path}`. Responses stream
-  directly from the chunk store with `ETag` = file hash, `Accept-Ranges: bytes`,
-  Range support, and Cache-Control derived from the manifest. Reads honour the
-  manifest auth mode: role-gated and sponsor-gated responses require canonical
-  request headers (`X-Iroha-Account`, `X-Iroha-Signature`) for the signed
-  account; missing/expired bundles return 404.
-- **CLI**: `iroha content publish --bundle <path.tar>` (or `--root <dir>`) now
-  auto-generates a manifest, emits optional `--manifest-out/--bundle-out`, and
-  accepts `--auth`, `--cache-max-age-secs`, `--dataspace`, `--lane`, `--immutable`,
-  and `--expires-at-height` overrides. `iroha content pack --root <dir>` builds
-  a deterministic tarball + manifest without submitting anything.
-- **Config**: cache/auth knobs live under `content.*` in `iroha_config`
+  Manifestlərə Norito indeks hash, dataspace/zolaq, keş siyasəti daxildir
+  (`max_age_seconds`, `immutable`), auth rejimi (`public` / `role:<role>` /
+  `sponsor:<uaid>`), saxlama siyasəti yertutanı və MIME ləğv edir.
+- **Deduping**: tar yükləri parçalanır (defolt 64KiB) və hər dəfə bir dəfə saxlanılır
+  istinad sayıları ilə hash; bir paketin təqaüdə çıxması parçaları azaldır və budaqlanır.
+- **Xidmət et**: Torii `GET /v1/content/{bundle}/{path}`-i ifşa edir. Cavab axını
+  birbaşa yığın mağazasından `ETag` = fayl hash, `Accept-Ranges: bytes`,
+  Range dəstəyi və manifestdən əldə edilən Cache-Control. Şərəf oxuyur
+  manifest auth rejimi: rol qapılı və sponsor qapalı cavablar kanonik tələb edir
+  imzalanmış üçün sorğu başlıqları (`X-Iroha-Account`, `X-Iroha-Signature`)
+  hesab; əskik/müddəti bitmiş paketlər 404 qaytarır.
+- **CLI**: indi `iroha content publish --bundle <path.tar>` (və ya `--root <dir>`)
+  avtomatik olaraq manifest yaradır, isteğe bağlı `--manifest-out/--bundle-out` yayır və
+  qəbul edir `--auth`, `--cache-max-age-secs`, `--dataspace`, `--lane`, `--immutable`,
+  və `--expires-at-height` ləğv edir. `iroha content pack --root <dir>` qurur
+  deterministik tarball + heç bir şey təqdim etmədən manifest.
+- **Konfiqurasiya**: keş/auth düymələri `iroha_config`-də `content.*` altında yaşayır
   (`default_cache_max_age_secs`, `max_cache_max_age_secs`, `immutable_bundles`,
-  `default_auth_mode`) and are enforced at publish time.
-- **SLO + limits**: `content.max_requests_per_second` / `request_burst` and
-  `content.max_egress_bytes_per_second` / `egress_burst_bytes` cap read-side
-  throughput; Torii enforces both before serving bytes and exports
-  `torii_content_requests_total`, `torii_content_request_duration_seconds`, and
-  `torii_content_response_bytes_total` metrics with outcome labels. Latency
-  targets live under `content.target_p50_latency_ms` /
+  `default_auth_mode`) və dərc zamanı tətbiq edilir.
+- **SLO + limitlər**: `content.max_requests_per_second` / `request_burst` və
+  `content.max_egress_bytes_per_second` / `egress_burst_bytes` qapaq oxu tərəfi
+  ötürmə qabiliyyəti; Torii həm baytlara, həm də ixraclara xidmət etməzdən əvvəl tətbiq edir
+  `torii_content_requests_total`, `torii_content_request_duration_seconds` və
+  Nəticə etiketləri ilə `torii_content_response_bytes_total` göstəriciləri. Gecikmə
+  hədəflər `content.target_p50_latency_ms` altında yaşayır /
   `content.target_p99_latency_ms` / `content.target_availability_bps`.
-- **Abuse controls**: Rate buckets are keyed by UAID/API token/remote IP, and an
-  optional PoW guard (`content.pow_difficulty_bits`, `content.pow_header`) can
-  be required before reads. DA stripe layout defaults come from
-  `content.stripe_layout` and are echoed in receipts/manifest hashes.
-- **Receipts & DA evidence**: successful responses attach
-  `sora-content-receipt` (base64 Norito-framed `ContentDaReceipt` bytes) carrying
-  `bundle_id`, `path`, `file_hash`, `served_bytes`, the served byte range,
-  `chunk_root` / `stripe_layout`, optional PDP commitment, and a timestamp so
-  clients can pin what was fetched without re-reading the body.
+- **Sui-istifadəyə nəzarət**: Qiymət kovaları UAID/API işarəsi/uzaq IP və
+  isteğe bağlı PoW qoruyucusu (`content.pow_difficulty_bits`, `content.pow_header`) bilər
+  oxumadan əvvəl tələb olunur. DA zolaq düzümü defoltları buradan gəlir
+  `content.stripe_layout` və qəbzlərdə/manifest heşlərində əks olunur.
+- ** Qəbzlər və DA sübutları**: uğurlu cavablar əlavə olunur
+  `sora-content-receipt` (base64 Norito çərçivəli `ContentDaReceipt` bayt) daşıyan
+  `bundle_id`, `path`, `file_hash`, `served_bytes`, xidmət edilən bayt diapazonu,
+  `chunk_root` / `stripe_layout`, isteğe bağlı PDP öhdəliyi və buna görə vaxt damğası
+  müştərilər cəsədi yenidən oxumadan gətirilənləri pin edə bilərlər.
 
-Key references:
-
-- Data model: `crates/iroha_data_model/src/content.rs`
-- Execution: `crates/iroha_core/src/smartcontracts/isi/content.rs`
-- Torii handler: `crates/iroha_torii/src/content.rs`
-- CLI helper: `crates/iroha_cli/src/content.rs`
+Əsas istinadlar:- Məlumat modeli: `crates/iroha_data_model/src/content.rs`
+- İcra: `crates/iroha_core/src/smartcontracts/isi/content.rs`
+- Torii işləyicisi: `crates/iroha_torii/src/content.rs`
+- CLI köməkçisi: `crates/iroha_cli/src/content.rs`

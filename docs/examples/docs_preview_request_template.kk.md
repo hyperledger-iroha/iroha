@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 59948351a84b27efe0d9741545d8f93c7525fa5f545605a0942d9f2f574f6f06
 source_last_modified: "2025-12-29T18:16:35.072823+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Access Request (Template)
+# Docs порталын алдын ала қарау рұқсат сұрауы (үлгі)
 
-Use this template when capturing reviewer details before granting access to the
-public preview environment. Copy the markdown into an issue or request form and
-replace the placeholder values.
+Рұқсат беру алдында шолушы мәліметтерін түсіру кезінде осы үлгіні пайдаланыңыз
+қоғамдық алдын ала қарау ортасы. Белгілеуді мәселе немесе сұрау пішініне көшіріңіз және
+толтырғыш мәндерін ауыстырыңыз.
 
 ```markdown
 ## Request Summary
@@ -44,9 +45,9 @@ replace the placeholder values.
 
 ---
 
-## Community-Specific Questions (W2+)
-- Motivation for preview access (one sentence):
-- Primary review focus (SDK, governance, Norito, SoraFS, other):
-- Weekly time commitment & availability window (UTC):
-- Localization or accessibility needs (yes/no + details):
-- Community Code of Conduct + preview acceptable-use addendum acknowledged (yes/no):
+## Қауымдастыққа қатысты сұрақтар (W2+)
+- Алдын ала қарауға қол жеткізу үшін мотивация (бір сөйлем):
+- Негізгі шолу фокусы (SDK, басқару, Norito, SoraFS, басқалар):
+- Апталық уақыт міндеттемесі және қолжетімділік терезесі (UTC):
+- Локализация немесе қол жетімділік қажеттіліктері (иә/жоқ + мәліметтер):
+- Қауымдастықтың мінез-құлық кодексі + алдын ала қарау рұқсат етілген-пайдаланылатын қосымша расталды (иә/жоқ):

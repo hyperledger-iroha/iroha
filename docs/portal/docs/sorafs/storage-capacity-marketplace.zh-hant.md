@@ -11,136 +11,135 @@ id: storage-capacity-marketplace
 title: SoraFS Storage Capacity Marketplace
 sidebar_label: Capacity Marketplace
 description: SF-2c plan for the capacity marketplace, replication orders, telemetry, and governance hooks.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意規範來源
 :::
 
-# SoraFS Storage Capacity Marketplace (SF-2c Draft)
+# SoraFS 存儲容量市場（SF-2c 草案）
 
-The SF-2c roadmap item introduces a governed marketplace where storage
-providers declare committed capacity, receive replication orders, and earn fees
-proportional to delivered availability. This document scopes the deliverables
-required for the first release and breaks them into actionable tracks.
+SF-2c 路線圖項目引入了一個受監管的市場，其中存儲
+提供商聲明承諾容量、接收復制訂單並賺取費用
+與交付的可用性成正比。本文檔涵蓋了可交付成果
+首次發布所需的內容並將其分解為可操作的軌道。
 
-## Objectives
+## 目標
 
-- Express provider capacity commitments (total bytes, per-lane limits, expiry)
-  in a verifiable form consumable by governance, SoraNet transport, and Torii.
-- Allocate pins across providers according to declared capacity, stake, and
-  policy constraints while maintaining deterministic behaviour.
-- Meter storage delivery (replication success, uptime, integrity proofs) and
-  export telemetry for fee distribution.
-- Provide revocation and dispute processes so dishonest providers can be
-  penalised or removed.
+- Express 提供商容量承諾（總字節數、每通道限制、到期時間）
+  以可供治理、SoraNet 傳輸和 Torii 使用的可驗證形式。
+- 根據聲明的容量、股權和數量在提供商之間分配 pin
+  政策約束，同時保持確定性行為。
+- 計量存儲交付（複製成功、正常運行時間、完整性證明）以及
+  導出遙測數據以進行費用分配。
+- 提供撤銷和爭議流程，以便不誠實的提供商可以
+  受到處罰或除名。
 
-## Domain Concepts
+## 領域概念
 
-| Concept | Description | Initial Deliverable |
-|---------|-------------|---------------------|
-| `CapacityDeclarationV1` | Norito payload describing provider ID, chunker profile support, committed GiB, lane-specific limits, pricing hints, staking commitment, and expiry. | Schema + validator in `sorafs_manifest::capacity`. |
-| `ReplicationOrder` | Governance-issued instruction assigning a manifest CID to one or more providers, including redundancy level and SLA metrics. | Norito schema shared with Torii + smart contract API. |
-| `CapacityLedger` | On-chain/off-chain registry tracking active capacity declarations, replication orders, performance metrics, and fee accrual. | Smart contract module or off-chain service stub with deterministic snapshot. |
-| `MarketplacePolicy` | Governance policy defining minimum stake, audit requirements, and penalty curves. | Config struct in `sorafs_manifest` + governance document. |
+|概念|描述 |初始交付 |
+|--------|-------------|---------------------|
+| `CapacityDeclarationV1` | Norito 有效負載描述提供商 ID、分塊配置文件支持、承諾 GiB、通道特定限制、定價提示、質押承諾和到期日。 | `sorafs_manifest::capacity` 中的架構 + 驗證器。 |
+| `ReplicationOrder` |治理髮布的指令將清單 CID 分配給一個或多個提供商，包括冗餘級別和 SLA 指標。 | Norito 架構與 Torii + 智能合約 API 共享。 |
+| `CapacityLedger` |鏈上/鏈下註冊表跟踪活動容量聲明、複製訂單、性能指標和費用應計。 |具有確定性快照的智能合約模塊或鏈下服務存根。 |
+| `MarketplacePolicy` |定義最低股權、審計要求和懲罰曲線的治理政策。 | `sorafs_manifest` + 治理文檔中的配置結構。 |
 
-### Implemented Schemas (Status)
+### 已實施的架構（狀態）
 
-## Work Breakdown
+## 工作分解
 
-### 1. Schema & Registry Layer
+### 1. 架構和註冊表層
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Define `CapacityDeclarationV1`, `ReplicationOrderV1`, `CapacityTelemetryV1`. | Storage Team / Governance | Use Norito; include semantic versioning and capability references. |
-| Implement parser + validator modules in `sorafs_manifest`. | Storage Team | Enforce monotonic IDs, capacity bounds, stake requirements. |
-| Extend chunker registry metadata with `min_capacity_gib` per profile. | Tooling WG | Helps clients enforce per-profile minimum hardware requirements. |
-| Draft `MarketplacePolicy` document capturing admission guardrails and penalty schedule. | Governance Council | Publish in docs alongside policy defaults. |
+|任務|所有者 |筆記|
+|------|----------|--------|
+|定義 `CapacityDeclarationV1`、`ReplicationOrderV1`、`CapacityTelemetryV1`。 |存儲團隊/治理|使用 Norito；包括語義版本控制和功能參考。 |
+|在 `sorafs_manifest` 中實現解析器 + 驗證器模塊。 |存儲團隊|強制執行單調 ID、容量限制、權益要求。 |
+|每個配置文件使用 `min_capacity_gib` 擴展分塊器註冊表元數據。 |工具工作組 |幫助客戶強制執行每個配置文件的最低硬件要求。 |
+| `MarketplacePolicy` 草案文件包含入場護欄和處罰表。 |治理委員會|在文檔中與默認策略一起發布。 |
 
-#### Schema Definitions (Implemented)
+#### 架構定義（已實現）
 
-- `CapacityDeclarationV1` captures signed capacity commitments per provider, including canonical chunker handles, capability references, optional lane caps, pricing hints, validity windows, and metadata. Validation ensures non-zero stake, canonical handles, deduplicated aliases, per-lane caps within the declared total, and monotonic GiB accounting.【crates/sorafs_manifest/src/capacity.rs:28】
-- `ReplicationOrderV1` binds manifests to governance-issued assignments with redundancy targets, SLA thresholds, and per-assignment guarantees; validators enforce canonical chunker handles, unique providers, and deadline constraints before Torii or the registry ingest the order.【crates/sorafs_manifest/src/capacity.rs:301】
-- `CapacityTelemetryV1` expresses epoch snapshots (declared vs utilised GiB, replication counters, uptime/PoR percentages) that feed fee distribution. Bounds checks keep utilisation within declarations and percentages within 0 – 100 %.【crates/sorafs_manifest/src/capacity.rs:476】
-- Shared helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, lane/assignment/SLA validators) provide deterministic key validation and error reporting that CI and downstream tooling can reuse.【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` now surfaces the on-chain snapshot via `/v1/sorafs/capacity/state`, combining provider declarations and fee ledger entries behind deterministic Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
-- Validation coverage exercises canonical handle enforcement, duplicate detection, per-lane bounds, replication assignment guards, and telemetry range checks so regressions surface immediately in CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- `CapacityDeclarationV1` 捕獲每個提供商簽署的容量承諾，包括規範分塊器句柄、功能參考、可選通道上限、定價提示、有效性窗口和元數據。驗證確保非零權益、規範句柄、重複數據刪除別名、聲明總數內的每通道上限以及單調 GiB 會計。 【crates/sorafs_manifest/src/capacity.rs:28】
+- `ReplicationOrderV1` 將清單綁定到具有冗餘目標、SLA 閾值和每個分配保證的治理髮布的分配；驗證器在 Torii 或註冊中心接收訂單之前強制執行規範的分塊句柄、唯一提供者和截止日期約束。 【crates/sorafs_manifest/src/capacity.rs:301】
+- `CapacityTelemetryV1` 表示提供費用分配的紀元快照（聲明的與使用的 GiB、複製計數器、正常運行時間/PoR 百分比）。邊界檢查將利用率保持在聲明範圍內，百分比保持在 0 – 100% 範圍內。 【crates/sorafs_manifest/src/capacity.rs:476】
+- 共享助手（`CapacityMetadataEntry`、`PricingScheduleV1`、通道/分配/SLA 驗證器）提供 CI 和下游工具可以重用的確定性密鑰驗證和錯誤報告。 【crates/sorafs_manifest/src/capacity.rs:230】
+- `PinProviderRegistry` 現在通過 `/v1/sorafs/capacity/state` 呈現鏈上快照，結合確定性 Norito JSON 後面的提供商聲明和費用分類帳條目。 【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- 驗證覆蓋範圍執行規範句柄執行、重複檢測、每通道邊界、複製分配保護和遙測範圍檢查，以便回歸立即在 CI 中顯現。 【crates/sorafs_manifest/src/capacity.rs:792】
+- 操作員工具：`sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` 將人類可讀的規範轉換為規範的 Norito 有效負載、base64 blob 和 JSON 摘要，以便操作員可以使用本地暫存 `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` 和復制順序固定裝置驗證。 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】參考夾具位於 `fixtures/sorafs_manifest/replication_order/`（`order_v1.json`、`order_v1.to`）中，並通過 `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 生成。
 
-### 2. Control Plane Integration
+### 2. 控制平面集成
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Add `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` Torii handlers with Norito JSON payloads. | Torii Team | Mirror validator logic; reuse Norito JSON helpers. |
-| Propagate `CapacityDeclarationV1` snapshots into orchestrator scoreboard metadata and gateway fetch plans. | Tooling WG / Orchestrator team | Extend `provider_metadata` with capacity references so multi-source scoring respects lane limits. |
-| Feed replication orders into orchestrator/gateway clients to drive assignments and failover hints. | Networking TL / Gateway team | Scoreboard builder consumes governance-signed replication orders. |
-| CLI tooling: extend `sorafs_cli` with `capacity declare`, `capacity telemetry`, `capacity orders import`. | Tooling WG | Provide deterministic JSON + scoreboard outputs. |
+|任務|所有者 |筆記|
+|------|----------|--------|
+|添加具有 Norito JSON 負載的 `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry`、`/v1/sorafs/capacity/orders` Torii 處理程序。 | Torii 團隊 |鏡像驗證器邏輯；重用 Norito JSON 幫助程序。 |
+|將 `CapacityDeclarationV1` 快照傳播到 Orchestrator 記分板元數據和網關獲取計劃中。 |工具工作組/協調器團隊|使用容量參考擴展 `provider_metadata`，以便多源評分遵守通道限制。 |
+|將復制訂單輸入編排器/網關客戶端以驅動分配和故障轉移提示。 |網絡 TL/網關團隊 |記分板構建器使用治理簽名的複制訂單。 |
+| CLI 工具：使用 `capacity declare`、`capacity telemetry`、`capacity orders import` 擴展 `sorafs_cli`。 |工具工作組 |提供確定性 JSON + 記分板輸出。 |
 
-### 3. Marketplace Policy & Governance
+### 3. 市場政策與治理
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Ratify `MarketplacePolicy` (minimum stake, penalty multipliers, audit cadence). | Governance Council | Publish in docs, capture revision history. |
-| Add governance hooks so Parliament can approve, renew, and revoke declarations. | Governance Council / Smart Contract team | Use Norito events + manifest ingestion. |
-| Implement penalty schedule (fee reduction, bond slashing) tied to telemetered SLA violations. | Governance Council / Treasury | Align with `DealEngine` settlement outputs. |
-| Document dispute process and escalation matrix. | Docs / Governance | Link to dispute runbook + CLI helpers. |
+|任務|所有者 |筆記|
+|------|----------|--------|
+|批准 `MarketplacePolicy`（最低股權、處罰乘數、審計節奏）。 |治理委員會|在文檔中發布，捕獲修訂歷史記錄。 |
+|添加治理掛鉤，以便議會可以批准、更新和撤銷聲明。 |治理委員會/智能合約團隊|使用 Norito 事件 + 清單攝取。 |
+|實施與遙測 SLA 違規行為相關的處罰計劃（費用減少、保證金削減）。 |治理委員會/財政部|與 `DealEngine` 結算輸出對齊。 |
+|記錄爭議流程和升級矩陣。 |文檔/治理|指向爭議 Runbook + CLI 幫助程序的鏈接。 |
 
-### 4. Metering & Fee Distribution
+### 4. 計量和費用分配
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Expand Torii metering ingest to accept `CapacityTelemetryV1`. | Torii Team | Validate GiB-hours, PoR success, uptime. |
-| Update `sorafs_node` metering pipeline to report per-order utilisation + SLA stats. | Storage Team | Align with replication orders and chunker handles. |
-| Settlement pipeline: convert telemetry + replication data into XOR-denominated payouts, produce governance-ready summaries, and record ledger state. | Treasury / Storage Team | Wire into Deal Engine / Treasury exports. |
-| Export dashboards/alerts for metering health (ingestion backlog, stale telemetry). | Observability | Extend Grafana pack referenced by SF-6/SF-7. |
+|任務|所有者 |筆記|
+|------|----------|--------|
+|展開 Torii 計量攝取以接受 `CapacityTelemetryV1`。 | Torii 團隊 |驗證 GiB 小時、PoR 成功、正常運行時間。 |
+|更新 `sorafs_node` 計量管道以報告每訂單利用率 + SLA 統計數據。 |存儲團隊|與復制順序和分塊器句柄對齊。 |
+|結算管道：將遙測+複製數據轉換為以異或計價的支出，生成可供治理的摘要，並記錄賬本狀態。 |財務/存儲團隊|電匯至交易引擎/金庫出口。 |
+|導出儀表板/警報以測量運行狀況（攝取積壓、過時的遙測）。 |可觀察性|擴展 SF-6/SF-7 引用的 Grafana 包。 |
 
-- Torii now exposes `/v1/sorafs/capacity/telemetry` and `/v1/sorafs/capacity/state` (JSON + Norito) so operators can submit epoch telemetry snapshots and inspectors can retrieve the canonical ledger for auditing or evidence packaging.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
-- `PinProviderRegistry` integration ensures replication orders are accessible through the same endpoint; CLI helpers (`sorafs_cli capacity telemetry --from-file telemetry.json`) now validate/publish telemetry from automation runs with deterministic hashing and alias resolution.
-- Metering snapshots produce `CapacityTelemetrySnapshot` entries pinned to the `metering` snapshot, and Prometheus exports feed the ready-to-import Grafana board at `docs/source/grafana_sorafs_metering.json` so billing teams can monitor GiB·hour accrual, projected nano-SORA fees, and SLA compliance in real time.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
-- When metering smoothing is enabled, the snapshot includes `smoothed_gib_hours` and `smoothed_por_success_bps` so operators can compare EMA-trended values against the raw counters that governance uses for payouts.【crates/sorafs_node/src/metering.rs:401】
+- Torii 現在公開 `/v1/sorafs/capacity/telemetry` 和 `/v1/sorafs/capacity/state` (JSON + Norito)，以便操作員可以提交紀元遙測快照，檢查員可以檢索規範賬本以進行審計或證據包裝。 【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- `PinProviderRegistry` 集成確保可通過同一端點訪問複製訂單； CLI 助手 (`sorafs_cli capacity telemetry --from-file telemetry.json`) 現在通過確定性哈希和別名解析來驗證/發布來自自動化運行的遙測數據。
+- 計量快照生成固定到 `metering` 快照的 `CapacityTelemetrySnapshot` 條目，Prometheus 導出為 `docs/source/grafana_sorafs_metering.json` 處的準備導入 Grafana 板提供數據，以便計費團隊可以監控預計的 GiB·小時累積情況nano-SORA費用，以及實時SLA合規性。 【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
+- 啟用計量平滑後，快照包括 `smoothed_gib_hours` 和 `smoothed_por_success_bps`，因此運營商可以將 EMA 趨勢值與治理用於支付的原始計數器進行比較。 【crates/sorafs_node/src/metering.rs:401】
 
-### 5. Dispute & Revocation Handling
+### 5. 爭議和撤銷處理
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Define `CapacityDisputeV1` payload (complainant, evidence, target provider). | Governance Council | Norito schema + validator. |
-| CLI support to file disputes and respond (with evidence attachments). | Tooling WG | Ensure deterministic hashing of evidence bundle. |
-| Add automated checks for repeated SLA breaches (auto-escalate to dispute). | Observability | Alert thresholds and governance hooks. |
-| Document revocation playbook (grace period, evacuation of pinned data). | Docs / Storage Team | Link to policy doc and operator runbook. |
+|任務|所有者 |筆記|
+|------|----------|--------|
+|定義 `CapacityDisputeV1` 有效負載（投訴人、證據、目標提供商）。 |治理委員會| Norito 架構 + 驗證器。 |
+| CLI 支持提交爭議並作出回應（帶有證據附件）。 |工具工作組 |確保證據包的確定性散列。 |
+|添加對重複違反 SLA 的自動檢查（自動升級為爭議）。 |可觀察性|警報閾值和治理掛鉤。 |
+|文檔撤銷手冊（寬限期、撤出固定數據）。 |文檔/存儲團隊 |政策文檔和操作手冊的鏈接。 |
 
-## Testing & CI Requirements
+## 測試和 CI 要求- 所有新模式驗證器的單元測試 (`sorafs_manifest`)。
+- 模擬集成測試：聲明→複製順序→計量→支付。
+- CI 工作流程，用於重新生成樣本容量聲明/遙測並確保簽名保持同步（擴展 `ci/check_sorafs_fixtures.sh`）。
+- 註冊表 API 的負載測試（模擬 10k 個提供商、100k 個訂單）。
 
-- Unit tests for all new schema validators (`sorafs_manifest`).
-- Integration tests that simulate: declaration → replication order → metering → payout.
-- CI workflow to regenerate sample capacity declarations/telemetry and ensure signatures remain in sync (extend `ci/check_sorafs_fixtures.sh`).
-- Load tests for the registry API (simulate 10k providers, 100k orders).
+## 遙測和儀表板
 
-## Telemetry & Dashboards
+- 儀表板面板：
+  - 每個提供商聲明的容量與使用的容量。
+  - 複製訂單積壓和平均分配延遲。
+  - SLA 合規性（正常運行時間百分比、PoR 成功率）。
+  - 每個週期的費用累積和處罰。
+- 警報：
+  - 提供商低於最低承諾容量。
+  - 複製順序卡住 > SLA。
+  - 計量管道故障。
 
-- Dashboard panels:
-  - Capacity declared vs utilised per provider.
-  - Replication order backlog and average assignment delay.
-  - SLA compliance (uptime %, PoR success rate).
-  - Fee accrual and penalties per epoch.
-- Alerts:
-  - Provider below minimum committed capacity.
-  - Replication order stuck > SLA.
-  - Metering pipeline failures.
+## 文檔交付成果
 
-## Documentation Deliverables
+- 操作員指南，用於聲明容量、更新承諾和監控利用率。
+- 審批申報、發布命令、處理糾紛的治理指南。
+- 容量端點和復制順序格式的 API 參考。
+- 開發人員的市場常見問題解答。
 
-- Operator guide for declaring capacity, renewing commitments, and monitoring utilisation.
-- Governance guide for approving declarations, issuing orders, handling disputes.
-- API reference for the capacity endpoints and replication order format.
-- Marketplace FAQ for developers.
+## GA 準備清單
 
-## GA Readiness Checklist
+路線圖項目**SF-2c**根據會計領域的具體證據進行生產推廣，
+爭議處理和入職。使用以下工件來保持驗收標準
+與實施同步。
 
-Roadmap item **SF-2c** gates production rollout on concrete evidence across accounting,
-dispute handling, and onboarding. Use the artefacts below to keep the acceptance criteria
-in sync with the implementation.
-
-### Nightly accounting & XOR reconciliation
-- Export the capacity state snapshot and the XOR ledger export for the same window, then run:
+### 每晚記賬和異或對賬
+- 導出同一窗口的容量狀態快照和異或賬本導出，然後運行：
   ```bash
   python3 scripts/telemetry/capacity_reconcile.py \
     --snapshot artifacts/sorafs/capacity/state_$(date +%F).json \
@@ -149,36 +148,36 @@ in sync with the implementation.
     --json-out artifacts/sorafs/capacity/reconcile_$(date +%F).json \
     --prom-out "${SORAFS_CAPACITY_RECONCILE_TEXTFILE:-artifacts/sorafs/capacity/reconcile.prom}"
   ```
-  The helper exits non-zero on missing/overpaid settlements or penalties and emits a Prometheus
-  textfile summary.
-- Alert `SoraFSCapacityReconciliationMismatch` (in `dashboards/alerts/sorafs_capacity_rules.yml`)
-  fires whenever reconciliation metrics report gaps; dashboards live under
-  `dashboards/grafana/sorafs_capacity_penalties.json`.
-- Archive the JSON summary and hashes under `docs/examples/sorafs_capacity_marketplace_validation/`
-  alongside governance packets.
+  幫助程序因缺少/多付的和解或罰款而退出非零，並發出 Prometheus
+  文本文件摘要。
+- 警報 `SoraFSCapacityReconciliationMismatch`（在 `dashboards/alerts/sorafs_capacity_rules.yml` 中）
+  每當調節指標報告差距時就會觸發；儀表板位於下面
+  `dashboards/grafana/sorafs_capacity_penalties.json`。
+- 將 JSON 摘要和哈希值存檔在 `docs/examples/sorafs_capacity_marketplace_validation/` 下
+  與治理包一起。
 
-### Dispute & slashing evidence
-- File disputes through `sorafs_manifest_stub capacity dispute` (tests:
-  `cargo test -p sorafs_car --test capacity_cli`) so payloads stay canonical.
-- Run `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` and the penalty
-  suites (`record_capacity_telemetry_penalises_persistent_under_delivery`) to prove disputes and
-  slashes replay deterministically.
-- Follow `docs/source/sorafs/dispute_revocation_runbook.md` for evidence capture and escalation;
-  link strike approvals back into the validation report.
+### 爭議和削減證據
+- 通過 `sorafs_manifest_stub capacity dispute` 提出爭議（測試：
+  `cargo test -p sorafs_car --test capacity_cli`），因此有效負載保持規範。
+- 運行 `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` 和懲罰
+  套件（`record_capacity_telemetry_penalises_persistent_under_delivery`）來證明爭議和
+  斜杠確定性地重播。
+- 遵循 `docs/source/sorafs/dispute_revocation_runbook.md` 進行證據捕獲和升級；
+  將罷工批准鏈接回驗證報告。
 
-### Provider onboarding & exit smoke tests
-- Regenerate declaration/telemetry artefacts with `sorafs_manifest_stub capacity ...` and replay
-  the CLI tests before submission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Submit via Torii (`/v1/sorafs/capacity/declare`) then capture `/v1/sorafs/capacity/state` plus
-  Grafana screenshots. Follow the exit flow in `docs/source/sorafs/capacity_onboarding_runbook.md`.
-- Archive signed artefacts and reconciliation outputs inside
-  `docs/examples/sorafs_capacity_marketplace_validation/`.
+### 提供商入職和退出冒煙測試
+- 使用 `sorafs_manifest_stub capacity ...` 重新生成聲明/遙測工件並重播
+  提交前進行 CLI 測試 (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
+- 通過 Torii (`/v1/sorafs/capacity/declare`) 提交，然後捕獲 `/v1/sorafs/capacity/state` 加
+  Grafana 屏幕截圖。按照 `docs/source/sorafs/capacity_onboarding_runbook.md` 中的退出流程進行操作。
+- 將簽名的工件和對賬輸出存檔在內部
+  `docs/examples/sorafs_capacity_marketplace_validation/`。
 
-## Dependencies & Sequencing
+## 依賴關係和排序
 
-1. Finish SF-2b (admission policy) — marketplace relies on vetted providers.
-2. Implement schema + registry layer (this doc) before Torii integration.
-3. Complete metering pipeline before enabling payouts.
-4. Final step: enable governance-controlled fee distribution once metering data is verified in staging.
+1. 完成 SF-2b（准入政策）——市場依賴於經過審查的提供商。
+2. 在Torii集成之前實現模式+註冊表層（本文檔）。
+3. 在啟用支付之前完成計量管道。
+4. 最後一步：一旦計量數據在暫存階段得到驗證，即可啟用治理控制的費用分配。
 
-Progress should be tracked in the roadmap with references to this document. Update the roadmap once each major section (schema, control plane, integration, metering, dispute handling) reaches feature complete status.
+應在路線圖中參考本文檔來跟踪進展情況。一旦每個主要部分（架構、控制平面、集成、計量、爭議處理）達到功能完成狀態，就更新路線圖。

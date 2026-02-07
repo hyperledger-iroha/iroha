@@ -8,62 +8,64 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet constant-rate profiles
 sidebar_label: Constant-Rate Profiles
 description: SNNet-17B1 preset catalogue for core/home production relays plus the SNNet-17A2 null dogfood profile, with tick->bandwidth math, CLI helpers, and MTU guardrails.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::注意規範來源
 :::
 
-SNNet-17B introduces fixed-rate transport lanes so relays move traffic in 1,024 B cells regardless
-of payload size. Operators pick from three presets:
+SNNet-17B 引入了固定速率傳輸通道，因此中繼在 1,024 B 單元中移動流量，無論
+有效負載大小。操作員從三個預設中進行選擇：
 
-- **core** - data-centre or professionally hosted relays that can dedicate >=30 Mbps to cover
-  traffic.
-- **home** - residential or low-uplink operators that still need anonymous fetches for
-  privacy-critical circuits.
-- **null** - the SNNet-17A2 dogfood preset. It retains the same TLVs/envelope but stretches the
-  tick and ceiling for low-bandwidth staging.
+- **核心** - 數據中心或專業託管的中繼，可以專用 >=30 Mbps 來覆蓋
+  交通。
+- **home** - 仍然需要匿名獲取的住宅或低上行鏈路運營商
+  隱私關鍵電路。
+- **null** - SNNet-17A2 狗糧預設。它保留了相同的 TLV/信封，但擴展了
+  低帶寬分級的刻度和上限。
 
-## Preset summary
+## 預設摘要
 
-| Profile | Tick (ms) | Cell (B) | Lane cap | Dummy floor | Per-lane payload (Mb/s) | Ceiling payload (Mb/s) | Ceiling % of uplink | Recommended uplink (Mb/s) | Neighbor cap | Auto-disable trigger (%) |
-|---------|-----------|----------|----------|-------------|-------------------------|------------------------|---------------------|----------------------------|--------------|--------------------------|
-| core    | 5.0       | 1024     | 12       | 4           | 1.64                    | 19.50                  | 65                  | 30.0                       | 8            | 85                       |
-| home    | 10.0      | 1024     | 4        | 2           | 0.82                    | 4.00                   | 40                  | 10.0                       | 2            | 70                       |
-| null    | 20.0      | 1024     | 2        | 1           | 0.41                    | 0.75                   | 15                  | 5.0                        | 1            | 55                       |
+|簡介 |刻度線（毫秒）|細胞（B）|車道帽 |虛擬地板|每通道有效負載 (Mb/s) |有效負載上限 (Mb/s) |上行鏈路百分比上限 |建議上行鏈路 (Mb/s) |鄰居帽 |自動禁用觸發器 (%) |
+|------|---------|----------|----------|--------------|--------------------------|------------------------|----------------------|----------------------------|--------------|----------------------------|
+|核心| 5.0 | 1024 | 1024 12 | 12 4 | 1.64 | 1.64 19.50 | 19.50 65 | 65 30.0 | 30.0 8 | 85 | 85
+|首頁 | 10.0 | 1024 | 1024 4 | 2 | 0.82 | 0.82 4.00 | 40 | 40 10.0 | 2 | 70 | 70
+|空 | 20.0 | 20.0 1024 | 1024 2 | 1 | 0.41 | 0.41 0.75 | 0.75 15 | 15 5.0 | 1 | 55 | 55
 
-- **Lane cap** - maximum concurrent constant-rate neighbors. The relay rejects extra circuits once
-  the cap is hit and increments `soranet_handshake_capacity_reject_total`.
-- **Dummy floor** - minimum number of lanes that stay alive with dummy traffic even when actual
-  demand is lower.
-- **Ceiling payload** - uplink budget dedicated to constant-rate lanes after applying the ceiling
-  fraction. Operators should never exceed this budget even if extra bandwidth is available.
-- **Auto-disable trigger** - sustained saturation percentage (averaged per preset) that causes the
-  runtime to drop to the dummy floor. Capacity is restored after the recovery threshold
-  (75% for `core`, 60% for `home`, 45% for `null`).
+- **車道上限** - 最大並發恆定速率鄰居。繼電器拒絕額外電路一次
+  達到上限並遞增 `soranet_handshake_capacity_reject_total`。
+- **虛擬樓層** - 即使在實際情況下也能保持虛擬交通的最小車道數
+  需求較低。
+- **有效負載上限** - 應用上限後專用於恆定速率通道的上行鏈路預算
+  分數。即使有額外的帶寬可用，運營商也不應超出此預算。
+- **自動禁用觸發器** - 持續飽和百分比（每個預設的平均值），導致
+  運行時掉落到虛擬地板上。容量在恢復閾值後恢復
+  （對於 `core` 為 75%，對於 `home` 為 60%，對於 `null` 為 45%）。
 
-**Important:** the `null` preset is for staging and capability dogfooding only; it does not meet the
-privacy guarantees required for production circuits.
+**重要提示：** `null` 預設僅用於暫存和功能測試；它不符合
+生產電路所需的隱私保證。
 
-## Tick -> bandwidth table
+## 勾選->帶寬表
 
-Each payload cell carries 1,024 B, so the KiB/sec column equals the number of cells emitted per
-second. Use the helper to extend the table with custom ticks.
+每個有效負載單元攜帶 1,024 B，因此 KiB/sec 列等於每個有效負載單元發射的單元數
+第二。使用幫助程序通過自定義刻度來擴展表格。
 
-| Tick (ms) | Cells/sec | Payload KiB/sec | Payload Mb/s |
-|-----------|-----------|-----------------|--------------|
-| 5.0       | 200.00    | 200.00          | 1.64         |
-| 7.5       | 133.33    | 133.33          | 1.09         |
-| 10.0      | 100.00    | 100.00          | 0.82         |
-| 15.0      | 66.67     | 66.67           | 0.55         |
-| 20.0      | 50.00     | 50.00           | 0.41         |
+|刻度線（毫秒）|單元/秒 |有效負載 KiB/秒 |有效負載 Mb/s |
+|----------|----------|-----------------|--------------|
+| 5.0 | 200.00 | 200.00 | 1.64 | 1.64
+| 7.5 | 7.5 133.33 | 133.33 | 1.09 | 1.09
+| 10.0 | 100.00 | 100.00 | 0.82 | 0.82
+| 15.0 | 15.0 66.67 | 66.67 66.67 | 66.67 0.55 | 0.55
+| 20.0 | 20.0 50.00 | 50.00 | 0.41 | 0.41
 
-Formula:
+公式：
 
 ```
 payload_mbps = (cell_bytes x 8 / 1_000_000) x (1000 / tick_ms)
 ```
 
-CLI helper:
+CLI 助手：
 
 ```bash
 # Markdown table output for all presets plus default tick table
@@ -76,13 +78,13 @@ cargo xtask soranet-constant-rate-profile --profile core --format json
 cargo xtask soranet-constant-rate-profile --tick-table --tick-values 5,7.5,12,18 --format markdown
 ```
 
-`--format markdown` emits GitHub-style tables for both the preset summary and optional tick cheat
-sheet so you can paste deterministic output into the portal. Pair it with `--json-out` to archive
-the rendered data for governance evidence.
+`--format markdown` 為預設摘要和可選的刻度作弊生成 GitHub 樣式的表格
+工作表，以便您可以將確定性輸出粘貼到門戶中。與 `--json-out` 配對進行存檔
+治理證據的渲染數據。
 
-## Configuration & overrides
+## 配置和覆蓋
 
-`tools/soranet-relay` exposes the presets in both config files and runtime overrides:
+`tools/soranet-relay` 在配置文件和運行時覆蓋中公開預設：
 
 ```bash
 # Persisted in relay.json
@@ -92,23 +94,23 @@ the rendered data for governance evidence.
 soranet-relay --config relay.json --constant-rate-profile core
 ```
 
-The config key accepts `core`, `home`, or `null` (default `core`). CLI overrides are useful for
-staging drills or SOC requests that temporarily reduce the duty cycle without rewriting configs.
+配置密鑰接受 `core`、`home` 或 `null`（默認為 `core`）。 CLI 覆蓋對於
+暫存演練或 SOC 請求可暫時減少佔空比，而無需重寫配置。
 
-## MTU guardrails
+## MTU 護欄
 
-- Payload cells use 1,024 B plus ~96 B of Norito+Noise framing and the minimal QUIC/UDP headers,
-  keeping each datagram below the IPv6 1,280 B minimum MTU.
-- When tunnels (WireGuard/IPsec) add extra encapsulation you **must** reduce `padding.cell_size`
-  so `cell_size + framing <= 1,280 B`. The relay validator enforces
-  `padding.cell_size <= 1,136 B` (1,280 B - 48 B UDP/IPv6 overhead - 96 B framing).
-- `core` profiles should pin >=4 neighbors even when idle so dummy lanes always cover a subset of
-  PQ guards. `home` profiles may limit constant-rate circuits to wallets/aggregators but must apply
-  back-pressure when saturation exceeds 70% for three telemetry windows.
+- 有效負載單元使用 1,024 B 加上約 96 B 的 Norito+噪聲幀和最小的 QUIC/UDP 標頭，
+  將每個數據報保持在 IPv6 1,280 B 最小 MTU 以下。
+- 當隧道（WireGuard/IPsec）添加額外封裝時，您**必須**減少 `padding.cell_size`
+  所以 `cell_size + framing <= 1,280 B`。中繼驗證器強制執行
+  `padding.cell_size <= 1,136 B`（1,280 B - 48 B UDP/IPv6 開銷 - 96 B 成幀）。
+- `core` 配置文件應固定 >=4 個鄰居，即使在閒置時也是如此，因此虛擬通道始終覆蓋
+  PQ守衛。 `home` 配置文件可能會限制錢包/聚合器的恆定速率電路，但必須適用
+  三個遙測窗口的飽和度超過 70% 時的背壓。
 
-## Telemetry & alerts
+## 遙測和警報
 
-Relays export the following metrics per preset:
+繼電器根據預設導出以下指標：
 
 - `soranet_constant_rate_active_neighbors`
 - `soranet_constant_rate_queue_depth`
@@ -118,12 +120,12 @@ Relays export the following metrics per preset:
 - `soranet_constant_rate_ceiling_hits_total`
 - `soranet_constant_rate_degraded`
 
-Alert when:
+出現以下情況時發出警報：
 
-1. Dummy ratio stays below the preset floor (`core >= 4/8`, `home >= 2/2`, `null >= 1/1`) for more than
-   two windows.
-2. `soranet_constant_rate_ceiling_hits_total` grows faster than one hit per five minutes.
-3. `soranet_constant_rate_degraded` flips to `1` outside a planned drill.
+1. 虛擬比率低於預設下限（`core >= 4/8`、`home >= 2/2`、`null >= 1/1`）的時間超過
+   兩個窗戶。
+2. `soranet_constant_rate_ceiling_hits_total` 的增長速度超過每五分鐘一次點擊。
+3. `soranet_constant_rate_degraded` 在計劃演練之外翻轉為 `1`。
 
-Record the preset label and neighbor list in incident reports so auditors can prove constant-rate
-policies matched the roadmap requirements.
+在事件報告中記錄預設標籤和鄰居列表，以便審核員可以證明恆定速率
+政策符合路線圖要求。

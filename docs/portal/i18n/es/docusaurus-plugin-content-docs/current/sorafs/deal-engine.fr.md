@@ -4,73 +4,71 @@ direction: ltr
 source: docs/portal/docs/sorafs/deal-engine.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: deal-engine
-title: Moteur d'accords SoraFS
-sidebar_label: Moteur d'accords
-description: Vue d'ensemble du moteur d'accords SF-8, de l'intégration Torii et des surfaces de télémétrie.
+id: motor de acuerdos
+título: Motor de acuerdos SoraFS
+sidebar_label: Motor de acuerdos
+descripción: Vista del conjunto del motor de acuerdo SF-8, de la integración Torii y de las superficies de televisión.
 ---
 
-:::note Source canonique
+:::nota Fuente canónica
 :::
 
-# Moteur d'accords SoraFS
+# Motor de acuerdos SoraFS
 
-La piste de roadmap SF-8 introduit le moteur d'accords SoraFS, fournissant
-une comptabilité déterministe pour les accords de stockage et de récupération entre
-clients et fournisseurs. Les accords sont décrits via les payloads Norito
-définis dans `crates/sorafs_manifest/src/deal.rs`, couvrant les termes de l'accord,
+La pista de ruta SF-8 introduce el motor de acuerdo SoraFS, Fournissant
+una compatibilidad determinada para los acuerdos de almacenamiento y recuperación entre
+clientes y proveedores. Los acuerdos son décrits a través de las cargas útiles Norito
+definido en `crates/sorafs_manifest/src/deal.rs`, cumpliendo los términos del acuerdo,
 le verrouillage de bonds, les micropaiements probabilistes et les enregistrements de règlement.
 
-Le worker SoraFS embarqué (`sorafs_node::NodeHandle`) instancie désormais un
-`DealEngine` pour chaque processus de nœud. Le moteur :
+El trabajador SoraFS embarqué (`sorafs_node::NodeHandle`) instancia desormada en
+`DealEngine` para cada proceso de nuevo. El motor:
 
-- valide et enregistre les accords via `DealTermsV1` ;
-- cumule des charges libellées en XOR lorsque l'usage de réplication est rapporté ;
-- évalue les fenêtres de micropaiement probabiliste via un échantillonnage déterministe
-  basé sur BLAKE3 ; et
-- produit des snapshots de ledger et des payloads de règlement adaptés à la publication
-  de gouvernance.
-
-Les tests unitaires couvrent la validation, la sélection des micropaiements et les flux de
-règlement afin que les opérateurs puissent exercer les APIs en confiance. Les règlements
-émettent désormais des payloads de gouvernance `DealSettlementV1`, s'intégrant directement
-au pipeline de publication SF-12, et mettent à jour la série OpenTelemetry `sorafs.node.deal_*`
+- valide y registre los acuerdos a través de `DealTermsV1`;
+- acumulación de cargos libellées en XOR cuando el uso de réplica esté informado;
+- Evalue les fenêtres de micropaiement probabiliste via un échantillonnage deterministe
+  basado en BLAKE3; y
+- Producto de instantáneas de libro mayor y cargas útiles adaptadas a la publicación.
+  de gobernanza.Las pruebas unitarias incluyen la validación, la selección de micropagos y el flujo de
+Reglamenta que los operadores puedan ejercer las API en confianza. Los reglamentos
+émettent desormais des payloads de gouvernance `DealSettlementV1`, s'intégrant directement
+en proceso de publicación SF-12, y agregado al día de la serie OpenTelemetry `sorafs.node.deal_*`
 (`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) pour les dashboards Torii et
-l'application des SLO. Les travaux suivants ciblent l'automatisation du slashing initiée par
-les auditeurs et la coordination des sémantiques d'annulation avec la politique de gouvernance.
+`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) para los paneles Torii y
+La aplicación de SLO. Los trabajos siguientes pueden automatizar la tala iniciada por
+les auditeurs et la coordinacion des sémantiques d'annulation avec la politique de gouvernance.
 
-La télémétrie d'usage alimente aussi l'ensemble de métriques `sorafs.node.micropayment_*` :
+La télémétrie d'usage alimente aussi el conjunto de métriques `sorafs.node.micropayment_*` :
 `micropayment_charge_nano`, `micropayment_credit_generated_nano`,
 `micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, et les compteurs de tickets
+`micropayment_outstanding_nano`, y los ordenadores de tickets
 (`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). Ces totaux exposent le flux de loterie
-probabiliste pour que les opérateurs puissent corréler les gains de micropaiements et
-le carry-over de crédit avec les résultats de règlement.
+`micropayment_tickets_duplicate_total`). Ces totaux exponennt le flux de lotería
+probabilidad de que los operadores puedan corregir las ganancias de micropagos y
+le transfer-over de crédit avec les résultats de règlement.
 
-## Intégration Torii
+## Integración Torii
 
-Torii expose des endpoints dédiés pour que les fournisseurs signalent l'usage et pilotent
-le cycle de vie des accords sans wiring spécifique :
-
-- `POST /v1/sorafs/deal/usage` accepte la télémétrie `DealUsageReport` et renvoie
+Torii expone los puntos finales deseados para que los proveedores señalen el uso y controlen
+El ciclo de vida de los acuerdos sin cableado específico:- `POST /v1/sorafs/deal/usage` acepta la televisión `DealUsageReport` y envía
   des résultats de comptabilité déterministes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalise la fenêtre courante, en streamant le
-  `DealSettlementRecord` résultant avec un `DealSettlementV1` encodé en base64
+- `POST /v1/sorafs/deal/settle` finalize la fenêtre courante, en streamant le
+  `DealSettlementRecord` resultante con un `DealSettlementV1` codificado en base64
   prêt pour publication dans le DAG de gouvernance.
-- Le feed `/v1/events/sse` de Torii diffuse désormais des enregistrements
-  `SorafsGatewayEvent::DealUsage` résumant chaque soumission d'usage (epoch, GiB-heures mesurés,
-  compteurs de tickets, charges déterministes), des enregistrements
-  `SorafsGatewayEvent::DealSettlement` qui incluent le snapshot canonique du ledger de règlement
-  ainsi que le digest/taille/base64 BLAKE3 de l'artefact de gouvernance sur disque, et des alertes
+- Le feed `/v1/events/sse` de Torii difuso desormais des enregistrements
+  `SorafsGatewayEvent::DealUsage` résumant chaque soumission d'usage (época, GiB-heures mesurés,
+  compteurs de tickets, charge déterministes), des enregistrements
+  `SorafsGatewayEvent::DealSettlement` que incluye la instantánea canónica del libro mayor de reglas
+  Además de le digest/taille/base64 BLAKE3 de l'artefact de gouvernance sur disque, et des alertas
   `SorafsGatewayEvent::ProofHealth` dès que les seuils PDP/PoTR sont dépassés (fournisseur, fenêtre,
-  état de strike/cooldown, montant de pénalité). Les consommateurs peuvent filtrer par fournisseur
-  pour réagir à de nouvelles télémétries, des règlements ou des alertes de santé des proofs sans polling.
+  estado de strike/cooldown, montante de pena). Los consumidores pueden filtrar por el proveedor.
+  Para reaccionar a las nuevas télémétries, des règlements ou des alertas de salud de las pruebas sin sondeo.
 
-Les deux endpoints participent au framework de quotas SoraFS via la nouvelle fenêtre
-`torii.sorafs.quota.deal_telemetry`, permettant aux opérateurs d'ajuster le taux de soumission
-autorisé par déploiement.
+Los dos puntos finales participan en el marco de cuotas SoraFS a través de la nueva ventana
+`torii.sorafs.quota.deal_telemetry`, que permite a los operadores ajustar el taux de soumission
+autorizado por el despliegue.

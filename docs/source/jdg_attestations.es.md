@@ -6,34 +6,35 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
 source_last_modified: "2026-01-09T07:05:10.922933+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JDG Attestations: Guard, Rotation, and Retention
+# Atestaciones JDG: Guardia, Rotación y Retención
 
-This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
+Esta nota documenta la protección de atestación JDG v1 que ahora se envía en `iroha_core`.
 
-- **Committee manifests:** Norito-encoded `JdgCommitteeManifest` bundles carry per-dataspace rotation
-  schedules (`committee_id`, ordered members, threshold, `activation_height`, `retire_height`).
-  Manifests are loaded with `JdgCommitteeSchedule::from_path` and enforce strictly increasing
-  activation heights with an optional grace overlap (`grace_blocks`) between retiring/activating
-  committees.
-- **Attestation guard:** `JdgAttestationGuard` enforces dataspace binding, expiry, stale bounds,
-  committee id/threshold matching, signer membership, supported signature schemes, and optional
-  SDN validation via `JdgSdnEnforcer`. Size caps, max lag, and allowed signature schemes are
-  constructor parameters; `validate(attestation, dataspace, current_height)` returns the active
-  committee or a structured error.
-  - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
-  - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
-    aggregate validation requires a valid PoP per committee member in the manifest; missing or
-    invalid PoPs reject the attestation.
-  Configure the allow-list via `governance.jdg_signature_schemes`.
-- **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
-  per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or
-  `for_dataspace_and_epoch` to retrieve audit/replay bundles.
-- **Tests:** Unit coverage now exercises valid committee selection, unknown signer rejection, stale
-  attestation rejection, unsupported scheme ids, and retention pruning. See
+- **Manifiestos del comité:** Los paquetes `JdgCommitteeManifest` codificados con Norito llevan rotación por espacio de datos
+  horarios (`committee_id`, miembros ordenados, umbral, `activation_height`, `retire_height`).
+  Los manifiestos se cargan con `JdgCommitteeSchedule::from_path` y aplican estrictamente valores crecientes.
+  alturas de activación con una superposición de gracia opcional (`grace_blocks`) entre retirar/activar
+  comités.
+- **Protección de atestación:** `JdgAttestationGuard` aplica el enlace del espacio de datos, la caducidad y los límites obsoletos.
+  Coincidencia de identificación/umbral de comité, membresía de firmante, esquemas de firma admitidos y opciones opcionales.
+  Validación SDN vía `JdgSdnEnforcer`. Los límites de tamaño, el retraso máximo y los esquemas de firma permitidos son
+  parámetros del constructor; `validate(attestation, dataspace, current_height)` devuelve el activo
+  comité o un error estructurado.
+  - `scheme_id = 1` (`simple_threshold`): firmas por firmante, mapa de bits de firmante opcional.
+  - `scheme_id = 2` (`bls_normal_aggregate`): firma normal BLS preagregada única sobre el
+    hash de certificación; Mapa de bits del firmante opcional; el valor predeterminado es todos los firmantes en la certificación. BLS
+    la validación agregada requiere un PoP válido por miembro del comité en el manifiesto; desaparecido o
+    Los PoP no válidos rechazan la atestación.
+  Configure la lista de permitidos a través de `governance.jdg_signature_schemes`.
+- **Almacén de retención:** `JdgAttestationStore` rastrea las certificaciones por espacio de datos con un configurable
+  límite por espacio de datos, eliminando las entradas más antiguas al insertar. Llame a `for_dataspace` o
+  `for_dataspace_and_epoch` para recuperar paquetes de auditoría/reproducción.
+- **Pruebas:** La cobertura de la unidad ahora ejerce una selección de comité válida, rechazo del firmante desconocido, obsoleto
+  rechazo de atestación, identificaciones de esquemas no admitidos y poda de retención. Ver
   `crates/iroha_core/src/jurisdiction.rs`.
 
-The guard rejects schemes outside the configured allow-list.
+El guardia rechaza esquemas fuera de la lista de permitidos configurada.

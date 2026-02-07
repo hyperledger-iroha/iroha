@@ -6,86 +6,85 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1ee87ee60e2e8c9d9636b282231b33de3cf1fd7240c8d31d0a0a1673651dcef1
 source_last_modified: "2026-01-03T18:07:58.621058+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% JDG-SDN attestations and rotation
+% JDG-SDN 認証とローテーション
 
-This note captures the enforcement model for Secret Data Node (SDN) attestations
-used by the Jurisdiction Data Guardian (JDG) flow.
+このノートは、Secret Data Node (SDN) 証明書の適用モデルをキャプチャします。
+Jurisdiction Data Guardian (JDG) フローによって使用されます。
 
-## Commitment format
-- `JdgSdnCommitment` binds the scope (`JdgAttestationScope`), the encrypted
-  payload hash, and the SDN public key. Seals are typed signatures
-  (`SignatureOf<JdgSdnCommitmentSignable>`) over the domain-tagged payload
-  `iroha:jurisdiction:sdn:commitment:v1\x00 || norito(signable)`.
-- Structural validation (`validate_basic`) enforces:
+## コミットメントの形式
+- `JdgSdnCommitment` はスコープ (`JdgAttestationScope`) をバインドします。
+  ペイロード ハッシュ、および SDN 公開キー。印鑑はタイプされた署名です
+  (`SignatureOf<JdgSdnCommitmentSignable>`) ドメインタグ付きペイロード上
+  `iroha:jurisdiction:sdn:commitment:v1\x00 || norito(signable)`。
+- 構造検証 (`validate_basic`) は以下を強制します。
   - `version == JDG_SDN_COMMITMENT_VERSION_V1`
-  - valid block ranges
-  - non-empty seals
-  - scope equality against the attestation when run via
+  - 有効なブロック範囲
+  - 空ではないシール
+  - 経由で実行する場合の証明書に対するスコープの等価性
     `JdgAttestation::validate_with_sdn`/`validate_with_sdn_registry`
-- Deduplication is handled by the attestation validator (signer+payload hash
-  uniqueness) to prevent withheld/duplicate commitments.
+- 重複排除はアテステーションバリデーター (署名者+ペイロードハッシュ) によって処理されます。
+  一意性）を使用して、コミットメントの保留/重複を防ぎます。
 
-## Registry and rotation policy
-- SDN keys live in `JdgSdnRegistry`, keyed by `(Algorithm, public_key_bytes)`.
-- `JdgSdnKeyRecord` records the activation height, optional retirement height,
-  and optional parent key.
-- Rotation is governed by `JdgSdnRotationPolicy` (currently: `dual_publish_blocks`
-  overlap window). Registering a child key updates the parent retirement to
-  `child.activation + dual_publish_blocks`, with guardrails:
-  - missing parents are rejected
-  - activations must be strictly increasing
-  - overlaps that exceed the grace window are rejected
-- Registry helpers surface the installed records (`record`, `keys`) for status
-  and API exposure.
+## レジストリとローテーション ポリシー
+- SDN キーは `JdgSdnRegistry` に存在し、`(Algorithm, public_key_bytes)` によってキー化されます。
+- `JdgSdnKeyRecord` は、アクティベーション高さ、オプションのリタイア高さ、
+  およびオプションの親キー。
+- 回転は `JdgSdnRotationPolicy` によって管理されます (現在: `dual_publish_blocks`)
+  オーバーラップウィンドウ)。子キーを登録すると、親のリタイアメントが更新されます。
+  `child.activation + dual_publish_blocks`、ガードレール付き:
+  - 行方不明の両親は拒否されます
+  - アクティベーションは確実に増加している必要があります
+  - 猶予期間を超えるオーバーラップは拒否されます。
+- レジストリ ヘルパーは、インストールされているレコード (`record`、`keys`) をステータスとして表示します。
+  そしてAPIの公開。
 
-## Validation flow
-- `JdgAttestation::validate_with_sdn_registry` wraps the structural
-  attestation checks and SDN enforcement. `JdgSdnPolicy` threads:
-  - `require_commitments`: enforce presence for PII/secret payloads
-  - `rotation`: grace window used when updating parent retirement
-- Each commitment is checked for:
-  - structural validity + attestation-scope match
-  - registered key presence
-  - active window covering the attested block range (retirement bounds already
-    include the dual-publish grace)
-  - valid seal over the domain-tagged commitment body
-- Stable errors surface the index for operator evidence:
-  `MissingSdnCommitments`, `UnknownSdnKey`, `InactiveSdnKey`, `InvalidSeal`,
-  or structural `Commitment`/`ScopeMismatch` failures.
+## 検証フロー
+- `JdgAttestation::validate_with_sdn_registry` は構造をラップします
+  構成証明チェックと SDN 強制。 `JdgSdnPolicy` スレッド:
+  - `require_commitments`: PII/秘密ペイロードの存在を強制します
+  - `rotation`: 親の退職を更新するときに使用される猶予期間
+- 各コミットメントは以下についてチェックされます。
+  - 構造的妥当性 + 証明範囲の一致
+  - 登録されたキーの存在
+  - 証明されたブロック範囲をカバーするアクティブ ウィンドウ (すでにリタイア境界
+    二重公開猶予を含む)
+  - ドメインタグ付きコミットメント本文に有効なシールを貼る
+- 安定したエラーは、オペレーターの証拠のインデックスとして表面化します。
+  `MissingSdnCommitments`、`UnknownSdnKey`、`InactiveSdnKey`、`InvalidSeal`、
+  または構造的な `Commitment`/`ScopeMismatch` 障害。
 
-## Operator runbook
-- **Provision:** register the first SDN key with `activated_at` at or before the
-  first secret block height. Publish the key fingerprint to JDG operators.
-- **Rotate:** generate the successor key, register it with `rotation_parent`
-  pointing at the current key, and confirm the parent retirement equals
-  `child_activation + dual_publish_blocks`. Re-seal payload commitments with
-  the active key during the overlap window.
-- **Audit:** expose registry snapshots (`record`, `keys`) via Torii/status
-  surfaces so auditors can confirm the active key and retirement windows. Alert
-  if the attested range falls outside the active window.
-- **Recovery:** `UnknownSdnKey` → ensure the registry includes the sealing key;
-  `InactiveSdnKey` → rotate or adjust activation heights; `InvalidSeal` →
-  re-seal payloads and refresh attestations.
+## オペレーターのランブック
+- **プロビジョニング:** 最初の SDN キーを `activated_at` に登録するか、その前に登録します。
+  第一秘密ブロックの高さ。キーのフィンガープリントを JDG オペレーターに公開します。
+- **Rotate:** 後継キーを生成し、`rotation_parent` に登録します。
+  現在のキーをポイントし、親のリタイアメントが等しいことを確認します。
+  `child_activation + dual_publish_blocks`。ペイロードコミットメントを再封印する
+  オーバーラップウィンドウ中のアクティブなキー。
+- **監査:** Torii/status 経由でレジストリ スナップショット (`record`、`keys`) を公開します。
+  表面に表示されるため、監査人はアクティブなキーとリタイア期間を確認できます。アラート
+  証明された範囲がアクティブなウィンドウの外側にある場合。
+- **回復:** `UnknownSdnKey` → レジストリにシーリング キーが含まれていることを確認します。
+  `InactiveSdnKey` → 起動の高さを回転または調整します。 `InvalidSeal` →
+  ペイロードを再封印し、証明書を更新します。## ランタイムヘルパー
+- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) ポリシーをパッケージ化 +
+  レジストリを調べ、`validate_with_sdn_registry` 経由で証明書を検証します。
+- レジストリは、Norito でエンコードされた `JdgSdnKeyRecord` バンドルからロードできます (「
+  `JdgSdnEnforcer::from_reader`/`from_path`) または
+  `from_records`、登録中に回転ガードレールを適用します。
+- オペレーターは、Torii/status の証拠として Norito バンドルを永続化できます。
+  同じペイロードが入場時に使用される執行者に供給される間、浮上し、
+  コンセンサスガード。単一のグローバル エンフォーサは、起動時に次のように初期化できます。
+  `init_enforcer_from_path`、および `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
+  status/Torii サーフェスのライブ ポリシー + キー レコードを公開します。
 
-## Runtime helper
-- `JdgSdnEnforcer` (`crates/iroha_core/src/jurisdiction.rs`) packages a policy +
-  registry and validates attestations via `validate_with_sdn_registry`.
-- Registries can be loaded from Norito-encoded `JdgSdnKeyRecord` bundles (see
-  `JdgSdnEnforcer::from_reader`/`from_path`) or assembled with
-  `from_records`, which applies the rotation guardrails during registration.
-- Operators can persist the Norito bundle as evidence for Torii/status
-  surfacing while the same payload feeds the enforcer used by admission and
-  consensus guards. A single global enforcer can be initialised at startup via
-  `init_enforcer_from_path`, and `enforcer()`/`registry_snapshot()`/`sdn_registry_status()`
-  expose the live policy + key records for status/Torii surfaces.
-
-## Tests
-- Regression coverage in `crates/iroha_data_model/src/jurisdiction.rs`:
-  `sdn_registry_accepts_active_commitment`, `sdn_registry_rejects_unknown_key`,
-  `sdn_registry_rejects_inactive_key`, `sdn_registry_rejects_bad_signature`,
-  `sdn_registry_sets_parent_retirement_window`,
-  `sdn_registry_rejects_overlap_beyond_policy`, alongside the existing
-  structural attestation/SDN validation tests.
+## テスト
+- `crates/iroha_data_model/src/jurisdiction.rs` の回帰カバレッジ:
+  `sdn_registry_accepts_active_commitment`、`sdn_registry_rejects_unknown_key`、
+  `sdn_registry_rejects_inactive_key`、`sdn_registry_rejects_bad_signature`、
+  `sdn_registry_sets_parent_retirement_window`、
+  `sdn_registry_rejects_overlap_beyond_policy`、既存の
+  構造証明/SDN 検証テスト。

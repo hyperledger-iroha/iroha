@@ -4,61 +4,63 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w0-summary
-title: W0 کے وسط کا فيڈبیک خلاصہ
-sidebar_label: W0 فيڈبیک (وسط)
-description: core maintainers کے preview wave کے لئے وسطی چیک پوائنٹس، نتائج اور action items.
+المعرف: ملخص المعاينة-w0
+العنوان: W0 وسط الخلاصة
+Sidebar_label: W0 فيبیک (وسط)
+الوصف: يقوم المشرفون الأساسيون بمعاينة الموجة وسط نقاط صغيرة والنتائج وعناصر العمل.
 ---
 
-| آئٹم | تفصیل |
+| ئٹم | تفاصيل |
 | --- | --- |
-| لہر | W0 - core maintainers |
-| خلاصہ تاریخ | 2025-03-27 |
-| ریویو ونڈو | 2025-03-25 -> 2025-04-08 |
-| شرکا | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| آرٹیفیکٹ ٹیگ | `preview-2025-03-24` |
+| لہر | W0 - المشرفون الأساسيون |
+| خلاصةہ تاريخ | 2025-03-27 |
+| ريويو ونڈو | 2025-03-25 -> 2025-04-08 |
+| شرکا | docs-core-01، sdk-rust-01، sdk-js-01، sorafs-ops-01، إمكانية الملاحظة-01 |
+| المقالة القادمة `preview-2025-03-24` |
 
-## نمایاں نکات
+## نماياں نکات
 
-1. **Checksum ورک فلو** - تمام reviewers نے تصدیق کی کہ `scripts/preview_verify.sh`
-   مشترکہ descriptor/archive جوڑی کے خلاف کامیاب رہا۔ کسی دستی override کی
-   ضرورت نہیں ہوئی۔
-2. **نیویگیشن فيڈبیک** - sidebar کی ترتیب میں دو معمولی مسائل رپورٹ ہوئے
-   (`docs-preview/w0 #1-#2`). دونوں Docs/DevRel کو دیے گئے اور لہر کو بلاک
-   نہیں کرتے۔
-3. **SoraFS runbook برابری** - sorafs-ops-01 نے `sorafs/orchestrator-ops` اور
-   `sorafs/multi-source-rollout` کے درمیان زیادہ واضح cross-links کی درخواست کی۔
-   follow-up issue بنایا گیا؛ W1 سے پہلے حل کرنا ہے۔
-4. **ٹیلیمیٹری ریویو** - observability-01 نے تصدیق کی کہ `docs.preview.integrity`,
-   `TryItProxyErrors` اور Try-it proxy logs سب green رہے؛ کوئی alert فائر نہیں ہوا۔
+1. **عمل المجموع الاختباري** - لم يقم جميع المراجعين بالتسجيل في `scripts/preview_verify.sh`
+   الواصف/الأرشيف هو نتيجة لخلافات المنتج. تجاوز هذا الجهاز
+   لا داعي للقلق.
+2. **الحديثة الفيتنامية** - يحتوي الشريط الجانبي على تقريرين عاديين حول القضايا
+   (`docs-preview/w0 #1-#2`). دونو Docs/DevRel قم بتنزيله وتنزيله باللون الأسود
+   لا يوجد.
+3. **SoraFS runbook برابر** - sorafs-ops-01 `sorafs/orchestrator-ops` و
+   `sorafs/multi-source-rollout` هناك عدد كبير من الروابط المتقاطعة الواضحة.
+   قضية المتابعة بنايا گيا؛ W1 سے پہلے حل کرنا ہے۔
+4. **ٹيليميٹر ريو** - إمكانية الملاحظة-01 لا ترصد `docs.preview.integrity`,
+   `TryItProxyErrors` وسجلات وكيل Try-it سب أخضر رہے؛ لا يوجد تنبيه فوري.
 
-## ایکشن آئٹمز
+## ایکشن آئمز
 
-| ID | وضاحت | مالک | اسٹیٹس |
+| معرف | وضاحت | مالك | ٹیٹس |
 | --- | --- | --- | --- |
-| W0-A1 | devportal sidebar entries کو دوبارہ ترتیب دینا تاکہ reviewers والے docs نمایاں ہوں (`preview-invite-*` کو ایک ساتھ رکھیں). | Docs-core-01 | مکمل - sidebar اب reviewers docs کو مسلسل دکھاتا ہے (`docs/portal/sidebars.js`). |
-| W0-A2 | `sorafs/orchestrator-ops` اور `sorafs/multi-source-rollout` کے درمیان واضح cross-link شامل کرنا۔ | Sorafs-ops-01 | مکمل - ہر runbook اب دوسرے کی طرف لنک کرتا ہے تاکہ rollout کے دوران دونوں گائیڈ نظر آئیں۔ |
-| W0-A3 | governance tracker کے ساتھ telemetry snapshots + query bundle شیئر کرنا۔ | Observability-01 | مکمل - bundle `DOCS-SORA-Preview-W0` کے ساتھ منسلک ہے۔ |
+| W0-A1 | إدخالات الشريط الجانبي devportal ستتم إعادة تدويرها من قبل المراجعين ومستندات المستندات (`preview-invite-*` في نفس الوقت). | مستندات-core-01 | مکمل - الشريط الجانبي اب المراجعين مستندات کو مسلسل دکھاتا ہے (`docs/portal/sidebars.js`). |
+| W0-A2 | `sorafs/orchestrator-ops` و`sorafs/multi-source-rollout` عبارة عن رابط متقاطع واضح يشمل کرنا. | Sorafs-ops-01 | مكمل - يعد دليل التشغيل بمثابة نصيحة سهلة الاستخدام لبدء التشغيل دون النظر إلى الرأي. |
+| W0-A3 | متتبع الحوكمة يحتوي على لقطات القياس عن بعد + حزمة الاستعلامات | إمكانية الملاحظة-01 | مكمل - الحزمة `DOCS-SORA-Preview-W0` کے ساتھ منسلک ہے۔ |
 
 ## اختتامی خلاصہ (2025-04-08)
 
-- پانچوں reviewers نے تکمیل کی تصدیق کی، لوکل builds صاف کیے، اور preview ونڈو سے
-  باہر نکل گئے؛ access revocations `DOCS-SORA-Preview-W0` میں ریکارڈ ہیں۔
-- لہر کے دوران کوئی incidents یا alerts نہیں ہوئے؛ telemetry dashboards پوری مدت
-  green رہے۔
-- نیویگیشن + cross-link اقدامات (W0-A1/A2) نافذ ہو چکے ہیں اور اوپر کے docs میں
-  دکھائی دیتے ہیں؛ telemetry evidence (W0-A3) tracker کے ساتھ منسلک ہے۔
-- evidence bundle محفوظ کر دیا گیا: telemetry screenshots، دعوت کی acknowledgements،
-  اور یہ خلاصہ tracker issue سے لنک ہیں۔
+- لا يقوم المراجعون النهائيون باستعراض تلك التقييمات، ويقوم Lukel بإنشاء بيانات واضحة ومعاينة ما تم إنجازه
+  لا يوجد شيء آخر؛ إبطال الوصول `DOCS-SORA-Preview-W0` سجل هنا.
+- لعدم حدوث حوادث أو تنبيهات؛ لوحات معلومات القياس عن بعد پوری مدت
+  رہے۔
+- إجراءات جديدة + عبر الارتباط (W0-A1/A2) تعمل على زيادة عدد المستندات وأحدث المستندات
+  أقوال أخرى؛ أداة تعقب أدلة القياس عن بعد (W0-A3) هي منسلك.
+- حزمة الأدلة محفوظ کر دیا گیا: لقطات شاشة القياس عن بعد، دعوة کی الاعترافات،
+  وهذه مشكلة التعقب باختصار لنك.
 
-## اگلے اقدامات
+##اگلے اجراءات
 
-- W1 کھولنے سے پہلے W0 action items نافذ کریں۔
-- قانونی منظوری اور proxy staging slot حاصل کریں، پھر [preview invite flow](../../preview-invite-flow.md) میں
-  بیان کردہ partner-wave preflight اقدامات پر عمل کریں۔
+- تفعيل W1 لعناصر العمل W0 بشكل فعال.
+- قانونيًا وفتحة التدريج للوكيل متاحة [معاينة تدفق الدعوة](../../preview-invite-flow.md)
+  تم تنفيذ إجراءات الاختبار المبدئي للموجة الشريكة.
 
-_یہ خلاصہ [preview invite tracker](../../preview-invite-tracker.md) سے منسلک ہے تاکہ
-DOCS-SORA roadmap قابلِ سراغ رہے۔_
+_یہ خلاصةہ [متعقب الدعوة المعاينة](../../preview-invite-tracker.md) سے منسلک ہے تاکہ
+DOCS-SORA خريطة الطريق قابلة سراغ رہے۔_

@@ -6,35 +6,37 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Agenda Council Workflow
 description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import CodeBlock from '@theme/CodeBlock';
-import sortitionSummary from '@site/docs/examples/ministry/agenda_sortition_summary_example.json';
+'@theme/CodeBlock' မှ CodeBlock ကို တင်သွင်းပါ။
+'@site/docs/examples/ministry/agenda_sortition_summary_example.json' မှ တင်သွင်းခြင်း အနှစ်ချုပ်
 
-const summary = sortitionSummary;
+const summary = အမျိုးအစားခွဲခြင်းအကျဉ်းချုပ်;
 
-function SortitionSummaryTable({rows}) {
-  return (
-    <table>
+လုပ်ဆောင်ချက် အမျိုးအစားခွဲခြင်း အကျဉ်းချုပ်ဇယား({rows}) {
+  ပြန်လာ (
+    <စားပွဲ>
       <thead>
         <tr>
-          <th>Slot</th>
-          <th>Member</th>
-          <th>Role</th>
+          <th>အပေါက်</th>
+          <th>အဖွဲ့ဝင်</th>
+          <th>အခန်းကဏ္ဍ</th>
           <th>Org</th>
-          <th>Weight</th>
-          <th>Entropy (truncated)</th>
+          <th>အလေးချိန်</th>
+          <th>Entropy (ဖြတ်တောက်ထားသည်)</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((row, index) => (
+        {rows.map((အတန်း၊ အညွှန်း) => (
           <tr key={`${row.member_id}-${row.draw_position}`}>
             <td>{index + 1}</td>
             <td><code>{row.member_id}</code></td>
             <td>{row.role}</td>
             <td>{row.organization}</td>
             <td>{row.weight}</td>
-            <td><code>{row.draw_entropy_hex.slice(0, 16)}…</code></td>
+            <td><code>{row.draw_entropy_hex.slice(0၊ 16)}…</code></td>
           </tr>
         ))}
       </tbody>
@@ -42,47 +44,47 @@ function SortitionSummaryTable({rows}) {
   );
 }
 
-## Overview
+## ခြုံငုံသုံးသပ်ချက်
 
-Roadmap item **MINFO-2** requires a deterministic path from proposal linting to
-public sortition evidence so anyone can confirm how a case reached the agenda
-council. This page wires the previously landed CLI helpers directly into the
-developer portal so proposers, auditors, and platform teams can follow the same
-checklist without spelunking the mono-repo.
+လမ်းပြမြေပုံပါ အကြောင်းအရာ **MINFO-2** သည် အဆိုပြုချက်မှ အလင်းတန်းအထိ အဆုံးအဖြတ်ပေးသည့် လမ်းကြောင်းတစ်ခု လိုအပ်သည်။
+အမှုကို မည်ကဲ့သို့ လုပ်ငန်းစဉ်သို့ ရောက်ရှိကြောင်း မည်သူမဆို အတည်ပြုနိုင်စေရန် အများသူငှာ ခွဲခြားခြင်းဆိုင်ရာ အထောက်အထားများ
+ကောင်စီ ဤစာမျက်နှာသည် ယခင်က ဆင်းသက်လာသော CLI အကူအညီပေးသူများကို တိုက်ရိုက်ဆက်သွယ်ပေးသည်။
+developer portal သည် အဆိုပြုသူများ၊ စာရင်းစစ်များနှင့် ပလက်ဖောင်းအဖွဲ့များသည် တူညီသောအတိုင်း လုပ်ဆောင်နိုင်သည်။
+mono-repo ကို မဖော်ပြဘဲ စစ်ဆေးရန်စာရင်း။
 
-The workflow covers three repeatable steps:
+အလုပ်အသွားအလာတွင် ထပ်ခါတလဲလဲ လုပ်ဆောင်နိုင်သော အဆင့်သုံးဆင့် ပါဝင်သည်-
 
-1. Validate `AgendaProposalV1` payloads locally and reject duplicate hashes
-   before the submission reaches the moderation queue.
-2. Publish duplicate-registry hits alongside the proposal so council staff can
-   trace earlier cases without losing determinism.
-3. Run the sortition helper, capture the Merkle proof bundle, and surface the
-   selected roster inside the portal so citizens can replay the draw.
+1. `AgendaProposalV1` ပေးချေမှုများအား စက်တွင်းတွင် အတည်ပြုပြီး ထပ်နေသော hashe များကို ငြင်းပယ်ပါ
+   တင်သွင်းမှု စိစစ်ရေး တန်းစီမရောက်ရှိမီ။
+2. ကောင်စီဝန်ထမ်းများ တတ်နိုင်သရွေ့ အဆိုပြုချက်နှင့်အတူ မိတ္တူပွား-မှတ်ပုံတင်ခြင်းများကို ထုတ်ဝေပါ။
+   သတ်မှတ်ပြဋ္ဌာန်းမှု မပျက်စေဘဲ အစောပိုင်းဖြစ်ရပ်များကို ခြေရာခံပါ။
+3. အမျိုးအစားခွဲရေးအကူကိုဖွင့်ပါ၊ Merkle အထောက်အထားအစုအဝေးကိုဖမ်းယူပြီး ၎င်းကိုမျက်နှာပြင်ပေါ်တင်ပါ။
+   နိုင်ငံသားများသည် မဲနှိုက်ခြင်းကို ပြန်လည်ကစားနိုင်စေရန် ပေါ်တယ်အတွင်းတွင် ရွေးချယ်ထားသော စာရင်းဇယားများ။
 
-All helpers live in `cargo xtask ministry-agenda`; the Norito schema is
-documented under `docs/source/ministry/agenda_council_proposal.md`.
+အကူအညီပေးသူများအားလုံး `cargo xtask ministry-agenda` တွင်နေထိုင်သည်။ Norito schema သည်
+`docs/source/ministry/agenda_council_proposal.md` အောက်တွင် မှတ်တမ်းတင်ထားသည်။
 
-## 1. Validate proposals locally
+## 1. ဒေသအလိုက် အဆိုပြုချက်များကို အတည်ပြုပါ။
 
-Use the CLI to lint JSON payloads and assert that required evidence (hash
-families, digest lengths, language tag, submitter contact) is present. The
-validator shares code with the Torii ingestion path, so a proposal that passes
-here will also pass when uploaded through the portal.
+JSON payloads များကိုဖော်ပြရန်နှင့် လိုအပ်သောအထောက်အထားများ (hash
+မိသားစုများ၊ အတိုကောက်အရှည်များ၊ ဘာသာစကားတက်ဂ်၊ တင်ပြသူ အဆက်အသွယ်) ရှိနေပါသည်။ ဟိ
+validator သည် Torii သုံးစွဲမှုလမ်းကြောင်းနှင့် ကုဒ်ကို မျှဝေသည်၊ ထို့ကြောင့် ဖြတ်သန်းမည့် အဆိုပြုချက်
+ပေါ်တယ်မှတဆင့် အပ်လုဒ်လုပ်သည့်အခါတွင်လည်း ဤနေရာမှ ဖြတ်သန်းသွားမည်ဖြစ်သည်။
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda validate \\
-  --proposal docs/examples/ministry/agenda_proposal_example.json \\
+<CodeBlock language="bash">{`ကုန်တင် xtask ဝန်ကြီးဌာန-အစီအစဉ်ကို အတည်ပြုသည် \\
+  --proposal docs/example/ministry/agenda_proposal_example.json \\
   --registry docs/examples/ministry/agenda_duplicate_registry.json`}</CodeBlock>
 
-- Add `--allow-registry-conflicts` when triaging historical payloads; new
-  submissions should fail fast when a fingerprint already exists.
-- The examples directory ships the reference proposal and registry so SDKs can
-  adopt the format without hard-coding private payloads.
+- သမိုင်းဝင်ပေးဆောင်မှုများကို စမ်းသပ်သည့်အခါ `--allow-registry-conflicts` ကို ထည့်ပါ။ အသစ်
+  လက်ဗွေရာ ရှိနှင့်ပြီးပါက တင်ပြချက်များ မြန်ဆန်စွာ ပျက်ကွက်သင့်ပါသည်။
+- ဥပမာလမ်းညွှန်များသည် SDKs များလုပ်ဆောင်နိုင်စေရန် ရည်ညွှန်းအဆိုပြုချက်နှင့် မှတ်ပုံတင်ခြင်းကို ပို့ဆောင်ပေးသည်။
+  hard-coding သီးသန့် payloads မပါဘဲ format ကိုလက်ခံပါ။
 
-## 2. Publish duplicate-registry context
+## 2. မိတ္တူပွား-မှတ်ပုံတင်ခြင်း အကြောင်းအရာကို ထုတ်ဝေပါ။
 
-Every accepted proposal includes the registry digest that was consulted before
-ingest. Capture the SoraFS CID or Torii manifest path for that registry and add
-it to your submission metadata so council reviewers can verify the same JSON.
+လက်ခံထားသော အဆိုပြုချက်တိုင်းတွင် ယခင်က ဆွေးနွေးခဲ့သော မှတ်ပုံတင်ခြင်း အနှစ်ချုပ် ပါဝင်ပါသည်။
+စားသုံးမိခြင်း။ ထိုမှတ်ပုံတင်ခြင်းအတွက် SoraFS CID သို့မဟုတ် Torii မန်နီးဖက်စ်လမ်းကြောင်းကို ဖမ်းယူပြီး ထည့်ပါ
+ကောင်စီမှ ပြန်လည်သုံးသပ်သူများသည် တူညီသော JSON ကို အတည်ပြုနိုင်စေရန် သင်၏တင်ပြမှု မက်တာဒေတာသို့ ၎င်းကို ပေးပို့ပါ။
 
 ```json title="Duplicate registry (excerpt)"
 {
@@ -97,34 +99,32 @@ it to your submission metadata so council reviewers can verify the same JSON.
 }
 ```
 
-When the CLI reports a collision, the portal shows the linked proposal IDs so
-operators can merge or reject resubmissions deterministically.
+CLI သည် ယာဉ်တိုက်မှုတစ်ခုအား အစီရင်ခံသောအခါ၊ ပေါ်တယ်သည် ချိတ်ဆက်ထားသော အဆိုပြုချက် IDs များကို ပြသသည်။
+အော်ပရေတာများသည် ပြန်လည်တင်ပြချက်များကို တိကျစွာ ပေါင်းစပ်နိုင်သည် သို့မဟုတ် ငြင်းပယ်နိုင်သည်။
 
-## 3. Run and publish the sortition summary
+## 3. အမျိုးအစားအကျဉ်းချုပ်ကို လုပ်ဆောင်ပြီး ထုတ်ဝေပါ။
 
-Once a docket is ready, run the deterministic sortition helper. It consumes the
-roster JSON, seed, and target slot count, then emits a Merkle-proof-backed
-summary. The summary JSON is what the portal renders in the **Council draw**
-panel.
+docket တစ်ခုအဆင်သင့်ဖြစ်ပါက၊ အဆုံးအဖြတ်ပေးသော အမျိုးအစားခွဲပေးသူကို ဖွင့်ပါ။ ၎င်းသည် စားသုံးသည်။
+စာရင်းဇယား JSON၊ အမျိုးအနွယ်နှင့် ပစ်မှတ်အထိုင်အရေအတွက်၊ ထို့နောက် Merkle-proof-ကျောထောက်နောက်ခံပြုထားသော ထုတ်လွှတ်သည်
+အနှစ်ချုပ်။ အကျဉ်းချုပ် JSON သည် **Council ဆွဲခြင်း** တွင် portal မှ ထုတ်ပေးသည်
+ဘောင်။
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda sortition \\
-  --roster docs/examples/ministry/agenda_council_roster.json \\
-  --slots 3 \\
+<CodeBlock language="bash">{`ကုန်တင် xtask ဝန်ကြီးဌာန-အစီအစဉ် အမျိုးအစားခွဲခြင်း \\
+  --roster docs/example/ministry/agenda_council_roster.json \\
+  -- slot 3 \\
   --seed 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
   --output artifacts/ministry/sortition/2026-03-12.json`}</CodeBlock>
 
-Store the resulting JSON on SoraFS (or alongside the signed agenda packet) and
-link the CID in the proposal tracker. The developer portal consumes the same
-JSON structure; the example below renders the bundled
-`agenda_sortition_summary_example.json`.
+ရလဒ် JSON ကို SoraFS တွင် (သို့မဟုတ် လက်မှတ်ရေးထိုးထားသော အစီအစဉ်ထုပ်ပိုးမှုနှင့်အတူ) နှင့်
+အဆိုပြုချက် ခြေရာခံစနစ်တွင် CID ကို ချိတ်ဆက်ပါ။ developer portal သည် အလားတူစားသုံးသည်။
+JSON ဖွဲ့စည်းပုံ၊ အောက်ဖော်ပြပါ ဥပမာသည် အစုအဝေးကို ပြန်ဆိုသည်။
+`agenda_sortition_summary_example.json`။
 
-### Example council draw
-
-<table>
+### ဥပမာ ကောင်စီဆွဲ<စားပွဲ>
   <thead>
     <tr>
-      <th>Field</th>
-      <th>Value</th>
+      <th>အကွက်</th>
+      <th>တန်ဖိုး</th>
     </tr>
   </thead>
   <tbody>
@@ -133,23 +133,23 @@ JSON structure; the example below renders the bundled
       <td><code>{summary.algorithm}</code></td>
     </tr>
     <tr>
-      <td>Roster digest (BLAKE3)</td>
+      <td>စာရင်းဇယား (BLAKE3)</td>
       <td><code>{summary.roster_digest.blake3_hex}</code></td>
     </tr>
     <tr>
-      <td>Roster digest (SHA-256)</td>
+      <td>စာရင်းဇယား (SHA-256)</td>
       <td><code>{summary.roster_digest.sha256_hex}</code></td>
     </tr>
     <tr>
-      <td>Seed</td>
+      <td>မျိုးစေ့</td>
       <td><code>{summary.seed_hex}</code></td>
     </tr>
     <tr>
-      <td>Slots</td>
+      <td>အပေါက်များ</td>
       <td>{summary.slots}</td>
     </tr>
     <tr>
-      <td>Eligible members</td>
+      <td>သတ်မှတ်ချက်ပြည့်မီသော အဖွဲ့ဝင်များ</td>
       <td>{summary.eligible_members}</td>
     </tr>
     <tr>
@@ -161,17 +161,17 @@ JSON structure; the example below renders the bundled
 
 <SortitionSummaryTable rows={summary.selected} />
 
-Each selected member includes:
+ရွေးချယ်ထားသော အဖွဲ့ဝင်တိုင်းတွင်-
 
-- `draw_entropy_hex` (32 BLAKE3 bytes) so anyone can recompute the RNG output.
-- `eligible_index` and `original_index` so auditors can prove that opt-outs were
-  honored.
-- A Merkle proof covering the roster leaf; reproducing the tree confirms the
-  roster published inside the packet matches the draw.
+- `draw_entropy_hex` (32 BLAKE3 bytes) ထို့ကြောင့် မည်သူမဆို RNG အထွက်ကို ပြန်လည်တွက်ချက်နိုင်ပါသည်။
+- `eligible_index` နှင့် `original_index` သို့မှသာ စာရင်းစစ်များသည် ရွေးချယ်ခံရကြောင်း သက်သေပြနိုင်သည်
+  ဂုဏ်ပြုပါသည်။
+- စာရင်းဇယားအရွက်ကို ဖုံးအုပ်ထားသော Merkle အထောက်အထား၊ အပင်မျိုးပွားခြင်းကို အတည်ပြုသည်။
+  ထုပ်ပိုးမှုအတွင်း ထုတ်ပြန်ထားသော စာရင်းဇယားသည် မဲနှိုက်ခြင်းနှင့် ကိုက်ညီသည်။
 
-### Decision log
+### ဆုံးဖြတ်ချက်မှတ်တမ်း
 
-When the council votes on a proposal, attach the decision memo and the
-sortition summary CID to the governance action (Torii `/v1/gov/*` entry). Portal
-pages link the memo, the vote tally, and the JSON shown above so every action
-contains the full evidence chain required by **MINFO-2**.
+ကောင်စီက အဆိုကို မဲခွဲတဲ့အခါ ဆုံးဖြတ်ချက်မှတ်စုတိုနဲ့ ပူးတွဲပါ
+အုပ်ချုပ်မှုလုပ်ဆောင်ချက်အတွက် အမျိုးအစားခွဲခြင်းအကျဉ်းချုပ် CID (Torii `/v1/gov/*` ထည့်သွင်းမှု)။ မုခ်ဦး
+စာမျက်နှာများသည် မှတ်စုတို၊ မဲစာရင်းနှင့် အထက်တွင်ပြသထားသည့် JSON တို့ကို ချိတ်ဆက်ထားသောကြောင့် လုပ်ဆောင်ချက်တိုင်း
+**MINFO-2** မှ လိုအပ်သော အထောက်အထား ကွင်းဆက် အပြည့်အစုံ ပါရှိသည်။

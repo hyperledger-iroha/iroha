@@ -7,79 +7,76 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8324267c90cfbaf718760c4883427e85d81edcfa180dd9f64fd31a5e219749f4
 source_last_modified: "2026-01-17T04:50:15.304524+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# FASTPQ Prover Work Breakdown
+# FASTPQ Prover жұмысының бұзылуы
 
-This document captures the staged plan for delivering a production-ready FASTPQ-ISI prover and wiring it into the data-space scheduling pipeline. Every definition below is normative unless marked as a TODO. Estimated soundness uses Cairo-style DEEP-FRI bounds; automated rejection-sampling tests in CI fail if the measured bound drops below 128 bits.
+Бұл құжат өндіріске дайын FASTPQ-ISI проверін жеткізу және оны деректер кеңістігін жоспарлау құбырына қосу үшін кезеңдік жоспарды қамтиды. Төмендегі әрбір анықтама TODO ретінде белгіленбесе, нормативтік болып табылады. Болжалды сенімділік Каир стиліндегі DEEP-FRI шекараларын пайдаланады; Өлшенген шекара 128 биттен төмен түссе, CI жүйесіндегі автоматтандырылған қабылдамау сынамалары сәтсіз аяқталады.
 
-## Stage 0 — Hash Placeholder (landed)
-- Deterministic Norito encoding with BLAKE2b commitment.
-- Placeholder backend returning `BackendUnavailable`.
-- Canonical parameter table provided by `fastpq_isi`.
+## 0-кезең — хэш толтырғышы (қонды)
+- BLAKE2b міндеттемесі бар детерминистік Norito кодтау.
+- `BackendUnavailable` қайтаратын толтырғыш сервері.
+- `fastpq_isi` ұсынған канондық параметрлер кестесі.
 
-## Stage 1 — Trace Builder Prototype
+## 1-кезең — Trace Builder прототипі
 
-> **Status (2025-11-09):** `fastpq_prover` now exposes canonical packing
-> helpers (`pack_bytes`, `PackedBytes`) and the deterministic Poseidon2
-> ordering commitment over Goldilocks. Constants are pinned to
-> `ark-poseidon2` commit `3f2b7fe`, closing the follow-up about swapping out the interim BLAKE2
-> placeholder is closed. Golden fixtures (`tests/fixtures/packing_roundtrip.json`,
-> `tests/fixtures/ordering_hash.json`) now anchor the regression suite.
+> **Күй (2025-11-09):** `fastpq_prover` енді канондық қаптаманы көрсетеді
+> көмекшілер (`pack_bytes`, `PackedBytes`) және детерминирленген Poseidon2
+> Goldilocks арқылы тапсырыс беру міндеттемесі. Тұрақтылар бекітіледі
+> `ark-poseidon2` `3f2b7fe` міндеттемесін орындай отырып, аралық BLAKE2 ауыстыру туралы бақылауды аяқтайды.
+> толтырғыш жабық. Алтын арматура (`tests/fixtures/packing_roundtrip.json`,
+> `tests/fixtures/ordering_hash.json`) енді регрессия жиынтығын бекітіңіз.
 
-### Objectives
-- Implement the FASTPQ trace builder for the KV-update AIR. Each row must encode:
-  - `key_limbs[i]`: base-256 limbs (7 bytes, little-endian) of the canonical key path.
-  - `value_old_limbs[i]`, `value_new_limbs[i]`: same packing for pre/post values.
-  - Selector columns: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm`.
-  - Auxiliary columns: `delta = value_new - value_old`, `running_asset_delta`, `metadata_hash`, `supply_counter`.
-  - Asset columns: `asset_id_limbs[i]` using 7-byte limbs.
-  - SMT columns per level `ℓ`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, plus `neighbour_leaf` for non-membership.
-  - Metadata columns: `dsid`, `slot`.
-- **Deterministic ordering.** Sort rows lexicographically by `(key_bytes, op_rank, original_index)` using a stable sort. `op_rank` mapping: `transfer=0`, `mint=1`, `burn=2`, `role_grant=3`, `role_revoke=4`, `meta_set=5`. `original_index` is the 0-based index before sorting. Persist the resulting Poseidon2 ordering hash (domain tag `fastpq:v1:ordering`). Encode the hash preimage as `[domain_len, domain_limbs…, payload_len, payload_limbs…]` where lengths are u64 field elements so trailing zero bytes remain distinguishable.
-- Lookup witness: produce `perm_hash = Poseidon2(role_id || permission_id || epoch_u64_le)` when the stored column `s_perm` (logical OR of `s_role_grant` and `s_role_revoke`) is 1. Role/permission IDs are fixed-width 32-byte LE strings; epoch is 8-byte LE.
-- Enforce invariants both before and inside the AIR: selectors mutually exclusive, per-asset conservation, dsid/slot constants.
-- `N_trace = 2^k` (`pow2_ceiling` of row count); `N_eval = N_trace * 2^b` where `b` is the blowup exponent.
-- Provide fixtures and property tests:
-  - Packing round-trips (`fastpq_prover/tests/packing.rs`, `tests/fixtures/packing_roundtrip.json`).
-  - Ordering stability hash (`tests/fixtures/ordering_hash.json`).
-  - Batch fixtures (`trace_transfer.json`, `trace_mint.json`, `trace_duplicate_update.json`).
-
-### AIR Column Schema
-| Column Group      | Names                                                                                  | Description                                                                                                           |
-| ----------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Activity          | `s_active`                                                                               | 1 for real rows, 0 for padding.                                                                                       |
-| Main              | `key_limbs[i]`, `value_old_limbs[i]`, `value_new_limbs[i]`                               | Packed Goldilocks elements (little-endian, 7-byte limbs).                                                             |
-| Asset             | `asset_id_limbs[i]`                                                                      | Packed canonical asset identifier (little-endian, 7-byte limbs).                                                      |
-| Selectors         | `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm` | 0/1. Constraint: Σ selectors (including `s_perm`) = `s_active`; `s_perm` mirrors role grant/revoke rows.              |
-| Auxiliary         | `delta`, `running_asset_delta`, `metadata_hash`, `supply_counter`                        | State used for constraints, conservation, and audit trails.                                                           |
-| SMT               | `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, `neighbour_leaf`                   | Per-level Poseidon2 inputs/outputs plus neighbour witness for non-membership.                                         |
-| Lookup            | `perm_hash`                                                                              | Poseidon2 hash for permission lookup (constrained only when `s_perm = 1`).                                            |
-| Metadata          | `dsid`, `slot`                                                                           | Constant across rows.                                                                                                 |
-
-### Math & Constraints
-- **Field packing:** bytes are chunked into 7-byte limbs (little-endian). Each limb `limb_j = Σ_{k=0}^{6} byte_{7j+k} * 256^k`; reject limbs ≥ Goldilocks modulus.
-- **Balance/conservation:** let `δ = value_new - value_old`. Group rows by `asset_id`. Define `r_asset_start = 1` at the first row of each asset group (0 otherwise) and constrain
+### Мақсаттар
+- KV-жаңарту AIR үшін FASTPQ трасса құрастырушысын іске қосыңыз. Әрбір жол кодтауы керек:
+  - `key_limbs[i]`: канондық кілт жолының негізі-256 лимбі (7 байт, аз-эндиан).
+  - `value_old_limbs[i]`, `value_new_limbs[i]`: алдыңғы/соңғы мәндер үшін бірдей қаптама.
+  - Таңдау бағандары: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_role_revoke`, I100NI67X0, `s_perm`.
+  - Көмекші бағандар: `delta = value_new - value_old`, `running_asset_delta`, `metadata_hash`, `supply_counter`.
+  - Актив бағандары: `asset_id_limbs[i]` 7 байт лимиттерді пайдаланады.
+  - `ℓ` деңгейіндегі SMT бағандары: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, сонымен қатар мүшелік еместер үшін `neighbour_leaf`.
+  - Метадеректер бағандары: `dsid`, `slot`.
+- **Детерминистік реттілік.** Тұрақты сұрыптау арқылы жолдарды лексикографиялық түрде `(key_bytes, op_rank, original_index)` бойынша сұрыптаңыз. `op_rank` салыстыру: `transfer=0`, `mint=1`, `burn=2`, `role_grant=3`, `role_revoke=4`, Prometheus. `original_index` сұрыптау алдындағы 0-негізделген индекс. Алынған Poseidon2 тапсырыс хэшін сақтау (`fastpq:v1:ordering` домен тегі). Хэштің алдын ала кескінін `[domain_len, domain_limbs…, payload_len, payload_limbs…]` ретінде кодтаңыз, мұнда ұзындықтар u64 өріс элементтері болып табылады, сондықтан кейінгі нөл байттар ерекшеленетін болып қалады.
+- Іздеу куәгері: `s_perm` сақталған баған (логикалық НЕМЕСЕ `s_role_grant` және `s_role_revoke`) 1 болғанда `perm_hash = Poseidon2(role_id || permission_id || epoch_u64_le)` жасаңыз. Рөл/рұқсат идентификаторлары бекітілген ені 32 байт LE; дәуірі 8 байт LE.
+- AIR алдында да, ішінде де инвариантты күшейтіңіз: селекторлар өзара эксклюзивті, әр активті сақтау, dsid/слот тұрақтылары.
+- `N_trace = 2^k` (жол санының `pow2_ceiling`); `N_eval = N_trace * 2^b` мұндағы `b` - үрлеу көрсеткіші.
+- Арматура мен мүлік сынақтарын қамтамасыз етіңіз:
+  - Қаптаманың екі жаққа айналуы (`fastpq_prover/tests/packing.rs`, `tests/fixtures/packing_roundtrip.json`).
+  - Тұрақтылық хэшіне тапсырыс беру (`tests/fixtures/ordering_hash.json`).
+  - Пакеттік қондырғылар (`trace_transfer.json`, `trace_mint.json`, `trace_duplicate_update.json`).### AIR бағанының схемасы
+| Бағандар тобы | Есімдері | Сипаттама |
+| ----------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Әрекет | `s_active` | 1 нақты жолдар үшін, 0 толтыру үшін.                                                                                       |
+| Негізгі | `key_limbs[i]`, `value_old_limbs[i]`, `value_new_limbs[i]` | Бумаланған Goldilocks элементтері (литл-эндиан, 7 байт лимбтер).                                                             |
+| Актив | `asset_id_limbs[i]` | Бумаланған канондық актив идентификаторы (литл-эндиан, 7 байт лимбтер).                                                      |
+| Таңдаушылар | `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm` | 0/1. Шектеу: Σ селекторлар (соның ішінде `s_perm`) = `s_active`; `s_perm` рөлді беру/қайтару жолдарын көрсетеді.              |
+| Көмекші | `delta`, `running_asset_delta`, `metadata_hash`, `supply_counter` | Шектеулер, сақтау және тексеру жолдары үшін пайдаланылатын күй.                                                           |
+| SMT | `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, `neighbour_leaf` | Әр деңгейдегі Poseidon2 кірістері/шығыстары және мүшеліктен тыс көрші куәгер.                                         |
+| Іздеу | `perm_hash` | Рұқсат іздеуге арналған Poseidon2 хэш (тек `s_perm = 1` кезінде шектелген).                                            |
+| Метадеректер | `dsid`, `slot` | Жолдар бойынша тұрақты.                                                                                                 |### Математика және шектеулер
+- **Өріс орамы:** байттар 7 байт лимиттерге (кіші-эндиан) бөлінген. Әрбір мүше `limb_j = Σ_{k=0}^{6} byte_{7j+k} * 256^k`; мүшелерді қабылдамау ≥ Goldilocks модулі.
+- **Баланс/сақтау:** `δ = value_new - value_old` болсын. Жолдарды `asset_id` арқылы топтаңыз. Әрбір актив тобының бірінші жолында `r_asset_start = 1` анықтаңыз (әйтпесе 0) және шектеңіз
   ```
   running_asset_delta = (1 - r_asset_start) * running_asset_delta_prev + δ.
   ```
-  On the last row of each asset group assert
+  Әрбір актив тобының соңғы жолында бекіту
   ```
   running_asset_delta = Σ (s_mint * δ) - Σ (s_burn * δ).
   ```
-  Transfers satisfy the constraint automatically because their δ values sum to zero across the group. Example: if `value_old = 100` and `value_new = 120` on a mint row, δ = 20, so the mint sum contributes +20 and the final check resolves to zero when no burns occur.
-- **Padding:** introduce `s_active`. Multiply all row constraints by `s_active` and enforce a contiguous prefix: `s_active[i] ≥ s_active[i+1]`. Padding rows (`s_active=0`) must keep constant values but are otherwise unconstrained.
-- **Ordering hash:** Poseidon2 hash (domain `fastpq:v1:ordering`) over row encodings; stored in Public IO for auditability.
+  Тасымалдаулар шектеуді автоматты түрде қанағаттандырады, себебі олардың δ мәндері топ бойынша нөлге тең. Мысал: егер `value_old = 100` және `value_new = 120` жалбыз жолында болса, δ = 20, сондықтан жалбыз сомасы +20 қосады және ешқандай күйік болмаған кезде соңғы тексеру нөлге тең болады.
+- ** Толтырғыш:** `s_active` енгізіңіз. Барлық жол шектеулерін `s_active` көбейтіңіз және сабақтас префиксті орындаңыз: `s_active[i] ≥ s_active[i+1]`. Толтырғыш жолдар (`s_active=0`) тұрақты мәндерді сақтауы керек, бірақ басқаша шектеусіз.
+- **Тапсырыс хэші:** жол кодтауларының үстінен Poseidon2 хэш (домен `fastpq:v1:ordering`); тексеру мүмкіндігі үшін Public IO ішінде сақталады.
 
-## Stage 2 — STARK Prover Core
+## 2-кезең — STARK Prover Core
 
-### Objectives
-- Build Poseidon2 Merkle commitments over trace and lookup evaluation vectors. Parameters: rate=2, capacity=1, full rounds=8, partial rounds=57, constants pinned to `ark-poseidon2` commit `3f2b7fe` (v0.3.0).
-- Low-degree extension: evaluate each column on domain `D = { g^i | i = 0 .. N_eval-1 }`, where `N_eval = 2^{k+b}` divides the 2-adic capacity of Goldilocks. Let `g = ω^{(p-1)/N_eval}` with `ω` the fixed primitive root of Goldilocks and `p` its modulus; use the base subgroup (no coset). Record `g` in the transcript (tag `fastpq:v1:lde`).
-- Composition polynomials: for each constraint `C_j`, form `F_j(X) = C_j(X) / Z_N(X)` with degree margins listed below.
-- Lookup argument (permissions): sample `γ` from transcript. Trace product `Z_0 = 1`, `Z_i = Z_{i-1} * (perm_hash_i - γ)^{s_perm_i}`. Table product `T = ∏_j (table_perm_j - γ)`. Boundary constraint: `Z_final / T = 1`.
-- DEEP-FRI with arity `r ∈ {8, 16}`: for each layer, absorb the root with tag `fastpq:v1:fri_layer_ℓ`, sample `β_ℓ` (tag `fastpq:v1:beta_ℓ`), and fold via `H_{ℓ+1}(i) = Σ_{k=0}^{r-1} H_ℓ(r*i + k) * β_ℓ^k`.
-- Proof object (Norito-encoded):
+### Мақсаттар
+- Бақылау және іздеу векторлары бойынша Poseidon2 Merkle міндеттемелерін құрастырыңыз. Параметрлер: жылдамдық=2, сыйымдылық=1, толық айналымдар=8, ішінара айналымдар=57, `ark-poseidon2` орындауына бекітілген тұрақтылар `3f2b7fe` (v0.3.0).
+- Төмен дәрежелі кеңейтім: `D = { g^i | i = 0 .. N_eval-1 }` доменіндегі әрбір бағанды ​​бағалаңыз, мұнда `N_eval = 2^{k+b}` Goldilocks 2-адик сыйымдылығын бөледі. `g = ω^{(p-1)/N_eval}` `ω` бар Goldilocks тұрақты қарабайыр түбірі және `p` оның модулі болсын; негізгі ішкі топты пайдаланыңыз (косет жоқ). Транскриптке `g` жазыңыз (`fastpq:v1:lde` тегі).
+- Құрамдық көпмүшеліктер: әрбір `C_j` шектеуі үшін, төменде тізімделген дәреже шеттері бар `F_j(X) = C_j(X) / Z_N(X)` пішімі.
+- Аргументті іздеу (рұқсаттар): транскрипттен `γ` үлгісі. `Z_0 = 1`, `Z_i = Z_{i-1} * (perm_hash_i - γ)^{s_perm_i}` ізі өнімі. Кесте өнімі `T = ∏_j (table_perm_j - γ)`. Шекаралық шектеу: `Z_final / T = 1`.
+- `r ∈ {8, 16}` arity бар DEEP-FRI: әр қабат үшін `fastpq:v1:fri_layer_ℓ` тегі бар тамырды, `β_ℓ` үлгісін (`fastpq:v1:beta_ℓ` тегі) және `H_{ℓ+1}(i) = Σ_{k=0}^{r-1} H_ℓ(r*i + k) * β_ℓ^k` арқылы бүктеңіз.
+- Дәлелдеу нысаны (Norito кодталған):
   ```
   Proof {
       protocol_version: u16,
@@ -94,113 +91,107 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
       queries: Vec<QueryOpening>,
   }
   ```
-- Verifier mirrors prover; run regression suite on 1k/5k/20k-row traces with golden transcripts.
+- Провер айналарын тексеру; алтын транскрипттері бар 1k/5k/20k-жолдардағы регрессия жиынтығын іске қосыңыз.
 
-### Degree Accounting
-| Constraint | Degree before division | Degree after selectors | Margin vs `deg(Z_N)` |
+### Бухгалтерлік есеп
+| Шектеу | Бөлу алдындағы дәреже | Селекторлардан кейінгі дәреже | Маржа қарсы `deg(Z_N)` |
 |------------|------------------------|------------------------|----------------------|
-| Transfer/mint/burn conservation | ≤1 | ≤1 | `deg(Z_N) - 2` |
-| Role grant/revoke lookup | ≤2 | ≤2 | `deg(Z_N) - 3` |
-| Metadata set | ≤1 | ≤1 | `deg(Z_N) - 2` |
-| SMT hash (per level) | ≤3 | ≤3 | `deg(Z_N) - 4` |
-| Lookup grand product | product relation | N/A | Boundary constraint |
-| Boundary roots / supply totals | 0 | 0 | exact |
+| Тасымалдау/жалбыз/күйікті сақтау | ≤1 | ≤1 | `deg(Z_N) - 2` |
+| Рөлді беру/қайтару іздеу | ≤2 | ≤2 | `deg(Z_N) - 3` |
+| Метадеректер жинағы | ≤1 | ≤1 | `deg(Z_N) - 2` |
+| SMT хэш (әр деңгейде) | ≤3 | ≤3 | `deg(Z_N) - 4` |
+| Үлкен өнімді іздеңіз | өнім қатынасы | Жоқ | Шекаралық шектеу |
+| Шекаралық түбірлер / ұсыныс қорытындылары | 0 | 0 | дәл |
 
-Padding rows are handled through `s_active`; dummy rows extend the trace to `N_trace` without violating constraints.
+Толтырғыш жолдар `s_active` арқылы өңделеді; жалған жолдар шектеулерді бұзбай ізді `N_trace` дейін кеңейтеді.## Кодтау және транскрипт (жаһандық)
+- **Байтты орау:** базалық-256 (7-байт лимбтер, аз-эндиан). `fastpq_prover/tests/packing.rs` жүйесіндегі сынақтар.
+- **Өрісті кодтау:** канондық Goldilocks (кіші-эндиандық 64-бит лимб, қабылдамау ≥ p); Poseidon2 шығыстары/SMT түбірлері 32 байт аз эндиандық массивтер ретінде серияланған.
+- **Транскрипт (Фиат–Шамир):**
+  1. BLAKE2b `protocol_version`, `params_version`, `parameter_set`, `public_io` және Poseidon2 растау тегін (`fastpq:v1:init`) сіңіреді.
+  2. `trace_root`, `lookup_root` (`fastpq:v1:roots`) сіңіріңіз.
+  3. `γ` (`fastpq:v1:gamma`) іздеу тапсырмасын шығарыңыз.
+  4. `α_j` (`fastpq:v1:alpha_j`) композиция мәселелерін шығарыңыз.
+  5. Әрбір FRI қабатының түбірі үшін `fastpq:v1:fri_layer_ℓ` арқылы сіңіріңіз, `β_ℓ` (`fastpq:v1:beta_ℓ`) шығарыңыз.
+  6. Сұрау индекстерін шығарыңыз (`fastpq:v1:query_index`).
 
-## Encoding & Transcript (Global)
-- **Byte packing:** base-256 (7-byte limbs, little-endian). Tests in `fastpq_prover/tests/packing.rs`.
-- **Field encoding:** canonical Goldilocks (little-endian 64-bit limb, reject ≥ p); Poseidon2 outputs/SMT roots serialized as 32-byte little-endian arrays.
-- **Transcript (Fiat–Shamir):**
-  1. BLAKE2b absorb `protocol_version`, `params_version`, `parameter_set`, `public_io`, and Poseidon2 commit tag (`fastpq:v1:init`).
-  2. Absorb `trace_root`, `lookup_root` (`fastpq:v1:roots`).
-  3. Derive lookup challenge `γ` (`fastpq:v1:gamma`).
-  4. Derive composition challenges `α_j` (`fastpq:v1:alpha_j`).
-  5. For each FRI layer root, absorb with `fastpq:v1:fri_layer_ℓ`, derive `β_ℓ` (`fastpq:v1:beta_ℓ`).
-  6. Derive query indices (`fastpq:v1:query_index`).
+  Тегтер ASCII кіші әріптері; тексерушілер іріктеу қиындықтарынан бұрын сәйкессіздіктерді қабылдамайды. Алтын транскрипт қондырғысы: `tests/fixtures/transcript_v1.json`.
+- **Нұсқа жасау:** `protocol_version = 1`, `params_version` `fastpq_isi` параметрлер жинағына сәйкес келеді.
 
-  Tags are lowercase ASCII; verifiers reject mismatches before sampling challenges. Golden transcript fixture: `tests/fixtures/transcript_v1.json`.
-- **Versioning:** `protocol_version = 1`, `params_version` matches `fastpq_isi` parameter set.
-
-## Lookup Argument (Permissions)
-- Committed table sorted lexicographically by `(role_id_bytes, permission_id_bytes, epoch_le)` and committed via Poseidon2 Merkle tree (`perm_root` in `PublicIO`).
-- Trace witness uses `perm_hash` and selector `s_perm` (OR of role grant/revoke). The tuple is encoded as `role_id_bytes || permission_id_bytes || epoch_u64_le` with fixed widths (32, 32, 8 bytes).
-- Product relation:
+## Аргументті іздеу (рұқсаттар)
+- `(role_id_bytes, permission_id_bytes, epoch_le)` бойынша лексикографиялық сұрыпталған және Poseidon2 Merkle ағашы (`PublicIO` ішіндегі `perm_root`) арқылы жасалған бекітілген кесте.
+- Бақылау куәгері `perm_hash` және `s_perm` селекторын (НЕМЕСЕ рөлді беру/қайтару) пайдаланады. Кортеж бекітілген енімен (32, 32, 8 байт) `role_id_bytes || permission_id_bytes || epoch_u64_le` ретінде кодталған.
+- Өнім қатынасы:
   ```
   Z_0 = 1
   for each row i: Z_i = Z_{i-1} * (perm_hash_i - γ)^{s_perm_i}
   T = ∏_j (table_perm_j - γ)
   ```
-  Boundary assertion: `Z_final / T = 1`. See `examples/lookup_grand_product.md` for a concrete accumulator walkthrough.
+  Шекаралық бекіту: `Z_final / T = 1`. Бетон аккумуляторының толық нұсқасын `examples/lookup_grand_product.md` қараңыз.
 
-## Sparse Merkle Tree Constraints
-- Define `SMT_HEIGHT` (number of levels). Columns `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, `neighbour_leaf` appear for all `ℓ ∈ [0, SMT_HEIGHT)`.
-- Poseidon2 parameters pinned to `ark-poseidon2` commit `3f2b7fe` (v0.3.0); domain tag `fastpq:v1:poseidon_node`. All nodes use little-endian field encoding.
-- Update rules per level:
+## Merkle ағашының сирек шектеулері
+- `SMT_HEIGHT` (деңгейлер саны) анықтаңыз. `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`, `neighbour_leaf` бағандары барлық `ℓ ∈ [0, SMT_HEIGHT)` үшін пайда болады.
+- `ark-poseidon2` `3f2b7fe` (v0.3.0) орындауына бекітілген Poseidon2 параметрлері; домен тегі `fastpq:v1:poseidon_node`. Барлық түйіндер аз-ендиан өріс кодтауын пайдаланады.
+- Әр деңгей бойынша ережелерді жаңарту:
   ```
   if path_bit_ℓ == 0:
       node_out_ℓ = Poseidon2(node_in_ℓ, sibling_ℓ)
   else:
       node_out_ℓ = Poseidon2(sibling_ℓ, node_in_ℓ)
   ```
-- Inserts set `(node_in_0 = 0, node_out_0 = value_new)`; deletes set `(node_in_0 = value_old, node_out_0 = 0)`.
-- Non-membership proofs supply `neighbour_leaf` to show the queried interval is empty. See `examples/smt_update.md` for a worked example and JSON layout.
-- Boundary constraint: the final hash equals `old_root` for pre rows and `new_root` for post rows.
+- `(node_in_0 = 0, node_out_0 = value_new)` кірістіру жинағы; `(node_in_0 = value_old, node_out_0 = 0)` жинағын жояды.
+- Сұралған аралықтың бос екенін көрсету үшін мүшелік емес дәлелдер `neighbour_leaf` береді. Жұмыс істеген мысал және JSON орналасуы үшін `examples/smt_update.md` қараңыз.
+- Шекаралық шектеу: соңғы хэш алдыңғы жолдар үшін `old_root` және кейінгі жолдар үшін `new_root` тең.
 
-## Soundness Parameters & SLOs
-| N_trace | blowup | FRI arity | layers | queries | est bits | Proof size (≤) | RAM (≤) | P95 latency (≤) |
+## Дыбыс параметрлері және SLO
+| N_trace | соққы | FRI arity | қабаттар | сұраулар | est бит | Дәлелдеу өлшемі (≤) | ЖЖҚ (≤) | P95 кідіріс (≤) |
 | ------- | ------ | --------- | ------ | ------- | -------- | --------------- | ------- | ---------------- |
-| 2^15    | 8      | 8         | 5      | 52      | ~190     | 300 KB          | 1.5 GB  | 0.40 s (A100)    |
-| 2^16    | 8      | 8         | 6      | 58      | ~132     | 420 KB          | 2.5 GB  | 0.75 s (A100)    |
-| 2^17    | 16     | 16        | 5      | 64      | ~142     | 550 KB          | 3.5 GB  | 1.20 s (A100)    |
+| 2^15 | 8 | 8 | 5 | 52 | ~190 | 300 КБ | 1,5 ГБ | 0,40 с (A100) |
+| 2^16 | 8 | 8 | 6 | 58 | ~132 | 420 КБ | 2,5 ГБ | 0,75 с (A100) |
+| 2^17 | 16 | 16 | 5 | 64 | ~142 | 550 КБ | 3,5 ГБ | 1,20 с (A100) |
 
-Derivations follow Appendix A. CI harness produces malformed proofs and fails if estimated bits <128.
+Туындылар А қосымшасына сәйкес келеді. CI белгішесі дұрыс емес дәлелдемелерді жасайды және болжалды бит <128 болса, сәтсіздікке ұшырайды.## Қоғамдық IO схемасы
+| Өріс | Байттар | Кодтау | Ескертпелер |
+|----------------|-------|---------------------------------------|-------------------------------------|
+| `dsid` | 16 | little-endian UUID | `fastpq:v1:dsid` тегімен хэштелген жазба жолағы үшін деректер кеңістігі идентификаторы (әдепкі жолақ үшін ғаламдық). |
+| `slot` | 8 | little-endian u64 | Дәуірден бергі наносекундтар.            |
+| `old_root` | 32 | little-endian Poseidon2 өріс байты | Пакет алдында SMT түбірі.              |
+| `new_root` | 32 | little-endian Poseidon2 өріс байты | Пакеттен кейінгі SMT түбірі.               |
+| `perm_root` | 32 | little-endian Poseidon2 өріс байты | Слотқа арналған рұқсат кестесінің түбірі. |
+| `tx_set_hash` | 32 | BLAKE2b | Сұрыпталған нұсқау идентификаторлары.     |
+| `parameter` | var | UTF-8 (мысалы, `fastpq-lane-balanced`) | Параметрлер жиынының атауы.                 |
+| `protocol_version`, `params_version` | әрқайсысы 2 | little-endian u16 | Нұсқа мәндері.                      |
+| `ordering_hash` | 32 | Посейдон2 (кішкентай-эндиан) | Сұрыпталған жолдардың тұрақты хэші.         |
 
-## Public IO Schema
-| Field            | Bytes | Encoding                              | Notes                               |
-|-----------------|-------|---------------------------------------|-------------------------------------|
-| `dsid`           | 16    | little-endian UUID                    | Dataspace ID for the entry's lane (global for default lane), hashed with tag `fastpq:v1:dsid`. |
-| `slot`           | 8     | little-endian u64                     | Nanoseconds since epoch.            |
-| `old_root`       | 32    | little-endian Poseidon2 field bytes   | SMT root before batch.              |
-| `new_root`       | 32    | little-endian Poseidon2 field bytes   | SMT root after batch.               |
-| `perm_root`      | 32    | little-endian Poseidon2 field bytes   | Permission table root for the slot. |
-| `tx_set_hash`    | 32    | BLAKE2b                               | Sorted instruction identifiers.     |
-| `parameter`      | var   | UTF-8 (e.g., `fastpq-lane-balanced`)  | Parameter set name.                 |
-| `protocol_version`, `params_version` | 2 each | little-endian u16 | Version values.                      |
-| `ordering_hash`  | 32    | Poseidon2 (little-endian)             | Stable hash of sorted rows.         |
+Жою нөлдік мән лимиттерімен кодталады; жоқ кілттер нөлдік жапырақты + көрші куәгерді пайдаланады.
 
-Deletion is encoded by zero value limbs; absent keys use zero leaf + neighbour witness.
+`FastpqTransitionBatch.public_inputs` — `dsid`, `slot` және түбірлік міндеттемелер үшін канондық тасымалдаушы;
+пакеттік метадеректер жазба хэш/транскрипт санын есепке алу үшін сақталған.
 
-`FastpqTransitionBatch.public_inputs` is the canonical carrier for `dsid`, `slot`, and root commitments;
-batch metadata is reserved for entry hash/transcript count bookkeeping.
+## Хэштерді кодтау
+- Тапсырыс хэш: Poseidon2 (тег `fastpq:v1:ordering`).
+- Пакеттік артефакт хэші: `PublicIO || proof.commitments` үстінде BLAKE2b (`fastpq:v1:artifact` тегі).
 
-## Encoding Hashes
-- Ordering hash: Poseidon2 (tag `fastpq:v1:ordering`).
-- Batch artifact hash: BLAKE2b over `PublicIO || proof.commitments` (tag `fastpq:v1:artifact`).
-
-## Stage Definitions of Done (DoD)
-- **Stage 1 DoD**
-  - Packing round-trip tests and fixtures merged.
-  - AIR spec (`docs/source/fastpq_air.md`) includes `s_active`, asset/SMT columns, selector definitions (including `s_perm`), and symbolic constraints.
-  - Ordering hash recorded in PublicIO and verified via fixtures.
-  - SMT/lookup witness generation implemented with membership & non-membership vectors.
-  - Conservation tests cover transfer, mint, burn, and mixed batches.
-- **Stage 2 DoD**
-  - Transcript spec implemented; golden transcript (`tests/fixtures/transcript_v1.json`) and domain tags verified.
-  - Poseidon2 parameter commit `3f2b7fe` pinned in prover and verifier with endianness tests across architectures.
-  - Soundness CI guard active; proof size/RAM/latency SLOs recorded.
-- **Stage 3 DoD**
-  - Scheduler API (`SubmitProofRequest`, `ProofResult`) documented with idempotency keys.
-  - Proof artifacts stored content-addressably with retry/backoff.
-  - Telemetry exported for queue depth, queue wait time, prover execution latency, retry counts, backend failure counts, and GPU/CPU utilisation, with dashboards and alert thresholds for each metric.
-
-## Stage 5 — GPU Acceleration & Optimisation
-- Target kernels: LDE (NTT), Poseidon2 hashing, Merkle tree construction, FRI folding.
-- Determinism: disable fast-math, ensure bit-identical outputs across CPU, CUDA, Metal. CI must compare proof roots across devices.
-- Benchmark suite comparing CPU vs GPU on reference hardware (e.g., Nvidia A100, AMD MI210).
-- Metal backend (Apple Silicon):
-  - Build script compiles the kernel suite (`metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon2.metal`) into `fastpq.metallib` via `xcrun metal`/`xcrun metallib`; ensure the macOS developer tools include the Metal toolchain (`xcode-select --install`, then `xcodebuild -downloadComponent MetalToolchain` if required).【crates/fastpq_prover/build.rs:98】【crates/fastpq_prover/build.rs:189】
-  - Manual rebuild (mirrors `build.rs`) for CI warm-ups or deterministic packaging:
+## Орындалған кезең анықтамалары (DoD)
+- **1 кезең DoD**
+  - Буып-түю сынақтары мен арматура біріктірілді.
+  - AIR ерекшелігі (`docs/source/fastpq_air.md`) `s_active`, актив/SMT бағандары, селектор анықтамалары (соның ішінде `s_perm`) және символдық шектеулерді қамтиды.
+  - PublicIO-да жазылған және арматура арқылы тексерілген тапсырыс хэші.
+  - Мүшелік және мүшелік емес векторлармен іске асырылған SMT/іздеу куәгерлері.
+  - Консервациялау сынақтары тасымалдау, жалбыз, күйік және аралас партияларды қамтиды.
+- **2-кезең DoD**
+  - Транскрипт спецификациясы енгізілді; алтын транскрипт (`tests/fixtures/transcript_v1.json`) және домен тегтері тексерілді.
+  - `3f2b7fe` Poseidon2 параметрі дәлелдеуші және верфикаторға бекітілген, архитектуралар бойынша энданность сынақтарымен.
+  - Soundness CI қорғанысы белсенді; дәлелдеу өлшемі/RAM/кідіріс SLO жазылған.
+- **3-кезең DoD**
+  - Жоспарлаушы API (`SubmitProofRequest`, `ProofResult`) идентификациялық кілттермен құжатталған.
+  - Қайталау/қайта өшіру арқылы мекенжай бойынша мазмұн сақталған дәлелдеу артефактілері.
+  - Телеметрия кезек тереңдігі, кезек күту уақыты, провердің орындалу кідірісі, қайталау әрекеттері, сервердегі сәтсіздіктер саны және GPU/CPU пайдалану үшін, бақылау тақталары және әрбір көрсеткіш үшін ескерту шектері бар экспортталған.## 5-кезең — GPU жеделдету және оңтайландыру
+- Мақсатты ядролар: LDE (NTT), Poseidon2 хэштеу, Merkle ағаш құрылысы, FRI бүктеу.
+- Детерминизм: жылдам математиканы өшіріңіз, процессор, CUDA, металл бойынша бірдей биттік шығыстарды қамтамасыз етіңіз. CI құрылғылардағы дәлелдеу түбірлерін салыстыруы керек.
+- Анықтамалық жабдықта (мысалы, Nvidia A100, AMD MI210) CPU мен GPU салыстыратын эталондық жиынтық.
+- Металл артқы жағы (Apple Silicon):
+  - Құрастыру сценарийі ядро жиынтығын (`metal/kernels/ntt_stage.metal`, `metal/kernels/poseidon2.metal`) `fastpq.metallib` ішіне `xcrun metal`/`xcrun metallib` арқылы құрастырады; macOS әзірлеуші құралдарының құрамында металл құралдар тізбегі (`xcode-select --install`, содан кейін қажет болса `xcodebuild -downloadComponent MetalToolchain`) бар екеніне көз жеткізіңіз.【crates/fastpq_prover/build.rs:98】【crates/fastpq_prover/build.rs:189】
+  - CI қыздыру немесе детерминирленген орау үшін қолмен қайта құру (`build.rs` айналары):
     ```bash
     export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
     xcrun metal -std=metal3.0 -O3 -c metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
@@ -208,58 +199,51 @@ batch metadata is reserved for entry hash/transcript count bookkeeping.
     xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" -o "$OUT_DIR/fastpq.metallib"
     export FASTPQ_METAL_LIB="$OUT_DIR/fastpq.metallib"
     ```
-    Successful builds emit `FASTPQ_METAL_LIB=<path>` so the runtime can load the metallib deterministically.【crates/fastpq_prover/build.rs:188】【crates/fastpq_prover/src/metal.rs:42】
-  - The LDE kernel now assumes the evaluation buffer is zero-initialised on the host. Keep the existing `vec![0; ..]` allocation path or explicitly zero buffers when reusing them.【crates/fastpq_prover/src/metal.rs:233】【crates/fastpq_prover/metal/kernels/ntt_stage.metal:141】
-  - Coset multiplication is fused into the final FFT stage to avoid an extra pass; any changes to LDE staging must preserve that invariant.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:193】
-  - The shared-memory FFT/LDE kernel now stops at the tile depth and hands the remaining butterflies plus any inverse scaling to a dedicated `fastpq_fft_post_tiling` pass. The Rust host threads the same column batches through both kernels and only launches the post-tile dispatch when `log_len` exceeds the tile limit, so queue-depth telemetry, kernel stats, and fallback behaviour stay deterministic while the GPU handles the wide-stage work entirely on-device.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:654】
-  - To experiment with launch shapes, set `FASTPQ_METAL_THREADGROUP=<width>`; the dispatch path clamps the value to the device limit and logs the override so profiling runs can sweep threadgroup sizes without recompiling.【crates/fastpq_prover/src/metal.rs:321】
-  - Tune the FFT tile directly: the host now derives threadgroup lanes (16 for short traces, 32 once `log_len ≥ 6`, 64 once `log_len ≥ 10`, 128 once `log_len ≥ 14`, and 256 at `log_len ≥ 18`) and tile depth (5 stages for small traces, 4 when `log_len ≥ 12`, and once the domain reaches `log_len ≥ 18/20/22` the shared-memory pass now runs 12/14/16 stages before handing control to the post-tile kernel) from the requested domain plus the device’s execution width/max threads. Override with `FASTPQ_METAL_FFT_LANES` (power of two between 8 and 256) and `FASTPQ_METAL_FFT_TILE_STAGES` (1–16) to pin specific launch shapes; both values flow through `FftArgs`, get clamped to the supported window, and are logged for profiling sweeps.【crates/fastpq_prover/src/metal_config.rs:15】【crates/fastpq_prover/src/metal.rs:120】【crates/fastpq_prover/metal/kernels/ntt_stage.metal:244】
-- FFT/IFFT and LDE column batching now derive from the resolved threadgroup width: the host targets roughly 4 096 logical threads per command buffer, fuses up to 64 columns at a time with the circular-buffer tile staging, and only ratchets down through 64 → 32 → 16 → 8 → 4 → 2 → 1 columns as the evaluation domain crosses the 2¹⁶/2¹⁸/2²⁰/2²² thresholds. This keeps the 20 k-row capture at ≥64 columns per dispatch while ensuring long cosets still finish deterministically. The adaptive scheduler still doubles column width until dispatches approach the ≈2 ms target and now halves the batch automatically whenever a sampled dispatch lands ≥30 % over that target, so lane/tile transitions that inflate per-column cost fall back without manual overrides. Poseidon permutations share the same adaptive scheduler and the `metal_heuristics.batch_columns.poseidon` block in `fastpq_metal_bench` now records the resolved state count, cap, last duration, and override flag so queue-depth telemetry can be tied directly to Poseidon tuning. Override with `FASTPQ_METAL_FFT_COLUMNS` (1–64) to pin a deterministic FFT batch size, and use `FASTPQ_METAL_LDE_COLUMNS` (1–64) when you need the LDE dispatcher to honour a fixed column count; the Metal bench surfaces the resolved `kernel_profiles.*.columns` entries in every capture so tuning experiments stay reproducible.【crates/fastpq_prover/src/metal.rs:742】【crates/fastpq_prover/src/metal.rs:1402】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1284】
-- Multi-queue dispatch is now automatic on discrete Macs: the host inspects `is_low_power`, `is_headless`, and the device location to decide whether to spin up two Metal command queues, only fans out when the workload carries at least 16 columns (scaled by the resolved fan-out), and round-robins the column batches so long traces keep both GPU lanes busy without sacrificing determinism. The command-buffer semaphore now enforces a “two in flight per queue” floor, and queue telemetry records the aggregate measurement window (`window_ms`) plus normalized busy ratios (`busy_ratio`) for the global semaphore and every queue entry so release artefacts can prove both queues stayed ≥50 % busy over the same time span. Override the defaults with `FASTPQ_METAL_QUEUE_FANOUT` (1–4 lanes) and `FASTPQ_METAL_COLUMN_THRESHOLD` (minimum total columns before fan-out); the Metal parity tests force the overrides so multi-GPU Macs stay covered, and the resolved policy is logged alongside the queue-depth telemetry and the new `metal_dispatch_queue.queues[*]` block.【crates/fastpq_prover/src/metal.rs:620】【crates/fastpq_prover/src/metal.rs:900】【crates/fastpq_prover/src/metal.rs:2254】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:871】
-- Metal detection now probes `MTLCreateSystemDefaultDevice`/`MTLCopyAllDevices` directly (warming up CoreGraphics on headless shells) before falling back to `system_profiler`, and `FASTPQ_DEBUG_METAL_ENUM` prints the enumerated devices when set so headless CI runs can explain why `FASTPQ_GPU=gpu` still downgraded to the CPU path. When the override is set to `gpu` but no accelerator is detected, `fastpq_metal_bench` now errors immediately with a pointer to the debug knob instead of silently continuing on the CPU. This narrows the “silent CPU fallback” class called out in WP2‑E and gives operators a knob to capture enumeration logs inside wrapped benchmarks.【crates/fastpq_prover/src/backend.rs:665】【crates/fastpq_prover/src/backend.rs:705】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】
-  - Poseidon GPU timings now refuse to treat CPU fallbacks as “GPU” data. `hash_columns_gpu` reports whether the accelerator actually ran, `measure_poseidon_gpu` drops samples (and logs a warning) whenever the pipeline falls back, and the Poseidon microbench child exits with an error if GPU hashing is unavailable. As a result, `gpu_recorded=false` whenever Metal execution falls back, the queue summary still records the failed dispatch window, and dashboard summaries immediately flag the regression. The wrapper (`scripts/fastpq/wrap_benchmark.py`) now fails when `metal_dispatch_queue.poseidon.dispatch_count == 0` so Stage 7 bundles can’t be signed without real GPU Poseidon dispatch evidence.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1123】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2200】【scripts/fastpq/wrap_benchmark.py:912】
-- Poseidon hashing now mirrors that staging contract. `PoseidonColumnBatch` produces flattened payload buffers plus offset/length descriptors, the host rebases those descriptors per batch and runs a `COLUMN_STAGING_PIPE_DEPTH` double buffer so payload + descriptor uploads overlap with GPU work, and both Metal/CUDA kernels consume the descriptors directly so each dispatch absorbs all padded rate blocks on-device before emitting the column digests. `hash_columns_from_coefficients` now streams those batches through a GPU worker thread, keeping 64+ columns in flight by default on discrete GPUs (tunable via `FASTPQ_POSEIDON_PIPE_COLUMNS` / `FASTPQ_POSEIDON_PIPE_DEPTH`). The Metal bench records the resolved pipeline settings + batch counts under `metal_dispatch_queue.poseidon_pipeline`, and `kernel_profiles.poseidon.bytes` includes the descriptor traffic so Stage 7 captures prove the new ABI end-to-end.【crates/fastpq_prover/src/trace.rs:604】【crates/fastpq_prover/src/trace.rs:809】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1963】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2675】【crates/fastpq_prover/src/metal.rs:2290】【crates/fastpq_prover/cuda/fastpq_cuda.cu:351】
-- Stage7-P2 fused Poseidon hashing now lands in both GPU backends. The streaming worker feeds contiguous `PoseidonColumnBatch::column_window()` slices into `hash_columns_gpu_fused`, which pipes them to `poseidon_hash_columns_fused` so each dispatch writes `leaf_digests || parent_digests` with the canonical `(⌈columns / 2⌉)` parent mapping. `ColumnDigests` keeps both slices, and `merkle_root_with_first_level` consumes the parent layer immediately, so the CPU never recomputes depth‑1 nodes and Stage7 telemetry can assert that GPU captures report zero “fallback” parents whenever the fused kernel succeeds.【crates/fastpq_prover/src/trace.rs:1070】【crates/fastpq_prover/src/gpu.rs:365】【crates/fastpq_prover/src/metal.rs:2422】【crates/fastpq_prover/cuda/fastpq_cuda.cu:631】
-- `fastpq_metal_bench` now emits a `device_profile` block with the Metal device name, registry id, `low_power`/`headless` flags, location (built-in, slot, external), discrete indicator, `hw.model`, and the derived Apple SoC label (for example, “M3 Max”). Stage 7 dashboards consume this field to bucket captures by M4/M3 vs discrete GPUs without parsing hostnames, and the JSON ships next to the queue/heuristic evidence so every release artefact proves which fleet class produced the run.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2536】
-  - FFT host/device overlap now uses a double-buffered staging window: while batch *n* finishes inside `fastpq_fft_post_tiling`, the host flattens batch *n + 1* into the second staging buffer and only pauses when a buffer must be recycled. The backend records how many batches were flattened plus the time spent flattening versus waiting for GPU completion, and `fastpq_metal_bench` surfaces the aggregated `column_staging.{batches,flatten_ms,wait_ms,wait_ratio}` block so release artefacts can prove the overlap instead of silent host stalls. The JSON report now also breaks the totals down per phase under `column_staging.phases.{fft,lde,poseidon}`, letting Stage 7 captures prove whether FFT/LDE/Poseidon staging is host-bound or waiting on GPU completion. Poseidon permutations reuse the same pooled staging buffers, so `--operation poseidon_hash_columns` captures now emit the Poseidon-specific `column_staging` deltas alongside the queue-depth evidence without bespoke instrumentation. The new `column_staging.samples.{fft,lde,poseidon}` arrays record the per-batch `batch/flatten_ms/wait_ms/wait_ratio` tuples, making it trivial to prove that the `COLUMN_STAGING_PIPE_DEPTH` overlap is holding (or to spot when the host starts waiting for GPU completions).【crates/fastpq_prover/src/metal.rs:319】【crates/fastpq_prover/src/metal.rs:330】【crates/fastpq_prover/src/metal.rs:1813】【crates/fastpq_prover/src/metal.rs:2488】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1189】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1216】
-- Poseidon2 acceleration now runs as a high-occupancy Metal kernel: each threadgroup copies the round constants and MDS rows into threadgroup memory, unrolls the full/partial rounds, and walks multiple states per lane so every dispatch launches at least 4 096 logical threads. Override the launch shape via `FASTPQ_METAL_POSEIDON_LANES` (powers of two between 32 and 256, clamped to the device limit) and `FASTPQ_METAL_POSEIDON_BATCH` (1–32 states per lane) to reproduce profiling experiments without rebuilding `fastpq.metallib`; the Rust host threads the resolved tuning through `PoseidonArgs` before dispatching. The host now snapshots `MTLDevice::{is_low_power,is_headless,location}` once per boot and automatically biases discrete GPUs toward VRAM-tiered launches (`256×24` on ≥48 GiB parts, `256×20` at 32 GiB, `256×16` otherwise) while low-power SoCs stick to `256×8` (fallbacks for 128/64 lane hardware continue to use 8/6 states per lane), so operators get the >16-state pipeline depth without touching env vars. `fastpq_metal_bench` re-executes itself under `FASTPQ_METAL_POSEIDON_MICRO_MODE={default,scalar}` to capture a dedicated `poseidon_microbench` block comparing the scalar lane against the multi-state kernel so release artefacts can quote a concrete speedup. The same captures surface `poseidon_pipeline` telemetry (`chunk_columns`, `pipe_depth`, `batches`, `fallbacks`) so Stage 7 evidence proves the overlap window on every GPU trace.【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal_config.rs:78】【crates/fastpq_prover/src/metal.rs:1971】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1691】【crates/fastpq_prover/src/trace.rs:299】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1988】
-  - LDE tile staging now mirrors the FFT heuristics: heavy traces only execute 12 stages in the shared-memory pass once `log₂(len) ≥ 18`, drop to 10 stages at log₂ 20, and clamp to eight stages at log₂ 22 so the wide butterflies move into the post-tiling kernel. Override with `FASTPQ_METAL_LDE_TILE_STAGES` (1–32) whenever you need a deterministic depth; the host only launches the post-tiling dispatch when the heuristic stops early so queue-depth and kernel telemetry stay deterministic.【crates/fastpq_prover/src/metal.rs:827】
-  - Kernel micro-optimisation: the shared-memory FFT/LDE tiles now reuse per-lane twiddle and coset strides instead of re-evaluating `pow_mod*` for every butterfly. Each lane precomputes `w_seed`, `w_stride`, and (when required) the coset stride once per block, then streams through the offsets, slashing the scalar multiplications inside `apply_stage_tile`/`apply_stage_global` and bringing the 20 k-row LDE mean down to ~1.55 s with the latest heuristics (still above the 950 ms goal, but a further ~50 ms improvement over the batching-only tweak).【crates/fastpq_prover/metal/kernels/ntt_stage.metal:164】【fastpq_metal_bench_run11.json:1】
-  - The kernel suite now has a dedicated reference (`docs/source/fastpq_metal_kernels.md`) that documents each entry point, the threadgroup/tile limits enforced in `fastpq.metallib`, and the reproduction steps for compiling the metallib manually.【docs/source/fastpq_metal_kernels.md:1】
-  - The benchmark report now emits a `post_tile_dispatches` object that records how many FFT/IFFT/LDE batches ran in the dedicated post-tiling kernel (per-kind dispatch counts plus the stage/log₂ boundaries). `scripts/fastpq/wrap_benchmark.py` copies the block into `benchmarks.post_tile_dispatches`/`benchmarks.post_tile_summary`, and the manifest gate refuses GPU captures that omit the evidence so every 20 k-row artefact proves the multi-pass kernel ran on-device.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】【scripts/fastpq/wrap_benchmark.py:255】【xtask/src/fastpq.rs:280】
-  - Set `FASTPQ_METAL_TRACE=1` to emit per-dispatch debug logs (pipeline label, threadgroup width, launch groups, elapsed time) for Instruments/Metal trace correlation.【crates/fastpq_prover/src/metal.rs:346】
-- The dispatch queue is now instrumented: `FASTPQ_METAL_MAX_IN_FLIGHT` caps concurrent Metal command buffers (auto default derived from the detected GPU core count via `system_profiler`, clamped to at least the queue fan-out floor with a host-parallelism fallback when macOS refuses to report the device). The bench enables queue-depth sampling so the exported JSON carries a `metal_dispatch_queue` object with `limit`, `dispatch_count`, `max_in_flight`, `busy_ms`, and `overlap_ms` fields for release evidence, adds a nested `metal_dispatch_queue.poseidon` block whenever a Poseidon-only capture (`--operation poseidon_hash_columns`) runs, and emits a `metal_heuristics` block describing the resolved command-buffer limit plus the FFT/LDE batch columns (including whether overrides forced the values) so reviewers can audit the scheduling decisions alongside the telemetry. Poseidon kernels also feed a dedicated `poseidon_profiles` block distilled from the kernel samples so bytes/thread, occupancy, and dispatch geometry are tracked across artefacts. If the primary run can’t collect queue depth or the LDE zero-fill stats (for example, when a GPU dispatch silently falls back to the CPU), the harness automatically fires a single probe dispatch to gather the missing telemetry and now synthesizes host zero-fill timings when the GPU refuses to report them, so published evidence always includes the `zero_fill` block.【crates/fastpq_prover/src/metal.rs:2056】【crates/fastpq_prover/src/metal.rs:247】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1524】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2078】
-  - Set `FASTPQ_SKIP_GPU_BUILD=1` when cross-compiling without the Metal toolchain; the warning records the skip and the planner continues on the CPU path.【crates/fastpq_prover/build.rs:45】【crates/fastpq_prover/src/backend.rs:195】
-  - Runtime detection uses `system_profiler` to confirm Metal support; if the framework, device, or metallib is missing the build script clears `FASTPQ_METAL_LIB` and the planner stays on the deterministic CPU path.【crates/fastpq_prover/build.rs:29】【crates/fastpq_prover/src/backend.rs:293】【crates/fastpq_prover/src/backend.rs:605】【crates/fastpq_prover/src/metal.rs:43】
-  - Operator checklist (Metal hosts):
-    1. Confirm the toolchain is present and that `FASTPQ_METAL_LIB` points at a compiled `.metallib` (`echo $FASTPQ_METAL_LIB` should be non-empty after `cargo build --features fastpq-gpu`).【crates/fastpq_prover/build.rs:188】
-    2. Run parity tests with GPU lanes enabled: `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release`. This exercises the Metal kernels and falls back automatically if detection fails.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/metal.rs:418】
-    3. Capture a benchmark sample for dashboards: locate the compiled Metal library
-       (`fd -g 'fastpq.metallib' target/release/build | head -n1`), export it via
-       `FASTPQ_METAL_LIB`, and run
+    Сәтті құрастырулар `FASTPQ_METAL_LIB=<path>` сәулелерін шығарады, осылайша орындалу уақыты металлибті детерминативті түрде жүктей алады.【crates/fastpq_prover/build.rs:188】【crates/fastpq_prover/src/metal.rs:42】
+  - LDE ядросы енді бағалау буфері хостта нөлдік инициализацияланған деп болжайды. Оларды қайта пайдалану кезінде бар `vec![0; ..]` бөлу жолын немесе анық нөлдік буферді сақтаңыз.【crates/fastpq_prover/src/metal.rs:233】【crates/fastpq_prover/metal/kernels/ntt_stage.metal:14:
+  - Косеттік көбейту қосымша өтуді болдырмау үшін соңғы FFT кезеңіне біріктірілген; LDE кезеңіндегі кез келген өзгерістер сол инвариантты сақтауы керек.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:193】
+  - Ортақ жадтың FFT/LDE ядросы енді плитка тереңдігінде тоқтап, қалған көбелектер мен кез келген кері масштабтауды арнайы `fastpq_fft_post_tiling` өтуіне береді. Rust хосты бірдей баған топтамаларын екі ядро арқылы өткізеді және `log_len` мозаика шегінен асқанда ғана кейінгі жіберуді іске қосады, сондықтан кезек тереңдігі телеметриясы, ядро статистикасы және қалпына келтіру әрекеті детерминирленген болып қалады, ал GPU кең кезеңді жұмысты толығымен өңдейді. құрылғыда.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:654】
+  - Іске қосу пішіндерімен тәжірибе жасау үшін `FASTPQ_METAL_THREADGROUP=<width>` орнатыңыз; жіберу жолы мәнді құрылғы шегіне қысады және қайта анықтауды тіркейді, осылайша профильдеу орындалулары қайта құрастырусыз ағындар тобының өлшемдерін сыпырып алады.【crates/fastpq_prover/src/metal.rs:321】- FFT тақтасын тікелей баптаңыз: хост енді ағындар тобының жолақтарын шығарады (қысқа жолдар үшін 16, `log_len ≥ 6` бір рет 32, `log_len ≥ 10` бір рет 64, `log_len ≥ 10` бір рет 128 және Prometheus және кіші кезең үшін 256) іздер, `log_len ≥ 12` кезінде 4 және домен `log_len ≥ 18/20/22` жеткенде, ортақ жад өтуі енді бақылауды тақтадан кейінгі ядроға беруден бұрын 12/14/16 кезеңнен тұрады) сұралған доменнен және құрылғының орындалу ені/макс. Арнайы іске қосу пішіндерін бекіту үшін `FASTPQ_METAL_FFT_LANES` (8 және 256 арасындағы екі қуат) және `FASTPQ_METAL_FFT_TILE_STAGES` (1–16) көмегімен қайта анықтау; екі мән де `FftArgs` арқылы өтеді, қолдау көрсетілетін терезеге бекітіледі және профильдеу үшін журналға жазылады сыпырғыштар.【crates/fastpq_prover/src/metal_config.rs:15】【crates/fastpq_prover/src/metal.rs:120】【crates/fastpq_prover/metal/kernels/ntt_stage.metal:244】
+- FFT/IFFT және LDE бағандарының топтамасы енді шешілген ағындар тобының енінен алынады: хост бір пәрмен буферіне шамамен 4096 логикалық ағынды мақсат етеді, бір уақытта 64-ке дейін бағанды айналмалы буферлік тақтайшамен біріктіреді және тек 64→32→16→8→lu доменді қиылысатын →2 бағандары арқылы төмендетеді. 2¹⁶/2¹⁸/2²⁰/2²² шекті мәндер. Бұл 20 мың жолды түсіруді әр жөнелтімде ≥64 баған деңгейінде сақтайды, сонымен бірге ұзақ косеттердің әлі де анық аяқталуын қамтамасыз етеді. Бейімделетін жоспарлаушы әлі де жөнелтілімдер ≈2 мс мақсатқа жақындағанша баған енін екі еселейді және енді таңдалған жөнелтілім осы мақсаттан ≥30% қонған сайын пакетті автоматты түрде екі есе азайтады, осылайша бір баған құнын арттыратын жолақ/плиткалық ауысулар қолмен қайта анықтаусыз төмендейді. Poseidon ауыстырулары бірдей бейімделген жоспарлаушымен бөліседі және `fastpq_metal_bench` ішіндегі `metal_heuristics.batch_columns.poseidon` блогы енді шешілген күй санын, шекті, соңғы ұзақтықты және қайта анықтау жалауын жазады, осылайша кезек тереңдігі телеметриясын тікелей Poseidon баптауына байланыстыруға болады. Детерминирленген FFT бума өлшемін бекіту үшін `FASTPQ_METAL_FFT_COLUMNS` (1–64) көмегімен қайта анықтау және бекітілген баған санын сақтау үшін LDE диспетчері қажет болғанда `FASTPQ_METAL_LDE_COLUMNS` (1–64) пайдаланыңыз; Металл орындық әрбір түсіруде шешілген `kernel_profiles.*.columns` жазбаларын жабады, осылайша баптау эксперименттері сақталады. қайталанатын.【crates/fastpq_prover/src/metal.rs:742】【crates/fastpq_prover/src/metal.rs:1402】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:12- Дискретті Mac компьютерлерінде көп кезекті жіберу енді автоматты түрде жүзеге асырылады: хост `is_low_power`, `is_headless` және құрылғының орналасқан жерін екі Металл пәрмен кезегін айналдыру немесе айналдыру туралы шешім қабылдау үшін тексереді, жұмыс жүктемесі кемінде 16 бағанды көтерген кезде ғана желдеткіштер шығады (шешілген бағаналар мен ұзақ жолдармен масштабталады), GPU жолақтары детерминизмнен бас тартпай бос емес. Пәрмен буферінің семафоры енді «әр кезекте екі рейс» қабатын күшейтеді, ал кезек телеметриясы жалпы өлшем терезесін (`window_ms`) және жаһандық семафор үшін нормаланған бос емес коэффициенттерді (`busy_ratio`) жазады және әрбір кезек жазбасы артта қалуы мүмкін ≥0 артта қалуы мүмкін. бірдей уақыт аралығында бос емес. Әдепкі мәндерді `FASTPQ_METAL_QUEUE_FANOUT` (1–4 жол) және `FASTPQ_METAL_COLUMN_THRESHOLD` (шығуға дейінгі ең аз жалпы бағандар) көмегімен қайта анықтау; Металл паритетінің сынақтары қайта анықтауды мәжбүрлейді, сондықтан көп GPU Mac компьютерлері жабық күйде қалады және шешілген саясат кезек тереңдігі телеметриясы мен жаңа `metal_dispatch_queue.queues[*]` қатарында тіркеледі. блок.【crates/fastpq_prover/src/metal.rs:620】【crates/fastpq_prover/src/metal.rs:900】【сандық s/fastpq_prover/src/metal.rs:2254】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:871】
+- Металл анықтау енді `MTLCreateSystemDefaultDevice`/`MTLCopyAllDevices`-ті тексереді (бассыз қабықтардағы CoreGraphics-ті жылыту) `system_profiler`-қа қайта оралмас бұрын, ал `FASTPQ_DEBUG_METAL_ENUM` нөмірленген құрылғыларды басып шығарады, сондықтан басы жоқ CI орнатылған кезде неліктен екенін түсіндіре алады. `FASTPQ_GPU=gpu` әлі де CPU жолына төмендетілді. Қайта анықтау `gpu` күйіне орнатылған, бірақ ешқандай үдеткіш анықталмаған кезде, `fastpq_metal_bench` процессорда үнсіз жалғастырудың орнына түзету тұтқасының көрсеткішімен бірден қателерді жібереді. Бұл WP2‑E-де шақырылған «үнсіз CPU қалпына келтіру» сыныбын тарылтады және операторларға оралған ішіндегі санау журналдарын түсіру тұтқасын береді. эталондар.【crates/fastpq_prover/src/backend.rs:665】【crates/fastpq_prover/src/backend.rs:705】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】
+  - Poseidon GPU уақыттары енді CPU резервтерін «GPU» деректері ретінде қарастырудан бас тартады. `hash_columns_gpu` үдеткіштің шынымен іске қосылғанын хабарлайды, `measure_poseidon_gpu` конвейер кері түскен сайын үлгілерді түсіреді (және ескертуді тіркейді) және GPU хэштеу қолжетімсіз болса, Poseidon microbench еншілес бағдарламасы қатемен шығады. Нәтижесінде, `gpu_recorded=false` Металлдың орындалуы кері кеткен сайын, кезек жиыны әлі де сәтсіз жіберу терезесін жазады және бақылау тақтасының қорытындылары регрессияны бірден белгілейді. Қаптама (`scripts/fastpq/wrap_benchmark.py`) енді `metal_dispatch_queue.poseidon.dispatch_count == 0` кезінде істен шығады, сондықтан Stage7 бумаларына нақты GPU Poseidon жіберуінсіз қол қою мүмкін емес. дәлелі.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1123】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2200】【scripts/fastpq/wrap_bench.- Посейдон хэшингі енді осы сахналық келісім-шартты көрсетеді. `PoseidonColumnBatch` тегістелген пайдалы жүктеме буферлерін, плюс офсет/ұзындық дескрипторларын шығарады, хост әр партия үшін дескрипторларды қайта негіздейді және `COLUMN_STAGING_PIPE_DEPTH` қос буферін іске қосады, осылайша пайдалы жүктеме + дескрипторды жүктеп салулар GPU жұмысымен қабаттасады, және екі металл/CUDA ядросы да барлық дескрипттерді блоктайтын барлық жылдамдықты жұтып қояды. баған дайджесттерін шығарар алдында құрылғыда. `hash_columns_from_coefficients` енді дискретті графикалық процессорларда (`FASTPQ_POSEIDON_PIPE_COLUMNS` / `FASTPQ_POSEIDON_PIPE_DEPTH` арқылы реттеуге болады) әдепкі бойынша 64+ бағанды ​​ұшу күйінде сақтай отырып, GPU жұмысшы ағыны арқылы сол топтамаларды ағынмен жібереді. Металл орындық `metal_dispatch_queue.poseidon_pipeline` астында шешілген құбыр параметрлерін + партиялар санын жазады, ал `kernel_profiles.poseidon.bytes` дескриптор трафигін қамтиды, осылайша Stage7 түсірулері жаңа ABI нұсқасын дәлелдейді. end-to-end.【crates/fastpq_prover/src/trace.rs:604】【crates/fastpq_prover/src/trace.rs:809】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:196 3】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2675】【crates/fastpq_prover/src/metal.rs:2290】【crates/fastpq_prover/cuda/fastpq_prover/cuda/fastpq:31】】.
+- Stage7-P2 біріктірілген Poseidon хэшингі енді GPU серверлерінің екеуіне де түседі. Ағынды жұмысшы сабақтас `PoseidonColumnBatch::column_window()` кесектерін `hash_columns_gpu_fused` ішіне береді, ол оларды `poseidon_hash_columns_fused` жүйесіне өткізеді, осылайша әрбір жөнелтілім `leaf_digests || parent_digests` канондық Grafana парағын салыстыру арқылы жазады. `ColumnDigests` екі бөлікті де сақтайды, ал `merkle_root_with_first_level` бірден ата-аналық қабатты тұтынады, сондықтан процессор ешқашан тереңдік-1 түйіндерін есептемейді және Stage7 телеметриясы біріктірілген ядро кез келген кезде GPU нөлдік «қайтару» ата-аналық есептерді түсіретінін дәлелдей алады. сәтті.【crates/fastpq_prover/src/trace.rs:1070】【crates/fastpq_prover/src/gpu.rs:365】 【crates/fastpq_prover/src/metal.rs:2422】【crates/fastpq_prover/cuda/fastpq_cuda.cu:631】
+- `fastpq_metal_bench` енді металл құрылғы атауы, тізілім идентификаторы, `low_power`/`headless` жалаушалары, орналасқан жері (кіріктірілген, ұяшық, сыртқы), дискретті индикатор Apple0X, `device_profile` және `device_profile` блогын шығарады. (мысалы, «M3 Max»). Stage7 бақылау тақталары бұл өрісті M4/M3 және дискретті GPU арқылы хост атауларын талдамай-ақ түсіру үшін пайдаланады және JSON кезек/эвристикалық дәлелдер жанында жіберіледі, осылайша әрбір шығарылым артефакті қай флот класы жүгіруді жасағанын дәлелдейді.- FFT хост/құрылғы қабаттасуы енді қос буферленген кезеңдік терезені пайдаланады: *n* бумасы `fastpq_fft_post_tiling` ішінде аяқталған кезде, хост *n+1* бумасын екінші кезең буферіне тегістейді және буферді қайта өңдеу қажет болғанда ғана кідіртеді. Серверде қанша партия тегістелгенін және GPU аяқталуын күткенге қарағанда тегістеуге жұмсалған уақытты жазады және `fastpq_metal_bench` біріктірілген `column_staging.{batches,flatten_ms,wait_ms,wait_ratio}` блогын көрсетеді, осылайша шығару артефактілері дыбыссыз хост қоймаларының орнына қабаттасуды дәлелдей алады. JSON есебі қазір де `column_staging.phases.{fft,lde,poseidon}` бойынша фаза бойынша қорытындыларды бөледі, бұл Stage7 түсіруіне FFT/LDE/Poseidon кезеңінің хостқа байланысты екенін немесе GPU аяқталуын күтуін дәлелдеуге мүмкіндік береді. Посейдон ауыстырулары бірдей біріктірілген аралық буферлерді қайта пайдаланады, сондықтан `--operation poseidon_hash_columns` түсірулері енді тапсырыс беру құралынсыз кезек тереңдігінің дәлелдерімен қатар Посейдонға тән `column_staging` дельталарын шығарады. Жаңа `column_staging.samples.{fft,lde,poseidon}` массивтері әр пакеттегі `batch/flatten_ms/wait_ms/wait_ratio` кортеждерін жазады, бұл `COLUMN_STAGING_PIPE_DEPTH` қабаттасуының сақталып тұрғанын дәлелдеуді (немесе хост GPU күте бастағанын анықтауды) жеңілдетеді. аяқтау).【crates/fastpq_prover/src/metal.rs:319】【crates/fastpq_prover/src/metal.rs:330】【crates/fastpq_prover/src/metal.rs:1813】【crates/fa tpq_prover/src/metal.rs:2488】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1189】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:126】- Poseidon2 жеделдету енді жоғары толтырылған металл ядросы ретінде жұмыс істейді: әрбір ағындар тобы дөңгелек константаларды және MDS жолдарын ағындар тобының жадына көшіреді, толық/жартылай айналымдарды шығарады және әрбір жолдау кем дегенде 4096 логикалық ағынды іске қосатындай әр жолақтағы бірнеше күйлерді аралайды. `fastpq.metallib` қайта құрусыз профильдеу эксперименттерін қайта жасау үшін `FASTPQ_METAL_POSEIDON_LANES` (32 және 256 арасындағы екі қуат, құрылғы шегіне бекітілген) және `FASTPQ_METAL_POSEIDON_BATCH` (әр жолақ үшін 1–32 күй) арқылы іске қосу пішінін қайта анықтау; Rust хосты жіберілгенге дейін `PoseidonArgs` арқылы шешілген баптауды өткізеді. Хост қазір `MTLDevice::{is_low_power,is_headless,location}` суретін жүктеуде бір рет түсіреді және дискретті графикалық процессорларды VRAM деңгейлі іске қосуларға автоматты түрде бейімдейді (≥48GiB бөліктеріндегі `256×24`, 32GiB кезінде `256×20`, I10320, ал басқалары төмен) SoC құрылғылары `256×8` (128/64 жолақты аппараттық құралдың қайтарылуы әр жолақ үшін 8/6 күйді пайдалануды жалғастырады), осылайша операторлар env нұсқаларына қол тигізбестен >16 күйдегі құбыр тереңдігін алады. `fastpq_metal_bench` `FASTPQ_METAL_POSEIDON_MICRO_MODE={default,scalar}` астында скалярлық жолақты көп күйлі ядромен салыстыратын арнайы `poseidon_microbench` блогын түсіру үшін өзін қайта орындайды, сондықтан босату артефактілері нақты жылдамдықты көрсете алады. `poseidon_pipeline` бетінің телеметриясын бірдей түсіреді (`chunk_columns`, `pipe_depth`, `batches`, `fallbacks`), сондықтан 7-кезеңнің дәлелдері әрбір GPU-да қабаттасу терезесін дәлелдейді. trace.【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal_config.rs:78】【crates/fastpq_prover/src/metal.rs:1971】】 tes/fastpq_prover/src/bin/fastpq_metal_bench.rs:1691】【crates/fastpq_prover/src/trace.rs:299】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:19
+  - LDE тақтайшасының қойылымы енді FFT эвристикасын көрсетеді: ауыр іздер `log₂(len) ≥ 18` бір рет ортақ жад өтуінде тек 12 кезеңді орындайды, log₂20 кезінде 10 кезеңге дейін төмендейді және log₂22 деңгейінде сегіз кезеңге қысады, осылайша кең көбелектер постқа жылжиды. Детерминирленген тереңдік қажет болған кезде `FASTPQ_METAL_LDE_TILE_STAGES` (1–32) көмегімен қайта анықтау; хост тек қана эвристикалық ерте тоқтаған кезде, кезек тереңдігі мен ядро телеметриясы детерминирленген күйде болған кезде ғана плиткадан кейінгі жіберуді іске қосады.【crates/fastpq_prover/src/metal.rs:827】
+  - Ядроның микро-оңтайландыруы: ортақ жадты FFT/LDE тақталары енді әрбір көбелек үшін `pow_mod*` қайта бағалаудың орнына әр жолақтағы бұралу мен косет қадамдарын қайта пайдаланады. Әрбір жолақ `w_stride`, `w_stride` және (қажет болған жағдайда) әрбір блокқа бір рет косет қадамын алдын ала есептейді, содан кейін `apply_stage_tile`/`apply_stage_tile`/Prometheus орта жолының ішіндегі скаляр көбейтінділерін қиып, ығысулар арқылы өтеді. Соңғы эвристикамен ~1,55 секунд (950 мс мақсаттан әлі де жоғары, бірақ тек пакеттік реттеуге қарағанда тағы ~50 мс жақсарту).【crates/fastpq_prover/metal/kernels/ntt_stage.metal:164】【fastpq_metal_benchson_run:11.j- Енді ядролар жинағында әрбір кіру нүктесін, `fastpq.metallib` жүйесінде орындалатын ағындар тобын/плитка шектеулерін және металлибті қолмен құрастыруға арналған қайта шығару қадамдарын құжаттайтын арнайы сілтеме (`docs/source/fastpq_metal_kernels.md`) бар.【docs/source/fastpq_metal_kernels.md:1s.
+  - Эталондық есеп енді бөлінгеннен кейінгі ядрода қанша FFT/IFFT/LDE топтамасының орындалғанын жазатын `post_tile_dispatches` нысанын шығарады (әр түрдегі жөнелтулер саны және кезең/лог₂ шекаралары). `scripts/fastpq/wrap_benchmark.py` блокты `benchmarks.post_tile_dispatches`/`benchmarks.post_tile_summary` ішіне көшіреді және манифест қақпасы дәлелдерді өткізбейтін GPU түсірулерінен бас тартады, сондықтан әрбір 20к-жол артефакті көп өту ядросының жұмыс істегенін дәлелдейді. құрылғыда.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】【scripts/fastpq/wrap_benchmark.py:255】【xtask/src/fastpq.rs:280】
+  - `FASTPQ_METAL_TRACE=1` параметрлерін Instruments/Metal ізінің корреляциясы үшін әр жөнелту журналдарын (құбыр жапсырмасы, ағындар тобының ені, іске қосу топтары, өткен уақыт) шығару үшін орнатыңыз.【crates/fastpq_prover/src/metal.rs:346】
+- Жіберу кезегі енді құралмен жабдықталған: `FASTPQ_METAL_MAX_IN_FLIGHT` бір мезгілде металл пәрмен буферлерін жабады (автоматты әдепкі `system_profiler` арқылы анықталған GPU өзегі санынан алынған, кем дегенде macOS құрылғысын пайдалану туралы хабарлау үшін хост-параллельдік қалпына келтіру мүмкіндігі бар кезектің желдеткіш қабатына бекітілген). Экспортталған JSON `metal_dispatch_queue` нысанын `limit`, `dispatch_count`, `max_in_flight`, `busy_ms`, `busy_ms`, `busy_ms` және `busy_ms` бар `metal_dispatch_queue` нысанын тасымалдайтындай орындық кезек тереңдігін таңдауға мүмкіндік береді. тек Poseidon үшін түсіру (`--operation poseidon_hash_columns`) іске қосылғанда кірістірілген `metal_dispatch_queue.poseidon` блогы және шешілген пәрмен буферінің шегін сипаттайтын `metal_heuristics` блогын және FFT/LDE пакеттік пакетін шығарады (соның ішінде бағандардың мәндерін тексеруге мәжбүрлей алатын немесе тексеруге болатын шешімдерді қоса алғанда) телеметриямен қатар. Посейдон ядролары сонымен қатар ядро ​​үлгілерінен тазартылған арнайы `poseidon_profiles` блогын береді, осылайша артефактілер бойынша байт/жіп, толтыру және жіберу геометриясы бақыланады. Бастапқы іске қосу кезек тереңдігін немесе LDE нөлдік толтыру статистикасын жинай алмаса (мысалы, GPU жөнелтілімі процессорға үнсіз оралғанда), құрылғы жетіспейтін телеметрияны жинау үшін бір зонд жіберуді автоматты түрде іске қосады және енді GPU олар туралы есеп беруден бас тартқан кезде хосттың нөлдік толтыру уақыттарын синтездейді, сондықтан олар туралы мәліметтерді жариялайды I801016 блок.【crates/fastpq_prover/src/metal.rs:2056】【crates/fastpq_prover/src/metal.rs:247】【crates/fastpq _prover/src/bin/fastpq_metal_bench.rs:1524】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2078】
+  - Металл құралдар тізбегінсіз айқас компиляция кезінде `FASTPQ_SKIP_GPU_BUILD=1` орнатыңыз; ескерту өткізіп жіберуді жазады және жоспарлаушы процессор жолында жалғастырады.【crates/fastpq_prover/build.rs:45】【crates/fastpq_prover/src/backend.rs:195】- Орындалу уақытын анықтау металл қолдауын растау үшін `system_profiler` пайдаланады; жақтау, құрылғы немесе metallib жоқ болса құрастыру сценарийі `FASTPQ_METAL_LIB` тазалайды және жоспарлаушы детерминирленген процессорда қалады path.【crates/fastpq_prover/build.rs:29】【crates/fastpq_prover/src/backend.rs:293】【crates/fastpq_prover/src/backend.rs:605】【crates/fastpq_prover.3】4】s:
+  - Операторды тексеру тізімі (металл хосттар):
+    1. Құралдар тізбегінің бар екенін және `FASTPQ_METAL_LIB` нүктелерінің құрастырылған `.metallib` (`echo $FASTPQ_METAL_LIB` `cargo build --features fastpq-gpu` кейін бос болмауы керек) екенін растаңыз.【crates/fastpq_prover:188
+    2. GPU жолақтарын қосу арқылы паритет сынақтарын орындаңыз: `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release`. Бұл Металл ядроларын жаттықтырады және анықтау сәтсіз болса, автоматты түрде кері түседі.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/metal.rs:418】
+    3. Бақылау тақталары үшін эталон үлгісін түсіріңіз: құрастырылған металл кітапханасын табыңыз
+       (`fd -g 'fastpq.metallib' target/release/build | head -n1`), арқылы экспорттаңыз
+       `FASTPQ_METAL_LIB` және іске қосыңыз
       `cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`.
-       The canonical `fastpq-lane-balanced` set now pads every capture to 32,768 rows, so the
-       JSON reflects both the requested 20 k rows and the padded domain that drives the GPU
-       kernels. Upload the JSON/log to your evidence store; the nightly macOS workflow mirrors
-      this run and archives the artefacts for reference. The report records
-     `fft_tuning.{threadgroup_lanes,tile_stage_limit}` alongside each operation’s `speedup`, the
-     LDE section adds `zero_fill.{bytes,ms,queue_delta}` so release artefacts prove determinism,
-     host zero-fill overhead, and the incremental GPU queue usage (limit, dispatch count,
-     peak in-flight, busy/overlap time), and the new `kernel_profiles` block captures per-kernel
-     occupancy ratios, estimated bandwidth, and duration ranges so dashboards can flag GPU
-       regressions without reprocessing raw samples.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】
-       Expect the Metal LDE path to stay under 950 ms (`<1 s` target on Apple M-series hardware);
-4. Capture row-usage telemetry from a real ExecWitness so dashboards can chart transfer gadget
-   adoption. Fetch a witness from Torii
-  (`iroha_cli audit witness --binary --out exec.witness`) and decode it with
-  `iroha_cli audit witness --decode exec.witness` (optionally add
-  `--fastpq-parameter fastpq-lane-balanced` to assert the expected parameter set; FASTPQ batches
-  emit by default; pass `--no-fastpq-batches` only if you need to trim the output).
-   Every batch entry now emits a `row_usage` object (`total_rows`, `transfer_rows`,
-   `non_transfer_rows`, per-selector counts, and `transfer_ratio`). Archive that JSON snippet
-   reprocessing raw transcripts.【crates/iroha_cli/src/audit.rs:209】 Compare the new capture against
-   the previous baseline with `scripts/fastpq/check_row_usage.py` so CI fails if transfer ratios or
-   total rows regress:
+       Канондық `fastpq-lane-balanced` жинағы енді әрбір түсіруді 32 768 жолға толтырады, сондықтан
+       JSON сұралған 20к жолды да, GPU жетектейтін толтырылған доменді де көрсетеді
+       ядролар. JSON/журналды дәлелдер қоймасына жүктеп салыңыз; түнгі MacOS жұмыс үрдісінің айналары
+      бұл анықтама үшін артефактілерді іске қосады және мұрағаттайды. Есеп жазылады
+     `fft_tuning.{threadgroup_lanes,tile_stage_limit}` әрбір операцияның `speedup` қатарында,
+     LDE бөлімі `zero_fill.{bytes,ms,queue_delta}` қосады, сондықтан шығарылым артефактілері детерминизмді дәлелдейді,
+     хосттың нөлдік толтыру шығыны және қосымша GPU кезегін пайдалану (шектеу, жөнелту саны,
+     ең жоғары ұшу кезінде, бос емес/қабаттасу уақыты) және жаңа `kernel_profiles` блогы әрбір ядроны түсіреді
+     бақылау тақталары GPU-ны белгілей алатындай, толтыру коэффициенттері, болжалды өткізу қабілеттілігі және ұзақтығы диапазондары
+       шикі үлгілерді қайта өңдеусіз регрессиялар.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】
+       Metal LDE жолының 950 мс-ден төмен болуын күтіңіз (Apple M сериялы аппараттық құралдағы `<1 s` мақсаты);
+4. Бақылау тақталары тасымалдау гаджетін диаграммалай алуы үшін нақты ExecWitness-тен жолды пайдалану телеметриясын түсіріңіз.
+   асырап алу. Torii нөмірінен куәгерді алыңыз
+  (`iroha_cli audit witness --binary --out exec.witness`) және оны көмегімен декодтаңыз
+  `iroha_cli audit witness --decode exec.witness` (міндетті емес қосыңыз
+  Күтілетін параметрлер жинағын бекіту үшін `--fastpq-parameter fastpq-lane-balanced`; FASTPQ бумалары
+  әдепкі бойынша шығару; шығысты кесу қажет болған жағдайда ғана `--no-fastpq-batches` өткізіңіз).
+   Әрбір пакеттік жазба енді `row_usage` нысанын шығарады (`total_rows`, `transfer_rows`,
+   `non_transfer_rows`, әрбір таңдаушы саны және `transfer_ratio`). JSON үзіндісін мұрағаттау
+   өңделмеген транскрипттерді қайта өңдеу.【crates/iroha_cli/src/audit.rs:209】 Жаңа түсіруді салыстырыңыз
+   алдыңғы базалық сызық `scripts/fastpq/check_row_usage.py`, сондықтан тасымалдау коэффициенттері немесе
+   жалпы жолдар регрессі:
 
    ```bash
    python3 scripts/fastpq/check_row_usage.py \
@@ -267,15 +251,13 @@ batch metadata is reserved for entry hash/transcript count bookkeeping.
      --candidate fastpq_row_usage_2025-05-12.json \
      --max-transfer-ratio-increase 0.005 \
      --max-total-rows-increase 0
-   ```
-
-   Sample JSON blobs for smoke tests live in `scripts/fastpq/examples/`. Locally you can run `make check-fastpq-row-usage`
-   (wraps `ci/check_fastpq_row_usage.sh`), and CI runs the same script via `.github/workflows/fastpq-row-usage.yml` to compare the committed
-   `artifacts/fastpq_benchmarks/fastpq_row_usage_*.json` snapshots so the evidence bundle fails fast whenever
-   transfer rows creep back up. Pass `--summary-out <path>` if you want a machine-readable diff (the CI job uploads `fastpq_row_usage_summary.json`).
-   When an ExecWitness isn’t handy, synthesize a regression sample with `fastpq_row_bench`
-   (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`), which emits the exact same `row_usage`
-   object for configurable selector counts (e.g., a 65 536 row stress test):
+   ```Түтін сынақтарына арналған JSON блоб үлгісі `scripts/fastpq/examples/` ішінде өмір сүреді. Жергілікті жерде `make check-fastpq-row-usage` іске қосуға болады
+   (`ci/check_fastpq_row_usage.sh` орады) және CI жасалған сценарийді салыстыру үшін `.github/workflows/fastpq-row-usage.yml` арқылы бірдей сценарийді іске қосады
+   `artifacts/fastpq_benchmarks/fastpq_row_usage_*.json` суретті түсіреді, сондықтан дәлелдер жинағы кез келген уақытта тез істен шығады
+   тасымалдау жолдары кері жылжиды. Машинада оқылатын дифференцияны қаласаңыз, `--summary-out <path>` өтіңіз (CI тапсырмасы `fastpq_row_usage_summary.json` жүктеп салады).
+   ExecWitness қол жетімді болмаса, `fastpq_row_bench` көмегімен регрессия үлгісін синтездеңіз
+   (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`), ол дәл `row_usage` шығарады
+   конфигурацияланатын селектор сандарына арналған нысан (мысалы, 65536 жолдың кернеу сынағы):
 
    ```bash
    cargo run -p fastpq_prover --bin fastpq_row_bench -- \
@@ -284,99 +266,93 @@ batch metadata is reserved for entry hash/transcript count bookkeeping.
      --burn-rows 128 \
      --pretty \
      --output artifacts/fastpq_benchmarks/fastpq_row_usage_65k.json
-   ```
-
-   Stage 7-3 rollout bundles must also pass `scripts/fastpq/validate_row_usage_snapshot.py`, which
-   enforces that every `row_usage` entry contains the selector counts and that
-   `transfer_ratio = transfer_rows / total_rows`; `ci/check_fastpq_rollout.sh` calls the helper
-   automatically so bundles missing those invariants fail before GPU lanes are mandated.【scripts/fastpq/validate_row_usage_snapshot.py:1】【ci/check_fastpq_rollout.sh:1】
-       the bench manifest gate enforces this via `--max-operation-ms lde=950`, so refresh the
-       capture whenever your evidence exceeds that bound.
-      When you also need Instruments evidence, pass `--trace-dir <dir>` so the harness
-      relaunches itself via `xcrun xctrace record` (default “Metal System Trace” template) and
-      stores a timestamped `.trace` file alongside the JSON; you can still override the location /
-      template manually with `--trace-output <path>` plus optional `--trace-template` /
-      `--trace-seconds`. The resulting JSON advertises `metal_trace_{template,seconds,output}` so
-      artefact bundles always identify the captured trace.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:177】
-      Wrap each capture with
+   ```7-3-кезеңді шығару пакеттері де `scripts/fastpq/validate_row_usage_snapshot.py` өтуі керек.
+   әрбір `row_usage` жазбасында селектор сандары бар екенін және
+   `transfer_ratio = transfer_rows / total_rows`; `ci/check_fastpq_rollout.sh` көмекшіні шақырады
+   автоматты түрде сол инварианттар жоқ дестелер GPU жолақтары міндетті болғанға дейін сәтсіздікке ұшырайды.【scripts/fastpq/validate_row_usage_snapshot.py:1】【ci/check_fastpq_rollout.sh:1】
+       орындық манифест қақпасы мұны `--max-operation-ms lde=950` арқылы жүзеге асырады, сондықтан
+       Сіздің дәлелдеріңіз осы шектен асқан кезде ұстаңыз.
+      Сондай-ақ Құралдар дәлелі қажет болған кезде, `--trace-dir <dir>` сымын өткізіңіз
+      `xcrun xctrace record` (әдепкі «Металл жүйе ізі» үлгісі) арқылы өзін қайта іске қосады және
+      уақыт белгісі бар `.trace` файлын JSON жанында сақтайды; сіз әлі де орынды қайта анықтай аласыз /
+      үлгіні қолмен `--trace-output <path>` плюс қосымша `--trace-template` /
+      `--trace-seconds`. Нәтижесінде JSON `metal_trace_{template,seconds,output}` осылайша жарнамалайды
+      артефакт бумалары әрқашан түсірілген ізді анықтайды.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:177】
+      Әрбір түсірілген суретті ораңыз
       `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output`
-       (add `--gpg-key <fingerprint>` if you need to pin a signing identity) so the bundle fails
-       fast whenever the GPU LDE mean breaches the 950 ms target, Poseidon exceeds 1 s, or the
-       Poseidon telemetry blocks are missing, embeds a `row_usage_snapshot`
-      next to the JSON, surfaces the Poseidon microbench summary under `benchmarks.poseidon_microbench`,
-      and still carries metadata for runbooks and the Grafana dashboard
-    (`dashboards/grafana/fastpq_acceleration.json`). The JSON now emits `speedup.ratio` /
-     `speedup.delta_ms` per operation so release evidence can prove GPU vs
-     CPU gains without reprocessing the raw samples, and the wrapper copies both the
-     zero-fill statistics (plus `queue_delta`) into `zero_fill_hotspots` (bytes, latency, derived
-     GB/s), records the Instruments metadata under `metadata.metal_trace`, threads the optional
-     `metadata.row_usage_snapshot` block when `--row-usage <decoded witness>` is supplied, and flattens the
-     per-kernel counters into `benchmarks.kernel_summary` so padding bottlenecks, Metal queue
-     utilisation, kernel occupancy, and bandwidth regressions are visible at a glance without
-     spelunking the raw report.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:521】【scripts/fastpq/wrap_benchmark.py:1】【artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】
-     Because the row-usage snapshot now travels with the wrapped artefact, rollout tickets simply
-     reference the bundle instead of attaching a second JSON snippet, and CI can diff the embedded
-    counts directly when validating Stage 7 submissions. To archive the microbench data on its own,
-    run `python3 scripts/fastpq/export_poseidon_microbench.py --bundle artifacts/fastpq_benchmarks/<metal>.json`
-    and store the resulting file under `benchmarks/poseidon/`. Keep the aggregated manifest fresh with
+       (қол қою идентификаторын бекіту қажет болса, `--gpg-key <fingerprint>` қосыңыз) сондықтан бума сәтсіз аяқталады
+       GPU LDE орташа мәні 950 мс мақсатты бұзған сайын, Poseidon 1 секундтан асқанда немесе
+       Poseidon телеметриялық блоктары жоқ, `row_usage_snapshot` кірістіреді
+      JSON жанында, `benchmarks.poseidon_microbench` астында Poseidon микробұйдасының қорытындысы шығады,
+      және әлі де runbook және Grafana бақылау тақтасы үшін метадеректерді тасымалдайды
+    (`dashboards/grafana/fastpq_acceleration.json`). JSON енді `speedup.ratio` / шығарады
+     Әр операцияға `speedup.delta_ms`, сондықтан дәлелдемелерді шығару GPU мен салыстыруға мүмкіндік береді
+     Орталық процессор өңделмеген үлгілерді қайта өңдемей-ақ жоғарылайды және орауыш екеуін де көшіреді
+     нөлдік толтыру статистикасы (плюс `queue_delta`) `zero_fill_hotspots` (байт, кідіріс, алынған)
+     GB/s), `metadata.metal_trace` астында Құралдар метадеректерін жазады, қосымша
+     `metadata.row_usage_snapshot` `--row-usage <decoded witness>` берілгенде блоктайды және оны тегістейді
+     ядролық есептегіштер `benchmarks.kernel_summary`, осылайша кедергілерді толтырады, металл кезегі
+     пайдалану, ядроның толтырылуы және өткізу қабілеттілігінің регрессиялары бір қарағанда көрінеді.
+     шикізатты айту есеп.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:521】【scripts/fastpq/wrap_benchmark .py:1】【artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】
+     Жолды пайдалану суреті енді оралған артефактпен бірге жүретіндіктен, билеттер жай ғана шығарылады.
+     Екінші JSON үзіндісін тіркеудің орнына жинаққа сілтеме жасаңыз және CI ендірілген файлды ажырата алады
+    Stage7 жіберілімдерін тексеру кезінде тікелей есептеледі. Микробағдарлама деректерін өздігінен мұрағаттау үшін,
+    `python3 scripts/fastpq/export_poseidon_microbench.py --bundle artifacts/fastpq_benchmarks/<metal>.json` іске қосыңыз
+    және алынған файлды `benchmarks/poseidon/` астында сақтаңыз. Жиынтық манифестті жаңа күйде сақтаңыз
     `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json`
-    so dashboards/CI can diff the full history without walking each file manually.
-    4. Validate telemetry by curling `fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}` (Prometheus endpoint) or looking for `telemetry::fastpq.execution_mode` logs; unexpected `resolved="cpu"` entries indicate the host fell back despite GPU intent.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】
-    5. Use `FASTPQ_GPU=cpu` (or the config knob) to force CPU execution during maintenance and confirm fallback logs still appear; this keeps SRE runbooks aligned with the deterministic path.【crates/fastpq_prover/src/backend.rs:308】【crates/iroha_config/src/parameters/user.rs:1357】
-- Telemetry & fallback:
-  - Execution-mode logs (`telemetry::fastpq.execution_mode`) and counters (`fastpq_execution_mode_total{device_class="…", backend="metal"|…}`) expose the requested vs resolved mode so silent fallbacks are visible in dashboards.【crates/fastpq_prover/src/backend.rs:174】【crates/iroha_telemetry/src/metrics.rs:5397】
-  - The `FASTPQ Acceleration Overview` Grafana board (`dashboards/grafana/fastpq_acceleration.json`) visualises the Metal adoption rate and links back to the benchmark artefacts, while the paired alert rules (`dashboards/alerts/fastpq_acceleration_rules.yml`) gate rollouts on sustained downgrades.
-  - `FASTPQ_GPU={auto,cpu,gpu}` overrides remain supported; unknown values raise warnings but still propagate to telemetry for auditing.【crates/fastpq_prover/src/backend.rs:308】【crates/fastpq_prover/src/backend.rs:349】
-  - GPU parity tests (`cargo test -p fastpq_prover --features fastpq_prover/fastpq-gpu`) must pass for CUDA and Metal; CI skips gracefully when the metallib is absent or detection fails.【crates/fastpq_prover/src/gpu.rs:49】【crates/fastpq_prover/src/backend.rs:346】
-  - Metal readiness evidence (archive the artefacts below with every rollout so the roadmap audit can prove determinism, telemetry coverage, and fallback behaviour):
-
-    | Step | Goal | Command / Evidence |
+    сондықтан бақылау тақталары/CI толық тарихты әр файлды қолмен жылжытпай-ақ ажырата алады.4. `fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}` (Prometheus соңғы нүктесі) немесе `telemetry::fastpq.execution_mode` журналдарын іздеу арқылы телеметрияны растаңыз; күтпеген `resolved="cpu"` жазбалары GPU ниетіне қарамастан хосттың кері кеткенін көрсетеді.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】
+    5. Техникалық қызмет көрсету кезінде процессорды орындауға мәжбүрлеу үшін `FASTPQ_GPU=cpu` (немесе конфигурациялау тұтқасын) пайдаланыңыз және қалпына келтіру журналдарының әлі де көрінетінін растаңыз; бұл SRE runbook файлдарын детерминирленген жолға сәйкестендіреді.【crates/fastpq_prover/src/backend.rs:308】【crates/iroha_config/src/parameters/user.rs:1357】
+- Телеметрия және қалпына келтіру:
+  - Орындау режимінің журналдары (`telemetry::fastpq.execution_mode`) және есептегіштер (`fastpq_execution_mode_total{device_class="…", backend="metal"|…}`) сұралған және шешілген режимді көрсетеді, осылайша дыбыссыз қалпына келтірулер келесіде көрінеді бақылау тақталары.【crates/fastpq_prover/src/backend.rs:174】【crates/iroha_telemetry/src/metrics.rs:5397】
+  - `FASTPQ Acceleration Overview` Grafana тақтасы (`dashboards/grafana/fastpq_acceleration.json`) металды қабылдау жылдамдығын көрсетеді және эталондық артефактілерге сілтеме жасайды, ал жұптастырылған ескерту ережелері (`dashboards/alerts/fastpq_acceleration_rules.yml`) шлюзді төмендетеді.
+  - `FASTPQ_GPU={auto,cpu,gpu}` қайта анықтауға қолдау көрсетіледі; Белгісіз мәндер ескертулерді арттырады, бірақ аудит үшін телеметрияға таралады.【crates/fastpq_prover/src/backend.rs:308】【crates/fastpq_prover/src/backend.rs:349】
+  - GPU паритеттік сынақтары (`cargo test -p fastpq_prover --features fastpq_prover/fastpq-gpu`) CUDA және Metal үшін өтуі керек; Metallib жоқ болғанда немесе анықтау сәтсіз болғанда CI әдемі өткізіп жібереді.【crates/fastpq_prover/src/gpu.rs:49】【crates/fastpq_prover/src/backend.rs:346】
+  - Металл дайындығының дәлелі (төмендегі артефактілерді әрбір шығарылыммен мұрағаттау үшін жол картасы аудиті детерминизмді, телеметрияны қамтуды және қалпына келтіру әрекетін дәлелдей алады):| Қадам | Мақсат | Бұйрық / Дәлел |
     | ---- | ---- | ------------------ |
-    | Build metallib | Ensure `xcrun metal`/`xcrun metallib` are available and emit the deterministic `.metallib` for this commit | `xcrun metal -std=metal3.0 -O3 -c metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"`; `xcrun metal -std=metal3.0 -O3 -c metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"`; `xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" -o "$OUT_DIR/fastpq.metallib"`; export `FASTPQ_METAL_LIB=$OUT_DIR/fastpq.metallib`.【crates/fastpq_prover/build.rs:98】【crates/fastpq_prover/build.rs:188】
-    | Verify env var | Confirm Metal stays enabled by checking the env var recorded by the build script | `echo $FASTPQ_METAL_LIB` (must return an absolute path; empty means the backend was disabled).【crates/fastpq_prover/build.rs:188】【crates/fastpq_prover/src/metal.rs:43】
-    | GPU parity suite | Prove kernels execute (or emit deterministic downgrade logs) before shipping | `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release` and store the resulting log snippet that shows either `backend="metal"` or the fallback warning.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/backend.rs:195】
-    | Benchmark sample | Capture the JSON/log pair that records `speedup.*` and FFT tuning so dashboards can ingest accelerator evidence | `FASTPQ_METAL_LIB=$(fd -g 'fastpq.metallib' target/release/build | head -n1) cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`; archive the JSON, the timestamped `.trace`, and stdout alongside release notes so the Grafana board picks up the Metal run (the report records the requested 20 k rows plus the padded 32,768-row domain so reviewers can confirm the `<1 s` LDE target).【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】
-    | Wrap & sign report | Fail the release if the GPU LDE mean breaches 950 ms, Poseidon exceeds 1 s, or Poseidon telemetry blocks are missing, and produce a signed artefact bundle | `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output [--gpg-key <fingerprint>]`; ship both the wrapped JSON and the generated `.json.asc` signature so auditors can verify the sub-second metrics without rerunning the workload.【scripts/fastpq/wrap_benchmark.py:714】【scripts/fastpq/wrap_benchmark.py:732】 |
-    | Signed bench manifest | Enforce `<1 s` LDE evidence across Metal/CUDA bundles and capture signed digests for release approval | `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json`; attach the manifest + signature to the release ticket so downstream automation can validate the sub-second proof metrics.【xtask/src/fastpq.rs:1】【artifacts/fastpq_benchmarks/README.md:65】
-| CUDA bundle | Keep the SM80 CUDA capture in lock-step with the Metal evidence so manifests cover both GPU classes. | `FASTPQ_GPU=gpu cargo run -p fastpq_prover --bin fastpq_cuda_bench --release -- --rows 20000 --iterations 5 --column-count 16 --device 0 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json` on the Xeon + RTX host → `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_cuda_bench.json artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --label device_class=xeon-rtx-sm80 --sign-output`; append the wrapped path to `artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt`, keep the `.json`/`.asc` pair next to the Metal bundle, and cite the seeded `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json` when auditors need a reference layout.【scripts/fastpq/wrap_benchmark.py:714】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】
-| Telemetry check | Validate Prometheus/OTEL surfaces reflect `device_class="<matrix>", backend="metal"` (or log the downgrade) | `curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'` and copy the `telemetry::fastpq.execution_mode` log emitted at startup.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】
-    | Forced fallback drill | Document the deterministic CPU path for SRE playbooks | Run a short workload with `FASTPQ_GPU=cpu` or `zk.fastpq.execution_mode = "cpu"` and capture the downgrade log so operators can rehearse the rollback procedure.【crates/fastpq_prover/src/backend.rs:308】【crates/iroha_config/src/parameters/user.rs:1357】
-    | Trace capture (optional) | When profiling, capture dispatch traces so kernel lane/tile overrides are reviewable later | Rerun one parity test with `FASTPQ_METAL_TRACE=1 FASTPQ_GPU=gpu …` and attach the produced trace log to your release artefacts.【crates/fastpq_prover/src/metal.rs:346】【crates/fastpq_prover/src/backend.rs:208】
+    | Metallib құрастыру | `xcrun metal`/`xcrun metallib` қолжетімді екеніне көз жеткізіңіз және осы міндеттеме үшін детерминирленген `.metallib` шығарыңыз | `xcrun metal -std=metal3.0 -O3 -c metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"`; `xcrun metal -std=metal3.0 -O3 -c metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"`; `xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" -o "$OUT_DIR/fastpq.metallib"`; экспорт `FASTPQ_METAL_LIB=$OUT_DIR/fastpq.metallib`.【crates/fastpq_prover/build.rs:98】【crates/fastpq_prover/build.rs:188】
+    | env var | тексеріңіз Құрастыру сценарийі | арқылы жазылған env var параметрін тексеру арқылы металдың қосулы күйін растаңыз `echo $FASTPQ_METAL_LIB` (абсолютті жолды қайтару керек; бос сервер өшірілгенін білдіреді).【crates/fastpq_prover/build.rs:188】【crates/fastpq_prover/src/metal.rs:43】
+    | GPU паритет жинағы | Жеткізу алдында ядролардың орындалатынын (немесе детерминирленген төмендету журналдарын шығаратынын) дәлелдеңіз `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release` және `backend="metal"` немесе резервтік ескертуді көрсететін нәтиже журнал үзіндісін сақтаңыз.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/backend.rs:19】:
+    | Эталон үлгісі | `speedup.*` және FFT баптауын жазатын JSON/журнал жұбын түсіріңіз, осылайша бақылау тақталары үдеткіш дәлелдерін қабылдай алады | `FASTPQ_METAL_LIB=$(fd -g 'fastpq.metallib' target/release/build | head -n1) cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`; JSON, уақыт белгісі бар `.trace` және stdout файлын шығарылым жазбаларымен бірге мұрағаттаңыз, осылайша Grafana тақтасы Металл жүгірісін алады (есеп сұралған 20 мың жолды және толтырылған 32 768 жолдық доменді жазады, осылайша шолушылар L1045000000000000000000000000000000000000000000000000000000000000:00:00:00:000.000. мақсат).【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】
+    | Есепті орау және қол қою | GPU LDE орташа мәні 950 мс бұзылса, Poseidon 1 секундтан асса немесе Poseidon телеметрия блоктары жоқ болса және қол қойылған артефакт бумасын шығарса, шығарылымды орындамау | `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output [--gpg-key <fingerprint>]`; оралған JSON және жасалған `.json.asc` қолтаңбасын жіберіңіз, осылайша аудиторлар жұмыс жүктемесін қайта іске қоспай-ақ екінші секундтық көрсеткіштерді тексере алады.【scripts/fastpq/wrap_benchmark.py:714】【scripts/fastpq/wrap_benchmark.py:7 |
+    | Қол қойылған стендтік манифест | `<1 s` LDE дәлелдерін Metal/CUDA бумалары арқылы орындау және шығаруды мақұлдау үшін қол қойылған дайджесттерді түсіру | `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json`; манифест + қолтаңбасын шығарылым билетіне тіркеңіз, осылайша төменгі ағындық автоматтандыру екінші секундтық дәлелдеу көрсеткіштерін тексере алады.【xtask/src/fastpq.rs:1】【artifacts/fastpq_benchmarks/README.md:65】
+| CUDA бумасы | SM80 CUDA түсіруін металл дәлелдермен құлыптау қадамында ұстаңыз, осылайша манифесттер GPU кластарының екеуін де қамтиды. | Xeon+RTX хостындағы `FASTPQ_GPU=gpu cargo run -p fastpq_prover --bin fastpq_cuda_bench --release -- --rows 20000 --iterations 5 --column-count 16 --device 0 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json` → `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_cuda_bench.json artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --label device_class=xeon-rtx-sm80 --sign-output`; оралған жолды `artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt` файлына қосыңыз, `.json`/`.asc` жұбын Металл бумасының қасында қалдырыңыз және аудиторларға сілтеме қажет болғанда бастапқы `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json` сілтемесін келтіріңіз орналасу.【scripts/fastpq/wrap_benchmark.py:714】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】
+| Телеметриялық тексеру | Prometheus/OTEL беттері `device_class="<matrix>", backend="metal"` көрсетеді (немесе төмендетуді тіркеу) | `curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'` және іске қосу кезінде шығарылған `telemetry::fastpq.execution_mode` журналын көшіріңіз.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】| Мәжбүрлі кері бұрғылау | SRE оқу кітаптарына арналған детерминирленген процессор жолын құжаттаңыз `FASTPQ_GPU=cpu` немесе `zk.fastpq.execution_mode = "cpu"` көмегімен қысқа жұмыс жүктемесін іске қосыңыз және операторлар кері қайтару процедурасын қайталай алатындай төмендету журналын түсіріңіз.
+    | Бақылауды түсіру (міндетті емес) | Профильдеу кезінде, ядро ​​жолағы/тақтаны қайта анықтау кейінірек қарастырылатындай етіп жіберу іздерін түсіріңіз | `FASTPQ_METAL_TRACE=1 FASTPQ_GPU=gpu …` көмегімен бір паритет сынамасын қайта орындаңыз және жасалған бақылау журналын шығарылым артефактілеріне тіркеңіз.【crates/fastpq_prover/src/metal.rs:346】【crates/fastpq_prover/src/backend.rs:208】
 
-    Archive the evidence with the release ticket and mirror the same checklist in `docs/source/fastpq_migration_guide.md` so staging/prod rollouts follow an identical playbook.【docs/source/fastpq_migration_guide.md:1】
+    Шығарылым билетімен дәлелдемелерді мұрағаттаңыз және `docs/source/fastpq_migration_guide.md` ішіндегі бірдей бақылау тізімін қайталаңыз, осылайша кезеңдік/өнім шығарулар бірдей оқу кітабына сәйкес келеді.【docs/source/fastpq_migration_guide.md:1】
 
-### Release checklist enforcement
+### Тексеру парағын орындауды шығару
 
-Add the following gates to every FASTPQ release ticket. Releases are blocked until all items are
-complete and attached as signed artefacts.
+Әрбір FASTPQ шығарылым билетіне келесі қақпаларды қосыңыз. Барлық элементтер болғанша шығарылымдар блокталады
+қол қойылған артефактілер ретінде толтырылады және қоса беріледі.
 
-1. **Sub-second proof metrics** — The canonical Metal benchmark capture
-   (`fastpq_metal_bench_*.json`) must prove the 20 000-row workload (32 768 padded rows) finishes in
-   <1 s. Concretely, the `benchmarks.operations` entry where `operation = "lde"` and the matching
-   `report.operations` sample must show `gpu_mean_ms ≤ 950`. Runs that exceed the ceiling require
-   investigation and a recapture before the checklist can be signed.
-2. **Signed benchmark manifest** — After recording fresh Metal + CUDA bundles, run
-   `cargo xtask fastpq-bench-manifest … --signing-key <path>` to emit
-   `artifacts/fastpq_bench_manifest.json` and the detached signature
-   (`artifacts/fastpq_bench_manifest.sig`). Attach both files plus the public key fingerprint to the
-   release ticket so reviewers can verify the digest and signature independently.【xtask/src/fastpq.rs:1】
-3. **Evidence attachments** — Store the raw benchmark JSON, stdout log (or Instruments trace, when
-   captured), and the manifest/signature pair with the release ticket. The checklist is only
-   considered green when the ticket links to those artefacts and the on-call reviewer confirms the
-   digest recorded in `fastpq_bench_manifest.json` matches the uploaded files.【artifacts/fastpq_benchmarks/README.md:1】
+1. **Секундтық дәлелдеу көрсеткіштері** — Металлдың канондық эталондық көрсеткіші
+   (`fastpq_metal_bench_*.json`) 20000 жолдық жұмыс жүктемесінің (32768 толтырылған жолдар) аяқталуын дәлелдеу керек
+   <1с. Нақтырақ айтқанда, `benchmarks.operations` жазбасы, мұнда `operation = "lde"` және сәйкестік
+   `report.operations` үлгісі `gpu_mean_ms ≤ 950` көрсетуі керек. Төбеден асатын жүгірулер қажет
+   тексеру және тексеру парағына қол қоюға дейін қайта алу.
+2. **Қол қойылған эталондық манифест** — Жаңа металл + CUDA бумаларын жазғаннан кейін іске қосыңыз
+   `cargo xtask fastpq-bench-manifest … --signing-key <path>` шығару
+   `artifacts/fastpq_bench_manifest.json` және бөлінген қолтаңба
+   (`artifacts/fastpq_bench_manifest.sig`). Екі файлды және ашық кілт саусақ ізін тіркеңіз
+   Рецензенттер дайджест пен қолтаңбаны тәуелсіз тексеруі үшін билетті шығарыңыз.【xtask/src/fastpq.rs:1】
+3. **Дәлелдер тіркемелері** — өңделмеген JSON эталонын, stdout журналын (немесе Құралдар ізін, қашан
+   түсірілген) және шығару билетімен манифест/қол жұбы. Тексеру парағы ғана
+   билет сол артефактілерге сілтеме жасағанда және шақыру бойынша тексеруші растаған кезде жасыл болып саналады
+   `fastpq_bench_manifest.json` ішінде жазылған дайджест жүктеп салынған файлдарға сәйкес келеді.【artifacts/fastpq_benchmarks/README.md:1】
 
-## Stage 6 — Hardening & Documentation
-- Placeholder backend retired; production pipeline ships by default with no feature toggles.
-- Reproducible builds (pin toolchains, container images).
-- Fuzzers for trace, SMT, lookup structures.
-- Prover-level smoke tests cover governance ballot grants and remittance transfers to keep Stage 6 fixtures stable ahead of full IVM rollouts.【crates/fastpq_prover/tests/realistic_flows.rs:1】
-- Runbooks with alert thresholds, remediation procedures, capacity planning guidelines.
-- Cross-architecture proof replay (x86_64, ARM64) in CI.
+## 6-кезең — шыңдау және құжаттау
+- Толтырғыш сервері өшірілді; Өндіріс құбыры әдепкі бойынша ешбір мүмкіндікті ауыстырып-қосқышсыз жіберіледі.
+- Қайталанатын конструкциялар (тапсырмалар тізбегі, контейнер кескіндері).
+- Trace, SMT, іздеу құрылымдарына арналған футзерлер.
+- Prover деңгейіндегі түтін сынақтары IVM толық шығарылымдарынан бұрын Stage6 құрылғыларын тұрақты ұстау үшін басқару бюллетеньдері мен ақша аударымдарын қамтиды.【crates/fastpq_prover/tests/realistic_flows.rs:1】
+- Ескерту шектері, қалпына келтіру процедуралары, мүмкіндіктерді жоспарлау нұсқаулары бар Runbooks.
+- CI ішінде архитектуралық дәлелді қайталау (x86_64, ARM64).
 
-### Bench manifest & release gate
+### Орындық манифест және босату қақпасы
 
-Release evidence now includes a deterministic manifest covering both Metal and
-CUDA benchmark bundles. Run:
+Шығарылым дәлелдері енді металды да, оны да қамтитын детерминирленген манифестті қамтиды
+CUDA эталондық жинақтары. Жүгіру:
 
 ```bash
 cargo xtask fastpq-bench-manifest \
@@ -385,159 +361,151 @@ cargo xtask fastpq-bench-manifest \
   --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json \
   --signing-key secrets/fastpq_bench.ed25519 \
   --out artifacts/fastpq_bench_manifest.json
-```
+```Пәрмен оралған бумаларды тексереді, кідіріс/жылдамдық шектерін бекітеді,
+BLAKE3 + SHA-256 дайджесттерін шығарады және (міндетті емес) манифестке қол қояды
+Ed25519 пернесі, сондықтан босату құралдары шығу тегін тексере алады. Қараңыз
+іске асыру үшін `xtask/src/fastpq.rs`/`xtask/src/main.rs` және
+Пайдалану нұсқаулығы үшін `artifacts/fastpq_benchmarks/README.md`.
 
-The command validates the wrapped bundles, enforces latency/speedup thresholds,
-emits BLAKE3 + SHA-256 digests, and (optionally) signs the manifest with an
-Ed25519 key so release tooling can verify provenance. See
-`xtask/src/fastpq.rs`/`xtask/src/main.rs` for the implementation and
-`artifacts/fastpq_benchmarks/README.md` for operational guidance.
+> **Ескертпе:** `benchmarks.poseidon_microbench` жоқ металл байламдары
+> сәтсіздікке ұшырайтын манифест ұрпақ. `scripts/fastpq/wrap_benchmark.py` қайта іске қосыңыз
+> (және дербес қажет болса, `scripts/fastpq/export_poseidon_microbench.py`
+> түйіндеме) Посейдонның дәлелі жоқ болса, манифестті босатыңыз
+> әрқашан скаляр-әдепкі салыстыруды түсіріңіз.【xtask/src/fastpq.rs:409】
 
-> **Note:** Metal bundles that omit `benchmarks.poseidon_microbench` now cause
-> the manifest generation to fail. Re-run `scripts/fastpq/wrap_benchmark.py`
-> (and `scripts/fastpq/export_poseidon_microbench.py` if you need a standalone
-> summary) whenever the Poseidon evidence is missing so release manifests
-> always capture the scalar-vs-default comparison.【xtask/src/fastpq.rs:409】
+`--matrix` жалауы (әдепкі бойынша `artifacts/fastpq_benchmarks/matrix/matrix_manifest.json`
+болған кезде) түсірген кросс-құрылғы медианаларын жүктейді
+`scripts/fastpq/capture_matrix.sh`. Манифест 20000 жолды және еденді кодтайды
+әрбір құрылғы класы үшін операциялық кідіріс/жылдамдық шектеулері, сондықтан тапсырыс бойынша
+`--require-rows`/`--max-operation-ms`/`--min-operation-speedup` қайта анықтаулар жоқ
+Арнайы регрессияны түзетпейінше, ұзағырақ талап етіледі.
 
-The `--matrix` flag (defaulting to `artifacts/fastpq_benchmarks/matrix/matrix_manifest.json`
-when present) loads the cross-device medians captured by
-`scripts/fastpq/capture_matrix.sh`. The manifest encodes the 20 000-row floor and
-per-operation latency/speedup limits for every device class, so bespoke
-`--require-rows`/`--max-operation-ms`/`--min-operation-speedup` overrides are no
-longer required unless you are debugging a specific regression.
-
-Refresh the matrix by appending wrapped benchmark paths to the
-`artifacts/fastpq_benchmarks/matrix/devices/<label>.txt` lists and running
-`scripts/fastpq/capture_matrix.sh`. The script snapshots the per-device medians,
-emits the consolidated `matrix_manifest.json`, and prints the relative path that
-`cargo xtask fastpq-bench-manifest` will consume. The Apple M4, Xeon + RTX, and
-Neoverse + MI300 capture lists (`devices/apple-m4-metal.txt`,
-`devices/xeon-rtx-sm80.txt`, `devices/neoverse-mi300.txt`) plus their wrapped
-benchmark bundles
+Орнатылған эталон жолдарын қосу арқылы матрицаны жаңартыңыз
+`artifacts/fastpq_benchmarks/matrix/devices/<label>.txt` тізімдері және іске қосылған
+`scripts/fastpq/capture_matrix.sh`. Сценарий әр құрылғының медианаларын түсіреді,
+біріктірілген `matrix_manifest.json` шығарады және салыстырмалы жолды басып шығарады
+`cargo xtask fastpq-bench-manifest` тұтынады. AppleM4, Xeon+RTX және
+Neoverse+MI300 түсіру тізімдері (`devices/apple-m4-metal.txt`,
+`devices/xeon-rtx-sm80.txt`, `devices/neoverse-mi300.txt`) плюс олардың оралған
+эталондық жинақтар
 (`fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json`,
 `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json`,
-`fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json`) are now checked
-in, so every release enforces the same cross-device medians before the manifest
-is signed.【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-metal.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】【artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】【artifacts/fastpq_benchmarks/fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json:1】【artifacts/fastpq_benchmarks/fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json:1】
+`fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json`) енді тексерілді
+ішінде, сондықтан әрбір шығарылым манифест алдындағы бірдей құрылғылар арасындағы медианаларды мәжбүрлейді
+болып табылады қол қойылған.【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-metal.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/x eon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】【artifacts/fastpq_benchmarks/fastp q_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】【artifacts/fastpq_benchmarks/fastpq_cuda_bench_2025-11-12T09050 1Z_ubuntu24_x86_64.json:1】【artifacts/fastpq_benchmarks/fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json:1】
 
 ---
 
-## Critique Summary & Open Actions
+## Сын қорытындысы және ашық әрекеттер
 
-## Stage 7 — Fleet Adoption & Rollout Evidence
+## 7-кезең — Флотты қабылдау және шығару дәлелдері
 
-Stage 7 takes the prover from “documented & benchmarked” (Stage 6) to
-“default-ready for production fleets”. The focus is on telemetry ingestion,
-cross-device capture parity, and operator evidence bundles so GPU acceleration
-can be mandated deterministically.
-
-- **Stage7-1 — Fleet telemetry ingestion & SLOs.** Production dashboards
-  (`dashboards/grafana/fastpq_acceleration.json`) must be wired to live
-  Prometheus/OTel feeds with Alertmanager coverage for queue-depth stalls,
-  zero-fill regressions, and silent CPU fallbacks. The alert pack stays under
-  `dashboards/alerts/fastpq_acceleration_rules.yml` and feeds the same evidence
-  bundle required in Stage 6.【dashboards/grafana/fastpq_acceleration.json:1】【dashboards/alerts/fastpq_acceleration_rules.yml:1】
-  The dashboard now exposes template variables for `device_class`, `chip_family`,
-  and `gpu_kind`, letting operators pivot Metal adoption by the exact matrix
-  label (e.g., `apple-m4-max`), by Apple chip family, or by discrete vs.
-  integrated GPU classes without editing the queries.
-  macOS nodes built with `irohad --features fastpq-gpu` now emit
+7-кезең проверді «құжатталған және салыстырылған» (6-кезең) деңгейіне дейін қабылдайды
+«Өндірістік флоттар үшін әдепкі бойынша дайын». Телеметрияны қабылдауға назар аударылады,
+кросс-құрылғыларды түсіру паритеті және GPU жеделдету үшін оператордың дәлелдемелері
+анықтауға болады.- **7-1-кезең — флоттың телеметриясын қабылдау және SLOs.** Өндірістік бақылау тақталары
+  (`dashboards/grafana/fastpq_acceleration.json`) жұмыс істеу үшін сымды болуы керек
+  Prometheus/OTel арналары Alertmanager жүйесімен кезек тереңдігі бар дүңгіршектерге арналған,
+  нөлдік толтыру регрессиялары және үнсіз процессорлық резервтер. Ескерту жинағы астында қалады
+  `dashboards/alerts/fastpq_acceleration_rules.yml` және бірдей дәлелдерді береді
+  6-кезеңде бума қажет.【бағыттар тақталары/grafana/fastpq_acceleration.json:1】【бақылау тақталары/alerts/fastpq_acceleration_rules.yml:1】
+  Бақылау тақтасы енді `device_class`, `chip_family` үшін үлгі айнымалы мәндерін көрсетеді,
+  және `gpu_kind`, операторларға дәл матрица бойынша металды қабылдауды бұруға мүмкіндік береді
+  жапсырма (мысалы, `apple-m4-max`), Apple чиптер тобы бойынша немесе дискретті
+  сұрауларды өңдеусіз біріктірілген GPU сыныптары.
+  `irohad --features fastpq-gpu` көмегімен жасалған macOS түйіндері енді шығарады
   `fastpq_execution_mode_total{device_class,chip_family,gpu_kind,...}`,
   `fastpq_metal_queue_ratio{device_class,chip_family,gpu_kind,queue,metric}`
-  (busy/overlap ratios), and
+  (бос емес/қабаттасу коэффициенттері) және
   `fastpq_metal_queue_depth{device_class,chip_family,gpu_kind,metric}`
-  (limit, max_in_flight, dispatch_count, window_seconds) so the dashboards and
-  Alertmanager rules can read Metal semaphore duty-cycle/headroom directly from
-  Prometheus without waiting for a benchmark bundle. Hosts now export
-  `fastpq_zero_fill_duration_ms{device_class,chip_family,gpu_kind}` and
-  `fastpq_zero_fill_bandwidth_gbps{device_class,chip_family,gpu_kind}` whenever
-  the LDE helper zeros GPU evaluation buffers, and Alertmanager gained the
-  `FastpqQueueHeadroomLow` (headroom < 1 for 10 m) and
-  `FastpqZeroFillRegression` (>0.40 ms over 15 m) rules so queue headroom and
-  zero-fill regressions page operators immediately instead of waiting for the
-  next wrapped benchmark. A new `FastpqCpuFallbackBurst` page-level alert tracks
-  GPU requests that land on the CPU backend for more than 5 % of the workload,
-  forcing operators to capture evidence and root-cause transient GPU failures
-  before retrying the rollout.【crates/irohad/src/main.rs:2345】【crates/iroha_telemetry/src/metrics.rs:4436】【dashboards/alerts/fastpq_acceleration_rules.yml:1】【dashboards/alerts/tests/fastpq_acceleration_rules.test.yml:1】
-  The SLO set now also enforces the ≥50 % Metal duty-cycle target via the
-  `FastpqQueueDutyCycleDrop` rule, which averages
-  `fastpq_metal_queue_ratio{metric="busy"}` over a rolling 15-minute window and
-  warns whenever GPU work is still being scheduled but a queue fails to keep the
-  required occupancy. This keeps the live telemetry contract aligned with the
-  benchmark evidence before GPU lanes are mandated.【dashboards/alerts/fastpq_acceleration_rules.yml:1】【dashboards/alerts/tests/fastpq_acceleration_rules.test.yml:1】
-- **Stage7-2 — Cross-device capture matrix.** The new
-  `scripts/fastpq/capture_matrix.sh` builds
-  `artifacts/fastpq_benchmarks/matrix/matrix_manifest.json` from the per-device
-  capture lists under `artifacts/fastpq_benchmarks/matrix/devices/`. Apple M4,
-  Xeon + RTX, and Neoverse + MI300 medians now live in-repo alongside their
-  wrapped bundles, so `cargo xtask fastpq-bench-manifest` loads the manifest
-  automatically, enforces the 20 000-row floor, and applies per-device
-  latency/speedup limits without bespoke CLI flags before a release bundle is
-  approved.【scripts/fastpq/capture_matrix.sh:1】【artifacts/fastpq_benchmarks/matrix/matrix_manifest.json:1】【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-metal.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】【xtask/src/fastpq.rs:1】
-Aggregated instability reasons now ship alongside the matrix: pass
-`--reason-summary-out` to `scripts/fastpq/geometry_matrix.py` to emit a
-JSON histogram of failure/warning causes keyed by host label and source
-summary, so Stage7-2 reviewers can see CPU fallbacks or missing telemetry at
-a glance without scanning the full Markdown table. The same helper now
-accepts `--host-label chip_family:Chip` (repeat for multiple keys) so the
-Markdown/JSON outputs include curated host label columns instead of burying
-that metadata in the raw summary, making it trivial to filter OS builds or
-Metal driver versions when compiling the Stage7-2 evidence bundle.【scripts/fastpq/geometry_matrix.py:1】
-Geometry sweeps also stamp ISO8601 `started_at` / `completed_at` fields into the
-summary, CSV, and Markdown outputs so capture bundles can prove the window for
-each host when Stage7-2 matrices merge multiple lab runs.【scripts/fastpq/launch_geometry_sweep.py:1】
-`scripts/fastpq/stage7_bundle.py` now stitches the geometry matrix together with
-`row_usage/*.json` snapshots into a single Stage7 bundle (`stage7_bundle.json`
-+ `stage7_geometry.md`), validating transfer ratios via
-`validate_row_usage_snapshot.py` and persisting host/env/reason/source summaries
-so rollout tickets can attach one deterministic artefact instead of juggling
-per-host tables.【scripts/fastpq/stage7_bundle.py:1】【scripts/fastpq/validate_row_usage_snapshot.py:1】
-- **Stage7-3 — Operator adoption evidence & rollback drills.** The new
-  `docs/source/fastpq_rollout_playbook.md` describes the artefact bundle
-  (`fastpq_bench_manifest.json`, wrapped Metal/CUDA captures, Grafana export,
-  Alertmanager snapshot, rollback logs) that must accompany every rollout ticket
-  plus the staged (pilot → ramp → default) timeline and forced fallback drills.
-  `ci/check_fastpq_rollout.sh` validates these bundles so CI enforces the Stage 7
-  gate before releases move forward. The release pipeline can now pull the same
-  bundles into `artifacts/releases/<version>/fastpq_rollouts/…` via
-  `scripts/run_release_pipeline.py --fastpq-rollout-bundle <path>`, ensuring the
-  signed manifests and rollout evidence stay together. A reference bundle lives
-  under `artifacts/fastpq_rollouts/20250215T101500Z/fleet-alpha/canary/` to keep
-  the GitHub workflow (`.github/workflows/fastpq-rollout.yml`) green while real
-  rollout submissions are reviewed.
+  (шектеу, ұшудағы_максимум, жіберу_саны, терезе_секундтары) осылайша бақылау тақталары мен
+  Alertmanager ережелері Металл семафорының жұмыс циклі/жоғары көлемін тікелей мына жерден оқи алады
+  Prometheus эталондық топтаманы күтпестен. Хосттар енді экспортталады
+  `fastpq_zero_fill_duration_ms{device_class,chip_family,gpu_kind}` және
+  `fastpq_zero_fill_bandwidth_gbps{device_class,chip_family,gpu_kind}` кез келген уақытта
+  LDE көмекшісі GPU бағалау буферін нөлге түсіреді және Alertmanager алды
+  `FastpqQueueHeadroomLow` (10 м үшін үстіңгі орын 0,40 мс) ережелері, сондықтан кезекке тұру және
+  нөлдік толтырылған регрессиялар бетінің операторлары күтудің орнына дереу
+  келесі оралған эталон. Жаңа `FastpqCpuFallbackBurst` бет деңгейіндегі ескерту тректері
+  GPU жұмыс жүктемесінің 5%-дан астамы үшін CPU серверіне түсуді сұрайды,
+  операторларды дәлелдемелерді алуға және өтпелі GPU ақауларының түпкі себебін алуға мәжбүрлеу
+  қайталап көрмес бұрын rollout.【crates/irohad/src/main.rs:2345】【crates/iroha_telemetry/src/metrics.rs:4436】【бақылау тақталары/al erts/fastpq_acceleration_rules.yml:1】【бақылау тақталары/ескертулер/тесттер/fastpq_acceleration_rules.test.yml:1】
+  SLO жинағы енді ≥50% Металл жұмыс циклінің мақсатын да арқылы жүзеге асырады
+  `FastpqQueueDutyCycleDrop` ережесі, ол орташа
+  `fastpq_metal_queue_ratio{metric="busy"}` жылжымалы 15 минуттық терезеде және
+  GPU жұмысы әлі жоспарланып жатқанда, бірақ кезек сақталмаса, ескертеді
+  талап етілетін орын. Бұл тікелей телеметрия келісім-шартын сәйкестендіруге мүмкіндік береді
+  GPU жолақтары алдында эталондық дәлелдер міндетті.【бақылау тақталары/аlerts/fastpq_acceleration_rules.yml:1】【бақылау тақталары/alerts/tests/fastpq_acceleration_rules.test.yml:1】
+- **7-2-кезең — Құрылғылар арасындағы түсіру матрицасы.** Жаңа
+  `scripts/fastpq/capture_matrix.sh` құрастырады
+  Әрбір құрылғыдан `artifacts/fastpq_benchmarks/matrix/matrix_manifest.json`
+  `artifacts/fastpq_benchmarks/matrix/devices/` астындағы түсіру тізімдері. AppleM4,
+  Xeon+RTX және Neoverse+MI300 медианалары енді олармен қатар репода тұрады
+  оралған бумалар, сондықтан `cargo xtask fastpq-bench-manifest` манифестті жүктейді
+  автоматты түрде, 20000-қабатты күшейтеді және әр құрылғыға қолданады
+  шығарылым жинағы шығарылғанға дейін арнайы CLI жалаушалары жоқ кідіріс/жылдамдық шектеулерібекітілген.【scripts/fastpq/capture_matrix.sh:1】【artifacts/fastpq_benchmarks/matrix/matrix_manifest.json:1】【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-met al.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】rc.
+Жиынтық тұрақсыздық себептері енді матрицамен бірге жеткізіледі: өту
+шығару үшін `--reason-summary-out` - `scripts/fastpq/geometry_matrix.py`
+Хост белгісі мен көз арқылы кілттелген сәтсіздік/ескерту себептерінің JSON гистограммасы
+қорытынды, сондықтан Stage7-2 шолушылары мына жерден CPU резервтерін немесе жетіспейтін телеметрияны көре алады
+толық Markdown кестесін сканерлемей-ақ қарау. Қазір сол көмекші
+`--host-label chip_family:Chip` қабылдайды (бірнеше пернелер үшін қайталаңыз), сондықтан
+Markdown/JSON шығыстары көмудің орнына таңдалған хост белгісі бағандарын қамтиды
+шикі қорытындыдағы сол метадеректер, бұл ОЖ құрылымдарын сүзуді тривиальды етеді немесе
+Stage7-2 дәлелдер бумасын құрастыру кезіндегі металл драйвер нұсқалары.【scripts/fastpq/geometry_matrix.py:1】
+Геометрия сонымен қатар ISO8601 `started_at` / `completed_at` өрістеріне мөртаңба қояды.
+жиынтық, CSV және Markdown шығыстары, сондықтан түсіру бумалары терезені дәлелдей алады
+Stage7-2 матрицалары бірнеше зертханалық жұмыстарды біріктірген кезде әрбір хост.【scripts/fastpq/launch_geometry_sweep.py:1】
+`scripts/fastpq/stage7_bundle.py` енді геометрия матрицасын бірге тігеді
+`row_usage/*.json` суреті бір Stage7 бумасына (`stage7_bundle.json`)
++ `stage7_geometry.md`), арқылы тасымалдау коэффициенттерін тексеру
+`validate_row_usage_snapshot.py` және тұрақты хост/env/себеп/көзі қорытындылары
+сондықтан шығарылым билеттері жонглерлік емес, бір детерминирленген артефактты тіркей алады
+әрбір хост кестелері.【scripts/fastpq/stage7_bundle.py:1】【scripts/fastpq/validate_row_usage_snapshot.py:1】
+- **7-3-кезең — Операторды қабылдау дәлелдері және кері жаттығулар.** Жаңа
+  `docs/source/fastpq_rollout_playbook.md` артефакт бумасын сипаттайды
+  (`fastpq_bench_manifest.json`, оралған металл/CUDA түсіру, Grafana экспорттау,
+  Alertmanager суреті, кері қайтару журналдары) әрбір шығару билетімен бірге жүруі керек
+  сонымен қатар кезеңдік (ұшқыш → рампа → әдепкі) уақыт шкаласы және мәжбүрлі қалпына келтіру жаттығулары.
+  `ci/check_fastpq_rollout.sh` осы бумаларды тексереді, осылайша CI Stage7-ді қамтамасыз етеді
+  шығарылымдар алдында қақпа алға жылжиды. Шығару құбыры енді бірдей тарта алады
+  арқылы `artifacts/releases/<version>/fastpq_rollouts/…` ішіне жиналады
+  `scripts/run_release_pipeline.py --fastpq-rollout-bundle <path>`, қамтамасыз ету
+  қол қойылған манифесттер мен шығарылатын дәлелдер бірге қалады. Анықтамалық бума өмір сүреді
+  сақтау үшін `artifacts/fastpq_rollouts/20250215T101500Z/fleet-alpha/canary/` астында
+  GitHub жұмыс процесі (`.github/workflows/fastpq-rollout.yml`) нақты болған кезде жасыл
+  шығарылымдар қаралады.
 
-### Stage7 FFT queue fan-out
+### 7-кезең FFT кезегінің шығуы`crates/fastpq_prover/src/metal.rs` енді `QueuePolicy` жасайды, бұл
+хост а деп хабарлаған сайын автоматты түрде бірнеше металл пәрмен кезегін шығарады
+дискретті GPU. Біріктірілген графикалық процессорлар бір кезекті жолды сақтайды
+(`MIN_QUEUE_FANOUT = 1`), ал дискретті құрылғылар әдепкі бойынша екі кезекте және тек
+жұмыс жүктемесі кемінде 16 бағанды қамтитын кезде желдету. Эвристиканың екеуін де реттеуге болады
+жаңа `FASTPQ_METAL_QUEUE_FANOUT` және `FASTPQ_METAL_COLUMN_THRESHOLD` арқылы
+ортаның айнымалы мәндерін және жоспарлаушы FFT/LDE топтамаларын айналдырады
+сол кезекте жұптастырылған плиткадан кейінгі жөнелтілімді шығару алдында белсенді кезектер
+тапсырыс кепілдіктерін сақтау үшін.【crates/fastpq_prover/src/metal.rs:620】【crates/fastpq_prover/src/metal.rs:772】【crates/fastpq_prover/src/metal.rs:900】
+Түйін операторларына енді сол env нұсқаларын қолмен экспорттау қажет емес: the
+`iroha_config` профилі `fastpq.metal_queue_fanout` және
+`fastpq.metal_queue_column_threshold` және `irohad` оларды мына арқылы қолданады
+`fastpq_prover::set_metal_queue_policy` Metal сервері осылай инициализацияланғанға дейін
+флот профильдері тапсырыс бойынша іске қосу қаптамаларынсыз қайталанатын болып қалады.【crates/irohad/src/main.rs:1879】【crates/fastpq_prover/src/lib.rs:60】
+Кері FFT топтамалары енді тек жұмыс жүктемесі болған кезде бір кезекке жабысады
+желдеткіш шегіне жетеді (мысалы, 16 бағанды жолақпен теңестірілген түсіру), ол
+үлкен бағанды FFT/LDE/Poseidon қалдыру кезінде WP2-D үшін ≥1,0× теңдігін қалпына келтіреді
+көп кезек жолында жөнелтеді.【crates/fastpq_prover/src/metal.rs:2018】
 
-`crates/fastpq_prover/src/metal.rs` now instantiates a `QueuePolicy` that
-automatically spawns multiple Metal command queues whenever the host reports a
-discrete GPU. Integrated GPUs keep the single-queue path
-(`MIN_QUEUE_FANOUT = 1`), while discrete devices default to two queues and only
-fan out when a workload covers at least 16 columns. Both heuristics can be tuned
-via the new `FASTPQ_METAL_QUEUE_FANOUT` and `FASTPQ_METAL_COLUMN_THRESHOLD`
-environment variables, and the scheduler round-robins FFT/LDE batches across the
-active queues before issuing the paired post-tiling dispatch on the same queue
-to preserve ordering guarantees.【crates/fastpq_prover/src/metal.rs:620】【crates/fastpq_prover/src/metal.rs:772】【crates/fastpq_prover/src/metal.rs:900】
-Node operators no longer need to export those env vars manually: the
-`iroha_config` profile exposes `fastpq.metal_queue_fanout` and
-`fastpq.metal_queue_column_threshold`, and `irohad` applies them via
-`fastpq_prover::set_metal_queue_policy` before the Metal backend initialises so
-fleet profiles stay reproducible without bespoke launch wrappers.【crates/irohad/src/main.rs:1879】【crates/fastpq_prover/src/lib.rs:60】
-Inverse FFT batches now stick to a single queue whenever the workload only just
-hits the fan-out threshold (e.g., the 16-column lane-balanced capture), which
-restores ≥1.0× parity for WP2-D while leaving large-column FFT/LDE/Poseidon
-dispatches on the multi-queue path.【crates/fastpq_prover/src/metal.rs:2018】
+Көмекші сынақтары кезек саясаты қысқыштарын және талдаушы тексеруді жүзеге асырады, осылайша CI мүмкін
+әр құрылысшыда GPU жабдығын қажет етпестен Stage7 эвристикасын дәлелдеңіз,
+және GPU-арнайы сынақтар қайта ойнатуды қамтуды сақтау үшін желдеткішті қайта анықтауды мәжбүрлейді
+жаңа әдепкі параметрлермен синхрондаңыз.【crates/fastpq_prover/src/metal.rs:2163】【crates/fastpq_prover/src/metal.rs:2236】
 
-Helper tests exercise the queue-policy clamps and parser validation so CI can
-prove the Stage 7 heuristics without requiring GPU hardware on every builder,
-and the GPU-specific tests force fan-out overrides to keep replay coverage in
-sync with the new defaults.【crates/fastpq_prover/src/metal.rs:2163】【crates/fastpq_prover/src/metal.rs:2236】
+### 7-1-кезең Құрылғы белгілері және ескерту келісімі
 
-### Stage7-1 Device Labels & Alert Contract
-
-`scripts/fastpq/wrap_benchmark.py` now probes `system_profiler` on macOS capture
-hosts and records hardware labels in every wrapped benchmark so Fleet telemetry
-and the capture matrix can pivot by device without bespoke spreadsheets. A
-20 000-row Metal capture now carries entries such as:
+`scripts/fastpq/wrap_benchmark.py` енді `system_profiler` macOS түсірілімінде тексереді
+Флот телеметриясы үшін әрбір оралған эталондағы аппараттық құралдар белгілерін орналастырады және жазады
+және түсіру матрицасы арнайы электрондық кестелерсіз құрылғы бойынша бұрыла алады. А
+20000-қатар металды түсіру енді келесі жазбаларды қамтиды:
 
 ```json
 "labels": {
@@ -551,489 +519,460 @@ and the capture matrix can pivot by device without bespoke spreadsheets. A
 }
 ```
 
-These labels are ingested along with `benchmarks.zero_fill_hotspots` and
-`benchmarks.metal_dispatch_queue` so the Grafana snapshot, capture matrix
-(`artifacts/fastpq_benchmarks/matrix/devices/<label>.txt`), and Alertmanager
-evidence all agree on the hardware class that produced the metrics. The
-`--label` flag still allows manual overrides when a lab host lacks
-`system_profiler`, but the auto-probed identifiers now cover Apple M1–M4 and
-discrete PCIe GPUs out of the box.【scripts/fastpq/wrap_benchmark.py:1】
+Бұл белгілер `benchmarks.zero_fill_hotspots` және бірге қабылданады
+`benchmarks.metal_dispatch_queue` сондықтан Grafana суреті, түсіру матрицасы
+(`artifacts/fastpq_benchmarks/matrix/devices/<label>.txt`) және Alertmanager
+барлық дәлелдер метриканы шығарған аппараттық құрал класымен келіседі. The
+`--label` жалаушасы зертханалық хостта болмаған кезде қолмен қайта анықтауға мүмкіндік береді
+`system_profiler`, бірақ автоматты түрде тексерілетін идентификаторлар енді AppleM1–M4 және
+дискретті PCIe графикалық процессорлары қораптан шығарылды.【scripts/fastpq/wrap_benchmark.py:1】
 
-Linux captures receive the same treatment: `wrap_benchmark.py` now inspects
-`/proc/cpuinfo`, `nvidia-smi`/`rocm-smi`, and `lspci` so CUDA and OpenCL runs
-derive `cpu_model`, `gpu_model`, and a canonical `device_class` (`xeon-rtx-sm80`
-for the Stage 7 CUDA host, `neoverse-mi300` for the MI300A lab). Operators can
-still override the auto-detected values, but Stage 7 evidence bundles no longer
-require manual edits to tag Xeon/Neoverse captures with the correct device
-metadata.
+Linux түсірулері бірдей емдеуді алады: `wrap_benchmark.py` енді тексереді
+`/proc/cpuinfo`, `nvidia-smi`/`rocm-smi` және `lspci`, сондықтан CUDA және OpenCL жұмыс істейді
+`cpu_model`, `gpu_model` және канондық `device_class` (`xeon-rtx-sm80`) шығарыңыз
+Stage7 CUDA хосты үшін, MI300A зертханасы үшін `neoverse-mi300`). Операторлар жасай алады
+әлі де автоматты түрде анықталған мәндерді қайта анықтайды, бірақ Stage7 дәлелдемелері бұдан былай емес
+Xeon/Neoverse түсірілімдерін дұрыс құрылғымен белгілеу үшін қолмен өңдеулер қажет
+метадеректер.Орындалу уақытында әрбір хост `fastpq.device_class`, `fastpq.chip_family` және
+`fastpq.gpu_kind` (немесе сәйкес `FASTPQ_*` ортасының айнымалы мәндері)
+Prometheus экспорттау үшін түсіру жинағында пайда болатын бірдей матрицалық белгілер
+`fastpq_execution_mode_total{device_class="…",chip_family="…",gpu_kind="…"}` және
+FASTPQ Acceleration бақылау тақтасы үш осьтің кез келгені бойынша сүзе алады. The
+Alertmanager ережелері операторларға диаграмма беруге мүмкіндік беретін бірдей белгілер жиыны бойынша біріктіріледі
+қабылдау, төмендету және бір профильдің орнына бір аппараттық құрал профиліне арналған резервтер
+флоттың кең арақатынасы.【crates/iroha_config/src/parameters/user.rs:1224】【dashboards/grafana/fastpq_acceleration.json:1】【бақылау тақталары/alerts/fastpq_acceleration_rules.yml:1】
 
-At runtime, each host sets `fastpq.device_class`, `fastpq.chip_family`, and
-`fastpq.gpu_kind` (or the corresponding `FASTPQ_*` environment variables) to the
-same matrix labels that appear in the capture bundle so Prometheus export
-`fastpq_execution_mode_total{device_class="…",chip_family="…",gpu_kind="…"}` and
-the FASTPQ Acceleration dashboard can filter by any of the three axes. The
-Alertmanager rules aggregate over the same label set, letting operators chart
-adoption, downgrades, and fallbacks per hardware profile instead of a single
-fleet-wide ratio.【crates/iroha_config/src/parameters/user.rs:1224】【dashboards/grafana/fastpq_acceleration.json:1】【dashboards/alerts/fastpq_acceleration_rules.yml:1】
+Телеметриялық SLO/ескерту келісімшарты енді түсірілген көрсеткіштерді Stage7-ге қайта байланыстырады
+қақпалар. Төмендегі кестеде сигналдар мен орындау нүктелері жинақталған:
 
-The telemetry SLO/alert contract now ties the captured metrics back to the Stage 7
-gates. The table below summarises the signals and enforcement points:
-
-| Signal | Source | Target / Trigger | Enforcement |
+| Сигнал | Дереккөз | Мақсат / Триггер | Орындау |
 | ------ | ------ | ---------------- | ----------- |
-| GPU adoption ratio | Prometheus `fastpq_execution_mode_total{requested=~"auto|gpu", device_class="…", chip_family="…", gpu_kind="…", backend="metal"}` | ≥95 % of per-(device_class, chip_family, gpu_kind) resolutions must land on `resolved="gpu", backend="metal"`; page when any triplet drops below 50 % over 15 m | `FastpqMetalDowngrade` alert (page)【dashboards/alerts/fastpq_acceleration_rules.yml:1】 |
-| Backend gap | Prometheus `fastpq_execution_mode_total{backend="none", device_class="…", chip_family="…", gpu_kind="…"}` | Must remain at 0 for every triplet; warn after any sustained (>10 m) bursts | `FastpqBackendNoneBurst` alert (warning)【dashboards/alerts/fastpq_acceleration_rules.yml:21】 |
-| CPU fallback ratio | Prometheus `fastpq_execution_mode_total{requested=~"auto|gpu", backend="cpu", device_class="…", chip_family="…", gpu_kind="…"}` | ≤5 % of GPU-requested proofs may land on the CPU backend for any triplet; page when a triplet exceeds 5 % for ≥10 m | `FastpqCpuFallbackBurst` alert (page)【dashboards/alerts/fastpq_acceleration_rules.yml:32】 |
-| Metal queue duty cycle | Prometheus `fastpq_metal_queue_ratio{metric="busy", device_class="…", chip_family="…", gpu_kind="…"}` | Rolling 15 m average must stay ≥50 % whenever GPU jobs are queued; warn when utilisation drops below target while GPU requests persist | `FastpqQueueDutyCycleDrop` alert (warning)【dashboards/alerts/fastpq_acceleration_rules.yml:98】 |
-| Queue depth & zero-fill budget | Wrapped benchmark `metal_dispatch_queue` and `zero_fill_hotspots` blocks | `max_in_flight` must stay at least one slot below `limit` and LDE zero-fill mean must stay ≤0.4 ms (≈80 GB/s) for the canonical 20 000-row trace; any regression blocks the rollout bundle | Reviewed via `scripts/fastpq/wrap_benchmark.py` output and attached to the Stage 7 evidence bundle (`docs/source/fastpq_rollout_playbook.md`). |
-| Runtime queue headroom | Prometheus `fastpq_metal_queue_depth{metric="limit|max_in_flight", device_class="…", chip_family="…", gpu_kind="…"}` | `limit - max_in_flight ≥ 1` for every triplet; warn after 10 m without headroom | `FastpqQueueHeadroomLow` alert (warning)【dashboards/alerts/fastpq_acceleration_rules.yml:41】 |
-| Runtime zero-fill latency | Prometheus `fastpq_zero_fill_duration_ms{device_class="…", chip_family="…", gpu_kind="…"}` | Latest zero-fill sample must remain ≤0.40 ms (Stage 7 limit) | `FastpqZeroFillRegression` alert (page)【dashboards/alerts/fastpq_acceleration_rules.yml:58】 |
+| GPU қабылдау коэффициенті | Prometheus `fastpq_execution_mode_total{requested=~"auto|gpu", device_class="…", chip_family="…", gpu_kind="…", backend="metal"}` | Әрбір (құрылғы_сыныбы, чип_отбасы, gpu_түрі) ажыратымдылықтарының ≥95% `resolved="gpu", backend="metal"` құрылғысына түсуі керек; кез келген триплет 15м | үстінде 50%-дан төмен түссе бет `FastpqMetalDowngrade` ескерту (бет)【бақылау тақталары/ескертулер/fastpq_acceleration_rules.yml:1】 |
+| Backend аралығы | Prometheus `fastpq_execution_mode_total{backend="none", device_class="…", chip_family="…", gpu_kind="…"}` | Әрбір үштік үшін 0-де қалуы керек; тұрақты (>10 м) жарылыстардан кейін ескерту | `FastpqBackendNoneBurst` ескерту (ескерту)【бақылау тақталары/ескертулер/fastpq_acceleration_rules.yml:21】 |
+| CPU қалпына келтіру коэффициенті | Prometheus `fastpq_execution_mode_total{requested=~"auto|gpu", backend="cpu", device_class="…", chip_family="…", gpu_kind="…"}` | GPU сұраған дәлелдердің ≤5% кез келген триплет үшін CPU серверіне түсуі мүмкін; ≥10м | үшін триплет 5%-дан асатын бет `FastpqCpuFallbackBurst` ескерту (бет)【бақылау тақталары/ескертулер/fastpq_acceleration_rules.yml:32】 |
+| Металл кезекті жұмыс циклі | Prometheus `fastpq_metal_queue_ratio{metric="busy", device_class="…", chip_family="…", gpu_kind="…"}` | GPU тапсырмалары кезекте тұрғанда, орташа 15 м айналу ≥50% қалуы керек; GPU сұраулары сақталған кезде пайдалану мақсаттан төмен түскенде ескертіңіз `FastpqQueueDutyCycleDrop` ескерту (ескерту)【бақылау тақталары/ескертулер/fastpq_acceleration_rules.yml:98】 |
+| Кезек тереңдігі және нөлдік толтыру бюджеті | Орамды эталондық `metal_dispatch_queue` және `zero_fill_hotspots` блоктары | `max_in_flight` `limit` астында кем дегенде бір ұяшық болуы керек және LDE нөлдік толтыру ортасы канондық 20000 жолды із үшін ≤0,4 мс (≈80 ГБ/с) болуы керек; кез келген регрессия шығару бумасын блоктайды | `scripts/fastpq/wrap_benchmark.py` шығысы арқылы қаралды және Stage7 дәлелдер жинағына (`docs/source/fastpq_rollout_playbook.md`) тіркелген. |
+| Орындау кезегі бос орны | Prometheus `fastpq_metal_queue_depth{metric="limit|max_in_flight", device_class="…", chip_family="…", gpu_kind="…"}` | Әрбір үштік үшін `limit - max_in_flight ≥ 1`; 10м кейін бас бос орынсыз ескерту | `FastpqQueueHeadroomLow` ескерту (ескерту)【бақылау тақталары/ескертулер/fastpq_acceleration_rules.yml:41】 |
+| Орындалу уақыты нөлдік толтыру кідірісі | Prometheus `fastpq_zero_fill_duration_ms{device_class="…", chip_family="…", gpu_kind="…"}` | Ең соңғы нөлдік толтыру үлгісі ≤0,40 мс қалуы керек (7 кезең шегі) | `FastpqZeroFillRegression` ескертуі (бет)【бақылау тақталары/аlerts/fastpq_acceleration_rules.yml:58】 |Қаптама нөлдік толтыру жолын тікелей орындайды. Өту
+`--require-zero-fill-max-ms 0.40` - `scripts/fastpq/wrap_benchmark.py` және ол
+JSON стендінде нөлдік толтыру телеметриясы болмаса немесе ең ыстық болғанда сәтсіздікке ұшырайды
+нөлдік толтыру үлгісі 7-кезең бюджетінен асып түседі, бұл шығару бумаларына жол бермейді
+міндетті дәлелсіз жеткізу.【scripts/fastpq/wrap_benchmark.py:1008】
 
-The wrapper enforces the zero-fill row directly. Pass
-`--require-zero-fill-max-ms 0.40` to `scripts/fastpq/wrap_benchmark.py` and it
-will fail when the bench JSON lacks zero-fill telemetry or when the hottest
-zero-fill sample exceeds the Stage 7 budget, preventing rollout bundles from
-shipping without the mandated evidence.【scripts/fastpq/wrap_benchmark.py:1008】
+#### Ескертулерді өңдеудің 7-1 кезеңінің бақылау тізімі
 
-#### Stage 7-1 alert-handling checklist
+Жоғарыда аталған әрбір ескерту операторлар жинайтын арнайы шақыру бойынша жаттығуларды береді
+шығару бумасы талап ететін артефактілер:
 
-Every alert listed above feeds a specific on-call drill so operators gather the
-same artefacts that the release bundle requires:
-
-1. **`FastpqQueueHeadroomLow` (warning).** Run an instantaneous Prometheus query
-   for `fastpq_metal_queue_depth{metric=~"limit|max_in_flight",device_class="<matrix>"}` and
-   capture the Grafana “Queue headroom” panel from the `fastpq-acceleration`
-   board. Record the query result in
+1. **`FastpqQueueHeadroomLow` (ескерту).** Лездік Prometheus сұрауын іске қосыңыз
+   `fastpq_metal_queue_depth{metric=~"limit|max_in_flight",device_class="<matrix>"}` үшін және
+   `fastpq-acceleration` ішінен Grafana “Кезектегі орын” панелін түсіріңіз
+   тақта. Сұрау нәтижесін жазыңыз
    `artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_headroom.prom`
-   together with the alert ID so the release bundle proves the warning was
-   acknowledged before the queue starved.【dashboards/grafana/fastpq_acceleration.json:1】
-2. **`FastpqZeroFillRegression` (page).** Inspect
-   `fastpq_zero_fill_duration_ms{device_class="<matrix>"}` and, if the metric is
-   noisy, rerun `scripts/fastpq/wrap_benchmark.py` on the most recent bench JSON
-   to refresh the `zero_fill_hotspots` block. Attach the promQL output,
-   screenshots, and refreshed bench file to the rollout directory; this creates
-   the same evidence that `ci/check_fastpq_rollout.sh` expects during release
+   ескерту идентификаторымен бірге шығарылым жинағы ескертудің болғанын дәлелдейді
+   кезек ашылмай тұрып мойындалды.【dashboards/grafana/fastpq_acceleration.json:1】
+2. **`FastpqZeroFillRegression` (бет).** Тексеріңіз
+   `fastpq_zero_fill_duration_ms{device_class="<matrix>"}` және метрика болса
+   шулы, `scripts/fastpq/wrap_benchmark.py` ең соңғы JSON стендінде қайта іске қосыңыз
+   `zero_fill_hotspots` блогын жаңарту үшін. promQL шығысын тіркеңіз,
+   скриншоттар және жаңартылған стендтік файлды шығару каталогына; бұл жасайды
+   `ci/check_fastpq_rollout.sh` шығарылым кезінде күтетін бірдей дәлел
    validation.【scripts/fastpq/wrap_benchmark.py:1】【ci/check_fastpq_rollout.sh:1】
-3. **`FastpqCpuFallbackBurst` (page).** Confirm that
-   `fastpq_execution_mode_total{requested="gpu",backend="cpu"}` exceeds the 5 %
-   floor, then sample `irohad` logs for the corresponding downgrade messages
-   (`telemetry::fastpq.execution_mode resolved="cpu"`). Store the promQL dump
-   plus log excerpts in `metrics_cpu_fallback.prom`/`rollback_drill.log` so the
-   bundle demonstrates both the impact and the operator acknowledgement.
-4. **Evidence packaging.** After any alert clears, rerun the Stage 7-3 steps in
-   the rollout playbook (Grafana export, alert snapshot, rollback drill) and
-   revalidate the bundle via `ci/check_fastpq_rollout.sh` before reattaching it
-   to the release ticket.【docs/source/fastpq_rollout_playbook.md:114】
+3. **`FastpqCpuFallbackBurst` (бет).** Мұны растаңыз
+   `fastpq_execution_mode_total{requested="gpu",backend="cpu"}` 5%-дан асады
+   қабат, содан кейін сәйкес төмендету хабарлары үшін `irohad` журналдарын таңдаңыз
+   (`telemetry::fastpq.execution_mode resolved="cpu"`). promQL демпін сақтаңыз
+   плюс журнал үзінділері `metrics_cpu_fallback.prom`/`rollback_drill.log`, сондықтан
+   бума әсерді де, оператордың растауын да көрсетеді.
+4. **Дәлелдеме орамы.** Кез келген ескерту жойылғаннан кейін, 7-3 кезең қадамдарын қайта орындаңыз.
+   ойнату кітабын (Grafana экспорттау, ескерту суреті, кері бұрғылау) және
+   топтаманы қайта жалғамас бұрын `ci/check_fastpq_rollout.sh` арқылы қайта растаңыз
+   шығару билетіне.【docs/source/fastpq_rollout_playbook.md:114】
 
-Operators who prefer automation can run
+Автоматтандыруды қалайтын операторлар жұмыс істей алады
 `scripts/fastpq/capture_alert_evidence.sh --device-class <label> --out <bundle-dir>`
-to query the Prometheus API for the queue headroom, zero-fill, and CPU fallback
-metrics listed above; the helper writes the captured JSON (prefixed with the
-original promQL) into `metrics_headroom.prom`, `metrics_zero_fill.prom`, and
-`metrics_cpu_fallback.prom` under the chosen rollout directory so those files
-can be attached to the bundle without manual curl invocations.
+кезектегі бос орын, нөлдік толтыру және CPU резерві үшін Prometheus API сұрау үшін
+жоғарыда көрсетілген көрсеткіштер; көмекші түсірілген JSON жазады (префикспен
+түпнұсқа promQL) `metrics_headroom.prom`, `metrics_zero_fill.prom` және
+`metrics_cpu_fallback.prom` таңдалған шығару каталогында сол файлдар
+бумаға қолмен бұралу шақыруларысыз қосылуы мүмкін.`ci/check_fastpq_rollout.sh` енді кезектегі бос орын мен нөлдік толтыруды қамтамасыз етеді
+тікелей бюджет. Ол сілтеме жасаған әрбір `metal` орындығын талдайды
+`fastpq_bench_manifest.json`, тексереді
+`benchmarks.metal_dispatch_queue.{limit,max_in_flight}` және
+`benchmarks.zero_fill_hotspots[]` және бос орын азайған кезде топтама сәтсіз аяқталады
+бір ұядан төмен немесе кез келген LDE хотспот `mean_ms > 0.40` хабарлағанда. Бұл сақтайды
+CI жүйесіндегі 7-кезең телеметриялық қорғаушы, орындалған қолмен шолуға сәйкес келеді
+Grafana суретін түсіру және дәлелдерді шығару.【ci/check_fastpq_rollout.sh#L1】
+Сол валидацияның бөлігі ретінде сценарий енді әрбір оралғанын талап етеді
+эталон автоматты түрде анықталған аппараттық жапсырмаларды (`metadata.labels.device_class`) қамтиды
+және `metadata.labels.gpu_kind`). Бұл белгілер жоқ бумалар бірден істен шығады,
+артефактілерді, Stage7-2 матрицасын және орындау уақытын шығаруға кепілдік береді
+бақылау тақталарының барлығы бірдей құрылғы класының атауларына сілтеме жасайды.
 
-`ci/check_fastpq_rollout.sh` now enforces the queue headroom and zero-fill
-budget directly. It parses each `metal` bench referenced by
-`fastpq_bench_manifest.json`, inspects
-`benchmarks.metal_dispatch_queue.{limit,max_in_flight}` and
-`benchmarks.zero_fill_hotspots[]`, and fails the bundle when headroom drops
-below one slot or when any LDE hotspot reports `mean_ms > 0.40`. This keeps the
-Stage 7 telemetry guard in CI, matching the manual review performed on the
-Grafana snapshot and release evidence.【ci/check_fastpq_rollout.sh#L1】
-As part of the same validation pass the script now insists that every wrapped
-benchmark carries the auto-detected hardware labels (`metadata.labels.device_class`
-and `metadata.labels.gpu_kind`). Bundles missing those labels fail immediately,
-guaranteeing that release artefacts, Stage7-2 matrix manifests, and runtime
-dashboards all refer to the exact same device-class names.
+Grafana «Соңғы эталон» тақтасы және онымен байланысты шығарылым жинағы енді мынаны келтіреді
+`device_class`, нөлдік толтыру бюджеті және кезек тереңдігі суреті, сондықтан инженерлер шақырылады
+өндірістік телеметрияны белгі кезінде пайдаланылатын дәл түсіру сыныбымен байланыстыра алады
+өшірулі. Болашақ матрицалық жазбалар бірдей белгілерді иеленеді, яғни Stage7-2 құрылғысы
+тізімдер мен Prometheus бақылау тақталары AppleM4 үшін бір атау схемасын бөліседі,
+M3 Max және алдағы MI300/RTX түсірілімдері.
 
-The Grafana “Latest Benchmark” panel and associated rollout bundle now quote the
-`device_class`, zero-fill budget, and queue-depth snapshot so on-call engineers
-can correlate production telemetry with the exact capture class used during sign
-off. Future matrix entries inherit the same labels, meaning the Stage7-2 device
-lists and the Prometheus dashboards share a single naming scheme for Apple M4,
-M3 Max, and upcoming MI300/RTX captures.
+### 7-1-кезең Флоттың телеметриялық жұмыс кітабы
 
-### Stage7-1 Fleet telemetry runbook
+Әдепкі бойынша GPU жолақтарын қосу үшін осы бақылау тізімін орындаңыз, сондықтан флот телеметриясы
+және Alertmanager ережелері шығарылымды дайындау кезінде алынған бірдей дәлелдерді көрсетеді:
 
-Follow this checklist before enabling GPU lanes by default so fleet telemetry
-and Alertmanager rules mirror the same evidence captured during release prep:
-
-1. **Label capture and runtime hosts.** `python3 scripts/fastpq/wrap_benchmark.py`
-   already emits `metadata.labels.device_class`, `chip_family`, and `gpu_kind`
-   for every wrapped JSON. Keep those labels in sync with
-   `fastpq.{device_class,chip_family,gpu_kind}` (or the
-   `FASTPQ_{DEVICE_CLASS,CHIP_FAMILY,GPU_KIND}` env vars) inside `iroha_config`
-   so runtime metrics publish
+1. **Жапсырманы түсіру және орындау уақыты хосттары.** `python3 scripts/fastpq/wrap_benchmark.py`
+   қазірдің өзінде `metadata.labels.device_class`, `chip_family` және `gpu_kind` шығарады
+   әрбір оралған JSON үшін. Бұл белгілерді синхрондаңыз
+   `fastpq.{device_class,chip_family,gpu_kind}` (немесе
+   `FASTPQ_{DEVICE_CLASS,CHIP_FAMILY,GPU_KIND}` env vars) `iroha_config` ішіндегі
+   сондықтан орындалу уақытының көрсеткіштері жарияланады
    `fastpq_execution_mode_total{device_class="…",chip_family="…",gpu_kind="…"}`
-   and the `fastpq_metal_queue_*` gauges with the same identifiers that show up
-   in `artifacts/fastpq_benchmarks/matrix/devices/*.txt`. When staging a new
-   class, regenerate the matrix manifest via
+   және бірдей идентификаторлары бар `fastpq_metal_queue_*` өлшеуіштері
+   `artifacts/fastpq_benchmarks/matrix/devices/*.txt` ішінде. Жаңасын қойғанда
+   класс, арқылы матрицалық манифестті қалпына келтіріңіз
    `scripts/fastpq/capture_matrix.sh --devices artifacts/fastpq_benchmarks/matrix/devices`
-   so CI and dashboards understand the additional label.
-2. **Verify queue gauges and adoption metrics.** Run `irohad --features fastpq-gpu`
-   on the Metal hosts and scrape the telemetry endpoint to confirm live queue
-   gauges are exporting:
+   сондықтан CI және бақылау тақталары қосымша белгіні түсінеді.
+2. **Кезек көрсеткіштері мен қабылдау көрсеткіштерін тексеріңіз.** `irohad --features fastpq-gpu` іске қосыңыз
+   Металл хосттарында және тікелей кезекті растау үшін телеметрияның соңғы нүктесін сызыңыз
+   өлшегіштер экспортталады:
 
    ```bash
    curl -sf http://$IROHA_PROM/metrics | rg 'fastpq_metal_queue_(ratio|depth)'
    curl -sf http://$IROHA_PROM/metrics | rg 'fastpq_execution_mode_total'
-   ```
-
-   The first command proves the semaphore sampler is emitting the `busy`,
-   `overlap`, `limit`, and `max_in_flight` series and the second shows whether
-   each device class is resolving to `backend="metal"` or falling back to
-   `backend="cpu"`. Wire the scrape target through Prometheus/OTel before
-   importing the dashboard so Grafana can plot the fleet view immediately.
-3. **Install the dashboard + alert pack.** Import
+   ```Бірінші пәрмен семафор сынамасының `busy` шығаратынын дәлелдейді,
+   `overlap`, `limit` және `max_in_flight` сериялары және екіншісі
+   әрбір құрылғы класы `backend="metal"` шешімімен шешіледі немесе қайтадан төмендейді
+   `backend="cpu"`. Сырғыш нысанын Prometheus/OTel арқылы бұрын өткізіңіз
+   бақылау тақтасын импорттау, сондықтан Grafana флот көрінісін бірден құрастыра алады.
+3. **Бақылау тақтасын + ескерту бумасын орнатыңыз.** Импорттау
    `dashboards/grafana/fastpq_acceleration.json` into Grafana (retain the
-   built-in Device Class, Chip Family, and GPU Kind template variables) and load
+   кірістірілген құрылғы класы, чиптер тобы және GPU түрінің айнымалылары) және жүктеңіз
    `dashboards/alerts/fastpq_acceleration_rules.yml` into Alertmanager together
-   with its unit test fixture. The rule pack ships a `promtool` harness; run
+   with its unit test fixture. The rule pack ships a `promtool` harness; жүгіру
    `promtool test rules dashboards/alerts/tests/fastpq_acceleration_rules.test.yml`
-   whenever the rules change to prove `FastpqMetalDowngrade` and
-   `FastpqBackendNoneBurst` still fire at the documented thresholds.
-4. **Gate releases with the evidence bundle.** Keep
+   ережелер `FastpqMetalDowngrade` дәлелдеу үшін өзгерген сайын және
+   `FastpqBackendNoneBurst` құжатталған шектерде әлі де жанып тұрады.
+4. **Дәлелдер жинағы бар қақпалар шығарылады.** Сақтаңыз
    `docs/source/fastpq_rollout_playbook.md` handy while generating a rollout
-   submission so every bundle carries the wrapped benchmarks, Grafana export,
-   alert pack, queue telemetry proof, and rollback logs. CI already enforces the
+   жіберу, сондықтан әрбір бума оралған эталондарды, Grafana экспортын,
+   ескерту бумасы, кезек телеметриясын дәлелдеу және кері қайтару журналдары. CI already enforces the
    contract: `make check-fastpq-rollout` (or invoking
    `ci/check_fastpq_rollout.sh --bundle <path>`) validates the bundle, re-runs
-   the alert tests, and refuses to sign off when queue headroom or zero-fill
+   ескерту сынақтан өткізеді және кезек бос орын немесе нөлдік толтыру кезінде қол қоюдан бас тартады
    budgets regress.
-5. **Tie alerts back to remediation.** When Alertmanager pages, use the Grafana
-   board and the raw Prometheus counters from step 2 to confirm whether
-   downgrades stem from queue starvation, CPU fallbacks, or backend=none bursts.
+5. **Ескертулерді түзетуге байланыстырыңыз.** Alertmanager беттерін ашқан кезде Grafana пайдаланыңыз.
+   тақтасы және Prometheus шикі есептегіштері 2-қадамнан бастап растау үшін
+   Төмендетулер кезектің ашығуынан, процессордың қалпына келуінен немесе backend = ешбір жарылудан туындайды.
 The runbook lives in
 this document plus `docs/source/fastpq_rollout_playbook.md`; update the
 release ticket with the relevant `fastpq_execution_mode_total`,
-`fastpq_metal_queue_ratio`, and `fastpq_metal_queue_depth` excerpts together
-with links to the Grafana panel and the alert snapshot so reviewers can see
+`fastpq_metal_queue_ratio` және `fastpq_metal_queue_depth` үзінділері бірге
+шолушылар көре алатындай Grafana панеліне сілтемелер және ескерту суреті бар
 exactly which SLO triggered.
 
-### WP2-E — Stage-by-stage Metal profiling snapshot
+### WP2-E — Кезеңдік металл профилін жасау суреті
 
-`scripts/fastpq/src/bin/metal_profile.rs` summarizes the wrapped Metal captures
-so the sub-900 ms target can be tracked over time (run
+`scripts/fastpq/src/bin/metal_profile.rs` оралған металл түсірулерді қорытындылайды
+сондықтан 900 мс-тен төмен мақсатты уақыт өте келе бақылауға болады (іске қосу
 `cargo run --manifest-path scripts/fastpq/Cargo.toml --bin metal_profile -- <capture.json>`).
 The new Markdown helper
 `scripts/fastpq/metal_capture_summary.py fastpq_metal_bench_20k_latest.json --label "20k snapshot (pre-override)"`
-generates the stage tables below (it prints the Markdown along with a textual
-summary so WP2-E tickets can embed the evidence verbatim). Two captures are tracked
+төмендегі кезең кестелерін жасайды (ол Markdown мәтінімен бірге басып шығарады
+WP2-E билеттері дәлелдемелерді сөзбе-сөз ендіруі үшін қорытынды). Two captures are tracked
 right now:
 
-> **New WP2-E instrumentation:** `fastpq_metal_bench --gpu-probe ...` now emits a
-> detection snapshot (requested/resolved execution mode, `FASTPQ_GPU`
-> overrides, detected backend, and the enumerated Metal devices/registry ids)
+> **Жаңа WP2-E аспаптары:** `fastpq_metal_bench --gpu-probe ...` қазір сәуле шығарады
+> анықтау суреті (сұралған/шешілген орындау режимі, `FASTPQ_GPU`
+> қайта анықтау, анықталған сервер және тізімделген металл құрылғылар/тізілім идентификаторлары)
 > before any kernels run. Capture this log whenever a forced GPU run still
-> falls back to the CPU path so the evidence bundle records which hosts see
-> `MTLCopyAllDevices` return zero and which overrides were in effect during the
-> benchmark.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:603】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2616】
+> CPU жолына қайта түседі, осылайша дәлелдер жинағы хосттар көретін жазбаларды жазады
+> `MTLCopyAllDevices` нөлді қайтарады және осы уақыт ішінде қандай қайта анықтаулар қолданылды
+> эталон.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:603】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2616】> **Кезеңді түсіру көмекшісі:** `cargo xtask fastpq-stage-profile --trace --out-dir artifacts/fastpq_stage_profiles/<label>`
+> енді FFT, LDE және Poseidon үшін жеке `fastpq_metal_bench` дискілері,
+> шикі JSON шығыстарын әр кезеңдік каталогтар астында сақтайды және жалғыз шығарады
+> CPU/GPU уақыттарын, кезек тереңдігін жазатын `stage_profile_summary.json` жинағы
+> телеметрия, баған кезеңінің статистикасы, ядро профильдері және байланысты із
+> артефактілер. Ішкі жиынды мақсаттау үшін `--stage fft --stage lde --stage poseidon` өтіңіз,
+> `--trace-template "Metal System Trace"` арнайы xctrace үлгісін таңдау үшін,
+> және `--trace-dir` `.trace` бумаларын ортақ орынға бағыттау үшін. тіркеңіз
+> шолушылардың әрбір WP2-E мәселесіне арналған JSON қорытындысы және жасалған бақылау файлдары
+> кезекте тұруы (`metal_dispatch_queue.*`), қабаттасу коэффициенттері және
+> қолмен бірнеше рет жазусыз жүгірулер бойынша түсірілген іске қосу геометриясы
+> `fastpq_metal_bench` шақырулары.【xtask/src/fastpq.rs:721】【xtask/src/main.rs:3187】
 
-> **Stage capture helper:** `cargo xtask fastpq-stage-profile --trace --out-dir artifacts/fastpq_stage_profiles/<label>`
-> now drives `fastpq_metal_bench` for FFT, LDE, and Poseidon individually,
-> stores the raw JSON outputs under per-stage directories, and emits a single
-> `stage_profile_summary.json` bundle that records CPU/GPU timings, queue depth
-> telemetry, column-staging stats, kernel profiles, and the associated trace
-> artefacts. Pass `--stage fft --stage lde --stage poseidon` to target a subset,
-> `--trace-template "Metal System Trace"` to pick a specific xctrace template,
-> and `--trace-dir` to route `.trace` bundles to a shared location. Attach the
-> summary JSON plus the generated trace files to every WP2-E issue so reviewers
-> can diff queue occupancy (`metal_dispatch_queue.*`), overlap ratios, and the
-> captured launch geometry across runs without manually spelunking multiple
-> `fastpq_metal_bench` invocations.【xtask/src/fastpq.rs:721】【xtask/src/main.rs:3187】
-
-> **Queue/staging evidence helper (2026-05-09):** `scripts/fastpq/profile_queue.py` now
-> ingests one or more `fastpq_metal_bench` JSON captures and emits both a Markdown table and
-> a machine-readable summary (`--markdown-out/--json-out`) so queue depth, overlap ratios, and
-> host-side staging telemetry can ride alongside every WP2-E artefact. Running
-> `python3 scripts/fastpq/profile_queue.py fastpq_metal_bench_poseidon.json fastpq_metal_bench_20k_new.json --json-out artifacts/fastpq_benchmarks/fastpq_queue_profile_20260509.json` produced the table below and flagged that the archived Metal captures still report
-> `dispatch_count = 0` and `column_staging.batches = 0`—WP2-E.1 remains open until the Metal
-> instrumentation is rebuilt with telemetry enabled. The generated JSON/Markdown artefacts live
-> under `artifacts/fastpq_benchmarks/fastpq_queue_profile_20260509.{json,md}` for auditing.
-> The helper now (2026-05-19) also surfaces the Poseidon pipeline telemetry (`pipe_depth`,
-> `batches`, `chunk_columns`, and `fallbacks`) inside both the Markdown table and the JSON summary,
-> so WP2-E.4/6 reviewers can prove whether the GPU stayed on the pipelined path and whether any
-> fallbacks occurred without opening the raw capture.【scripts/fastpq/profile_queue.py:1】
-
-> **Stage profile summariser (2026-05-30):** `scripts/fastpq/stage_profile_report.py` consumes
-> the `stage_profile_summary.json` bundle emitted by `cargo xtask fastpq-stage-profile` and
-> renders both Markdown and JSON summaries so WP2-E reviewers can copy evidence into tickets
-> without manually transcribing timings. Invoke
+> **Кезек/дәлелдерді анықтау көмекшісі (09.05.2026):** `scripts/fastpq/profile_queue.py` қазір
+> бір немесе бірнеше `fastpq_metal_bench` жұтады JSON Markdown кестесін де түсіреді және шығарады
+> машина оқылатын қорытынды (`--markdown-out/--json-out`), сондықтан кезек тереңдігі, қабаттасу коэффициенттері және
+> хост тарапындағы сахналық телеметрия әрбір WP2-E артефактімен қатар жүре алады. Жүгіру
+> `python3 scripts/fastpq/profile_queue.py fastpq_metal_bench_poseidon.json fastpq_metal_bench_20k_new.json --json-out artifacts/fastpq_benchmarks/fastpq_queue_profile_20260509.json` төмендегі кестені жасады және мұрағатталған металл түсірулері әлі де есеп береді деп белгіледі
+> `dispatch_count = 0` және `column_staging.batches = 0`—WP2-E.1 Металл ашылғанша ашық қалады.
+> аспаптар телеметрия қосылған кезде қайта құрастырылады. Жасалған JSON/Markdown артефактілері тірі
+> аудит үшін `artifacts/fastpq_benchmarks/fastpq_queue_profile_20260509.{json,md}` астында.
+> Көмекші қазір (2026-05-19) Посейдон құбырының телеметриясын да көрсетеді (`pipe_depth`,
+> `batches`, `chunk_columns` және `fallbacks`) Markdown кестесінде де, JSON қорытындысында да,
+> сондықтан WP2-E.4/6 шолушылары GPU құбыр жолында қалғанын және бар-жоғын дәлелдей алады.
+> қалпына келтірулер өңделмеген түсіруді ашпай орын алды.【scripts/fastpq/profile_queue.py:1】> **Кезеңдік профильді қорытындылаушы (30-05-2026):** `scripts/fastpq/stage_profile_report.py` тұтынады
+> `cargo xtask fastpq-stage-profile` шығаратын `stage_profile_summary.json` бумасы және
+> WP2-E шолушылары дәлелдерді билеттерге көшіре алатындай етіп Markdown және JSON қорытындыларын көрсетеді
+> таймдарды қолмен транскрипциялаусыз. Шақыру
 > `python3 scripts/fastpq/stage_profile_report.py artifacts/fastpq_stage_profiles/<stamp>/stage_profile_summary.json --label "m3-lab" --markdown-out artifacts/fastpq_stage_profiles/<stamp>/stage_profile_summary.md --json-out artifacts/fastpq_stage_profiles/<stamp>/stage_profile_summary.jsonl`
-> to produce deterministic tables listing GPU/CPU means, speedup deltas, trace coverage, and
-> telemetry gaps per stage. The JSON output mirrors the table and records per-stage issue tags
-> (`trace missing`, `queue telemetry missing`, etc.) so governance automation can diff the host
-> runs referenced in WP2-E.1 through WP2-E.6.
-> **Host/device overlap guard (2026-06-04):** `scripts/fastpq/profile_queue.py` now annotates
-> FFT/LDE/Poseidon wait ratios alongside the per-stage flatten/wait millisecond totals and emits an
-> issue whenever `--max-wait-ratio <threshold>` detects poor overlap. Use
+> GPU/CPU құралдарын, жылдамдықты арттыру дельталарын, бақылауды қамтуды және
+> кезеңдегі телеметриялық бос орындар. JSON шығысы кестені көрсетеді және әр кезеңдегі мәселе тегтерін жазады
+> (`trace missing`, `queue telemetry missing`, т.б.) басқаруды автоматтандыру хостты ажырата алады.
+> WP2-E.1 және WP2-E.6 нұсқаларында сілтеме жасалған іске қосылады.
+> **Хост/құрылғы қабаттасу қорғауы (2026-06-04):** `scripts/fastpq/profile_queue.py` енді аннотация береді
+> FFT/LDE/Poseidon күту коэффициенттері әр кезеңдегі тегістеу/күту миллисекунд қорытындыларымен бірге және
+> `--max-wait-ratio <threshold>` нашар қабаттасуды анықтаған сайын шығады. Қолдану
 > `python3 scripts/fastpq/profile_queue.py --max-wait-ratio 0.20 fastpq_metal_bench_20k_latest.json --markdown-out artifacts/fastpq_benchmarks/<stamp>/queue.md`
-> to capture both the Markdown table and the JSON bundle with explicit wait ratios so WP2-E.5 tickets
-> can show whether the double-buffering window kept the GPU fed. The plain-text console output also
-> lists the per-phase ratios to make on-call investigations easier.
-> **Telemetry guard + run status (2026-06-09):** `fastpq_metal_bench` now emits a `run_status` block
-> (backend label, dispatch count, reasons) and the new `--require-telemetry` flag fails the run
-> whenever GPU timings or queue/staging telemetry are missing. `profile_queue.py` renders the run
-> status as a dedicated column and surfaces non-`ok` states in the issue list, and
-> `launch_geometry_sweep.py` threads the same state into warnings/classification so matrices can no
-> longer admit captures that silently fell back to CPU or skipped queue instrumentation.
-> **Poseidon/LDE auto-tuning (2026-06-12):** `metal_config::poseidon_batch_multiplier()` now scales
-> with the Metal working-set hints and `lde_tile_stage_target()` boosts tile depth on discrete GPUs.
-> The applied multiplier and tile limit are included in the `metal_heuristics` block of
-> `fastpq_metal_bench` outputs and rendered by `scripts/fastpq/metal_capture_summary.py`, so WP2-E
-> bundles record the exact pipeline knobs used in each capture without digging through raw JSON.【crates/fastpq_prover/src/metal_config.rs:1】【crates/fastpq_prover/src/metal.rs:2833】【scripts/fastpq/metal_capture_summary.py:1】
+> Markdown кестесін де, WP2-E.5 билеттерін алу үшін анық күту коэффициенттері бар JSON бумасын түсіру үшін
+> қосарлы буферлеу терезесінің GPU берілуін сақтайтынын көрсете алады. Сондай-ақ кәдімгі мәтіндік консоль шығысы
+> Шақыру бойынша тергеуді жеңілдету үшін фазалық коэффициенттерді тізімдейді.
+> **Телеметриялық қорғаушы + жұмыс күйі (09.06.2026):** `fastpq_metal_bench` енді `run_status` блогын шығарады
+> (бағдарлама белгісі, жөнелту саны, себептері) және жаңа `--require-telemetry` жалауы іске қосылмайды.
+> GPU уақыттары немесе кезек/кезеңдік телеметрия болмаған кезде. `profile_queue.py` renders the run
+> күйі арнайы баған ретінде және шығарылымдар тізімінде `ok` емес күйлерді көрсетеді және
+> `launch_geometry_sweep.py` бірдей күйді ескертулерге/классификацияға жібереді, сондықтан матрицалар
+> процессорға үнсіз оралған немесе кезек құралдарын өткізіп жіберген түсірулерді ұзағырақ қабылдаңыз.
+> **Poseidon/LDE автоматты баптау (2026-06-12):** `metal_config::poseidon_batch_multiplier()` енді масштабталады
+> Металлмен жұмыс істеуге арналған кеңестер мен `lde_tile_stage_target()` дискретті графикалық процессорлардағы тақта тереңдігін арттырады.
+> Қолданылатын көбейткіш және мозаика шегі `metal_heuristics` блогында қамтылған.
+> `fastpq_metal_bench` шығыстары және `scripts/fastpq/metal_capture_summary.py` арқылы көрсетіледі, сондықтан WP2-E
+> бумалар өңделмеген JSON файлын зерттемей-ақ әрбір түсіруде қолданылатын нақты құбыр желісі тұтқаларын жазады.【crates/fastpq_prover/src/metal_config.rs:1】【crates/fastpq_prover/src/metal.rs:2833】【scripts/fastpq_mature/alp.1】
 
-| Label | Dispatch | Busy | Overlap | Max Depth | FFT flatten | FFT wait | FFT wait % | LDE flatten | LDE wait | LDE wait % | Poseidon flatten | Poseidon wait | Poseidon wait % | Pipe depth | Pipe batches | Pipe fallbacks |
+| Белгі | Жіберу | Busy | Overlap | Максималды тереңдік | FFT flatten | FFT күту | FFT күту % | LDE flatten | LDE күту | LDE күту % | Poseidon flatten | Poseidon wait | Poseidon wait % | Құбыр тереңдігі | Pipe batches | Pipe fallbacks |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | fastpq_metal_bench_poseidon | 0 | 0.0% | 0.0% | 0 | – | – | – | – | – | – | – | – | – | – | – | – |
 | fastpq_metal_bench_20k_new | 0 | 0.0% | 0.0% | 0 | – | – | – | – | – | – | – | – | – | – | – | – |
 
 #### 20 k snapshot (pre-override)
 
-`fastpq_metal_bench_20k_latest.json`
-
-| Stage | Columns | Input len | GPU mean (ms) | CPU mean (ms) | GPU share | Speedup | Δ CPU (ms) |
+`fastpq_metal_bench_20k_latest.json`| Кезең | Бағандар | лен | енгізу GPU орташа (мс) | Орталық процессордың орташа мәні (мс) | GPU бөлісу | Жылдамдату | Δ CPU (мс) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| FFT | 16 | 32 768 | 130.986 ms (115.761–167.755) | 112.616 ms (95.335–132.929) | 2.4 % | 0.860× | −18.370 |
-| IFFT | 16 | 32 768 | 129.296 ms (111.127–142.955) | 158.144 ms (126.847–237.887) | 2.4 % | 1.223× | +28.848 |
-| LDE | 16 | 262 144 | 1 570.656 ms (1 544.397–1 584.502) | 1 752.523 ms (1 548.807–2 191.930) | 29.2 % | 1.116× | +181.867 |
-| Poseidon | 16 | 524 288 | 3 548.329 ms (3 519.881–3 576.041) | 3 642.706 ms (3 539.055–3 758.279) | 66.0 % | 1.027× | +94.377 |
+| FFT | 16 | 32768 | 130.986 ms (115.761–167.755) | 112.616 ms (95.335–132.929) | 2,4% | 0,860× | −18,370 |
+| IFFT | 16 | 32768 | 129.296 ms (111.127–142.955) | 158.144 ms (126.847–237.887) | 2,4% | 1,223× | +28,848 |
+| LDE | 16 | 262144 | 1 570.656 ms (1 544.397–1 584.502) | 1 752.523 ms (1 548.807–2 191.930) | 29,2% | 1,116× | +181,867 |
+| Посейдон | 16 | 524288 | 3 548.329 ms (3 519.881–3 576.041) | 3 642.706 ms (3 539.055–3 758.279) | 66,0% | 1,027× | +94,377 |
 
-Key observations:
+Негізгі ескертулер:1. GPU жалпы мәні 5,379 с, бұл 900 мс мақсатынан **4,48 с жоғары**. Посейдон
+   хэштеу әлі де орындалу уақытында (≈66%), LDE ядросымен екінші орында
+   орын (≈29%), сондықтан WP2-E Посейдон құбырының тереңдігіне де, тереңдігіне де шабуыл жасауы керек.
+   LDE жадының резиденттігі/плиткалық жоспары CPU резервтері жойылмай тұрып.
+2. IFFT скалярдан >1,22× болса да, FFT регрессия болып қалады (0,86×)
+   жол. Бізге ұшыру геометриясын тазалау керек
+   (`FASTPQ_METAL_{FFT,LDE}_COLUMNS` + `FASTPQ_METAL_QUEUE_FANOUT`) түсіну үшін
+   FFT толып жатқан жерін қазірдің өзінде жақсыға зиян келтірместен құтқаруға болады ма
+   IFFT уақыттары. `scripts/fastpq/launch_geometry_sweep.py` көмекшісі енді басқарады
+   бұл эксперименттер соңына дейін: үтірмен бөлінген қайта анықтауды өту (мысалы,
+   `--fft-columns 16,32 --queue-fanout 1,2` және
+   `--poseidon-lanes auto,256`) және ол шақырады
+   `fastpq_metal_bench` әрбір комбинация үшін JSON пайдалы жүктемелерін астында сақтаңыз
+   `artifacts/fastpq_geometry/<timestamp>/` және `summary.json` бумасын сақтау
+   әрбір іске қосудың кезек коэффициенттерін, FFT/LDE іске қосу таңдауларын, GPU және CPU уақыттарын сипаттау,
+   және хост метадеректері (хост аты/белгі, платформа үштік, анықталған құрылғы
+   класы, GPU жеткізушісі/моделі) сондықтан құрылғылар арасындағы салыстыруларда детерминирленген
+   шығу тегі. Көмекші енді жанына `reason_summary.json` деп жазады
+   әдепкі бойынша жиынтықты айналдыру үшін геометрия матрицасы сияқты бірдей классификаторды пайдалану
+   процессордың резервтік мүмкіндіктерін және жетіспейтін телеметрияны жоғарылату. Белгі қою үшін `--host-label staging-m3` пайдаланыңыз
+   ортақ зертханалардан түсірілген.
+   `scripts/fastpq/geometry_matrix.py` серіктес құралы енді біреуін немесе біреуін жұтады
+   қосымша жиынтық бумалар (`--summary hostA/summary.json --summary hostB/summary.json`)
+   және әрбір іске қосу пішінін *тұрақты* деп белгілейтін Markdown/JSON кестелерін шығарады
+   (FFT/LDE/Poseidon GPU уақыттары түсірілген) немесе *тұрақсыз* (тайм-аут, CPU резерві,
+   металл емес сервер немесе телеметрия жоқ) негізгі бағандармен бірге. The
+   кестелер енді шешілген `execution_mode`/`gpu_backend` плюс
+   `Reason` бағаны, сондықтан процессордың қалпына келуі және GPU уақытының жоқтығы
+   Уақыт блоктары болған кезде де 7-кезең матрицалары; жиынтық жол есептеледі
+   тұрақты және жалпы жүгіріс. `--operation fft|lde|poseidon_hash_columns` өтіңіз
+   сыпыру бір кезеңді оқшаулау қажет болғанда (мысалы, профильге
+   Poseidon бөлек) және `--extra-args` стендтік жалаушалар үшін бос қалдырыңыз.
+   Көмекші кез келгенін қабылдайды
+   пәрмен префиксі (әдепкі бойынша `cargo run … fastpq_metal_bench`) плюс қосымша
+   `--halt-on-error` / `--timeout-seconds` қорғаушы инженерлер жұмыс істей алатындай етіп
+   салыстыруды жинау кезінде әртүрлі машиналарда сыпыруды ойнату,
+   7-кезеңге арналған көп құрылғылы дәлелдеме жинақтары.
+3. `metal_dispatch_queue` `dispatch_count = 0` хабарланды, сондықтан кезек саны
+   GPU ядролары жұмыс істеп тұрса да, телеметрия жоқ болды. Қазір металл жұмыс уақыты қолданылады
+   кезекке арналған қоршауларды алу/шығару/бағандарды орналастыру
+   аспаптар жалаушаларын қадағалаңыз және геометриялық матрицалық есеп шақырылады
+   FFT/LDE/Poseidon GPU уақыттары болмаған кезде тұрақсыз іске қосу пішіндері. Сақтау
+   шолушылардың көруі үшін Markdown/JSON матрицасын WP2-E билеттеріне тіркеу
+   Кезекті телеметрия қол жетімді болған кезде қандай комбинациялар әлі де сәтсіз болады.`run_status` күзетшісі және `--require-telemetry` жалауы енді түсіру мүмкін емес
+   GPU уақыттары жоқ немесе кезек/кезеңдік телеметрия болмаған кезде, сондықтан
+   dispatch_count=0 орындалу бұдан былай WP2-E бумаларына байқалмай түсе алмайды.
+   `fastpq_metal_bench` енді `--require-gpu` көрсетеді және
+   `launch_geometry_sweep.py` оны әдепкі бойынша қосады (бас тарту
+   `--allow-cpu-fallback`) сондықтан процессордың қалпына келуі және металды анықтау ақаулары тоқтатылады
+   Stage7 матрицаларын GPU емес телеметриямен ластаудың орнына дереу.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs】【scripts/fastpq/launch_geometry_sweep.py】
+4. Нөлдік толтыру көрсеткіштері дәл сол себеппен бұрын жойылды; қоршауды түзету
+   хост аспаптарын белсенді күйде ұстайды, сондықтан келесі түсіру мынаны қамтуы керек
+   Синтетикалық тайымдарсыз `zero_fill` блогы.
 
-1. The GPU total is 5.379 s, which is **4.48 s over** the 900 ms goal. Poseidon
-   hashing still dominates the runtime (≈66 %) with the LDE kernel in second
-   place (≈29 %), so WP2-E needs to attack both the Poseidon pipeline depth and
-   the LDE memory residency/tiling plan before CPU fallbacks disappear.
-2. FFT remains a regression (0.86×) even though IFFT is >1.22× over the scalar
-   path. We need a launch-geometry sweep
-   (`FASTPQ_METAL_{FFT,LDE}_COLUMNS` + `FASTPQ_METAL_QUEUE_FANOUT`) to understand
-   whether the FFT occupancy can be salvaged without hurting the already-better
-   IFFT timings. The `scripts/fastpq/launch_geometry_sweep.py` helper now drives
-   these experiments end-to-end: pass comma-separated overrides (for example,
-   `--fft-columns 16,32 --queue-fanout 1,2` and
-   `--poseidon-lanes auto,256`) and it will invoke
-   `fastpq_metal_bench` for every combination, store the JSON payloads under
-   `artifacts/fastpq_geometry/<timestamp>/`, and persist a `summary.json` bundle
-   describing each run’s queue ratios, FFT/LDE launch picks, GPU vs CPU timings,
-   and the host metadata (hostname/label, platform triple, detected device
-   class, GPU vendor/model) so cross-device comparisons have deterministic
-   provenance. The helper now also writes `reason_summary.json` next to the
-   summary by default, using the same classifier as the geometry matrix to roll
-   up CPU fallbacks and missing telemetry. Use `--host-label staging-m3` to tag
-   captures from shared labs.
-   The companion `scripts/fastpq/geometry_matrix.py` tool now ingests one or
-   more summary bundles (`--summary hostA/summary.json --summary hostB/summary.json`)
-   and emits Markdown/JSON tables that label every launch shape as *stable*
-   (FFT/LDE/Poseidon GPU timings captured) or *unstable* (timeout, CPU fallback,
-   non-Metal backend, or missing telemetry) alongside the host columns. The
-   tables now include the resolved `execution_mode`/`gpu_backend` plus a
-   `Reason` column so CPU fallbacks and missing GPU timings are obvious in
-   Stage 7 matrices even when timing blocks are present; a summary line counts
-   the stable vs total runs. Pass `--operation fft|lde|poseidon_hash_columns`
-   when the sweep needs to isolate a single stage (for example, to profile
-   Poseidon separately) and keep `--extra-args` free for bench-specific flags.
-   The helper accepts any
-   command prefix (defaulting to `cargo run … fastpq_metal_bench`) plus optional
-   `--halt-on-error` / `--timeout-seconds` guards so performance engineers can
-   reproduce the sweep on different machines while collecting comparable,
-   multi-device evidence bundles for Stage 7.
-3. `metal_dispatch_queue` reported `dispatch_count = 0`, so queue occupancy
-   telemetry was missing even though GPU kernels ran. The Metal runtime now uses
-   acquire/release fences for the queue/column-staging toggles so worker threads
-   observe the instrumentation flags, and the geometry matrix report calls out
-   unstable launch shapes whenever FFT/LDE/Poseidon GPU timings are absent. Keep
-   attaching the Markdown/JSON matrix to WP2-E tickets so reviewers can see
-   which combinations are still failing once queue telemetry becomes available.
-   The `run_status` guard and `--require-telemetry` flag now fail the capture
-   whenever GPU timings are missing or queue/staging telemetry is absent, so
-   dispatch_count=0 runs can no longer slip into WP2-E bundles unnoticed.
-   `fastpq_metal_bench` now exposes `--require-gpu`, and
-   `launch_geometry_sweep.py` enables it by default (opt out with
-   `--allow-cpu-fallback`) so CPU fallbacks and Metal detection failures abort
-   immediately instead of polluting Stage 7 matrices with non-GPU telemetry.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs】【scripts/fastpq/launch_geometry_sweep.py】
-4. Zero-fill metrics previously vanished for the same reason; the fencing fix
-   keeps host instrumentation live, so the next capture should include the
-   `zero_fill` block without synthetic timings.
-
-#### 20 k snapshot with `FASTPQ_GPU=gpu`
+#### `FASTPQ_GPU=gpu` көмегімен 20 мың сурет
 
 `fastpq_metal_bench_20k_refresh.json`
 
-| Stage | Columns | Input len | GPU mean (ms) | CPU mean (ms) | GPU share | Speedup | Δ CPU (ms) |
+| Кезең | Бағандар | лен | енгізу GPU орташа (мс) | Орталық процессордың орташа мәні (мс) | GPU бөлісу | Жылдамдату | Δ CPU (мс) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| FFT | 16 | 32 768 | 79.951 ms (65.645–93.193) | 83.289 ms (59.956–107.585) | 0.3 % | 1.042× | +3.338 |
-| IFFT | 16 | 32 768 | 78.605 ms (69.986–83.726) | 93.898 ms (80.656–119.625) | 0.3 % | 1.195× | +15.293 |
-| LDE | 16 | 262 144 | 657.673 ms (619.219–712.367) | 669.537 ms (619.716–723.285) | 2.1 % | 1.018× | +11.864 |
-| Poseidon | 16 | 524 288 | 30 004.898 ms (27 284.117–32 945.253) | 29 087.532 ms (24 969.810–33 020.517) | 97.4 % | 0.969× | −917.366 |
+| FFT | 16 | 32768 | 79,951 мс (65,645–93,193) | 83,289 мс (59,956–107,585) | 0,3% | 1,042× | +3,338 |
+| IFFT | 16 | 32768 | 78,605 мс (69,986–83,726) | 93,898 мс (80,656–119,625) | 0,3% | 1,195× | +15,293 |
+| LDE | 16 | 262144 | 657,673 мс (619,219–712,367) | 669,537 мс (619,716–723,285) | 2,1% | 1,018× | +11,864 |
+| Посейдон | 16 | 524288 | 30004,898 мс (27284,117–32945,253) | 29087,532 мс (24969,810–33020,517) | 97,4% | 0,969× | −917,366 |
 
-Observations:
+Бақылаулар:
 
-1. Even with `FASTPQ_GPU=gpu`, this capture still reflects CPU fallback:
-   ~30 s per iteration with `metal_dispatch_queue` stuck at zero. When the
-   override is set but the host can’t discover a Metal device, the CLI now exits
-   before running any kernels and prints the requested/resolved mode plus the
-   backend label so engineers can tell whether detection, entitlements, or the
-   metallib lookup caused the downgrade. Run `fastpq_metal_bench --gpu-probe
-   --rows …` with `FASTPQ_DEBUG_METAL_ENUM=1` to capture the enumeration log and
-   fix the underlying detection issue before re-running the profiler.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2636】
-2. Zero-fill telemetry now records a real sample (18.66 ms over 32 MiB), proving
-   the fencing fix works, but queue deltas remain absent until GPU dispatches
-   succeed.
-3. Because the backend keeps downgrading, the Stage 7 telemetry gate is still
-   blocked: queue headroom evidence and poseidon overlap require a genuine GPU
-   run.
+1. Тіпті `FASTPQ_GPU=gpu` болса да, бұл түсіру әлі де CPU резервін көрсетеді:
+   `metal_dispatch_queue` нөлде тұрып қалған итерация үшін ~30 секунд. Қашан
+   қайта анықтау орнатылды, бірақ хост металл құрылғысын таба алмайды, CLI енді шығады
+   кез келген ядроларды іске қоспас бұрын және сұралған/шешілген режимді басып шығарады
+   инженерлер анықтауды, құқықтарды немесе анықтауды айта алатындай сервер белгісі
+   metallib іздеуі төмендетуге себеп болды. `fastpq_metal_bench --gpu-probe іске қосыңыз
+   --жолдар …` with `FASTPQ_DEBUG_METAL_ENUM=1` санау журналын және
+   Профильді қайта іске қоспас бұрын негізгі анықтау мәселесін түзетіңіз.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2636】
+2. Нөлдік толтыру телеметриясы енді нақты үлгіні (32МБ-тан 18,66 мс) жазады.
+   қоршауларды түзету жұмыс істейді, бірақ кезек дельталары GPU жіберілгенше жоқ болып қалады
+   табысқа жету.
+3. Сервер төмендеуді жалғастыратындықтан, Stage7 телеметрия қақпасы тұрақты
+   бұғатталған: кезек күту орнының дәлелі мен посейдонның қабаттасуы шынайы GPU қажет
+   жүгіру.
 
-These captures now anchor the WP2-E backlog. Next actions: gather profiler
-flamecharts and queue logs (once the backend executes on the GPU), target the
-Poseidon/LDE bottlenecks before revisiting FFT, and unblock the backend fallback
-so Stage 7 telemetry has real GPU data.
+Бұл түсірулер енді WP2-E кешігуін бекітеді. Келесі әрекеттер: профильді жинау
+жалындық диаграммалар мен кезек журналдары (бағдарлама GPU-да орындалғаннан кейін),
+FFT-ті қайта қарау алдында Poseidon/LDE кедергілері және резервтік резервті бұғаттаудан босату
+сондықтан Stage7 телеметриясында нақты GPU деректері бар.
 
-### Strengths
-- Incremental staging, trace-first design, transparent STARK stack.
+### Күшті жақтары
+- Инкрементті сахналау, із қалдыратын дизайн, мөлдір STARK стек.### Басымдылығы жоғары әрекет элементтері
+1. Буып-түю/тапсырыс құрылғыларын енгізіңіз және AIR спецификациясын жаңартыңыз.
+2. `3f2b7fe` Poseidon2 тапсырмасын аяқтаңыз және SMT/іздеу векторларының мысалын жариялаңыз.
+3. Арматуралармен қатар жұмыс істеген мысалдарды (`lookup_grand_product.md`, `smt_update.md`) сақтаңыз.
+4. Құжаттаманың дұрыстығын және CI қабылдамау әдістемесін  қосымшасын қосыңыз.
 
-### High-Priority Action Items
-1. Implement packing/order fixtures and update AIR spec.
-2. Finalise Poseidon2 commit `3f2b7fe` and publish example SMT/lookup vectors.
-3. Maintain worked examples (`lookup_grand_product.md`, `smt_update.md`) alongside fixtures.
-4. Add Appendix A documenting soundness derivation and CI rejection methodology.
+### Шешілген дизайн шешімдері
+- P1-де ажыратылған ZK (тек дұрыстық); болашақ кезеңде қайта қарау.
+- Басқару күйінен алынған рұқсат кестесінің түбірі; пакеттер кестені тек оқуға арналған ретінде қарастырады және іздеу арқылы мүшелікті дәлелдейді.
+- Кілттік дәлелдемелер жоқ болса, канондық кодтаумен нөл жапырақты және көрші куәгерді пайдаланады.
+- Семантиканы жою = канондық перне кеңістігінде нөлге орнатылған жапырақ мәні.
 
-### Resolved Design Decisions
-- ZK disabled (correctness-only) in P1; revisit in future stage.
-- Permission table root derived from governance state; batches treat table as read-only and prove membership via lookup.
-- Absent key proofs use zero leaf plus neighbour witness with canonical encoding.
-- Delete semantics = leaf value set to zero within canonical keyspace.
+Бұл құжатты канондық сілтеме ретінде пайдаланыңыз; Дрейфті болдырмау үшін оны бастапқы кодпен, құрылғылармен және қосымшалармен бірге жаңартыңыз.
 
-Use this document as the canonical reference; update it alongside source code, fixtures, and appendices to avoid drift.
+## А қосымшасы — Дұрыстық туындысы
 
-## Appendix A — Soundness Derivation
+Бұл қосымшада «Soundness & SLOs» кестесінің қалай жасалатынын және CI жоғарыда айтылған ≥128-биттік еденді қалай қолданатынын түсіндіреді.
 
-This appendix explains how the “Soundness & SLOs” table is produced and how CI enforces the ≥128-bit floor mentioned earlier.
+### Белгі
+- `N_trace = 2^k` — сұрыптау мен толтырудан кейінгі із ұзындығы екінің дәрежесіне дейін.
+- `b` — үрлеу факторы (`N_eval = N_trace × b`).
+- `r` — FRI arity (канондық жинақтар үшін 8 немесе 16).
+- `ℓ` — FRI қысқартуларының саны (`layers` бағаны).
+- `q` — дәлелдеу үшін тексеру сұраулары (`queries` бағаны).
+- `ρ` — бағанды ​​жоспарлаушы хабарлаған тиімді код жылдамдығы: `ρ = max_i(degree_i / domain_i)` бірінші FRI раундынан аман қалған шектеулер бойынша.
 
-### Notation
-- `N_trace = 2^k` — trace length after sorting and padding to a power of two.
-- `b` — blowup factor (`N_eval = N_trace × b`).
-- `r` — FRI arity (8 or 16 for the canonical sets).
-- `ℓ` — number of FRI reductions (`layers` column).
-- `q` — verifier queries per proof (`queries` column).
-- `ρ` — effective code rate reported by the column planner: `ρ = max_i(degree_i / domain_i)` over the constraints that survive the first FRI round.
+Goldilocks базалық өрісінде `|F| = 2^64 - 2^32 + 1` бар, сондықтан Fiat-Shamir соқтығысуы `q / 2^64` арқылы шектеледі. Тегістеу `fastpq-lane-balanced` үшін `g = 23` және кідіріс профилі үшін `g = 21` бар ортогональды `2^{-g}` коэффициентін қосады.【crates/fastpq_isi/src/params.rs:65
 
-The Goldilocks base field has `|F| = 2^64 - 2^32 + 1`, so Fiat–Shamir collisions are bounded by `q / 2^64`. Grinding adds an orthogonal `2^{-g}` factor, with `g = 23` for `fastpq-lane-balanced` and `g = 21` for the latency profile.【crates/fastpq_isi/src/params.rs:65】
+### Аналитикалық байланысты
 
-### Analytic bound
-
-With constant-rate DEEP-FRI the statistical failure probability satisfies
+Тұрақты DEEP-FRI жылдамдығымен статистикалық сәтсіздік ықтималдығы қанағаттандырылады
 
 ```
 p_fri ≤ Σ_{j=0}^{ℓ-1} ρ^{q} = ℓ · ρ^{q}
 ```
 
-because each layer reduces polynomial degree and domain width by the same factor `r`, keeping `ρ` constant. The table’s `est bits` column reports `⌊-log₂ p_fri⌋`; Fiat–Shamir and grinding serve as extra safety margin.
+себебі әрбір қабат `ρ` тұрақты күйде сақтай отырып, көпмүшелік дәрежесі мен домен енін бірдей `r` коэффициентімен азайтады. Кестенің `est bits` бағаны есептері `⌊-log₂ p_fri⌋`; Fiat – Shamir және тегістеу қосымша қауіпсіздік шегі ретінде қызмет етеді.
 
-### Planner output and worked computation
+### Жоспарлаушы шығысы және жұмыс есебі
 
-Running the Stage 1 column planner on representative batches yields:
+1-кезең бағанының жоспарлаушысын өкіл топтамаларында іске қосу нәтиже береді:
 
-| Parameter set | `N_trace` | `b` | `N_eval` | `ρ` (planner) | Effective degree (`ρ × N_eval`) | `ℓ` | `q` | `-log₂(ℓ · ρ^{q})` |
-| ------------- | --------- | --- | -------- | ------------- | -------------------------------- | --- | --- | ------------------ |
-| Balanced 20 k batch | `2^15` | 8  | 262 144  | 0.077026 | 20 192  | 5 | 52 | 190 bits |
-| Throughput 65 k batch | `2^16` | 8 | 524 288 | 0.200208 | 104 967 | 6 | 58 | 132 bits |
-| Latency 131 k batch | `2^17` | 16 | 2 097 152 | 0.209492 | 439 337 | 5 | 64 | 142 bits |
+| Параметрлер жинағы | `N_trace` | `b` | `N_eval` | `ρ` (жоспарлаушы) | Тиімді дәрежесі (`ρ × N_eval`) | `ℓ` | `q` | `-log₂(ℓ · ρ^{q})` |
+| ------------- | --------- | --- | -------- | ------------- | --------------------------------- | --- | --- | ------------------ |
+| Теңгерімделген 20к топтама | `2^15` | 8 | 262144 | 0,077026 | 20192 | 5 | 52 | 190бит |
+| Өткізу қабілеті 65к топтама | `2^16` | 8 | 524288 | 0,200208 | 104967 | 6 | 58 | 132бит |
+| Кешігу 131k бума | `2^17` | 16 | 2097152 | 0,209492 | 439337 | 5 | 64 | 142бит |Мысал (теңдестірілген 20 мың топтама):
+1. `N_trace = 2^15`, сондықтан `N_eval = 2^15 × 8 = 2^18`.
+2. Жоспарлау құралының есептері `ρ = 0.077026`, сондықтан `p_fri = 5 × ρ^{52} ≈ 6.4 × 10^{-58}`.
+3. `-log₂ p_fri = 190 bits`, кесте жазбасына сәйкес келеді.
+4. Fiat-Shamir соқтығысуы ең көбі `2^{-58.3}` қосады, ал тегістеу (`g = 23`) тағы бір `2^{-23}` азайтады, жалпы дыбысты 160 биттен жоғары деңгейде сақтайды.
 
-Example (balanced 20 k batch):
-1. `N_trace = 2^15`, so `N_eval = 2^15 × 8 = 2^18`.
-2. Planner instrumentation reports `ρ = 0.077026`, so `p_fri = 5 × ρ^{52} ≈ 6.4 × 10^{-58}`.
-3. `-log₂ p_fri = 190 bits`, matching the table entry.
-4. Fiat–Shamir collisions add at most `2^{-58.3}`, and grinding (`g = 23`) subtracts another `2^{-23}`, keeping the total soundness comfortably above 160 bits.
+### CI бас тартуға арналған сынама алу жиегі
 
-### CI rejection-sampling harness
+Әрбір CI жұмысы эмпирикалық өлшемдердің аналитикалық шектен ±0,6 бит ішінде сақталуын қамтамасыз ету үшін Монте-Карло белдеуін орындайды:
+1. Канондық параметрлер жиынын сызыңыз және сәйкес жолдар санымен `TransitionBatch` синтезін жасаңыз.
+2. Бақылауды жасаңыз, кездейсоқ таңдалған шектеуді аударыңыз (мысалы, іздеудің негізгі өнімін немесе SMT інісін бұзу) және дәлелдеме жасауға тырысыңыз.
+3. Fiat–Shamir сынақтарын қайта сынап, тексерушіні қайта іске қосыңыз (ұнтақтау кіреді) және бұрмаланған дәлелдеменің қабылданбағанын жазыңыз.
+4. Параметрлер жиынына 16384 тұқым үшін қайталаңыз және байқалған бас тарту жылдамдығының 99% Клоппер-Пирсон төменгі шегін биттерге түрлендіріңіз.
 
-Every CI run executes a Monte Carlo harness to ensure empirical measurements stay within ±0.6 bits of the analytic bound:
-1. Draw a canonical parameter set and synthesise a `TransitionBatch` with the matching row count.
-2. Build the trace, flip a randomly chosen constraint (e.g., perturb the lookup grand product or an SMT sibling), and attempt to produce a proof.
-3. Rerun the verifier, resampling Fiat–Shamir challenges (grinding included), and record whether the tampered proof is rejected.
-4. Repeat for 16 384 seeds per parameter set and convert the 99 % Clopper–Pearson lower bound of the observed rejection rate into bits.
+Өлшенген төменгі шекара 128 биттен төмен сырғып кетсе, тапсырма бірден орындалмайды, сондықтан жоспарлаушыдағы, жиналмалы циклдегі немесе транскрипт сымындағы регрессиялар біріктіру алдында ұсталады.
 
-The job fails immediately if the measured lower bound slips under 128 bits, so regressions in the planner, folding loop, or transcript wiring are caught before merge.
+## Қосымша B — Домен-түбір туындысы
 
-## Appendix B — Domain-root derivation
+Stage0 бақылау және бағалау генераторларын Poseidon туындысы константаларына бекітеді, осылайша барлық енгізулер бірдей ішкі топтармен бөліседі.
 
-Stage 0 pins the trace and evaluation generators to Poseidon-derived constants so all implementations share the same subgroups.
+### Процедура
+1. **Тұқым таңдау.** UTF‑8 тегін `fastpq:v1:domain_roots` FASTPQ басқа жерде пайдаланылған Poseidon2 губкасына сіңіріңіз (күй ені=3, жылдамдық=2, төрт толық + 57 жартылай айналым). Кірістер `pack_bytes` ішінен `[len, limbs…]` кодтауын қайта пайдаланады, `g_base = 7` негізгі генераторын береді.
+2. **Баспа генераторы.** `trace_root = g_base^{(p-1)/2^{trace_log_size}} mod p` есептеңіз және жарты қуат 1 емес болған кезде `trace_root^{2^{trace_log_size}} = 1` тексеріңіз.
+3. **LDE генераторы.** `lde_root` шығару үшін `lde_log_size` көмегімен бірдей дәрежені қайталаңыз.
+4. **Coset таңдауы.** Stage0 негізгі ішкі топты (`omega_coset = 1`) пайдаланады. Болашақ косеттер `fastpq:v1:domain_roots:coset` сияқты қосымша тегті қабылдай алады.
+5. **Орналастыру өлшемі.** Жоспарлаушылар ешқашан екінің жасырын өкілеттіктерінен толтыру ережелерін шығармайтындай етіп `permutation_size` мәнін анық сақтаңыз.
 
-### Procedure
-1. **Seed selection.** Absorb the UTF‑8 tag `fastpq:v1:domain_roots` into the Poseidon2 sponge used elsewhere in FASTPQ (state width = 3, rate = 2, four full + 57 partial rounds). Inputs reuse the `[len, limbs…]` encoding from `pack_bytes`, yielding the base generator `g_base = 7`.【crates/fastpq_prover/src/packing.rs:44】【scripts/fastpq/src/bin/poseidon_gen.rs:1】
-2. **Trace generator.** Compute `trace_root = g_base^{(p-1)/2^{trace_log_size}} mod p` and verify `trace_root^{2^{trace_log_size}} = 1` while the half-power is not 1.
-3. **LDE generator.** Repeat the same exponentiation with `lde_log_size` to derive `lde_root`.
-4. **Coset selection.** Stage 0 uses the base subgroup (`omega_coset = 1`). Future cosets can absorb an additional tag such as `fastpq:v1:domain_roots:coset`.
-5. **Permutation size.** Persist `permutation_size` explicitly so schedulers never infer padding rules from implicit powers of two.
+### Көшіру және валидация
+- Құралдар: `cargo run --manifest-path scripts/fastpq/Cargo.toml --bin poseidon_gen -- domain-roots` тот үзінділерін немесе Markdown кестесін шығарады (`--format table`, `--seed`, `--filter` қараңыз).【scripts/fastpq/src_gen/poseidon.
+- Тесттер: `canonical_sets_meet_security_target` жарияланған константаларға (нөлден басқа түбірлер, үрлеу/аритеттік жұптастыру, ауыстыру өлшемі) сәйкес келетін канондық параметрлер жиынын сақтайды, сондықтан `cargo test -p fastpq_isi` дрейфті бірден ұстайды.【crates/fastpq_isi/src/18ms.
+- Ақиқат көзі: жаңа параметр бумалары енгізілген сайын Stage0 кестесі мен `fastpq_isi/src/params.rs` бірге жаңартыңыз.
 
-### Reproduction and validation
-- Tooling: `cargo run --manifest-path scripts/fastpq/Cargo.toml --bin poseidon_gen -- domain-roots` emits either Rust snippets or a Markdown table (see `--format table`, `--seed`, `--filter`).【scripts/fastpq/src/bin/poseidon_gen.rs:1】
-- Tests: `canonical_sets_meet_security_target` keeps the canonical parameter sets aligned with the published constants (non-zero roots, blowup/arity pairing, permutation sizing), so `cargo test -p fastpq_isi` catches drift immediately.【crates/fastpq_isi/src/params.rs:138】
-- Source of truth: update the Stage 0 table and `fastpq_isi/src/params.rs` together whenever new parameter packs are introduced.
+## Қосымша C — Міндеттеме құбырының мәліметтері### Посейдон міндеттемелерінің ағыны
+2-кезең провер және тексеруші бөлісетін детерминирленген бақылау міндеттемесін анықтайды:
+1. **Өтулерді қалыпқа келтіру.** `trace::build_trace` әрбір топтаманы сұрыптайды, оны `N_trace = 2^{⌈log₂ rows⌉}` күйіне толтырады және төмендегі ретпен баған векторларын шығарады.【crates/fastpq_prover/src/trace.rs:123】
+2. **Хэш бағандары.** `trace::column_hashes` бағандарды `fastpq:v1:trace:column:<name>` тегтері бар арнайы Poseidon2 губкалары арқылы тасымалдайды. `fastpq-prover-preview` мүмкіндігі белсенді болғанда, бірдей өту серверге қажет IFFT/LDE коэффициенттерін қайта өңдейді, сондықтан қосымша матрица көшірмелері бөлінбейді.【crates/fastpq_prover/src/trace.rs:474】
+3. **Merkle ағашына көтеріңіз.** `trace::merkle_root` баған дайджесттерін `fastpq:v1:trace:node` тегі бар Poseidon түйіндерімен бүктейді, ерекше жағдайларды болдырмау үшін деңгейде тақ желдеткіш болған кезде соңғы жапырақты көшіреді.【crates/fastpq_prover/src.6/src:
+4. **Дайджестті аяқтаңыз.** `digest::trace_commitment` домен тегін (`fastpq:v1:trace_commitment`), параметр атауын, толтырылған өлшемдерді, баған дайджесттерін және Merkle түбірін бірдей `[len, limbs…]` кодтауын пайдалана отырып префикс жасайды, содан кейін SHA6b ішінде пайдалы жүктемені em2-мен хэштейді. `Proof::trace_commitment`.【crates/fastpq_prover/src/digest.rs:25】
 
-## Appendix C — Commitment pipeline details
+Тексеруші Fiat–Shamir сынақтарын іріктеу алдында бірдей дайджестті қайта есептейді, сондықтан кез келген саңылаулардың алдында тоқтату дәлелдерін сәйкестендірмейді.
 
-### Streaming Poseidon commitment flow
-Stage 2 defines the deterministic trace commitment shared by the prover and verifier:
-1. **Normalise transitions.** `trace::build_trace` sorts each batch, pads it to `N_trace = 2^{⌈log₂ rows⌉}`, and emits column vectors in the order below.【crates/fastpq_prover/src/trace.rs:123】
-2. **Hash columns.** `trace::column_hashes` streams the columns through dedicated Poseidon2 sponges tagged `fastpq:v1:trace:column:<name>`. When the `fastpq-prover-preview` feature is active the same traversal recycles the IFFT/LDE coefficients required by the backend, so no extra matrix copies are allocated.【crates/fastpq_prover/src/trace.rs:474】
-3. **Lift into a Merkle tree.** `trace::merkle_root` folds the column digests with Poseidon nodes tagged `fastpq:v1:trace:node`, duplicating the last leaf whenever a level has odd fan-out to avoid special cases.【crates/fastpq_prover/src/trace.rs:656】
-4. **Finalize the digest.** `digest::trace_commitment` prefixes the domain tag (`fastpq:v1:trace_commitment`), parameter name, padded dimensions, column digests, and Merkle root using the same `[len, limbs…]` encoding, then hashes the payload with SHA3-256 before embedding it in `Proof::trace_commitment`.【crates/fastpq_prover/src/digest.rs:25】
+### Poseidon резервтік басқару элементтері- Провер енді арнайы Poseidon құбыр желісін қайта анықтауды (`zk.fastpq.poseidon_mode`, env `FASTPQ_POSEIDON_MODE`, CLI `--fastpq-poseidon-mode`) көрсетеді, осылайша операторлар GPU FFT/LDE-ді CPU Poseidon хэшингімен Stage00 <0 мақсатына жете алмаған құрылғыларда араластыра алады. Қолдау көрсетілетін мәндер орындалу режимінің тұтқасын көрсетеді (`auto`, `cpu`, `gpu`), көрсетілмеген кезде әдепкі жаһандық режимге. Орындау уақыты бұл мәнді жолақ конфигурациясы (`FastpqPoseidonMode`) арқылы өткізеді және оны проверге (`Prover::canonical_with_modes`) таратады, осылайша қайта анықтау конфигурацияда детерминирленген және тексерілетін болады. қоқыс.【crates/iroha_config/src/parameters/user.rs:1488】【crates/fastpq_prover/src/proof.rs:138】【crates/iroha_core/src/fastpq/lane.rs:123】
+- Телеметрия шешілген құбыр режимін жаңа `fastpq_poseidon_pipeline_total{requested,resolved,path,device_class,chip_family,gpu_kind}` есептегіші (және OTLP егіз `fastpq.poseidon_pipeline_resolutions_total`) арқылы экспорттайды. Сондықтан `sorafs`/оператордың бақылау тақталары GPU біріктірілген/құбырлы хэштеу және мәжбүрлі процессорлық резервке (`path="cpu_forced"`) немесе орындалу уақытын төмендетуге (`path="cpu_fallback"`) қарсы шығарылым іске қосылғанын растай алады. CLI зонды `irohad` ішінде автоматты түрде орнатылады, сондықтан бумаларды шығарыңыз және тікелей телеметрия бірдей дәлелдер ағынын бөліседі.【crates/iroha_telemetry/src/metrics.rs:4780】【crates/irohad/src/main.rs:2504】
+- Аралас режимнің дәлелдері де бар қабылдау қақпасы арқылы әрбір таблоға мөрленеді: провер әр топтама үшін шешілген режим + жол белгісін шығарады, ал `fastpq_poseidon_pipeline_total` есептегіш дәлелдеу түскен сайын орындау режимінің есептегішімен қатар өседі. Бұл WP2-E.6 талаптарын оңтайландыру жалғасып жатқан кезде детерминирленген төмендетулер үшін таза ауыстырып-қосқышты қамтамасыз ету және оңтайландыруды көрінетін ету арқылы қанағаттандырады.【crates/fastpq_prover/src/trace.rs:1684】【docs/source/sorafs_orchestrator_rollout.md:139】
+- `scripts/fastpq/wrap_benchmark.py --poseidon-metrics metrics_poseidon.prom` енді Prometheus сызаттарын (металл немесе CUDA) талдайды және әрбір оралған буманың ішіне `poseidon_metrics` жиынын енгізеді. Көмекші санауыш жолдарды `metadata.labels.device_class` арқылы сүзеді, сәйкес `fastpq_execution_mode_total` үлгілерін түсіреді және `fastpq_poseidon_pipeline_total` жазбалары жоқ болғанда орауды орындамайды, сондықтан WP2-E.6 бумалары әрқашан CUDA/Mehoc орнына қайталанатын дәлелдерді жеткізеді. ескертпелер.【scripts/fastpq/wrap_benchmark.py:1】【scripts/fastpq/tests/test_wrap_benchmark.py:1】
 
-The verifier recomputes the same digest before sampling Fiat–Shamir challenges, so mismatches abort proofs before any openings.
-
-### Poseidon fallback controls
-
-- The prover now exposes a dedicated Poseidon pipeline override (`zk.fastpq.poseidon_mode`, env `FASTPQ_POSEIDON_MODE`, CLI `--fastpq-poseidon-mode`) so operators can mix GPU FFT/LDE with CPU Poseidon hashing on devices that fail to reach the Stage 7 <900 ms target. Supported values mirror the execution-mode knob (`auto`, `cpu`, `gpu`), defaulting to the global mode when unspecified. The runtime threads this value through the lane config (`FastpqPoseidonMode`) and propagates it into the prover (`Prover::canonical_with_modes`) so overrides are deterministic and auditable in config dumps.【crates/iroha_config/src/parameters/user.rs:1488】【crates/fastpq_prover/src/proof.rs:138】【crates/iroha_core/src/fastpq/lane.rs:123】
-- Telemetry exports the resolved pipeline mode via the new `fastpq_poseidon_pipeline_total{requested,resolved,path,device_class,chip_family,gpu_kind}` counter (and OTLP twin `fastpq.poseidon_pipeline_resolutions_total`). `sorafs`/operator dashboards can therefore confirm when a rollout is running GPU fused/pipelined hashing versus the forced CPU fallback (`path="cpu_forced"`) or runtime downgrades (`path="cpu_fallback"`). The CLI probe installs automatically in `irohad`, so release bundles and live telemetry share the same evidence stream.【crates/iroha_telemetry/src/metrics.rs:4780】【crates/irohad/src/main.rs:2504】
-- Mixed-mode evidence is also stamped into every scoreboard via the existing adoption gate: the prover emits the resolved mode + path label for each batch, and the `fastpq_poseidon_pipeline_total` counter increments alongside the execution-mode counter whenever a proof lands. This satisfies WP2-E.6 by making brownouts visible and by providing a clean switch for deterministic downgrades while optimisation continues.【crates/fastpq_prover/src/trace.rs:1684】【docs/source/sorafs_orchestrator_rollout.md:139】
-- `scripts/fastpq/wrap_benchmark.py --poseidon-metrics metrics_poseidon.prom` now parses Prometheus scrapes (Metal or CUDA) and embeds a `poseidon_metrics` summary inside every wrapped bundle. The helper filters the counter rows by `metadata.labels.device_class`, captures the matching `fastpq_execution_mode_total` samples, and fails the wrap when `fastpq_poseidon_pipeline_total` entries are missing so WP2-E.6 bundles always ship reproducible CUDA/Metal evidence instead of ad-hoc notes.【scripts/fastpq/wrap_benchmark.py:1】【scripts/fastpq/tests/test_wrap_benchmark.py:1】
-
-#### Deterministic mixed-mode policy (WP2-E.6)
-
-1. **Detect GPU shortfall.** Flag any device-class whose Stage 7 capture or live Grafana snapshot shows Poseidon latency keeping the total proof time >900 ms while FFT/LDE stay below target. Operators annotate the capture matrix (`artifacts/fastpq_benchmarks/matrix/devices/<label>.txt`) and page the on-call when `fastpq_poseidon_pipeline_total{device_class="<label>",path="gpu"}` stagnates while `fastpq_execution_mode_total{backend="metal"}` still records GPU FFT/LDE dispatches.【scripts/fastpq/wrap_benchmark.py:1】【dashboards/grafana/fastpq_acceleration.json:1】
-2. **Flip to CPU Poseidon only for the affected hosts.** Set `zk.fastpq.poseidon_mode = "cpu"` (or `FASTPQ_POSEIDON_MODE=cpu`) in the host-local config alongside the fleet labels, keeping `zk.fastpq.execution_mode = "gpu"` so FFT/LDE continue to use the accelerator. Record the config diff in the rollout ticket and add the per-host override to the bundle as `poseidon_fallback.patch` so reviewers can replay the change deterministically.
-3. **Prove the downgrade.** Scrape the Poseidon counter immediately after restarting the node:
+#### Детерминистік аралас режим саясаты (WP2-E.6)1. **GPU жетіспеушілігін анықтаңыз.** Stage7 түсіру немесе тікелей Grafana суреті Poseidon кідірісін көрсететін кез келген құрылғы класын белгілеңіз, бұл ретте FFT/LDE мақсаттан төмен болған кезде жалпы дәлелдеу уақытын >900 мс сақтайды. Операторлар түсіру матрицасына (`artifacts/fastpq_benchmarks/matrix/devices/<label>.txt`) түсіндірме жасайды және `fastpq_poseidon_pipeline_total{device_class="<label>",path="gpu"}` тоқтап тұрғанда, `fastpq_execution_mode_total{backend="metal"}` GPU FFT/LDE жазатын болса, шақыртуға бет береді. dispatches.【scripts/fastpq/wrap_benchmark.py:1】【бақылау тақталары/grafana/fastpq_acceleration.json:1】
+2. **Зақымдалған хосттар үшін ғана CPU Poseidon құрылғысына айналдырыңыз.** `zk.fastpq.poseidon_mode = "cpu"` (немесе `FASTPQ_POSEIDON_MODE=cpu`) флот белгілерімен қатар хост-жергілікті конфигурацияға орнатыңыз, `zk.fastpq.execution_mode = "gpu"` сақтай отырып, FFT/LDE жылдамдатқышты пайдалана береді. Шығарылым билетінде конфигурация айырмашылығын жазыңыз және шолушылар өзгерісті анықтаушы түрде қайталай алатындай етіп пакетке әрбір хост үшін қайта анықтауды қосыңыз.
+3. **Төмендетуді дәлелдеңіз.** Түйінді қайта іске қосқаннан кейін бірден Poseidon есептегішті қырыңыз:
    ```bash
    curl -s http://<host>:8180/metrics | rg 'fastpq_poseidon_pipeline_total{.*device_class="<label>"'
    ```
-   The dump must show `path="cpu_forced"` growing in lock-step with the GPU execution counter. Store the scrape as `metrics_poseidon.prom` next to the existing `metrics_cpu_fallback.prom` snapshot and capture the matching `telemetry::fastpq.poseidon` log lines in `poseidon_fallback.log`.
-4. **Monitor & exit.** Keep alerting on `fastpq_poseidon_pipeline_total{path="cpu_forced"}` while optimisation work continues. Once a patch brings the per-proof runtime back under 900 ms on the test host, roll the config back to `auto`, re-run the scrape (showing `path="gpu"` again), and attach the before/after metrics to the bundle to close the mixed-mode drill.
+   Қоқыс GPU орындау есептегішімен құлыптау қадамында өсіп келе жатқан `path="cpu_forced"` көрсетуі керек. Қырындыны `metrics_poseidon.prom` ретінде бұрыннан бар `metrics_cpu_fallback.prom` суретінің жанында сақтаңыз және `poseidon_fallback.log` ішіндегі сәйкес `telemetry::fastpq.poseidon` журнал жолдарын түсіріңіз.
+4. **Бақылау және шығу.** Оңтайландыру жұмысы жалғасуда `fastpq_poseidon_pipeline_total{path="cpu_forced"}` телефонында ескертуді жалғастырыңыз. Патч сынақ хостында тексерілген жұмыс уақытын 900 мс-ден төмен қайтарғаннан кейін, конфигурацияны `auto` қалпына келтіріңіз, сызуды қайта іске қосыңыз (қайтадан `path="gpu"` көрсетеді) және аралас режимді бұрғылауды жабу үшін жинаққа алдыңғы/кейін көрсеткіштерін тіркеңіз.
 
-**Telemetry contract.**
+**Телеметриялық келісім-шарт.**
 
-| Signal | PromQL / Source | Purpose |
+| Сигнал | PromQL / Source | Мақсаты |
 |--------|-----------------|---------|
-| Poseidon mode counter | `fastpq_poseidon_pipeline_total{device_class="<label>",path=~"cpu_.*"}` | Confirms CPU hashing is intentional and scoped to the flagged device-class. |
-| Execution mode counter | `fastpq_execution_mode_total{device_class="<label>",backend="metal"}` | Proves FFT/LDE still run on GPU even while Poseidon downgrades. |
-| Log evidence | `telemetry::fastpq.poseidon` entries captured in `poseidon_fallback.log` | Provides per-proof proof that the host resolved to CPU hashing with Reason `cpu_forced`. |
+| Посейдон режимінің есептегіші | `fastpq_poseidon_pipeline_total{device_class="<label>",path=~"cpu_.*"}` | CPU хэштеуінің әдейі және жалауша қойылған құрылғы сыныбына қатысты екенін растайды. |
+| Орындау режимінің есептегіші | `fastpq_execution_mode_total{device_class="<label>",backend="metal"}` | FFT/LDE әлі де Poseidon нұсқасын төмендетсе де GPU-да жұмыс істейтінін дәлелдейді. |
+| Журнал дәлелдері | `poseidon_fallback.log` ішінде түсірілген `telemetry::fastpq.poseidon` жазбалары | Хосттың `cpu_forced` себебімен процессор хэшингіне шешім қабылдағанын дәлелдейтін дәлелді береді. |
 
-The rollout bundle must now include `metrics_poseidon.prom`, the config diff, and the log excerpt whenever mixed-mode is active so governance can audit the deterministic fallback policy alongside the FFT/LDE telemetry. `ci/check_fastpq_rollout.sh` already enforces the queue/zero-fill limits; the follow-up gate will sanity-check the Poseidon counter once mixed-mode lands in release automation.
+Басқару FFT/LDE телеметриясымен бірге детерминирленген қалпына келтіру саясатын тексере алатындай етіп, шығару жинағы енді аралас режим белсенді болған кезде `metrics_poseidon.prom`, конфигурация айырмашылығын және журнал үзіндісін қамтуы керек. `ci/check_fastpq_rollout.sh` кезек/нөлдік толтыру шектеулерін әлдеқашан бекітеді; Аралас режимде босату автоматикасына кіргеннен кейін бақылау қақпасы Poseidon есептегішінің саулығын тексереді.
 
-The Stage 7 capture tooling already handles CUDA: wrap every `fastpq_cuda_bench` bundle with `--poseidon-metrics` (pointing at the scraped `metrics_poseidon.prom`) and the output now carries the same pipeline counters/resolution summary used on Metal so governance can verify CUDA fallbacks without bespoke tooling.【scripts/fastpq/wrap_benchmark.py:1】
+Stage7 түсіру құралы CUDA-ны әлдеқашан өңдейді: әрбір `fastpq_cuda_bench` бумасын `--poseidon-metrics` арқылы ораңыз (сырылған `metrics_poseidon.prom`) және шығыс енді Metalify жүйесінде пайдаланылған бірдей құбыр санауыштарын/ажырату жиынын береді, сондықтан CUDA-ны кері қайтара алмайды. құралдар.【scripts/fastpq/wrap_benchmark.py:1】### Баған тәртібі
+Хэширлеу құбыры бағандарды осы детерминирленген ретпен тұтынады:
+1. Таңдау жалаушалары: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, I08500, I08500 `s_perm`.
+2. Буып-түйілген аяқ бағандары (әрқайсысы із ұзындығына нөлдік толтырылған): `key_limb_{i}`, `value_old_limb_{i}`, `value_new_limb_{i}`, `asset_id_limb_{i}`.
+3. Көмекші скалярлар: `delta`, `running_asset_delta`, `metadata_hash`, `supply_counter`, `perm_hash`, `neighbour_leaf`, `neighbour_leaf`, I018, I018 `slot`.
+4. Әрбір `ℓ ∈ [0, SMT_HEIGHT)` деңгейі үшін сирек Merkle куәгерлері: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`.
 
-### Column order
-The hashing pipeline consumes columns in this deterministic order:
-1. Selector flags: `s_active`, `s_transfer`, `s_mint`, `s_burn`, `s_role_grant`, `s_role_revoke`, `s_meta_set`, `s_perm`.
-2. Packed limb columns (each zero-padded to the trace length): `key_limb_{i}`, `value_old_limb_{i}`, `value_new_limb_{i}`, `asset_id_limb_{i}`.
-3. Auxiliary scalars: `delta`, `running_asset_delta`, `metadata_hash`, `supply_counter`, `perm_hash`, `neighbour_leaf`, `dsid`, `slot`.
-4. Sparse Merkle witnesses for every level `ℓ ∈ [0, SMT_HEIGHT)`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`.
+`trace::column_hashes` бағандарды дәл осы ретпен аралайды, сондықтан толтырғыш сервері және Stage2 STARK орындалуы шығарылымдар бойынша тұрақты болып қалады.【crates/fastpq_prover/src/trace.rs:474】
 
-`trace::column_hashes` walks the columns in exactly this order, so the placeholder backend and Stage 2 STARK implementation remain trace-stable across releases.【crates/fastpq_prover/src/trace.rs:474】
+### Транскрипт домен тегтері
+2-кезең тапсырманы анықтау үшін төмендегі Fiat–Shamir каталогын түзетеді:
 
-### Transcript domain tags
-Stage 2 fixes the Fiat–Shamir catalog below to keep challenge generation deterministic:
-
-| Tag | Purpose |
+| Тег | Мақсаты |
 | --- | ------- |
-| `fastpq:v1:init` | Absorb protocol version, parameter set, and `PublicIO`. |
-| `fastpq:v1:roots` | Commit the trace and lookup Merkle roots. |
-| `fastpq:v1:gamma` | Sample the lookup grand-product challenge. |
-| `fastpq:v1:alpha:<i>` | Sample composition-polynomial challenges (`i = 0, 1`). |
-| `fastpq:v1:lookup:product` | Absorb the evaluated lookup grand product. |
-| `fastpq:v1:beta:<round>` | Sample the folding challenge for each FRI round. |
-| `fastpq:v1:fri_layer:<round>` | Commit the Merkle root for each FRI layer. |
-| `fastpq:v1:fri:final` | Record the final FRI layer before opening queries. |
-| `fastpq:v1:query_index:0` | Deterministically derive verifier query indices. |
+| `fastpq:v1:init` | Протокол нұсқасын, параметрлер жинағын және `PublicIO` қабылдаңыз. |
+| `fastpq:v1:roots` | Бақылауды орындаңыз және Merkle түбірлерін іздеңіз. |
+| `fastpq:v1:gamma` | Үлкен өнімді іздеу тапсырмасының үлгісі. |
+| `fastpq:v1:alpha:<i>` | Құрамы-көпмүшелік тапсырмалар үлгісі (`i = 0, 1`). |
+| `fastpq:v1:lookup:product` | Бағаланған ірі өнімді іздеңіз. |
+| `fastpq:v1:beta:<round>` | Әрбір FRI раунды үшін бүктеу тапсырмасын таңдаңыз. |
+| `fastpq:v1:fri_layer:<round>` | Әрбір FRI қабаты үшін Merkle түбірін жасаңыз. |
+| `fastpq:v1:fri:final` | Сұрауларды ашпас бұрын соңғы FRI қабатын жазыңыз. |
+| `fastpq:v1:query_index:0` | Тексеруші сұрау индекстерін анықтау. |

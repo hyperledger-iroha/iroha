@@ -8,169 +8,171 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview feedback logging
 sidebar_label: Feedback logging
 description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import previewFeedbackSummary from '@site/src/data/previewFeedbackSummary.json';
+ቅድመ እይታFeedback ማጠቃለያ ከ'@site/src/data/previewFeedbackSummary.json';
 
-function FeedbackSummaryTable() {
-  const waves = previewFeedbackSummary?.waves ?? [];
-  if (waves.length === 0) {
-    return (
+ተግባር ግብረ መልስ ማጠቃለያ ሠንጠረዥ() {
+  const waves = ቅድመ እይታ ግብረመልስ ማጠቃለያ?.waves ?? [];
+  ከሆነ (ሞገዶች. ርዝመት === 0) {
+    መመለስ (
       <p>
-        No preview feedback entries have been recorded in
-        {' '}
-        <code>{previewFeedbackSummary?.source ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
+        ምንም የቅድመ እይታ ግብረመልስ ግቤቶች አልተመዘገቡም።
+        {''}
+        <code>{የግብረ መልስ ማጠቃለያ ቅድመ እይታ?.ምንጭ ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
         .
       </p>
     );
   }
-  return (
-    <table>
-      <thead>
+  መመለስ (
+    <ጠረጴዛ>
+      <ርዕስ>
         <tr>
-          <th>Wave</th>
-          <th>Status</th>
-          <th>Total events</th>
-          <th>Invites</th>
-          <th>Open invites</th>
-          <th>Acknowledged</th>
-          <th>Revoked</th>
-          <th>Feedback</th>
-          <th>Issues</th>
-          <th>Completion %</th>
-          <th>Ack %</th>
-          <th>Response rate</th>
-          <th>Ack latency (avg h)</th>
-          <th>Feedback latency (avg h)</th>
-          <th>Last event</th>
-          <th>Days since last event</th>
+          <th>ሞገድ</th>
+          <th>ሁኔታ</th>
+          <th>ጠቅላላ ክስተቶች</th>
+          <th>ግብዣዎች</th>
+          <th>ግብዣዎችን ክፈት</th>
+          <th>ተመሰከረ</th>
+          <th>ተሽሯል</th>
+          <th>ግብረመልስ</th>
+          <th>ጉዳዮች</th>
+          <th>ማጠናቀቅ %</th>
+          <th>አክ %</th>
+          <th>የምላሽ መጠን</th>
+          <th>አክ መዘግየት (አማካኝ ሰ) </th>
+          <th>የመልስ መዘግየት (አማካኝ ሰ) </th>
+          <th>የመጨረሻው ክስተት</th>
+          <th>ከመጨረሻው ክስተት ጀምሮ ባሉት ቀናት</th>
         </tr>
-      </thead>
+      </ thead>
       <tbody>
-        {waves.map((wave) => {
-          const feedback = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
-          const issues = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
-          const acknowledgements =
-            wave.acknowledgements ?? wave.eventCounts?.acknowledged ?? 0;
-          const revocations =
-            wave.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
-          const responseRate =
-            wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
-          const completionPercent =
-            wave.inviteCompletionPercent == null
-              ? '—'
+        {waves.map((ሞገድ) => {
+          const ግብረ መልስ = wave.feedbackCount ?? wave.eventCounts?.['ግብረመልስ ገብቷል'] ?? 0;
+          const ጉዳዮች = wave.issuesCount ?? wave.eventCounts?.['ጉዳይ-ተከፈተ'] ?? 0;
+          const ምስጋናዎች =
+            ሞገድ. ምስጋናዎች ?? wave.eventcounts?.ተመሰከረ ?? 0;
+          const ስረዛዎች =
+            ሞገድ.መሻሪያዎች ?? wave.eventCounts?.['መዳረሻ ተሽሯል'] ?? 0;
+          const ምላሽ ተመን =
+            wave.responseRatePercent == ባዶ ? '-': `${wave.responseRatePercent}%`;
+          const completion በመቶ =
+            wave.invite ማጠናቀቅያ በመቶኛ == ባዶ
+              ? '-
               : `${wave.inviteCompletionPercent}%`;
           const ackPercent =
-            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
+            wave.ackRatePercent == ባዶ ? '-': `${wave.ackRatePercent}%`;
           const ackLatency =
-            wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
+            wave.ackLatencyHoursAvg == ባዶ ? '-'፡ wave.ackLatencyHoursAvg;
           const feedbackLatency =
-            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
-          return (
+            wave.feedbackLatencyHoursAvg == ባዶ ? '-'፡ wave.feedbackLatencyHoursAvg;
+          መመለስ (
             <tr key={wave.wave}>
               <td>{wave.wave}</td>
-              <td>{wave.status ?? 'pending'}</td>
+              <td>{wave.status ?? 'በመጠባበቅ ላይ'}</td>
               <td>{wave.totalEvents}</td>
-              <td>{wave.invites?.total ?? 0}</td>
-              <td>{wave.invites?.open ?? 0}</td>
-              <td>{acknowledgements}</td>
-              <td>{revocations}</td>
-              <td>{feedback}</td>
-              <td>{issues}</td>
-              <td>{completionPercent}</td>
+              <td>{ሞገድ. ይጋብዛል?.ጠቅላላ ?? 0}</td>
+              <td>{ሞገድ. ይጋብዛል?. ክፍት ነው ?? 0}</td>
+              <td>{ምስጋናዎች}</td>
+              <td>{መሻሮች}</td>
+              <td>{ግብረመልስ}</td>
+              <td>{ጉዳዮች}</td>
+              <td>{ማጠናቀቂያ መቶኛ}</td>
               <td>{ackPercent}</td>
               <td>{responseRate}</td>
-              <td title={wave.ackLatencyHoursP95 == null ? undefined : `p95 ${wave.ackLatencyHoursP95}h`}>
+              <td title={wave.ackLatencyHoursP95 == ባዶ ነው? ያልተገለጸ፡ I18NI0000018X}>
                 {ackLatency}
               </td>
               <td
-                title={
-                  wave.feedbackLatencyHoursP95 == null
-                    ? undefined
+                ርዕስ={
+                  wave.feedbackLatencyHoursP95 == ባዶ
+                    ? ያልተገለጸ
                     : `p95 ${wave.feedbackLatencyHoursP95}h`
                 }
               >
-                {feedbackLatency}
+                {ግብረ መልስLatency}
               </td>
               <td>{wave.lastEventTimestamp ?? '—'}</td>
-              <td>{wave.daysSinceLastEvent ?? '—'}</td>
+              <td>{wave.daysከመጨረሻው ክስተት ጀምሮ ?? '—'}</td>
             </tr>
           );
         })}
       </tbody>
-    </table>
+    </ ሠንጠረዥ>
   );
 }
 
-The roadmap calls for verifiable evidence whenever we invite reviewers into the
-docs portal preview. This note explains how to capture that evidence with the
-`preview-feedback-log` helper, how to share the resulting artefacts with
-governance, and where to file digests once a wave closes.
+ፍኖተ ካርታው ገምጋሚዎችን በጋበዝን ቁጥር ሊረጋገጥ የሚችል ማስረጃን ይጠይቃል
+docs ፖርታል ቅድመ እይታ። ይህ ማስታወሻ ያንን ማስረጃ እንዴት መያዝ እንዳለበት ያብራራል።
+`preview-feedback-log` አጋዥ፣ የተገኙትን ቅርሶች እንዴት ማጋራት እንደሚቻል
+አስተዳደር, እና አንድ ጊዜ ማዕበል ከተዘጋ የምግብ መፍጫውን የት እንደሚያስገቡ.
 
-## Why we log feedback
+## ለምን ግብረ መልስ እንመዘግባለን።
 
-- **Compliance:** every invite must record who accessed the preview, when they
-  acknowledged the acceptable-use policy, and when their access was revoked.
-- **Telemetry correlation:** the log lets us correlate portal telemetry spikes
-  or Try it traffic with specific invite cohorts.
-- **Governance evidence:** each DOCS-SORA checkpoint needs a machine-readable
-  summary showing invite counts, open reviewers, and the state of outstanding
-  issues.
+- ** ተገዢነት: *** እያንዳንዱ ግብዣ ማን ቅድመ እይታውን እንደደረሰ መመዝገብ አለበት።
+  ተቀባይነት ያለው የአጠቃቀም ፖሊሲን አምነዋል፣ እና መዳረሻቸው ሲሰረዝ።
+- **የቴሌሜትሪ ትስስር፡** መዝገቡ የፖርታል ቴሌሜትሪ ሹልፎችን እንድናገናኝ ያስችለናል።
+  ወይም ከተወሰኑ የግብዣ ቡድኖች ጋር ትራፊክ ይሞክሩት።
+- ** የመንግስት ማስረጃዎች: *** እያንዳንዱ DOCS-SORA የፍተሻ ነጥብ በማሽን የሚነበብ ያስፈልገዋል.
+  የግብዣ ብዛትን፣ ክፍት ገምጋሚዎችን እና የላቀ ሁኔታን የሚያሳይ ማጠቃለያ
+  ጉዳዮች
 
-All evidence lives under `artifacts/docs_portal_preview/` so it can be attached
-to the invite wave ticket or governance review without scraping CI logs.
+ሁሉም ማስረጃዎች በI18NI0000021X ስር ይኖራሉ ስለዚህ ማያያዝ ይችላል።
+የ CI ምዝግብ ማስታወሻዎችን ሳይቧጭ ወደ ግብዣው ሞገድ ቲኬት ወይም የአስተዳደር ግምገማ።
 
-## Live invite summary
+## የቀጥታ ግብዣ ማጠቃለያ
 
-`docs/portal/scripts/preview-feedback-summary.mjs` ingests the shared log and
-writes `src/data/previewFeedbackSummary.json` during `npm run build`. The table
-below renders that JSON so reviewers can see the current invite footprint
-without running the CLI helper.
+`docs/portal/scripts/preview-feedback-summary.mjs` የተጋራውን ምዝግብ እና
+በ I18NI0000024X ጊዜ `src/data/previewFeedbackSummary.json` ይጽፋል። ጠረጴዛው
+ከዚህ በታች JSON ገምጋሚዎች የአሁኑን የግብዣ አሻራ ማየት እንዲችሉ ያሳያል
+የ CLI ረዳትን ሳያስኬዱ.
 
-<FeedbackSummaryTable />
+<የመልስ ማጠቃለያ ሰንጠረዥ />
 
-In addition to the invite totals, the summary now surfaces acknowledgement and
-revocation counts, the derived response rate (feedback submissions divided by
-total invites), and the average latency (with a hoverable p95) between an
-invite and the reviewer’s acknowledgement or feedback submission. The new
-**Completion %** column shows how many invites have been closed (acknowledged or
-revoked), while **Ack %** highlights how many recipients explicitly confirmed
-the acceptable-use steps. These derived percentages—plus the JSON-only
-revocation/issue rates—feed the governance dashboards so reviewers can confirm
-both participation levels and turnaround time without running the CLI helper.
-The **Status** column highlights whether a wave is still
-active (`active`), closed but within the 14-day monitoring window (`closed`), or
-ready for archival (`archived`). The **Days since last event** metric shows how
-long it has been since the final invite/feedback action so councils can spot
-waves that need to be wrapped up or re-engage lingering recipients.
+ከግብዣው ድምር በተጨማሪ፣ ማጠቃለያው አሁን እውቅናን ይሰጣል
+መሻር ይቆጥራል፣ የተገኘው የምላሽ መጠን (የግብረመልስ ግቤቶች የተከፋፈለው።
+ጠቅላላ ግብዣዎች)፣ እና አማካይ መዘግየት (በሚያንዣብብ p95) መካከል
+መጋበዝ እና የገምጋሚው እውቅና ወይም አስተያየት ማስገባት። አዲሱ
+** ማጠናቀቅ %** አምድ ምን ያህል ግብዣዎች እንደተዘጉ ያሳያል (እውቅና የተሰጠው ወይም
+ተሽሯል)፣ **Ack %** ምን ያህል ተቀባዮች በግልፅ እንደተረጋገጡ ያደምቃል
+ተቀባይነት ያለው-የአጠቃቀም ደረጃዎች. እነዚህ የተገኙ መቶኛዎች - ከJSON-ብቻ ጋር
+የመሻር/የፍቺ መጠን—ገምጋሚዎች እንዲያረጋግጡ የአስተዳደር ዳሽቦርዶችን ይመግቡ
+ሁለቱም የተሳትፎ ደረጃዎች እና የ CLI ረዳትን ሳያደርጉ የመመለሻ ጊዜ.
+የ **ሁኔታ** አምድ ማዕበል አሁንም እንዳለ ያሳያል
+ንቁ (`active`)፣ ተዘግቷል ነገር ግን በ14-ቀን የክትትል መስኮት (`closed`)፣ ወይም
+ለማህደር ዝግጁ (I18NI0000027X)። **ከመጨረሻው ክስተት ወዲህ ያሉት ቀናት** መለኪያው እንዴት እንደሆነ ያሳያል
+ምክር ቤቶች እንዲታዩ ከመጨረሻው የግብዣ/የመልስ እርምጃ ጀምሮ ረጅም ጊዜ ቆይቷል
+መጠቅለል የሚያስፈልጋቸው ሞገዶች ወይም የቆዩ ተቀባዮችን እንደገና ማሳተፍ.
 
-### Wave `preview-20260218` recap
+### ሞገድ I18NI0000028X ድጋሚ
 
-- **Scope:** Finance beta, observability ops, SDK partner, and ecosystem advocate reviewers invited on **2026‑02‑18** ahead of the next DOCS-SORA checkpoint.
-- **Metrics:** 4 invites, 4 acknowledgements, 4 revocations, and 4 feedback submissions (`responseRatePercent = 100`) with a single follow-up issue (`DOCS-SORA-Preview-20260218`) filed by the observability cohort.
-- **Evidence:** `artifacts/docs_portal_preview/feedback_log.json` now includes the detailed event timeline for this wave and `artifacts/docs_portal_preview/preview-20260218-summary.json` captures the normalized metrics we attach to governance packets. Regenerating the portal data via `npm run --prefix docs/portal preview:log -- --summary --summary-json` pulls the same numbers into `src/data/previewFeedbackSummary.json`.
-- **Wave helper:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` emits the per-wave summary, digest, and refreshed portal data in one step.
-- **Follow-ups:** Observability feedback scoped additional CSP examples for Try it requests; Docs/DevRel are tracking the write-up under `docs/portal/docs/sorafs/observability-plan.md` (§4.2) so the next invite wave can validate the fix. The full recap lives in [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) with the timeline captured in [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md).
+- ** ወሰን፡** የፋይናንስ ቅድመ-ይሁንታ፣ ታዛቢነት ኦፕስ፣ የኤስዲኬ አጋር እና የስነምህዳር ጠበቃ ገምጋሚዎች በ*2026-02-18** ተጋብዘዋል ከሚቀጥለው DOCS-I18NT0000003X የፍተሻ ነጥብ በፊት።
+- ** መለኪያዎች፡** 4 ግብዣዎች፣ 4 እውቅናዎች፣ 4 መሻሮች እና 4 የግብረመልስ ግቤቶች (`responseRatePercent = 100`) ከአንድ የክትትል እትም (`DOCS-SORA-Preview-20260218`) ጋር በታዛቢነት ስብስብ የቀረበ።
+- ** ማስረጃ:** `artifacts/docs_portal_preview/feedback_log.json` አሁን ለዚህ ሞገድ ዝርዝር የክስተት ጊዜን ያካትታል እና `artifacts/docs_portal_preview/preview-20260218-summary.json` ከአስተዳደር እሽጎች ጋር የምናያይዛቸውን የተለመዱ መለኪያዎችን ይይዛል። በ`npm run --prefix docs/portal preview:log -- --summary --summary-json` በኩል የፖርታል መረጃን እንደገና ማመንጨት ተመሳሳይ ቁጥሮችን ወደ `src/data/previewFeedbackSummary.json` ይጎትታል።
+- **የማዕበል አጋዥ፡** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` የየማዕበል ማጠቃለያ፣ መፍጨት እና የታደሰ የፖርታል ዳታ በአንድ እርምጃ ይለቃል።
+- ** ተከታታዮች: *** የታዛቢነት ግብረመልስ ተጨማሪ የሲኤስፒ ምሳሌዎችን ለጥያቄዎች ይሞክሩ; የሚቀጥለው የግብዣ ሞገድ ጥገናውን ማረጋገጥ እንዲችል ሰነዶች/ዴቭሬል በ`docs/portal/docs/sorafs/observability-plan.md` (§4.2) ስር መፃፍን እየተከታተሉ ነው። ሙሉ ማጠቃለያው በ[`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) ውስጥ ከተያዘው የጊዜ መስመር ጋር በ[`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md) ውስጥ ይኖራል።
 
-## Event taxonomy
+## የክስተት ታክሶኖሚ
 
-| Event | When to record it | Notes |
+| ክስተት | መቼ እንደሚቀዳ | ማስታወሻ |
 | --- | --- | --- |
-| `invite-sent` | Immediately after sending an invite email. | Append one entry per recipient so invite counts stay accurate. |
-| `acknowledged` | When the reviewer confirms they read the security/observability docs and ran the checksum gate. | Optional but recommended for partner cohorts. |
-| `feedback-submitted` | When a reviewer files a finding via the agreed tracker. | Include the issue/link in the `--notes` field. |
-| `issue-opened` | When DOCS-SORA files a follow-up issue derived from feedback. | Helps governance correlate roadmap items to preview feedback. |
-| `access-revoked` | Once the reviewer’s preview window ends or access is revoked early. | Required so the “open recipients” count stays accurate. |
+| `invite-sent` | የግብዣ ኢሜይል ከላኩ በኋላ ወዲያውኑ። | የግብዣ ብዛት ትክክል ሆኖ እንዲቆይ በአንድ ተቀባይ አንድ ግቤት ጨምር። |
+| `acknowledged` | ገምጋሚው ሲያረጋግጥ የደህንነት/የታዛቢነት ሰነዶችን አንብበው የቼክ ሰሙን በር ሮጡ። | አማራጭ ነገር ግን ለባልደረባ ስብስቦች ይመከራል። |
+| `feedback-submitted` | ገምጋሚ በተስማማው መከታተያ በኩል ግኝቱን ሲያቀርብ። | በ`--notes` መስክ ውስጥ ጉዳዩን/አገናኙን ያካትቱ። |
+| `issue-opened` | DOCS-I18NT0000005X ከአስተያየት የመነጨ የክትትል ችግር ሲፈጥር። | አስተያየቶችን አስቀድሞ ለማየት አስተዳደር የመንገድ ካርታ ንጥሎችን ለማዛመድ ያግዛል። |
+| `access-revoked` | አንዴ የገምጋሚው ቅድመ እይታ መስኮት ካለቀ ወይም መድረሻው ቀደም ብሎ ከተሻረ። | የ«ክፍት ተቀባዮች» ቆጠራ ትክክል ሆኖ እንዲቆይ ያስፈልጋል። |
 
-If you need an additional event, add it to
-`VALID_EVENTS` inside `docs/portal/scripts/preview-feedback-log.mjs` and update
-this table in the same change.
+ተጨማሪ ክስተት ከፈለጉ ያክሉት።
+`VALID_EVENTS` በ`docs/portal/scripts/preview-feedback-log.mjs` ውስጥ እና አዘምን
+ይህ ሰንጠረዥ በተመሳሳይ ለውጥ.
 
-## Logging workflow
+## የምዝግብ ማስታወሻ የስራ ሂደት
 
-The helper behind `npm run preview:log` writes a single JSON log that captures
-all events. Each entry contains the wave label, recipient, event, timestamp, and
-optional notes. Example:
+ከ I18NI0000047X በስተጀርባ ያለው ረዳት አንድ ነጠላ የ JSON ሎግ ይጽፋል
+ሁሉም ክስተቶች. እያንዳንዱ ግቤት የሞገድ መለያ፣ ተቀባይ፣ ክስተት፣ የጊዜ ማህተም እና ይዟል
+አማራጭ ማስታወሻዎች. ምሳሌ፡-
 
 ```json
 {
@@ -195,7 +197,7 @@ optional notes. Example:
 }
 ```
 
-Commands:
+ትዕዛዞች፡-
 
 ```bash
 # Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
@@ -225,51 +227,49 @@ npm run --prefix docs/portal preview:digest -- \
   --out artifacts/docs_portal_preview/preview-20260204-digest.md
 ```
 
-Tips:
+ጠቃሚ ምክሮች
 
-- Place the log under version control when working in a feature branch so other
-  maintainers can review changes. For long-running waves store the log in the
-  governance ticket and attach the final version to the release artefacts.
-- `preview:log` accepts `--log <path>` when you need to log directly inside a
-  SoraFS bundle or CI workspace.
-- Always include a `--notes` hint (issue link, GitHub handle, cohort ID) so the
-  summary is useful during the retrospective.
-- When you need deterministic summary timestamps (for CI or docs snapshots),
-  set `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` before running the summary
-  helper. This keeps the `generatedAt`, status, and day counters consistent
-  across rebuilds.
+- በባህሪ ቅርንጫፍ ውስጥ ሲሰሩ ምዝግብ ማስታወሻውን በስሪት ቁጥጥር ስር ያድርጉት
+  ጠባቂዎች ለውጦችን መገምገም ይችላሉ. ለረጅም ጊዜ ሞገዶች ምዝግብ ማስታወሻውን በ ውስጥ ያከማቹ
+  የአስተዳደር ትኬት እና የመጨረሻውን እትም ከተለቀቁት ቅርሶች ጋር ያያይዙ።
+- በቀጥታ ወደ ውስጥ ለመግባት ሲፈልጉ `preview:log` `--log <path>` ይቀበላል
+  SoraFS ጥቅል ወይም CI የስራ ቦታ።
+- ሁልጊዜ የI18NI0000050X ፍንጭ (የችግር አገናኝ ፣ GitHub እጀታ ፣ የቡድን መታወቂያ) ያካትቱ
+  ማጠቃለያ በኋለኛው እይታ ወቅት ጠቃሚ ነው።
+- የሚወስን ማጠቃለያ የጊዜ ማህተሞች ሲፈልጉ (ለ CI ወይም ለዶክመንቶች ቅጽበተ-ፎቶዎች)
+  ማጠቃለያውን ከማሄድዎ በፊት `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` ያዘጋጁ
+  ረዳት ። ይህ የ`generatedAt`፣ ሁኔታ እና የቀን መቁጠሪያዎች ወጥነት ያለው እንዲሆን ያደርጋል
+  በመልሶ ግንባታዎች ላይ።
 
-## Summaries, digests, and archives
-
-1. **Per-wave summary:** generate the JSON summary and attach it to the invite
-   ticket together with the raw log. The summary enumerates total invites, open
-   recipients, and feedback counts so governance can confirm we captured every
-   reviewer. The portal build also publishes an aggregate summary at
-   `src/data/previewFeedbackSummary.json` so stakeholders can see the current
-   snapshot without running the CLI.
-2. **Weekly digest:** run `npm run --prefix docs/portal preview:digest -- --wave <label>`
-   to pre-populate the Markdown metrics, then tailor the placeholder sections
-   using the template in
+## ማጠቃለያዎች፣ መፍጨት እና ማህደሮች1. **በየማዕበል ማጠቃለያ፡** የJSON ማጠቃለያ አምጡና ከግብዣው ጋር ያያይዙት።
+   ትኬት ከጥሬ ምዝግብ ማስታወሻ ጋር. ማጠቃለያው ጠቅላላ ግብዣዎችን ይዘረዝራል፣ ክፍት ነው።
+   አስተዳደር እያንዳንዱን መያዙን ማረጋገጥ እንዲችል ተቀባዮች እና ግብረመልስ ይቆጠራሉ።
+   ገምጋሚ። የፖርታል ግንባታው አጠቃላይ ማጠቃለያ በ ላይ ያትማል
+   ባለድርሻ አካላት የአሁኑን ማየት እንዲችሉ `src/data/previewFeedbackSummary.json`
+   CLI ን ሳያስኬዱ ቅጽበተ-ፎቶ።
+2. ** ሳምንታዊ መፈጨት: ** አሂድ `npm run --prefix docs/portal preview:digest -- --wave <label>`
+   የማርክዳውን መለኪያዎችን በቅድሚያ ለመሙላት፣ ከዚያም የቦታ ያዥ ክፍሎችን ብጁ ያድርጉ
+   ውስጥ አብነት በመጠቀም
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   before sharing it with stakeholders. Include at least: wave label, open
-   reviewers, notable findings, and next actions.
-3. **Archival:** move closed-wave logs into
-   `artifacts/docs_portal_preview/archive/<wave>/` and keep only the most recent
-   active wave at the root. This keeps CI artefacts small while preserving the
-   audit trail.
+   ከባለድርሻ አካላት ጋር ከመጋራቱ በፊት. ቢያንስ ያካትቱ፡ የሞገድ መለያ፣ ክፍት
+   ገምጋሚዎች፣ ታዋቂ ግኝቶች እና ቀጣይ እርምጃዎች።
+3. ** መዝገብ ቤት፡** የተዘጉ ሞገዶችን ወደ ውስጥ ያንቀሳቅሱ
+   `artifacts/docs_portal_preview/archive/<wave>/` እና በጣም የቅርብ ጊዜውን ብቻ ያስቀምጡ
+   በስሩ ላይ ንቁ ሞገድ. ይህ CI ቅርሶችን በመጠበቅ ላይ ትንሽ ያደርገዋል
+   የኦዲት መንገድ.
 
-## Linking to the roadmap
+## ከፍኖተ ካርታው ጋር ማገናኘት።
 
-- Reference this document from invite and onboarding playbooks whenever you ask
-  reviewers to file feedback (see
-  [`preview-invite-flow`](./preview-invite-flow.md),
-  [`reviewer-onboarding`](./reviewer-onboarding.md), and
-  [`public-preview-invite`](./public-preview-invite.md)).
-- Mention the generated summary in `status.md` when closing a wave so DOCS-SORA
-  roadmap items (e.g., DOCS-1b/2b/3c) can cite the artefact.
-- Store hash digests alongside the summary when uploading to SoraFS so external
-  reviewers can verify the evidence bundle.
+- በጠየቁት ጊዜ ይህንን ሰነድ ከመጋበዝ እና ከመሳፈሪያ መጫወቻ መጽሐፍት ይመልከቱ
+  አስተያየት ለመስጠት ገምጋሚዎች (ተመልከት
+  [`preview-invite-flow`](./preview-invite-flow.md)፣
+  [`reviewer-onboarding`](./reviewer-onboarding.md)፣ እና
+  [`public-preview-invite`](./public-preview-invite.md))።
+- በ DOCS-SORA ማዕበል ሲዘጋ የተፈጠረውን ማጠቃለያ በI18NI00000060 ጥቀስ።
+  የፍኖተ ካርታ እቃዎች (ለምሳሌ፡ DOCS-1b/2b/3c) የጥበብ ስራውን ሊጠቅሱ ይችላሉ።
+- ወደ SoraFS ሲሰቅሉ ከማጠቃለያው ጎን ለጎን የሃሽ መፍጫውን ያከማቹ በጣም ውጫዊ
+  ገምጋሚዎች የማስረጃ ጥቅሉን ማረጋገጥ ይችላሉ።
 
-Keeping the logging workflow codified here unblocks the roadmap requirement to
-“capture feedback/telemetry for governance” and reduces the time spent
-reconstructing invite history at every milestone.
+የምዝግብ ማስታወሻውን የስራ ፍሰት እዚህ ተቀድቶ ማቆየት የፍኖተ ካርታ መስፈርቱን ይከለክላል
+"ለአስተዳደር ግብረ-መልስ/ቴሌሜትሪ ይያዙ" እና የሚጠፋውን ጊዜ ይቀንሳል
+በእያንዳንዱ ምዕራፍ ላይ የግብዣ ታሪክን እንደገና መገንባት።

@@ -4,85 +4,80 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/log.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-log
-title: W1 فيڈبیک اور ٹیلیمیٹری لاگ
-sidebar_label: W1 لاگ
-description: پہلی پارٹنر preview wave کے لئے مجموعی roster، ٹیلیمیٹری checkpoints، اور reviewers نوٹس۔
+ID: vista previa-comentarios-w1-log
+título: W1 فيڈبیک اور ٹیلیمیٹری لاگ
+sidebar_label: W1 menú
+descripción: پہلی پارٹنر ola de vista previa کے لئے مجموعی lista, ٹیلیمیٹری puntos de control, اور revisores نوٹس۔
 ---
 
-یہ لاگ **W1 پارٹنر preview** کے لئے invite roster، ٹیلیمیٹری checkpoints، اور reviewer feedback محفوظ کرتا ہے
-جو [`preview-feedback/w1/plan.md`](./plan.md) کی acceptance tasks اور wave tracker اندراج
+یہ لاگ **W1 پارٹنر vista previa** کے لئے lista de invitaciones, ٹیلیمیٹری puntos de control, اور comentarios de revisores محفوظ کرتا ہے
+جو [`preview-feedback/w1/plan.md`](./plan.md) کی tareas de aceptación اور wave tracker اندراج
 [`../../preview-invite-tracker.md`](../../preview-invite-tracker.md) کے ساتھ وابستہ ہیں۔ جب دعوت ارسال ہو،
-ٹیلیمیٹری snapshot ریکارڈ ہو، یا feedback item triage ہو تو اسے اپ ڈیٹ کریں تاکہ governance reviewers
-بغیر بیرونی ٹکٹس کے پیچھے گئے ثبوت replay کر سکیں۔
+ٹیلیمیٹری instantánea ریکارڈ ہو، یا clasificación de elementos de retroalimentación ہو تو اسے اپ ڈیٹ کریں تاکہ revisores de gobernanza
+بغیر بیرونی ٹکٹس کے پیچھے گئے ثبوت repetición کر سکیں۔
 
-## Cohort roster
-
-| Partner ID | Request ticket | NDA موصول | Invite sent (UTC) | Ack/first login (UTC) | Status | Notes |
+## Lista de cohortes| ID de socio | Solicitar billete | Acuerdo de confidencialidad | Invitación enviada (UTC) | Confirmación/primer inicio de sesión (UTC) | Estado | Notas |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ مکمل 2025-04-26 | sorafs-op-01; orchestrator docs parity evidence پر فوکس۔ |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ مکمل 2025-04-26 | sorafs-op-02; Norito/telemetry cross-links کی توثیق۔ |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ مکمل 2025-04-26 | sorafs-op-03; multi-source failover drills چلائے۔ |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ مکمل 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook review۔ |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ مکمل 2025-04-26 | torii-int-02; Try it screenshot update میں ساتھ دیا (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ مکمل 2025-04-26 | sdk-partner-01; JS/Swift cookbook feedback + ISO bridge sanity checks۔ |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ مکمل 2025-04-26 | sdk-partner-02; compliance 2025-04-11 کو clear، Connect/telemetry notes پر فوکس۔ |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ مکمل 2025-04-26 | gateway-ops-01; gateway ops guide audit + anonymised Try it proxy flow۔ |
+| socio-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Actualización 2025-04-26 | sorafs-op-01; Orchestrator documenta evidencia de paridad پر فوکس۔ |
+| socio-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Actualización 2025-04-26 | sorafs-op-02; Norito/enlaces cruzados de telemetría کی توثیق۔ |
+| socio-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Actualización 2025-04-26 | sorafs-op-03; simulacros de conmutación por error de múltiples fuentes چلائے۔ |
+| socio-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Actualización 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Pruébalo reseña de libro de cocina۔ |
+| socio-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Actualización 2025-04-26 | torii-int-02; Pruébelo con la actualización de captura de pantalla میں ساتھ دیا (docs-preview/w1 #2). |
+| socio-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Actualización 2025-04-26 | socio-sdk-01; Comentarios sobre el libro de cocina de JS/Swift + comprobaciones de integridad del puente ISO۔ |
+| socio-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Actualización 2025-04-26 | socio-sdk-02; cumplimiento 2025-04-11 کو clear، Notas de conexión/telemetría پر فوکس۔ || socio-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Actualización 2025-04-26 | puerta de enlace-ops-01; auditoría de la guía de operaciones de puerta de enlace + anónimo Pruébelo flujo de proxy۔ |
 
-**Invite sent** اور **Ack** کے timestamps فوری طور پر درج کریں جب outbound email جاری ہو۔
-وقت کو W1 پلان میں دی گئی UTC schedule کے مطابق رکھیں۔
+**Invitación enviada** اور **Ack** کے marcas de tiempo فوری طور پر درج کریں جب correo electrónico saliente جاری ہو۔
+وقت کو W1 پلان میں دی گئی Horario UTC کے مطابق رکھیں۔
 
-## Telemetry checkpoints
+## Puntos de control de telemetría
 
-| Timestamp (UTC) | Dashboards / probes | Owner | Result | Artefact |
+| Marca de tiempo (UTC) | Cuadros de mandos / sondas | Propietario | Resultado | Artefacto |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ All green | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transcript | Ops | ✅ Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | Dashboards اوپر + `probe:portal` | Docs/DevRel + Ops | ✅ Pre-invite snapshot, no regressions | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards اوپر + Try it proxy latency diff | Docs/DevRel lead | ✅ Midpoint check passed (0 alerts; Try it latency p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards اوپر + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, zero outstanding alerts | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Documentos/DevRel + Operaciones | ✅ Todo verde | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transcripción | Operaciones | ✅ Escenificado | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | Cuadros de mandos + `probe:portal` | Documentos/DevRel + Operaciones | ✅ Instantánea previa a la invitación, sin regresiones | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 | Paneles de control + Pruébelo, diferencia de latencia de proxy | Líder de Docs/DevRel | ✅ Comprobación del punto medio superada (0 alertas; Pruébelo latencia p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 2025-04-26 16:25 | Cuadros de instrumentos اوپر + sonda de salida | Docs/DevRel + enlace de gobernanza | ✅ Instantánea de salida, cero alertas pendientes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-روزانہ office-hour samples (2025-04-13 -> 2025-04-25) NDJSON + PNG exports کے طور پر
+روزانہ muestras de horario de oficina (2025-04-13 -> 2025-04-25) Exportaciones NDJSON + PNG کے طور پر
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` میں موجود ہیں، فائل نام
-`docs-preview-integrity-<date>.json` اور متعلقہ screenshots کے ساتھ۔
+`docs-preview-integrity-<date>.json` اور متعلقہ capturas de pantalla کے ساتھ۔
 
-## Feedback اور issue log
-
-اس جدول کو reviewer findings کے خلاصے کے لئے استعمال کریں۔ ہر entry کو GitHub/discuss
-ticket اور اس structured form سے جوڑیں جو
+## Comentarios y registro de problemasاس جدول کو hallazgos del revisor کے خلاصے کے لئے استعمال کریں۔ ہر entrada کو GitHub/discutir
+billete اور اس forma estructurada سے جوڑیں جو
 [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md) کے ذریعے بھرا گیا۔
 
-| Reference | Severity | Owner | Status | Notes |
+| Referencia | Gravedad | Propietario | Estado | Notas |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ Resolved 2025-04-18 | Try it nav wording + sidebar anchor واضح کیا (`docs/source/sorafs/tryit.md` نئے label کے ساتھ اپ ڈیٹ). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ Resolved 2025-04-19 | Try it screenshot + caption reviewer کی درخواست پر اپ ڈیٹ؛ artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| - | Info | Docs/DevRel lead | 🟢 Closed | باقی تبصرے صرف Q&A تھے؛ ہر پارٹنر کے feedback form میں محفوظ ہیں `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` | Bajo | Documentos-core-02 | ✅ Resuelto 2025-04-18 | Pruébelo con texto de navegación + ancla de barra lateral واضح کیا (`docs/source/sorafs/tryit.md` نئے etiqueta کے ساتھ اپ ڈیٹ). |
+| `docs-preview/w1 #2` | Bajo | Documentos-core-03 | ✅ Resuelto 2025-04-19 | Pruébelo captura de pantalla + revisor de subtítulos کی درخواست پر اپ ڈیٹ؛ artefacto `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| - | Información | Líder de Docs/DevRel | 🟢 Cerrado | باقی تبصرے صرف Preguntas y respuestas تھے؛ ہر پارٹنر کے formulario de comentarios میں محفوظ ہیں `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
 
-## Knowledge check اور survey tracking
+## Verificación de conocimientos y seguimiento de encuestas
 
-1. ہر reviewer کے quiz scores ریکارڈ کریں (target >=90%); exported CSV کو invite artefacts کے ساتھ attach کریں۔
-2. feedback form سے حاصل qualitative survey answers جمع کریں اور انہیں
-   `artifacts/docs_preview/W1/preview-2025-04-12/surveys/` کے تحت mirror کریں۔
-3. threshold سے نیچے والوں کے لئے remediation calls schedule کریں اور انہیں اس فائل میں log کریں۔
+1. ہر revisor کے puntuaciones de las pruebas ریکارڈ کریں (objetivo >=90%); CSV exportado کو invitar artefactos کے ساتھ adjuntar کریں۔
+2. formulario de comentarios سے حاصل respuestas a encuestas cualitativas جمع کریں اور انہیں
+   `artifacts/docs_preview/W1/preview-2025-04-12/surveys/` کے تحت espejo کریں۔
+3. umbral سے نیچے والوں کے لئے programación de llamadas de remediación کریں اور انہیں اس فائل میں log کریں۔
 
-تمام آٹھ reviewers نے knowledge check میں >=94% اسکور کیا (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). کوئی remediation calls درکار نہیں ہوئیں؛
-ہر پارٹنر کے survey exports یہاں موجود ہیں:
+تمام آٹھ revisores نے verificación de conocimientos میں >=94% اسکور کیا (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). کوئی llamadas de remediación درکار نہیں ہوئیں؛
+ہر پارٹنر کے exportaciones de encuestas یہاں موجود ہیں:
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
-## Artefact inventory
-
-- Preview descriptor/checksum bundle: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Probe + link-check summary: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Try it proxy change log: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Telemetry exports: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Daily office-hour telemetry bundle: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Feedback + survey exports: reviewer-specific folders رکھیں
+## Inventario de artefactos- Vista previa del descriptor/paquete de suma de comprobación: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- Resumen de sonda + enlace-comprobación: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- Pruébelo, registro de cambios de proxy: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- Exportaciones de telemetría: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- Paquete de telemetría diaria en horario de oficina: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- Comentarios + exportaciones de encuestas: carpetas específicas del revisor رکھیں
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/` کے تحت
-- Knowledge check CSV اور summary: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- Verificación de conocimientos CSV y resumen: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Inventory کو tracker issue کے ساتھ sync رکھیں۔ جب artefacts کو governance ticket میں کاپی کریں تو hashes attach کریں
-تاکہ auditors فائلیں بغیر shell access کے verify کر سکیں۔
+Problema con el rastreador de inventario کے ساتھ sincronización رکھیں۔ جب artefactos کو ticket de gobernanza میں کاپی کریں تو hashes adjuntos کریں
+تاکہ auditores فائلیں بغیر acceso al shell کے verificar کر سکیں۔

@@ -10,24 +10,25 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript Connect preview recipe
 description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
 slug: /sdks/recipes/javascript-connect-preview
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+filight Sample load འདི་ '@site/src/ཆ་ཤས་/ཆ་ཤས་/དཔེ་ཚད་ཕབ་ལེན་';
 
-This recipe shows how to combine `bootstrapConnectPreviewSession` with the
-WebSocket dialer exposed by `ToriiClient.openConnectWebSocket()`. The script
-mirrors the Connect section of the JS SDK roadmap: it mints deterministic
-preview URIs, records queue depth telemetry, and opens the canonical
-`/v1/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
-same flow as browsers.
+བཀོད་སྒྲིག་འདི་གིས་ `bootstrapConnectPreviewSession` དང་གཅིག་ཁར་ མཉམ་སྡེབ་འབད་ཐངས་སྟོནམ་ཨིན།
+`ToriiClient.openConnectWebSocket()` གིས་ ཝེབ་སོ་ཀེཊ་ཌའི་ལར་ བཀྲམ་སྟོན་འབད་ཡོདཔ། ༡ ཡིག་གཟུགས་འདི།
+ཇེ་ཨེསི་ཨེསི་ཌི་ཀེ་ ལམ་གྱི་ས་ཁྲ་གི་མཐུད་འབྲེལ་གྱི་དབྱེ་ཚན་འདི་ མེ་ལོང་: དེ་གིས་ མིན་ཊི་ཚུ་ གཏན་འབེབས་བཟོ་ནི།
+སྔོན་ལྟའི་ཡུ་ཨར་ཨའི་ཚུ་དང་ གྱལ་རིམ་གཏིང་ཚད་ བརྒྱུད་འཕྲིན་ དེ་ལས་ ཀེ་ནོ་ནིག་ཁ་ཕྱེཝ་ཨིན།
+`/v1/connect/ws` མཐའ་མཚམས་ `ws` ཐུམ་སྒྲིལ་ལག་ལེན་འཐབ་སྟེ་ Node.js གློག་རིམ་ཚུ་གིས་ ལག་ལེན་འཐབ་བཏུབ།
+བརའུ་ཟར་དང་འདྲ།
 
-<SampleDownload
-  href="/sdk-recipes/javascript/connect-preview.mjs"
-  filename="connect-preview.mjs"
-  description="Download the runnable script referenced in this recipe."
-/>
+<དཔེ་ཚད་ཕབ་ལེན་འབད།
+  href="/sdk-ལན་/ཇ་བ་སི་ཀིརིཀ་ཊི་/མཐུད་ལམ་-སྔོན་ལྟ་.mjs"
+  filen name="--preview.mjs""
+  secont="ཐབས་ཤེས་འདི་ནང་གཞི་བསྟུན་འབད་ཡོད་པའི་ གཡོག་བཀོལ་བཏུབ་པའི་ཡིག་ཚུགས་ཕབ་ལེན་འབད།"
+།/>།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
 ```bash
 npm install @iroha/iroha-js ws
@@ -40,10 +41,10 @@ export IROHA_TORII_API_TOKEN="sandbox-token"
 export CONNECT_REGISTRATION_NODE="https://torii.backup.example"
 ```
 
-Set `CONNECT_ROLE` to `app` when you need to dial the application side of the
-handshake. The default role is `wallet`.
+ཁྱོད་ཀྱིས་ གློག་རིམ་གྱི་ཕྱོགས་འདི་ ཌའི་ཨེལ་འདི་ ཌའི་ཨེལ་འདི་ ཌའི་ཨེལ་འདི་ ཌིལ་འབད་དགོ་པའི་སྐབས་ I18NI0000000006X ལུ་ གཞི་སྒྲིག་འབད།
+ལག་བཟོ། སྔོན་སྒྲིག་འགན་ཁུར་འདི་ `wallet` ཨིན།
 
-## Example script
+## དཔེར་ཡིག་།
 
 ```ts title="connect-preview.mjs"
 #!/usr/bin/env node
@@ -138,21 +139,21 @@ main().catch((error) => {
 });
 ```
 
-## Run & monitor
+## གཡོག་བཀོལ།
 
-- Execute the script with `node --env-file=.env connect-preview.mjs` (or export
-  the variables manually). The script logs the preview wallet URI, deeplink, and
-  queue depth before opening the WebSocket.
-- Feed telemetry dashboards by scraping the queue metrics the script prints for
-  overflow/expiry cases (`connect.queue_depth`, `connect.queue_overflow_total`,
-  `connect.queue_expired_total`). The `ConnectQueueError` helpers emit the
-  roadmap taxonomy (`queueOverflow`, `timeout`) so OTEL exporters can stay
-  consistent with Android/Swift clients.
-- Swap the role to `app` to inspect the application leg of the handshake. The
-  dialer automatically chooses the correct token (`token_app` vs. `token_wallet`)
-  and upgrades `http→ws`/`https→wss` so both roles share the same snippet.
+- ཡིག་ཚུགས་འདི་ `node --env-file=.env connect-preview.mjs` དང་གཅིག་ཁར་ལག་ལེན་འཐབ།(ཡང་ན་ཕྱིར་འདྲེན་འབད།
+  འགྱུར་ཅན་ཚུ་ ལག་ཐོག་ལས་)། ཡིག་ཆ་འདི་གིས་ སྔོན་ལྟའི་དངུལ་ཁུག་འདི་ URI དང་ གཏིང་ཟབ་ལིངཀ་ དེ་ལས་ དང་ དེ་ལས་ དང་ དེ་ལས་ ནང་བསྐྱོད་འབདཝ་ཨིན།
+  ཝེབ་སོ་ཀེཊི་ཁ་མ་ཕྱེ་བའི་ཧེ་མ་ གྱལ་གཏིང་ཚད་།
+- གྱལ་རིམ་ཚུ་ བཤུད་སྒྲིལ་འབད་ཐོག་ལས་ ཕིཌི་ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌི་ཚུ་ ཡིག་ཚུགས་ཀྱི་དཔར་བསྐྲུན་ཚུ་ གི་དོན་ལུ་ བརྡ་སྟོནམ་ཨིན།
+  འཕྱུར་/འདོན་གྱི་གནད་དོན་ (`connect.queue_depth`, I18NI000000011X,
+  `connect.queue_expired_total`). I18NI000000013X གྲོགས་རམ་འབད་མི་ཚུ་གིས་ བཏོནམ་ཨིན།
+  ལམ་གྱི་ས་ཁྲ་ (`queueOverflow`, `timeout`) དེ་འབདཝ་ལས་ OTEL ཕྱིར་ཚོང་འཐབ་མི་ཚུ་ སྡོད་ཚུགས།
+  Android/Swift མཁོ་མངགས་འབད་མི་ཚུ་དང་གཅིག་ཁར་ མཐུན་སྒྲིག་ཡོདཔ།
+- ལག་བཟོའི་ ཞུ་ཡིག་རྐངམ་བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ I18NI0000016X ལུ་ འགན་ཁུར་བརྗེ་སོར་འབད། ཚིག༌ཕྲད
+  ཌའི་ལར་གྱིས་ རང་བཞིན་གྱིས་ ཊོ་ཀེན་ཚུ་ ངེས་བདེན་ (`token_app` དང་ I18NI0000018X) གདམ་ཁ་རྐྱབ་ཨིན།
+  དང་ ཡར་འཕར་ `http→ws`/`https→wss` དེ་གཉིས་ཆ་ར་གིས་ འགན་ཁུར་གཅིག་མཚུངས་སྦེ་ བརྗེ་སོར་འབདཝ་ཨིན།
 
-This recipe closes the remaining JS5 documentation gap for the Connect preview
-story called out in `roadmap.md`: the portal now ships a turnkey sample plus
-queue telemetry guidance, matching the roadmap requirement to document the
-WebSocket walkthrough alongside the Connect session helpers.
+ཐབས་གཞི་འདི་གིས་ མཐུད་ལམ་སྔོན་ལྟ་གི་དོན་ལུ་ ལྷག་ལུས་ཇེ་ཨེསི་༥ ཡིག་ཆ་གི་བར་སྟོང་འདི་ཁ་བསྡམས།
+ད་ལྟོ་ཡོད་པའི་ལོ་རྒྱུས་འདི་ `roadmap.md` ནང་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
+གྱལ་རིམ་གྱི་བརྡ་འཕྲིན་ལམ་སྟོན་དང་ ལམ་སྟོན་གྱི་དགོས་མཁོ་དང་མཐུན་སྒྲིག་འབད་ནི།
+WebSocket speed speed speed sostwork གི་མཉམ་དུ་ མཐུད་བྱེད་ཀྱི་ལས་རོགས་པ་ཚུ།

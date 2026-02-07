@@ -6,112 +6,105 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T20:16:38.056405+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# مصفوفة الميزات العالمية
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+وسيلة الإيضاح: تم تنفيذ `◉` بالكامل · تم تنفيذ `○` في الغالب · تم تنفيذ `▲` جزئيًا · بدأ تنفيذ `△` للتو · لم يبدأ `✖︎`
 
-## Consensus & Networking
+## الإجماع والتواصل
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| دعم K/r لجامعين متعددين والفوز بشهادة الالتزام الأول | ◉ | الاختيار الحتمي للمجمع، والتوزيع الزائد، ومعلمات K/r على السلسلة، وقبول شهادة الالتزام الصالحة الأولى التي يتم شحنها مع الاختبارات. | Status.md:255; Status.md:314 |
+| تراجع جهاز تنظيم ضربات القلب، أرضية RTT، الارتعاش الحتمي | ◉ | مؤقتات قابلة للتكوين مع نطاق غضب متصل من خلال التكوين والقياس عن بعد والمستندات. | Status.md:251 |
+| NEW_VIEW بوابة وأعلى تتبع لمراقبة الجودة | ◉ | يحمل التحكم في التدفق NEW_VIEW/Evidence، أعلى مراقبة الجودة يعتمد بشكل رتيب، ويحسب حراس المصافحة بصمة الإصبع. | Status.md:210 |
+| تتبع أدلة التوفر (استشاري) | ◉ | تم إرسال أدلة التوفر وتتبعها؛ الالتزام لا بوابة على التوفر في الإصدار 1. | Status.md:الأحدث |
+| بث موثوق (نقل الحمولة الصافية DA) | ◉ | يتم تمكين تدفق رسائل RBC (Init/Chunk/Ready/Deliver) عندما يكون `da_enabled=true` كمسار نقل/استرداد؛ يتم تتبع أدلة التوفر (استشارية) بينما تتم عائدات الالتزام بشكل مستقل. | Status.md:الأحدث |
+| الالتزام بربط جذر حالة مراقبة الجودة | ◉ | تنفيذ QCs يحمل `parent_state_root`/`post_state_root`؛ لا توجد بوابة منفصلة لمراقبة الجودة والتنفيذ. | Status.md:الأحدث |
+| نشر الأدلة ونقاط النهاية للتدقيق | ◉ | ControlFlow::Evidence، ونقاط نهاية الأدلة Torii، والاختبارات السلبية. | Status.md:176; Status.md:760-761 |
+| قياس RBC عن بعد، ومقاييس الاستعداد/التسليم | ◉ | `/v1/sumeragi/rbc*` نقاط النهاية وعدادات/مخطط الرسم البياني للقياس عن بعد متاحة للمشغلين. | Status.md:283-284; Status.md:772 |
+| إعلان معلمة الإجماع والتحقق من الطوبولوجيا | ◉ | تبث العقد `(collectors_k, redundant_send_r)` وتتحقق من صحة المساواة بين الأقران. | Status.md:255 |
+| التناوب المعتمد على PRF | ◉ | يستخدم تحديد القائد/المجمع المسموح به بذور PRF + الارتفاع/العرض على القائمة الأساسية؛ يظل دوران التجزئة السابق بمثابة مساعد قديم. | Status.md:الأحدث |
 
-## Pipeline, Kura & State
+## خط الأنابيب، كورا والدولة| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| قبعات حارات الحجر الصحي والقياس عن بعد | ◉ | تم تنفيذ مقابض التكوين والتعامل مع الفائض الحتمي وعدادات القياس عن بعد. | Status.md:263 |
+| مقبض حوض سباحة عامل خط الأنابيب | ◉ | تم ربط `[pipeline].workers` عبر الحالة init مع اختبارات تحليل env. | Status.md:264 |
+| مسار استعلام اللقطة (المؤشرات المخزنة/السريعة الزوال) | ◉ | وضع المؤشر المخزن مع تكامل Torii وحظر تجمعات العمال. | Status.md:265; Status.md:371; Status.md:501 |
+| السيارات الجانبية لاستعادة بصمات الأصابع الثابتة DAG | ◉ | السيارات الجانبية المخزنة في Kura، ويتم التحقق من صحتها عند بدء التشغيل، وتنبعث التحذيرات عند عدم التطابق. | Status.md:106; Status.md:349 |
+| كورا بلوك تجزئة فك التشفير تصلب | ◉ | تم تحويل قراءات التجزئة إلى معالجة أولية بحجم 32 بايت من خلال اختبارات ذهاب وإياب مستقلة عن Norito. | Status.md:608; Status.md:668 |
+| Norito القياس عن بعد التكيفي لبرامج الترميز | ◉ | تمت إضافة مقاييس اختيار AoS vs NCB إلى Norito. | Status.md:156 |
+| استعلامات لقطة WSV عبر Torii | ◉ | يستخدم مسار استعلام اللقطة Torii حظر تجمع العمال ودلالات حتمية. | Status.md:501 |
+| تشغيل تسلسل تنفيذ المكالمة | ◉ | تقوم البيانات بتشغيل السلسلة مباشرة بعد تنفيذ المكالمة الجانبية بترتيب محدد. | Status.md:668 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+## Norito التسلسل والأدوات
 
-## Norito Serialization & Tooling
+| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| ترحيل Norito JSON (مساحة العمل) | ◉ | تمت إزالة سيردي من الإنتاج؛ يحافظ المخزون + حواجز الحماية على مساحة العمل Norito فقط. | Status.md:112; Status.md:124 |
+| قائمة الرفض Serde وحواجز الحماية CI | ◉ | تمنع سير العمل/البرامج النصية الخاصة بالحماية الاستخدام المباشر الجديد لـ Serde عبر مساحة العمل. | Status.md:218 |
+| Norito برنامج الترميز الذهبي واختبارات AoS/NCB | ◉ | تمت إضافة ذهبيات AoS/NCB واختبارات الاقتطاع ومزامنة المستندات. | Status.md:140-147; Status.md:149-150; Status.md:332; Status.md:666 |
+| Norito أدوات مصفوفة الميزات | ◉ | يدعم `scripts/run_norito_feature_matrix.sh` اختبارات الدخان النهائية؛ يغطي CI مجموعات التسلسل/الهيكل المعبأة. | Status.md:146; Status.md:152 |
+| روابط اللغة Norito (بايثون/جافا) | ◉ | تتم صيانة برامج الترميز Python وJava Norito باستخدام البرامج النصية للمزامنة. | Status.md:74; Status.md:81 |
+| Norito المرحلة 1 المصنفات الهيكلية SIMD | ◉ | مصنفات المرحلة 1 من NEON/AVX2 ذات التصنيفات الذهبية المتقاطعة والاختبارات الجسدية العشوائية. | Status.md:241 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
-| Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+## ترقيات الحوكمة ووقت التشغيل| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| قبول ترقية وقت التشغيل (بوابة ABI) | ◉ | يتم فرض مجموعة ABI النشطة عند القبول مع وجود أخطاء واختبارات منظمة. | Status.md:196 |
+| مساحة الاسم المحمية نشر النابضة | ▲ | نشر متطلبات البيانات التعريفية والبوابات السلكية؛ السياسة/UX لا تزال تتطور. | Status.md:171 |
+| قراءة حوكمة Torii لنقاط النهاية | ◉ | `/v1/gov/*` قراءة واجهات برمجة التطبيقات الموجهة من خلال اختبارات جهاز التوجيه. | Status.md:212 |
+| التحقق من دورة حياة وأحداث التسجيل الرئيسية | ◉ | تم تنفيذ تسجيل/تحديث/إيقاف VK، والأحداث، ومرشحات CLI، ودلالات الاحتفاظ. | Status.md:236-239; Status.md:595; Status.md:603 |
 
-## Governance & Runtime Upgrades
+## البنية التحتية للمعرفة الصفرية
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| واجهات برمجة التطبيقات لتخزين المرفقات | ◉ | `POST/GET/LIST/DELETE` نقاط نهاية المرفقات ذات المعرفات والاختبارات الحتمية. | Status.md:231 |
+| عامل إثبات الخلفية وتقرير TTL | ▲ | كعب الإثبات خلف علامة الميزة؛ TTL GC ومقابض التكوين السلكية؛ خط الأنابيب الكامل معلق. | Status.md:212; Status.md:233 |
+| ربط تجزئة المغلف في CoreHost | ◉ | تحقق من تجزئات المغلف المرتبطة عبر CoreHost والمكشوفة عبر نبضات التدقيق. | Status.md:250 |
+| بوابة تاريخ الجذر المحمية | ◉ | لقطات الجذر المترابطة في CoreHost مع السجل المحدود وتكوين الجذر الفارغ. | Status.md:303 |
+| تنفيذ اقتراع ZK وأقفال الإدارة | ○ | اشتقاق Nullifier، وتحديثات القفل، وتنفيذ تبديلات التحقق؛ دورة حياة الإثبات الكاملة لا تزال في مرحلة النضج. | Status.md:126-128; Status.md:194-195 |
+| مرفق إثبات التحقق المسبق والحذف | ◉ | استمرت سجلات سلامة العلامة الخلفية وإلغاء البيانات المكررة والإثبات في التنفيذ المسبق. | Status.md:348; Status.md:602 |
+| ZK Torii نقطة نهاية جلب الإثبات | ◉ | يعرض `/v1/zk/proof/{backend}/{hash}` سجلات الإثبات (الحالة، الارتفاع، vk_ref/الالتزام). | Status.md:94 |
 
-## Zero-Knowledge Infrastructure
+## التكامل IVM وKotodama| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| CoreHost syscall → جسر ISI | ○ | فك تشفير مؤشر TLV وانتظار النظام قيد التشغيل؛ فجوات التغطية/اختبارات التكافؤ المخطط لها. | Status.md:299-307; Status.md:477-486 |
+| منشئو المؤشر وبنيات المجال | ◉ | تنبعث وحدات Kotodama المدمجة من Norito TLVs وSCALL، مع اختبارات IR/e2e ومستندات. | Status.md:299-301 |
+| التحقق الصارم من صحة المؤشر-ABI ومزامنة المستندات | ◉ | تم فرض سياسة TLV عبر المضيف/IVM من خلال الاختبارات الذهبية والمستندات التي تم إنشاؤها. | Status.md:227; Status.md:317; Status.md:344; Status.md:366; Status.md:527 |
+| ZK syscall gating عبر CoreHost | ◉ | تقوم قوائم الانتظار لكل عملية ببوابة المظاريف التي تم التحقق منها وتفرض مطابقة التجزئة قبل تنفيذ ISI. | صناديق/iroha_core/src/smartcontracts/ivm/host.rs:213; صناديق/iroha_core/src/smartcontracts/ivm/host.rs:279 |
+| Kotodama مؤشر-مستندات ABI والقواعد | ◉ | تمت مزامنة القواعد النحوية/المستندات مع المُنشئين المباشرين وتخطيطات SCALL. | Status.md:299-301 |
+| محرك يحركه مخطط ISO 20022 وجسر Torii | ◉ | مخططات ISO 20022 الأساسية مضمنة، وتحليل XML الحتمي، و`/v1/iso20022/status/{MsgId}` API مكشوفة. | Status.md:65-70 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+## تسريع الأجهزة
 
-## IVM & Kotodama Integration
+| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| اختبارات تكافؤ ذيل/اختلال SIMD | ◉ | تضمن اختبارات التكافؤ العشوائية تطابق عمليات متجه SIMD مع الدلالات العددية للمحاذاة التعسفية. | Status.md:243 |
+| المعادن/CUDA الاحتياطية والاختبارات الذاتية | ◉ | تعمل واجهات GPU الخلفية على إجراء اختبارات ذاتية ذهبية وتعود إلى العددية/SIMD في حالة عدم التطابق؛ تغطي أجنحة التكافؤ SHA-256/Keccak/AES. | Status.md:244-246 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+## وقت الشبكة وأوضاع الإجماع
 
-## Hardware Acceleration
+| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| خدمة وقت الشبكة (NTS) | ✖︎ | التصميم موجود في `new_pipeline.md`؛ التنفيذ لم يتم تتبعه بعد في تحديثات الحالة. | new_pipeline.md |
+| وضع إجماع PoS المعين | ✖︎ | يوثق تصميم Nexus أوضاع المجموعة المغلقة وNPoS؛ التنفيذ الأساسي معلق. | new_pipeline.md; nexus.md |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+## Nexus خريطة طريق دفتر الأستاذ| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| سقالة دليل الفضاء | ✖︎ | لم يتم تنفيذ عقد التسجيل العالمي لبيانات/حوكمة DS بعد. | nexus.md |
+| تنسيق بيان مساحة البيانات ودورة الحياة | ✖︎ | يظل مخطط بيان Norito وإصداره وتدفق الإدارة على خريطة الطريق. | nexus.md |
+| حوكمة DS وتناوب أداة التحقق من الصحة | ✖︎ | لا تزال الإجراءات الموجودة على السلسلة لعضوية/تناوب DS في مرحلة التصميم. | nexus.md |
+| إرساء Cross-DS وتكوين كتلة Nexus | ✖︎ | تم تحديد طبقة التركيب والتزامات التثبيت ولكن لم يتم تنفيذها. | nexus.md |
+| تخزين مشفر بمسح Kura/WSV | ✖︎ | لم يتم بعد إنشاء تخزين البيانات الثنائية الكبيرة/اللقطة المرمزة بالمسح لـ DS العام/الخاص. | nexus.md |
+| ZK/سياسة إثبات التفاؤل لكل DS | ✖︎ | لم يتم تتبع متطلبات إثبات Per-DS وتنفيذها في التعليمات البرمجية. | nexus.md |
+| عزل الرسوم/الحصص لكل مساحة بيانات | ✖︎ | وتظل آليات سياسة الحصص والرسوم الخاصة بـ DS بمثابة العمل المستقبلي. | nexus.md |
 
-## Network Time & Consensus Modes
+## الفوضى وحقن الخطأ
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
-
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
-
-## Chaos & Fault Injection
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+| ميزة | الحالة | ملاحظات | الأدلة |
+|---------|-------|------|----------|
+| Izanami تنسيق شبكة الفوضى | ○ | يعمل عبء عمل Izanami الآن على تشغيل تعريف الأصول وبيانات التعريف وNFT ووصفات تكرار التشغيل مع تغطية الوحدة للمسارات الجديدة. | صناديق/إيزانامي/src/instructions.rs؛ صناديق/إيزانامي/src/instructions.rs#tests |

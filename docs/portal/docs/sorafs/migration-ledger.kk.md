@@ -9,36 +9,36 @@ source_last_modified: "2026-01-05T09:28:11.880522+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Migration Ledger"
 description: "Canonical change log tracking every migration milestone, owners, and required follow-ups."
+translator: machine-google-reviewed
 ---
 
-> Adapted from [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+> [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) нұсқасынан бейімделген.
 
-# SoraFS Migration Ledger
+№ SoraFS Көшіру кітабы
 
-This ledger mirrors the migration change log captured in the SoraFS
-Architecture RFC. Entries are grouped by milestone and list the effective
-window, impacted teams, and required actions. Updates to the migration plan
-MUST modify both this page and the RFC (`docs/source/sorafs_architecture_rfc.md`)
-to keep downstream consumers aligned.
+Бұл кітап SoraFS ішінде түсірілген көші-қонды өзгерту журналын көрсетеді.
+Архитектура RFC. Жазбалар кезең бойынша топтастырылған және тиімді тізімделген
+терезе, әсер еткен топтар және қажетті әрекеттер. Көшіру жоспарының жаңартулары
+Осы бетті де, RFC (`docs/source/sorafs_architecture_rfc.md`) екеуін де өзгерту керек
+төменгі тұтынушыларды теңестіру үшін.
 
-| Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
-|-----------|------------------|----------------|----------------|--------------|--------|
-| M1 | Weeks&nbsp;7–12 | CI enforces deterministic fixtures; alias proofs available in staging; tooling exposes explicit expectation flags. | Docs, Storage, Governance | Ensure fixtures stay signed, register aliases in staging registry, update release checklists with `--car-digest/--root-cid` enforcement. | ⏳ Pending |
+| Маңызды кезең | Тиімді терезе | Жиынтықты өзгерту | Әсер еткен командалар | Әрекет элементтері | Күй |
+|----------|------------------|----------------|----------------|--------------|--------|
+| M1 | 7–12 апта | CI детерминирленген қондырғыларды күшейтеді; сахналау кезінде қол жетімді бүркеншік аттың дәлелдері; құралдар анық күту жалауларын көрсетеді. | Құжаттар, Сақтау, Басқару | Арматуралардың қол қойылғанын қамтамасыз етіңіз, кезеңдік тізілімде бүркеншік аттарды тіркеңіз, `--car-digest/--root-cid` орындау арқылы шығарылымды тексеру тізімдерін жаңартыңыз. | ⏳ Күтуде |
 
-Governance control plane minutes referencing these milestones live under
-`docs/source/sorafs/`. Teams should add dated bullet points beneath each row
-when notable events occur (e.g., new alias registrations, registry incident
-retrospectives) to provide an auditable paper trail.
+Осы кезеңдерге сілтеме жасайтын басқару бақылау ұшақ хаттамалары тікелей астында
+`docs/source/sorafs/`. Командалар әр жолдың астына күні белгіленген таңбалау нүктелерін қосуы керек
+маңызды оқиғалар орын алғанда (мысалы, жаңа бүркеншік ат тіркеулері, тізілім оқиғасы
+ретроспективалар) тексерілетін қағаз ізін қамтамасыз ету.
 
-## Recent Updates
+## Соңғы жаңартулар
 
-- 2025-11-01 — Circulated `migration_roadmap.md` to governance council and
-  operator lists for review; awaiting sign-off at the next council session
-  (ref: `docs/source/sorafs/council_minutes_2025-10-29.md` follow-up).
-- 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy
-  validation via `sorafs_manifest` helpers, keeping on-chain paths aligned
-  with Torii checks.
-- 2026-02-13 — Added provider advert rollout phases (R0–R3) to the ledger and
-  published the associated dashboards and operator guidance
+- 2025-11-01 - Басқару кеңесіне `migration_roadmap.md` тарады және
+  шолу үшін оператор тізімдері; Кеңестің келесі сессиясында қол қоюды күтуде
+  (сілт: `docs/source/sorafs/council_minutes_2025-10-29.md` бақылау).
+- 2025-11-02 — PIN тізілімінің тізілімі ISI енді ортақ chunker/саясатты қолданады
+  `sorafs_manifest` көмекшілері арқылы тексеру, тізбектегі жолдарды туралау
+  Torii чектерімен.
+- 2026-02-13 — Бухгалтерлік кітапқа провайдердің жарнамасын шығару кезеңдері (R0–R3) қосылды және
+  байланысты бақылау тақталары мен оператор нұсқауларын жариялады
   (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
-

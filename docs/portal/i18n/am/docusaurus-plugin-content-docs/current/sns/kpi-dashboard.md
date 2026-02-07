@@ -6,57 +6,59 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS KPI dashboard
 description: Live Grafana panels that aggregate registrar, freeze, and revenue metrics for SN-8a.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Sora Name Service KPI Dashboard
+# የሶራ ስም አገልግሎት KPI ዳሽቦርድ
 
-The KPI dashboard gives stewards, guardians, and regulators a single place to
-review adoption, error, and revenue signals before the monthly annex cadence
-(SN-8a). The Grafana definition ships in the repository at
-`dashboards/grafana/sns_suffix_analytics.json` and the portal mirrors the same
-panels via an embedded iframe so the experience matches the internal Grafana
-instance.
+የKPI ዳሽቦርድ ለመጋቢዎች፣ አሳዳጊዎች እና ተቆጣጣሪዎች አንድ ቦታ ይሰጣል
+የጉዲፈቻ፣ የስህተት እና የገቢ ምልክቶችን ከወርሃዊ አባሪው በፊት ይገምግሙ
+(SN-8a) የ Grafana ፍቺ በማጠራቀሚያው ውስጥ በ
+`dashboards/grafana/sns_suffix_analytics.json` እና ፖርታል መስተዋቶች አንድ አይነት ናቸው።
+ፓነሎች በተገጠመ iframe በኩል ስለዚህ ልምዱ ከውስጣዊው I18NT0000001X ጋር ይዛመዳል
+ለምሳሌ
 
-## Filters & Data Sources
+## ማጣሪያዎች እና የውሂብ ምንጮች
 
-- **Suffix filter** – drives the `sns_registrar_status_total{suffix}` queries so
-  `.sora`, `.nexus`, and `.dao` can be inspected independently.
-- **Bulk release filter** – scopes the `sns_bulk_release_payment_*` metrics so
-  finance can reconcile a specific registrar manifest.
-- **Metrics** – pulls from Torii (`sns_registrar_status_total`,
-  `torii_request_duration_seconds`), guardian CLI (`guardian_freeze_active`),
-  `sns_governance_activation_total`, and the bulk-onboarding helper metrics.
+- ** ቅጥያ ማጣሪያ *** - የ `sns_registrar_status_total{suffix}` መጠይቆችን ያንቀሳቅሳል
+  `.sora`፣ `.nexus` እና `.dao` በተናጥል ሊመረመሩ ይችላሉ።
+- ** የጅምላ መልቀቂያ ማጣሪያ *** - የ `sns_bulk_release_payment_*` መለኪያዎችን ይሸፍናል ።
+  ፋይናንስ አንድ የተወሰነ የመዝጋቢ ዝርዝር መግለጫን ማስታረቅ ይችላል።
+- ** መለኪያዎች *** - ከ Torii (`sns_registrar_status_total` ፣
+  `torii_request_duration_seconds`)፣ አሳዳጊ CLI (`guardian_freeze_active`)፣
+  `sns_governance_activation_total`፣ እና የጅምላ ቦርዲንግ አጋዥ መለኪያዎች።
 
-## Panels
+## ፓነሎች
 
-1. **Registrations (last 24h)** – number of successful registrar events for the
-   selected suffix.
-2. **Governance activations (30d)** – charter/addendum motions recorded by the
-   CLI.
-3. **Registrar throughput** – per-suffix rate of successful registrar actions.
-4. **Registrar error modes** – 5 minute rate of error-labelled
-   `sns_registrar_status_total` counters.
-5. **Guardian freeze windows** – live selectors where `guardian_freeze_active`
-   reports an open freeze ticket.
-6. **Net payment units by asset** – totals reported by
-   `sns_bulk_release_payment_net_units` per asset.
-7. **Bulk requests per suffix** – manifest volumes per suffix id.
-8. **Net units per request** – ARPU-style calculation derived from the release
-   metrics.
+1. ** ምዝገባዎች (ያለፉት 24 ሰአታት) *** - የተሳካላቸው የመዝጋቢ ክስተቶች ብዛት
+   የተመረጠ ቅጥያ.
+2. **የመንግስት ማነቃቂያዎች (30ኛ)** - በቻርተር/በተጨማሪ የተቀረጹ አቤቱታዎች
+   CLI
+3. ** የመዝጋቢ ጊዜ ብዛት *** - የተሳካላቸው የመዝጋቢ ድርጊቶች በአንድ ቅጥያ መጠን።
+4. ** የመዝጋቢ ስህተት ሁነታዎች *** - የ 5 ደቂቃ የስህተት ምልክት
+   `sns_registrar_status_total` ቆጣሪዎች.
+5. **ጠባቂ የቀዘቀዙ መስኮቶች *** - ቀጥታ መምረጫዎች `guardian_freeze_active`
+   ክፍት የማረፊያ ትኬት ዘግቧል።
+6. ** የተጣራ የክፍያ አሃዶች በንብረት** - አጠቃላይ ሪፖርት የተደረገ
+   `sns_bulk_release_payment_net_units` በንብረት።
+7. ** የጅምላ ጥያቄዎች በቅጥያ *** - አንጸባራቂ ጥራዞች በቅጥያ መታወቂያ።
+8. ** የተጣራ አሃዶች በጥያቄ** - ከመልቀቁ የተገኘ የ ARPU-style ስሌት
+   መለኪያዎች.
 
-## Monthly KPI Review Checklist
+## ወርሃዊ የKPI ግምገማ ማረጋገጫ ዝርዝር
 
-The finance lead drives a recurring review on the first Tuesday of every month:
+የፋይናንስ መሪው በየወሩ የመጀመሪያ ማክሰኞ ተደጋጋሚ ግምገማን ያንቀሳቅሳል፡-
 
-1. Open the portal’s **Analytics → SNS KPI** page (or Grafana dashboard `sns-kpis`).
-2. Capture a PDF/CSV export of the registrar throughput and revenue tables.
-3. Compare suffixes for SLA breaches (error rate spikes, frozen selectors >72 h,
-   ARPU deltas >10 %).
-4. Log summaries + action items in the relevant annex entry under
+1. የፖርታሉን ** ትንታኔ → SNS KPI ** ገጽ (ወይም Grafana ዳሽቦርድ `sns-kpis`) ይክፈቱ።
+2. የመዝጋቢውን የውጤት መጠን እና የገቢ ሠንጠረዦችን ፒዲኤፍ/ሲኤስቪ ወደ ውጪ መላክ።
+3. ለ SLA ጥሰቶች ቅጥያዎችን ያወዳድሩ (የስህተት መጠን ሹል፣ የቀዘቀዙ መራጮች>72ሰ፣
+   ARPU ዴልታዎች >10%)።
+4. የመግቢያ ማጠቃለያዎች + የእርምጃ ንጥሎችን በሚመለከተው አባሪ ግቤት ስር
    `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. Attach the exported dashboard artefacts to the annex commit and link them in
-   the council agenda.
+5. ወደ ውጭ የተላኩትን ዳሽቦርድ ቅርሶች ከአባሪው ቃል ጋር ያያይዙ እና ያገናኙዋቸው
+   የምክር ቤቱ አጀንዳ.
 
-If the review uncovers SLA breaches, file a PagerDuty incident for the affected
-owner (registrar duty manager, guardian on-call, or steward program lead) and
-track the remediation in the annex log.
+ግምገማው የ SLA ጥሰቶችን ካገኘ ለተጎዳው የፔጄርዱቲ ክስተት ፋይል ያድርጉ
+ባለቤት (የሬጅስትራር ተረኛ አስተዳዳሪ፣ ሞግዚት በጥሪ ላይ፣ ወይም መጋቢ ፕሮግራም መሪ) እና
+ማሻሻያውን በአባሪ መዝገብ ውስጥ ይከታተሉ።

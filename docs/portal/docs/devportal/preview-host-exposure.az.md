@@ -11,25 +11,26 @@ id: preview-host-exposure
 title: Preview host exposure guide
 sidebar_label: Preview host exposure
 description: Publish and verify the beta preview host before sending invites.
+translator: machine-google-reviewed
 ---
 
-The DOCS‑SORA roadmap requires every public preview to ride on the same
-checksum‑verified bundle that reviewers exercise locally. Use this runbook
-after reviewer onboarding (and the invite approval ticket) are complete to put
-the beta preview host online.
+DOCS‑SORA yol xəritəsi hər bir ictimai önizləmənin eyni yolda getməsini tələb edir
+rəyçilərin yerli olaraq istifadə etdiyi yoxlama cəmi ilə təsdiqlənmiş paket. Bu runbook istifadə edin
+nəzərdən keçirən onboarding sonra (və dəvət təsdiq bilet) qoymaq üçün tamamlandı
+onlayn beta önizləmə hostu.
 
-## Prerequisites
+## İlkin şərtlər
 
-- Reviewer onboarding wave approved and logged in the preview tracker.
-- Latest portal build present under `docs/portal/build/` and checksum
-  verified (`build/checksums.sha256`).
-- SoraFS preview credentials (Torii URL, authority, private key, submitted
-  epoch) stored either in environment variables or a JSON config such as
+- Rəyçi onboarding dalğası təsdiqləndi və önizləmə izləyicisinə daxil oldu.
+- Ən son portal quruluşu `docs/portal/build/` və yoxlama məbləği altında mövcuddur
+  yoxlanılıb (`build/checksums.sha256`).
+- SoraFS önizləmə etimadnaməsi (Torii URL, səlahiyyət, şəxsi açar, təqdim edilib
+  epoch) mühit dəyişənlərində və ya JSON konfiqurasiyasında saxlanılır, məsələn
   [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- DNS change ticket opened with the desired hostname (`docs-preview.sora.link`,
-  `docs.iroha.tech`, etc.) plus on-call contacts.
+- İstədiyiniz host adı ilə açılan DNS dəyişdirmə bileti (`docs-preview.sora.link`,
+  `docs.iroha.tech` və s.) üstəgəl zəng üzrə kontaktlar.
 
-## Step 1 – Build and verify the bundle
+## Addım 1 – Paketi qurun və yoxlayın
 
 ```bash
 cd docs/portal
@@ -39,13 +40,13 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-The verify script refuses to continue when the checksum manifest is missing or
-tampered with, keeping every preview artefact audited.
+Yoxlama skripti yoxlama məbləği manifestinin olmaması və ya olmadıqda davam etməkdən imtina edir
+hər bir önizləmə artefaktını yoxlanaraq saxtalaşdırıldı.
 
-## Step 2 – Package the SoraFS artefacts
+## Addım 2 – SoraFS artefaktlarını qablaşdırın
 
-Convert the static site into a deterministic CAR/manifest pair. `ARTIFACT_DIR`
-defaults to `docs/portal/artifacts/`.
+Statik saytı deterministik CAR/manifest cütlüyünə çevirin. `ARTIFACT_DIR`
+defolt olaraq `docs/portal/artifacts/`.
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -61,13 +62,13 @@ node scripts/generate-preview-descriptor.mjs \
   --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Attach the generated `portal.car`, `portal.manifest.*`, descriptor, and checksum
-manifest to the preview wave ticket.
+Yaradılmış `portal.car`, `portal.manifest.*`, deskriptor və yoxlama məbləğini əlavə edin
+önizləmə dalğa biletinə manifest.
 
-## Step 3 – Publish the preview alias
+## Addım 3 – Önizləmə ləqəbini dərc edin
 
-Re-run the pin helper **without** `--skip-submit` once you are ready to expose
-the host. Supply either the JSON config or explicit CLI flags:
+Açmağa hazır olduqdan sonra pin köməkçisini **siz** `--skip-submit` yenidən işə salın
+ev sahibi. JSON konfiqurasiyasını və ya açıq CLI bayraqlarını təmin edin:
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -78,11 +79,11 @@ the host. Supply either the JSON config or explicit CLI flags:
   --config ~/secrets/sorafs_preview_publish.json
 ```
 
-The command writes `portal.pin.report.json`,
-`portal.manifest.submit.summary.json`, and `portal.submit.response.json`, which
-must ship with the invite evidence bundle.
+Komanda `portal.pin.report.json` yazır,
+`portal.manifest.submit.summary.json` və `portal.submit.response.json` olan
+dəvət sübut paketi ilə göndərilməlidir.
 
-## Step 4 – Generate the DNS cutover plan
+## Addım 4 – DNS kəsmə planını yaradın
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs \
@@ -97,11 +98,11 @@ node scripts/generate-dns-cutover-plan.mjs \
   --out artifacts/sorafs/portal.dns-cutover.json
 ```
 
-Share the resulting JSON with Ops so the DNS switch references the exact
-manifest digest. When reusing an earlier descriptor as the rollback source,
-append `--previous-dns-plan path/to/previous.json`.
+Yaranan JSON-u Ops ilə paylaşın ki, DNS keçidi dəqiq istinad etsin
+aşkar həzm. Əvvəlki təsviri geri qaytarma mənbəyi kimi təkrar istifadə edərkən,
+`--previous-dns-plan path/to/previous.json` əlavə edin.
 
-## Step 5 – Probe the deployed host
+## Addım 5 – Yerləşdirilmiş hostu yoxlayın
 
 ```bash
 npm run probe:portal -- \
@@ -109,23 +110,23 @@ npm run probe:portal -- \
   --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-The probe confirms the served release tag, CSP headers, and signature metadata.
-Repeat the command from two regions (or attach curl output) so auditors can see
-that the edge cache is warm.
+Prob təqdim edilən buraxılış etiketini, CSP başlıqlarını və imza metadatasını təsdiqləyir.
+Auditorların görə bilməsi üçün iki bölgədən əmri təkrarlayın (və ya qıvrım çıxışını əlavə edin).
+kənar önbelleğin isti olduğunu.
 
-## Evidence bundle
+## Sübut dəsti
 
-Include the following artefacts in the preview wave ticket and refer to them in
-the invite email:
+Aşağıdakı artefaktları önizləmə dalğa biletinə daxil edin və onlara müraciət edin
+dəvət e-poçtu:
 
-| Artefact | Purpose |
+| Artefakt | Məqsəd |
 |----------|---------|
-| `build/checksums.sha256` | Proves the bundle matches the CI build. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Canonical SoraFS payload + manifest. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Shows the manifest submission + alias binding succeeded. |
-| `artifacts/sorafs/portal.dns-cutover.json` | DNS metadata (ticket, window, contacts), route promotion (`Sora-Route-Binding`) summary, the `route_plan` pointer (plan JSON + header templates), cache purge info, and rollback instructions for Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Signed descriptor tying the archive + checksum together. |
-| `probe` output | Confirms the live host advertises the expected release tag. |
+| `build/checksums.sha256` | Paketin CI quruluşuna uyğun olduğunu sübut edir. |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Canonical SoraFS faydalı yük + manifest. |
+| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Manifest təqdimini göstərir + ləqəb bağlanması müvəffəqiyyətlidir. |
+| `artifacts/sorafs/portal.dns-cutover.json` | DNS metadata (bilet, pəncərə, kontaktlar), marşrut təşviqi (`Sora-Route-Binding`) xülasəsi, `route_plan` göstəricisi (plan JSON + başlıq şablonları), keşin təmizlənməsi məlumatı və Əməliyyatlar üçün geri qaytarma təlimatları. |
+| `artifacts/sorafs/preview-descriptor.json` | Arxivi + yoxlama məbləğini birləşdirən imzalanmış deskriptor. |
+| `probe` çıxış | Canlı ev sahibinin gözlənilən buraxılış etiketini reklam etdiyini təsdiqləyir. |
 
-Once the host is live, follow the [preview invite playbook](./public-preview-invite.md)
-to distribute the link, log invites, and monitor telemetry.
+Ev sahibi canlı olduqdan sonra [Önizləmə dəvətnamə kitabını] izləyin (./public-preview-invite.md)
+linki yaymaq, dəvətləri qeyd etmək və telemetriyaya nəzarət etmək.

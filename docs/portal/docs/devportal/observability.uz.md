@@ -11,40 +11,41 @@ id: observability
 title: Portal Observability & Analytics
 sidebar_label: Observability
 description: Telemetry, release tagging, and verification automation for the developer portal.
+translator: machine-google-reviewed
 ---
 
-The DOCS-SORA roadmap requires analytics, synthetic probes, and broken-link
-automation for every preview build. This note documents the plumbing that now
-ships with the portal so operators can wire monitoring without leaking visitor
-data.
+DOCS-SORA yoʻl xaritasi analitika, sintetik zondlar va uzilgan aloqani talab qiladi.
+har bir oldindan ko'rish qurilishi uchun avtomatlashtirish. Ushbu eslatma hozirda sanitariya-tesisat haqida ma'lumot beradi
+portal bilan jo'natiladi, shuning uchun operatorlar tashrif buyuruvchilarni oqizmasdan monitoring qilishlari mumkin
+ma'lumotlar.
 
-## Release tagging
+## Teglarni chiqarish
 
-- Set `DOCS_RELEASE_TAG=<identifier>` (falls back to `GIT_COMMIT` or `dev`) when
-  building the portal. The value is injected into `<meta name="sora-release">`
-  so probes and dashboards can distinguish deployments.
-- `npm run build` emits `build/release.json` (written by
-  `scripts/write-checksums.mjs`) describing the tag, timestamp, and optional
-  `DOCS_RELEASE_SOURCE`. The same file is bundled into preview artefacts and
-  referenced by the link checker report.
+- `DOCS_RELEASE_TAG=<identifier>` sozlang (`GIT_COMMIT` yoki `dev` ga qaytadi) qachon
+  portal qurish. Qiymat `<meta name="sora-release">` ichiga kiritiladi
+  shuning uchun problar va asboblar paneli joylashtirishni ajrata oladi.
+- `npm run build` `build/release.json` chiqaradi (yozgan:
+  `scripts/write-checksums.mjs`) tegni, vaqt tamg'asini va ixtiyoriyni tavsiflaydi
+  `DOCS_RELEASE_SOURCE`. Xuddi shu fayl oldindan ko'rish artefaktlariga birlashtirilgan va
+  havola tekshiruvi hisobotiga havola qilingan.
 
-## Privacy-preserving analytics
+## Maxfiylikni saqlaydigan tahlillar
 
-- Configure `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` to
-  enable the lightweight tracker. Payloads contain `{ event, path, locale,
-  release, ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
-  is used whenever possible to avoid blocking navigations.
-- Control sampling with `DOCS_ANALYTICS_SAMPLE_RATE` (0–1). The tracker stores
-  the last-sent path and never emits duplicate events for the same navigation.
-- The implementation lives in `src/components/AnalyticsTracker.jsx` and is
-  mounted globally through `src/theme/Root.js`.
+- `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` ni sozlang
+  engil vaznli trekerni yoqing. Foydali yuklar `{ hodisa, yo'l, mahalliy parametr,
+  reliz, ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
+  navigatsiyalarni blokirovka qilmaslik uchun imkon qadar foydalaniladi.
+- `DOCS_ANALYTICS_SAMPLE_RATE` (0–1) bilan namuna olishni nazorat qilish. Kuzatuvchi saqlaydi
+  oxirgi yuborilgan yo'l va hech qachon bir xil navigatsiya uchun takroriy hodisalarni chiqarmaydi.
+- Amalga oshirish `src/components/AnalyticsTracker.jsx` da yashaydi va shunday
+  `src/theme/Root.js` orqali global o'rnatilgan.
 
-## Synthetic probes
+## Sintetik zondlar
 
-- `npm run probe:portal` issues GET requests against common routes
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) and verifies the
-  `sora-release` meta tag matches `--expect-release` (or
-  `DOCS_RELEASE_TAG`). Example:
+- `npm run probe:portal` umumiy marshrutlarga qarshi GET so'rovlarini chiqaradi
+  (`/`, `/norito/overview`, `/reference/torii-swagger` va boshqalar) va tasdiqlaydi
+  `sora-release` meta yorlig'i `--expect-release` (yoki)
+  `DOCS_RELEASE_TAG`). Misol:
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -52,59 +53,59 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Failures are reported per path, making it easy to gate CD on probe success.
+Muvaffaqiyatsizliklar to'g'risida har bir yo'lda xabar beriladi, bu esa probning muvaffaqiyati haqida kompakt-diskni ochishni osonlashtiradi.
 
-## Broken-link automation
+## Buzilgan havolalarni avtomatlashtirish
 
-- `npm run check:links` scans `build/sitemap.xml`, ensures every entry maps to a
-  local file (checking `index.html` fallbacks), and writes
-  `build/link-report.json` containing the release metadata, totals, failures,
-  and the SHA-256 fingerprint of `checksums.sha256` (exposed as `manifest.id`)
-  so every report can be tied back to the artefact manifest.
-- The script exits non-zero when a page is missing, so CI can block releases on
-  stale or broken routes. Reports cite the candidate paths that were attempted,
-  which helps trace routing regressions back to the docs tree.
+- `npm run check:links` `build/sitemap.xml` ni skanerlaydi, har bir kirish xaritasini
+  mahalliy fayl (`index.html` zaxiralarini tekshirish) va yozadi
+  `build/link-report.json` reliz metamaʼlumotlari, jamilar, nosozliklar,
+  va `checksums.sha256` SHA-256 barmoq izi (`manifest.id` sifatida ochilgan)
+  shuning uchun har bir hisobotni artefakt manifestiga bog'lash mumkin.
+- Sahifa etishmayotganda skript noldan farq qiladi, shuning uchun CI nashrlarni bloklashi mumkin
+  eskirgan yoki buzilgan marshrutlar. Hisobotlarda nomzod yo'llariga iqtibos keltiriladi,
+  bu hujjatlar daraxtiga marshrutlash regressiyalarini kuzatishga yordam beradi.
 
-## Grafana dashboard & alerts
+## Grafana asboblar paneli va ogohlantirishlar
 
-- `dashboards/grafana/docs_portal.json` publishes the **Docs Portal Publishing**
-  Grafana board. It ships the following panels:
-  - *Gateway Refusals (5m)* uses `torii_sorafs_gateway_refusals_total` scoped by
-    `profile`/`reason` so SREs can detect bad policy pushes or token failures.
-  - *Alias Cache Refresh Outcomes* and *Alias Proof Age p90* track
-    `torii_sorafs_alias_cache_*` to prove fresh proofs exist before a DNS cut
-    over.
-  - *Pin Registry Manifest Counts* plus the *Active Alias Count* stat mirror the
-    pin-registry backlog and total aliases so governance can audit each release.
-  - *Gateway TLS Expiry (hours)* highlights when the publishing gateway’s TLS
-    cert approaches expiry (alert threshold at 72 h).
-  - *Replication SLA Outcomes* and *Replication Backlog* keep an eye on
-    `torii_sorafs_replication_*` telemetry to ensure all replicas meet the GA
-    bar after publishing.
-- Use the built-in template variables (`profile`, `reason`) to focus on the
-  `docs.sora` publishing profile or investigate spikes across all gateways.
-- PagerDuty routing uses the dashboard panels as evidence: alerts named
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, and
-  `DocsPortal/TLSExpiry` fire when the corresponding series breach their
-  thresholds. Link the alert’s runbook to this page so on-call engineers can
-  replay the exact Prometheus queries.
+- `dashboards/grafana/docs_portal.json` **Docs Portal Publishing**-ni nashr etadi
+  Grafana doska. U quyidagi panellarni yuboradi:
+  - *Gateway Redusals (5m)* `torii_sorafs_gateway_refusals_total` dan foydalanadi
+    `profile`/`reason`, shuning uchun SRElar noto'g'ri siyosat surishlari yoki token xatolarini aniqlay oladi.
+  - *Alias Keshni yangilash natijalari* va *Alias Proof Age p90* trek
+    DNS uzilishidan oldin yangi dalillar mavjudligini isbotlash uchun `torii_sorafs_alias_cache_*`
+    tugadi.
+  - *Ro‘yxatga olish kitobi manifestlari soni* va *Faol taxalluslar soni* statistik ma’lumotlarni aks ettiradi.
+    boshqaruv har bir nashrni tekshirishi mumkin bo'lgan pin-registrlar to'plami va umumiy taxalluslar.
+  - *Gateway TLS muddati (soat)* nashr qilish shlyuzi TLS qachon ta'kidlanadi
+    sertifikat muddati tugaydi (ogohlantirish chegarasi 72 soatda).
+  - *Replikatsiya SLA natijalari* va *Replikatsiyaning orqada qolishi* kuzatib boring
+    `torii_sorafs_replication_*` telemetriyasi barcha replikalarning GA talablariga javob berishiga ishonch hosil qilish
+    nashrdan keyin bar.
+- O'rnatilgan shablon o'zgaruvchilaridan (`profile`, `reason`) foydalaning.
+  `docs.sora` nashriyot profili yoki barcha shlyuzlar bo'ylab ko'tarilishlarni tekshirib ko'ring.
+- PagerDuty marshrutlash asboblar paneli panellaridan dalil sifatida foydalanadi: ogohlantirishlar nomli
+  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache` va
+  `DocsPortal/TLSExpiry` mos keladigan seriyalar buzilganda yong'in
+  chegaralar. Ogohlantirishning ish kitobini ushbu sahifaga bog'lang, shunda muhandislar qo'ng'iroq qilishlari mumkin
+  aniq Prometheus so'rovlarini takrorlang.
 
-## Putting it together
+## Uni birlashtirish
 
-1. During `npm run build`, set the release/analytics environment variables and
-   let the post-build step emit `checksums.sha256`, `release.json`, and
+1. `npm run build` vaqtida reliz/tahlil muhiti oʻzgaruvchilarini oʻrnating va
+   Qurilishdan keyingi bosqich `checksums.sha256`, `release.json` va
    `link-report.json`.
-2. Run `npm run probe:portal` against the preview hostname with
-   `--expect-release` wired to the same tag. Save the stdout for the publishing
-   checklist.
-3. Run `npm run check:links` to fail fast on broken sitemap entries and archive
-   the generated JSON report together with the preview artefacts. CI drops the
-   latest report at `artifacts/docs_portal/link-report.json` so governance can
-   download the evidence bundle straight from the build logs.
-4. Forward the analytics endpoint to your privacy-preserving collector (Plausible,
-   self-hosted OTEL ingest, etc.) and ensure sampling rates are documented per
-   release so dashboards interpret counts correctly.
-5. CI already wires these steps through the preview/deploy workflows
+2. `npm run probe:portal` ni oldindan ko'rish xost nomiga qarshi ishga tushiring
+   `--expect-release` xuddi shu tegga ulangan. stdoutni nashr qilish uchun saqlang
+   nazorat ro'yxati.
+3. Sayt xaritasidagi buzilgan yozuvlar va arxivda tezda ishlamay qolishi uchun `npm run check:links` ni ishga tushiring
+   yaratilgan JSON hisobotini oldindan ko'rish artefaktlari bilan birga. CI ni tushiradi
+   `artifacts/docs_portal/link-report.json` da so'nggi hisobot, shuning uchun boshqaruv mumkin
+   dalillar to'plamini to'g'ridan-to'g'ri qurilish jurnallaridan yuklab oling.
+4. Maxfiylikni saqlaydigan kollektoringizga tahlil soʻnggi nuqtasini yoʻnaltiring (Ishonchli,
+   o'z-o'zidan yotqizilgan OTEL ingest va h.k.) va tanlab olish stavkalari hujjatlashtirilganligiga ishonch hosil qiling
+   bo'shating, shunda asboblar paneli hisoblarni to'g'ri talqin qiladi.
+5. CI allaqachon bu bosqichlarni oldindan ko'rish/joylashtirish ish oqimlari orqali o'tkazmoqda
    (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), so local dry runs only need to
-   cover secret-specific behaviour.
+   `.github/workflows/docs-portal-deploy.yml`), shuning uchun mahalliy quruq yugurishlar faqat kerak
+   sirga xos xulq-atvorni qamrab oladi.

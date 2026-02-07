@@ -9,19 +9,20 @@ source_last_modified: "2025-12-29T18:16:35.983094+00:00"
 translation_last_reviewed: 2026-02-07
 title: Review Panel Summary Workflow (MINFO-4a)
 summary: Generate the neutral referendum summary with balanced citations, AI manifest references, and volunteer brief coverage.
+translator: machine-google-reviewed
 ---
 
-# Review Panel Summary (MINFO-4a)
+# የግምገማ ፓነል ማጠቃለያ (MINFO-4a)
 
-Roadmap item **MINFO-4a — Neutral summary generator** requires a reproducible workflow that turns an accepted agenda proposal, the volunteer brief corpus, and the attested AI moderation manifest into a neutral referendum summary. The deliverable must:
+የመንገድ ካርታ ንጥል **MINFO-4a — ገለልተኛ ማጠቃለያ ጄኔሬተር** ተቀባይነት ያለው የአጀንዳ ፕሮፖዛል፣ የበጎ ፈቃደኞች አጭር ኮርፐስ እና የተረጋገጠው የ AI ልከኝነት ወደ ገለልተኛ የሪፈረንደም ማጠቃለያ የሚቀይር ሊባዛ የሚችል የስራ ሂደት ይፈልጋል። ማስረከብ ያለበት፡-
 
-- Record the output as a Norito structure (`ReviewPanelSummaryV1`) so governance can archive it alongside manifests and ballots.
-- Lint the source material, failing fast when the review panel does not have balanced support/oppose coverage or when facts are missing citations.
-- Reference the AI manifest and the proposal evidence bundle in every highlight, ensuring the policy jury sees both automated and human context before voting.
+- ውጤቱን እንደ Norito መዋቅር (`ReviewPanelSummaryV1`) ይመዝግቡ ስለዚህ አስተዳደር ከማኒፌክት እና ከድምጽ መስጫ ወረቀቶች ጋር አብሮ በማህደር እንዲቀመጥ ያድርጉ።
+- ምንጩን ይዘርጉ፣ የግምገማ ፓነል ሚዛናዊ ድጋፍ/የተቃውሞ ሽፋን ከሌለው ወይም እውነታዎች ጥቅሶች ሲቀሩ በፍጥነት አለመሳካቱ።
+- የመመሪያው ዳኞች ድምጽ ከመስጠታችሁ በፊት ሁለቱንም አውቶማቲክ እና የሰው አውድ መመልከቱን በማረጋገጥ የ AI ዝርዝር መግለጫውን እና የፕሮፖዛል ማስረጃውን ቅርቅብ በሁሉም ድምቀቶች ያጣቅሱ።
 
-## CLI usage
+## የ CLI አጠቃቀም
 
-The workflow ships as part of `cargo xtask`:
+የስራ ፍሰቱ እንደ `cargo xtask` አካል ነው፡-
 
 ```bash
 cargo xtask ministry-panel synthesize \
@@ -32,23 +33,23 @@ cargo xtask ministry-panel synthesize \
 --output artifacts/review_panel/AC-2026-001-RP-2026-05.json
 ```
 
-Required inputs:
+የሚያስፈልጉ ግብዓቶች፡-
 
-1. `--proposal` – JSON payload adhering to `AgendaProposalV1`. The helper validates the schema before generating the summary.
-2. `--volunteer` – JSON array of volunteer briefs that follow `docs/source/ministry/volunteer_brief_template.md`. Off-topic entries are ignored automatically.
-3. `--ai-manifest` – Governance-signed `ModerationReproManifestV1` describing the AI committee that screened the content.
-4. `--panel-round` – Identifier for the current review round (`RP-YYYY-##`).
-5. `--output` – Destination file or `-` to stream to stdout. Use `--language` to override the proposal language and `--generated-at` to supply a deterministic Unix timestamp (milliseconds) when backfilling history.
+1. `--proposal` - JSON ክፍያ ከ `AgendaProposalV1` ጋር የሚጣበቅ። ረዳቱ ማጠቃለያውን ከማፍለቁ በፊት ንድፉን ያረጋግጣል።
+2. `--volunteer` - JSON ድርድር `docs/source/ministry/volunteer_brief_template.md` የሚከተሉ የበጎ ፈቃደኞች አጭር መግለጫ። ከርዕስ ውጪ ያሉ ግቤቶች በራስ ሰር ችላ ይባላሉ።
+3. `--ai-manifest` - በአስተዳደር የተፈረመ `ModerationReproManifestV1` ይዘቱን ያጣሩትን AI ኮሚቴ ይገልፃል።
+4. `--panel-round` - ለአሁኑ የግምገማ ዙር መለያ (`RP-YYYY-##`)።
+5. `--output` - መድረሻ ፋይል ወይም `-` ወደ stdout ለመልቀቅ። የፕሮፖዛል ቋንቋውን ለመሻር `--language` እና `--generated-at` ታሪክን በሚሞሉበት ጊዜ የሚወስን የዩኒክስ የጊዜ ማህተም (ሚሊሰከንዶች) ይጠቀሙ።
 
-Once the standalone summary is generated, run the
-[`cargo xtask ministry-panel packet`](referendum_packet.md) helper to assemble
-the complete referendum dossier (`ReferendumPacketV1`). Supplying
-`--summary-out` to the packet command will persist the same summary file while
-embedding it inside the packet object for downstream consumers.
+አንድ ጊዜ ብቻውን ማጠቃለያው ከተፈጠረ፣ ያሂዱት
+[`cargo xtask ministry-panel packet`](referendum_packet.md) ረዳት ለመሰብሰብ
+የተሟላ ሪፈረንደም ዶሴ (`ReferendumPacketV1`)። ማቅረብ
+`--summary-out` ወደ ፓኬት ትዕዛዝ ተመሳሳይ የማጠቃለያ ፋይል ይቆያል
+ለታችኛው ተፋሰስ ሸማቾች በፓኬት እቃ ውስጥ መክተት።
 
-### Automation via `ministry-transparency ingest`
+### አውቶማቲክ በ `ministry-transparency ingest`
 
-Teams that already run `cargo xtask ministry-transparency ingest` for quarterly evidence bundles can now stitch the review panel summary into the same pipeline:
+`cargo xtask ministry-transparency ingest`ን ለሩብ አመት የማስረጃ እሽጎች የሚያሄዱ ቡድኖች አሁን የግምገማ ፓነል ማጠቃለያውን በተመሳሳይ መስመር መስፋት ይችላሉ፡
 
 ```bash
 cargo xtask ministry-transparency ingest \
@@ -65,31 +66,29 @@ cargo xtask ministry-transparency ingest \
   --output artifacts/ministry/ingest.json
 ```
 
-All four `--panel-*` flags must be supplied together (and require `--volunteer`). The command emits the review panel summary to `--panel-summary-out`, embeds the parsed payload inside the ingest snapshot, and records a checksum so downstream tooling can attest to the evidence.
+አራቱም የ`--panel-*` ባንዲራዎች አንድ ላይ መቅረብ አለባቸው (እና `--volunteer` ያስፈልጋቸዋል)። ትዕዛዙ የግምገማ ፓነልን ማጠቃለያ ለ`--panel-summary-out` ያወጣል፣የተተነተነውን ጭነት በመግቢያ ቅጽበታዊ ገጽ እይታ ውስጥ አካቷል እና ቼክተም ይመዘግባል ስለዚህ የታችኛው ተፋሰስ መሳሪያዎች ማስረጃውን ይመሰክራል።
 
-## Linting and failure modes
+## ሊንቲንግ እና ውድቀት ሁነታዎች
 
-`cargo xtask ministry-panel synthesize` enforces the following invariants before writing the summary:
+`cargo xtask ministry-panel synthesize` ማጠቃለያውን ከመጻፍዎ በፊት የሚከተሉትን ተለዋዋጮች ያስፈጽማል፡
 
-- **Balanced stances:** at least one support brief and one oppose brief must be present. Missing coverage terminates the run with a descriptive error.
-- **Citation coverage:** highlights are only produced from fact rows that include citations. Missing citations never block the build, but each affected brief is listed under `warnings[]` in the output.
-- **Per-highlight references:** every highlight includes references to (a) the volunteer fact row(s), (b) the AI manifest ID, and (c) the first evidence attachment from the proposal so the packet always links back to the signed artefacts.
+- **ሚዛናዊ አቋሞች፡** ቢያንስ አንድ የድጋፍ አጭር እና አንድ ተቃዋሚ አጭር መገኘት አለበት። የጠፋ ሽፋን ሩጫውን ገላጭ በሆነ ስህተት ያጠናቅቃል።
+- ** የጥቅስ ሽፋን፡** ድምቀቶች የሚዘጋጁት ጥቅሶችን ካካተቱ የእውነት ረድፎች ብቻ ነው። የጎደሉ ጥቅሶች ግንቡን በጭራሽ አያግደውም ነገር ግን እያንዳንዱ የተነካ አጭር መግለጫ በውጤቱ ውስጥ በ`warnings[]` ተዘርዝሯል።
+- **በየድምቀት ማጣቀሻዎች፡** እያንዳንዱ ድምቀት ለ(ሀ) የፍቃደኛ እውነታ ረድፍ(ዎች)፣ (ለ) የ AI መግለጫ መታወቂያ እና (ሐ) ከፕሮፖዛሉ የተገኘ የመጀመሪያ ማስረጃ አባሪ ማጣቀሻዎችን ያካትታል ስለዚህ ፓኬጁ ሁል ጊዜ ወደ ፊርማዎቹ ቅርሶች ይመለሳል።ማንኛውም ቼክ ካልተሳካ ትዕዛዙ ዜሮ ባልሆነ ሁኔታ ይወጣል እና በችግር መዝገብ ላይ ይጠቁማል። የተሳካላቸው ሩጫዎች ከ`ReviewPanelSummaryV1` እቅድ ጋር የሚዛመድ እና በአስተዳደር መግለጫዎች ውስጥ ሊካተት የሚችል የJSON ፋይል ይጽፋሉ።
 
-If any check fails, the command exits with a non-zero status and points at the problematic record. Successful runs write a JSON file that matches the `ReviewPanelSummaryV1` schema and can be embedded in governance manifests.
+## የውጤት መዋቅር
 
-## Output structure
+`ReviewPanelSummaryV1` የሚኖረው በ`crates/iroha_data_model/src/ministry/mod.rs` ሲሆን ለእያንዳንዱ ሸማች በ`iroha_data_model` ሳጥን በኩል ይገኛል። ዋና ክፍሎች የሚከተሉትን ያካትታሉ:
 
-`ReviewPanelSummaryV1` lives in `crates/iroha_data_model/src/ministry/mod.rs` and is available to every consumer via the `iroha_data_model` crate. Key sections include:
+- `overview` – ርዕስ፣ ገለልተኛ ማጠቃለያ ዓረፍተ ነገር እና የውሳኔ አውድ ለፖሊሲ ዳኞች ፓኬት።
+- `stance_distribution` - አጭር መግለጫዎች ብዛት እና የእውነታ ረድፎች በአንድ አቋም። የታችኛው ዳሽቦርዶች ከማተምዎ በፊት ሽፋንን ለማረጋገጥ ይህንን ያንብቡ።
+- `highlights` - በአንድ አቋም እስከ ሁለት እውነታዎች ማጠቃለያዎች ሙሉ ብቃት ካላቸው ጥቅሶች ጋር።
+- `ai_manifest` – ከዳግም መራባት አንጸባራቂ የወጣ ሜታዳታ (አንጸባራቂ UUID፣ ሯጭ ስሪት፣ ገደቦች)።
+- `volunteer_references` - ለአጭር ጊዜ ስታቲስቲክስ (ቋንቋ, አቋም, ረድፎች, የተጠቀሱ ረድፎች) ለኦዲት.
+- `warnings` – ነፃ ቅጽ የተዘለሉ ዕቃዎችን የሚገልጹ ሊንት መልዕክቶች (ለምሳሌ፣ የጎደሉ ጥቅሶች ያሉት የእውነታ ረድፎች)።
 
-- `overview` – Title, neutral summary sentence, and decision context for the policy jury packet.
-- `stance_distribution` – Count of briefs and fact rows per stance. Downstream dashboards read this to confirm coverage before publishing.
-- `highlights` – Up to two fact summaries per stance with fully qualified citations.
-- `ai_manifest` – Extracted metadata from the reproducibility manifest (manifest UUID, runner version, thresholds).
-- `volunteer_references` – Per-brief statistics (language, stance, rows, cited rows) for audit.
-- `warnings` – Free-form lint messages describing skipped items (e.g., fact rows with missing citations).
+#ምሳሌ
 
-## Example
+`docs/examples/ministry/review_panel_summary_example.json` ከረዳት ጋር የተሰራ ሙሉ ናሙና ይዟል. የተመጣጠነ ድጋፍ/የመቃወም ሽፋን፣ የጥቅስ መስመር ዝርጋታ፣ አንጸባራቂ ማጣቀሻዎች እና የማስጠንቀቂያ ሕብረቁምፊዎችን ለዕውነታ ረድፎች ወደ ድምቀቶች ከፍ ማድረግ ላልቻሉ ያሳያል። ገለልተኛ ማጠቃለያውን መጠቀም የሚያስፈልጋቸው ዳሽቦርዶች፣ የአስተዳደር መግለጫዎች ወይም የኤስዲኬ መሣሪያ ሲራዘም ይጠቀሙበት።
 
-`docs/examples/ministry/review_panel_summary_example.json` contains a full sample produced with the helper. It demonstrates balanced support/oppose coverage, citation wiring, manifest references, and warning strings for fact rows that could not be promoted to highlights. Use it when extending dashboards, governance manifests, or SDK tooling that need to consume the neutral summary.
-
-> **Tip:** include the generated summary alongside the signed AI manifest and volunteer brief digest in the referendum evidence bundle so policy juries can verify every artifact referenced by the review panel.
+> ** ጠቃሚ ምክር፡** የመነጨውን ማጠቃለያ ከተፈረመው የ AI ዝርዝር መግለጫ ጋር ያካትቱ እና በሪፈረንደም ማስረጃ ጥቅል ውስጥ የበጎ ፈቃደኞች አጭር መግለጫ በማካተት በግምገማ ፓነል የተጠቀሰውን እያንዳንዱን ቅርስ የፖሊሲ ዳኞች ማረጋገጥ ይችላሉ።

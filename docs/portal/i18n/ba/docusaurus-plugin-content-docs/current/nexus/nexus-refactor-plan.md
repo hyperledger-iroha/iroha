@@ -7,109 +7,111 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Nexus ledger refactor plan
 description: Mirror of `docs/source/nexus_refactor_plan.md`, detailing the phased clean-up work for the Iroha 3 codebase.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_refactor_plan.md`. Keep both copies aligned until the multilingual edition lands in the portal.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Был биттә I18NI000000027X көҙгөһө. Ике күсермә лә порталға күп телле баҫма ерләнгәнсе тура килә.
+::: 1990 й.
 
-# Sora Nexus Ledger Refactor Plan
+# Сора I18NT0000000022X леджер рефакторы планы
 
-This document captures the immediate roadmap for the Sora Nexus Ledger ("Iroha 3") refactor. It reflects the current repository layout and the regressions observed in genesis/WSV bookkeeping, Sumeragi consensus, smart-contract triggers, snapshot queries, pointer-ABI host bindings, and Norito codecs. The objective is to converge on a coherent, testable architecture without attempting to land all fixes in one monolithic patch.
+Был документта тиҙ арала юл картаһы Sora I18NT000000023X Ledger («I18NT000000021X 3») рефакторы өсөн төшөрөлгән. Ул хәҙерге репозиторий планировкаһын һәм генез/ВСВ бухгалтерияһында күҙәтелгән регрессияларҙы сағылдыра, I18NT00000000000X консенсус, аҡыллы-контракт триггерҙар, снистер-ABI хост бәйләүҙәре һәм I18NT0000009X кодектары. Маҡсат – бөтә төҙәтмәләрҙе бер монолит патчҡа ерләргә тырышмайынса, бәйләнешле, һынаулы архитектураға яҡынлашыу.
 
-## 0. Guiding Principles
-- Preserve deterministic behavior across heterogeneous hardware; leverage acceleration only through opt-in feature flags with identical fallbacks.
-- Norito is the serialization layer. Any state/schema changes must include Norito encode/decode round-trip tests and fixture updates.
-- Configuration flows through `iroha_config` (user → actual → defaults). Remove ad-hoc environment toggles from production paths.
-- ABI policy remains V1 and non-negotiable. Hosts must reject unknown pointer types/syscalls deterministically.
-- `cargo test --workspace` and golden tests (`ivm`, `norito`, `integration_tests`) remain the baseline gate for every milestone.
+## 0. Етәксе принциптар
+- Гетероген аппарат аша детерминистик тәртипте һаҡлау; рычаг тиҙләнеше аша ғына опт-ин функцияһы флагтар менән бер үк fallbacks.
+- Norito — сериализация ҡатламы. Теләһә ниндәй дәүләт/схема үҙгәрештәре Norito үҙ эсенә алырға тейеш, кодлау/декод түңәрәк-сәйәхәт һынауҙары һәм ҡоролма яңыртыу.
+- Конфигурация I18NI000000028X аша аға (ҡулланыусы → фактик → ғәҙәттәгесә). Етештереүҙең юлдарынан махсус мөхитте һүтеп алыу.
+- ABI сәйәсәте V1 һәм һөйләшеүҙәр үткәрелмәгән булып ҡала. Хужалар билдәһеҙ күрһәткес тип/syscalls детерминистик рәүештә кире ҡағырға тейеш.
+- `cargo test --workspace` һәм алтын һынауҙар (I18NI000000030X, I18NI000000031X, I18NI000000032X) һәр этап өсөн база ҡапҡаһы булып ҡала.
 
-## 1. Repository Topology Snapshot
-- `crates/iroha_core`: Sumeragi actors, WSV, genesis loader, pipelines (query, overlay, zk lanes), smart-contract host glue.
-- `crates/iroha_data_model`: authoritative schema for on-chain data and queries.
-- `crates/iroha`: client API used by CLI, tests, SDK.
-- `crates/iroha_cli`: operator CLI, currently mirrors numerous APIs in `iroha`.
-- `crates/ivm`: Kotodama bytecode VM, pointer-ABI host integration entry points.
-- `crates/norito`: serialization codec with JSON adapters and AoS/NCB backends.
-- `integration_tests`: cross-component assertions covering genesis/bootstrap, Sumeragi, triggers, pagination, etc.
-- Docs already outline Sora Nexus Ledger goals (`nexus.md`, `new_pipeline.md`, `ivm.md`), but the implementation is fragmented and partially stale relative to the code.
+## 1. Репозиторий топологияһы Снэпшот
+- I18NI000000033X: Sumeragi актерҙары, WSV, генез тейәүсе, торба үткәргестәр (эҙләү, өҫтәү, zk һыҙаттары), смарт-контракт хужа елем.
+- `crates/iroha_data_model`: сылбырлы мәғлүмәттәр һәм эҙләүҙәр өсөн авторитетлы схема.
+- `crates/iroha`: CLI ҡулланған клиент API, тестар, СДК.
+- `crates/iroha_cli`: оператор CLI, әлеге ваҡытта `iroha`-тағы күп һанлы API-ларҙы көҙгөләй.
+- I18NI000000038X: I18NT000000007X байткод В.М., күрһәткес-ABI хост интеграцияһы инеү нөктәләре.
+- `crates/norito`: JSON адаптерҙары һәм AoS/NCB бекэндтары менән сериализация кодек.
+- I18NI000000040X: генеза/bootstrap-ты ҡаплаған кросс-компонент раҫлауҙары, Sumeragi, триггерҙар, мәжүсиҙәр һ.б.
+- Доктар инде Sora I18NT000000024X Ledger маҡсаттарын һүрәтләй (`nexus.md`, I18NI000000042X, `ivm.md`), әммә тормошҡа ашырыу өҙөк-өҙөк һәм өлөшләтә кодҡа сағыштырмаса.
 
-## 2. Refactor Pillars & Milestones
+## 2. Рефактор бағаналар & Мильстоундар
 
-### Phase A – Foundations and Observability
-1. **WSV Telemetry + Snapshots**
-   - Establish canonical snapshot API in `state` (`WorldStateSnapshot` trait) used by queries, Sumeragi, and CLI.
-   - Use `scripts/iroha_state_dump.sh` to produce deterministic snapshots via `iroha state dump --format norito`.
-2. **Genesis/Bootstrap Determinism**
-   - Refactor genesis ingestion to flow through a single Norito-powered pipeline (`iroha_core::genesis`).
-  - Add integration/regression coverage that replays genesis plus the first block and asserts identical WSV roots across arm64/x86_64 (tracked under `integration_tests/tests/genesis_replay_determinism.rs`).
-3. **Cross-crate Fixity Tests**
-   - Expand `integration_tests/tests/genesis_json.rs` to validate WSV, pipeline, and ABI invariants in one harness.
-  - Introduce a `cargo xtask check-shape` scaffold that panics on schema drift (tracked under DevEx tooling backlog; see `scripts/xtask/README.md` action item).
+### А фазаһы – нигеҙҙәр һәм күҙәтеү
+1. **WSV Телеметрия + Снэпшот**
+   - I18NI0000004X (I18NI0000000045X һыҙаты) I18NI0000004X-та канон снимок API-һын булдырыу, Sumeragi һәм CLI.
+   - I18NI000000046X ҡулланыу өсөн детерминистик снимоктар етештереү аша I18NI000000047X.
+2. **Генезис/Бутстрап детерминизм**
+   - Рефактор генезы ашау өсөн ағым аша бер I18NT00000000000012X-ҡөҙрәтле торба (I18NI000000048X).
+  - Өҫтәү интеграция/регрессия ҡаплау, тип replaying генезис плюс беренсе блок һәм раҫлауҙар бер үк WSV тамырҙары аша art64/x86_64 (күҙәтелгән аҫтында I18NI0000000049X).
+3. **Кросс-катлы Фиксит һынауҙары**
+   - WSV, торба үткәргес һәм АБИ инварианттарын бер йүгән менән раҫлау өсөн `integration_tests/tests/genesis_json.rs` киңәйтеү.
+  - I18NI000000051X скафандр менән таныштырҙы, тип паника схемаһы дрейфында (DevEx инструменталь ҡалдыҡтар аҫтында күҙәтелгән; ҡарағыҙ I18NI0000052X экшн әйбер).
 
-### Phase B – WSV & Query Surface
-1. **State Storage Transactions**
-   - Collapse `state/storage_transactions.rs` into a transactional adapter that enforces commit ordering and conflict detection.
-   - Unit tests now verify asset/world/triggers modifications roll back on failure.
-2. **Query Model Refactor**
-   - Move pagination/cursor logic into reusable components under `crates/iroha_core/src/query/`. Align Norito representations in `iroha_data_model`.
-  - Add snapshot queries for triggers, assets, and roles with deterministic ordering (tracked via `crates/iroha_core/tests/snapshot_iterable.rs` for current coverage).
-3. **Snapshot Consistency**
-   - Ensure `iroha ledger query` CLI uses the same snapshot path as Sumeragi/fetchers.
-   - CLI snapshot regression tests live under `tests/cli/state_snapshot.rs` (feature-gated for slow runs).
+### Фаза В – WSV & Һорау өҫтө
+1. **Дәүләт Һаҡлау операциялары**
+   - `state/storage_transactions.rs`-ты транзакция адаптерына йыйып алыу, ул тәртип боҙоуҙы һәм конфликттарҙы асыҡлауҙы үтәй.
+   - Блок һынауҙары хәҙер раҫлай актив/донъя/триггерҙар модификациялары етешһеҙлектәр тураһында кире ролл.
+2. **Һорау моделе рефакторы**
+   - I18NI000000054X буйынса күп тапҡыр ҡулланыла торған компоненттарға сәфәр/курсор логикаһын күсерергә. I18NT000013X спектаклдәре I18NI000000055X-та.
+  - триггерҙар, активтар һәм детерминистик заказ менән ролдәр өсөн снимок эҙләүҙәр өҫтәгеҙ (ағымдағы ҡаплау өсөн `crates/iroha_core/tests/snapshot_iterable.rs` аша күҙәтелгән).
+3. **Сняпшот эҙмә-эҙлеклелек**
+   - `iroha ledger query` CLI-ны тәьмин итеү I18NT000000004X/fetchers кеүек үк снимок юлын ҡуллана.
+   - CLI снимок регрессия һынауҙары I18NI000000058X аҫтында йәшәй (функция-ҡапҡалар өсөн яй йүгерә).
 
-### Phase C – Sumeragi Pipeline
-1. **Topology & Epoch Management**
-   - Extract `EpochRosterProvider` into a trait with implementations backed by WSV stake snapshots.
-  - `WsvEpochRosterAdapter::from_peer_iter` offers a simple mock-friendly constructor for benches/tests.
-2. **Consensus Flow Simplification**
-   - Reorganize `crates/iroha_core/src/sumeragi/*` into modules: `pacemaker`, `aggregation`, `availability`, `witness` with shared types under `consensus`.
-  - Replace ad-hoc message passing with typed Norito envelopes and introduce view-change property tests (tracked in the Sumeragi messaging backlog).
-3. **Lane/Proof Integration**
-   - Align lane proofs with DA commitments and ensure RBC gating is uniform.
-   - End-to-end integration test `integration_tests/tests/extra_functional/seven_peer_consistency.rs` now verifies the RBC-enabled path.
+### Фаза С – I18NT0000000005X Торба
+1. **Топология һәм эпоха менән идара итеү**
+   - `EpochRosterProvider` экстракцияһы WSV ставкаһы снимоктары ярҙамында тормошҡа ашырыуҙар менән һыҙатҡа.
+  - I18NI000000060X эскәмйәләр/тестар өсөн ябай макетлы конструктор тәҡдим итә.
+2. **Консенсус ағымы ябайлаштырыу**
+   - `crates/iroha_core/src/sumeragi/*` үҙгәртеп ҡороу модулдәргә: I18NI0000000062X, I18NI0000000063X, I18NI000000064X, I18NI000000065X I18NI0000000066X буйынса уртаҡ төрҙәр менән.
+  - I18NT000000014X конверттары менән үткән махсус хәбәрҙе алмаштырыу һәм ҡараш-үҙгәрештәр мөлкәт һынауҙарын индереү (I18NT000000006X хәбәрҙәренең артта ҡалыуында күҙәтелә).
+3. **Лейн/Дуҫлау интеграцияһы**
+   - DA йөкләмәләре менән һыҙатлы һыҙаттарҙы тура килтерергә һәм РБК ҡапҡаһын тәьмин итеү берҙәм булыуын тәьмин итә.
+   - I18NI000000067X осонда интеграция тесты хәҙер эритроциттар менән тәьмин ителгән юлды раҫлай.
 
-### Phase D – Smart Contracts & Pointer-ABI Hosts
-1. **Host Boundary Audit**
-   - Consolidate pointer-type checks (`ivm::pointer_abi`) and host adapters (`iroha_core::smartcontracts::ivm::host`).
-   - Pointer table expectations and host manifest bindings are covered by `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` and `ivm_host_mapping.rs`, which exercise the golden TLV mappings.
-2. **Trigger Execution Sandbox**
-   - Refactor triggers to run through a common `TriggerExecutor` that enforces gas, pointer validation, and event journaling.
-  - Add regression tests for call/time triggers covering failure paths (tracked via `crates/iroha_core/tests/trigger_failure.rs`).
-3. **CLI & Client Alignment**
-   - Ensure CLI operations (`audit`, `gov`, `sumeragi`, `ivm`) rely on the shared `iroha` client functions to avoid drift.
-   - CLI JSON snapshot tests live in `tests/cli/json_snapshot.rs`; keep them up to date so core command output continues to match the canonical JSON reference.
+### Фаза D – Аҡыллы килешәүҙәр & Элек-АБИ Хосттар
+1. **Элекке сик аудит**
+   - Консолидат күрһәткес тибындағы чектар (`ivm::pointer_abi`) һәм хост адаптерҙары (`iroha_core::smartcontracts::ivm::host`X).
+   - Һылтанма өҫтәл көтөүҙәре һәм хужа манифест бәйләүҙәре `crates/iroha_core/tests/ivm_pointer_abi_tlv_types.rs` һәм I18NI000000071X менән ҡаплана, унда алтын TLV карталарын ҡулланалар.
+2. **Тиггер Сэндбокс**
+   - Рефактор триггерҙары аша йүгерергә дөйөм I18NI000000072X, газ, күрһәткес раҫлау, һәм ваҡиғалар журналы.
+  - Шылтыратыу/ваҡыт триггерҙар өсөн регрессия һынауҙары өҫтәү етешһеҙлектәре юлдарын ҡаплау (`crates/iroha_core/tests/trigger_failure.rs` аша күҙәтелә).
+3. **CLI & Клиент тура килтереп**
+   - CLI операцияларын тәьмин итеү (`audit`, I18NI000000075X, I18NI000000076X, `ivm`) дрейфтан ҡотолоу өсөн I18NI000000078X клиент функцияларына таяна.
+   - CLI JSON снимок һынауҙары йәшәй I18NI000000079X; уларҙы заманса тотоу, шулай итеп, төп команда сығышы канонлы JSON һылтанма тура килтереп дауам итә.
 
-### Phase E – Norito Codec Hardening
-1. **Schema Registry**
-   - Create a Norito schema registry under `crates/norito/src/schema/` to source canonical encodings for core data types.
-   - Added doc tests verifying sample payload encoding (`norito::schema::SamplePayload`).
-2. **Golden Fixtures Refresh**
-   - Update `crates/norito/tests/*` golden fixtures to match new WSV schema once the refactor lands.
-   - `scripts/norito_regen.sh` regenerates the Norito JSON goldens deterministically via the `norito_regen_goldens` helper.
-3. **IVM/Norito Integration**
-   - Validate Kotodama manifest serialization end-to-end through Norito, ensuring pointer ABI metadata is consistent.
-   - `crates/ivm/tests/manifest_roundtrip.rs` keeps Norito encode/decode parity for manifests.
+### Е фазаһы – I18NT0000000015X Codec ҡатылыҡ
+1. **Схема Реестры**
+   - I18NT000000000016X схемаһы I18NI000000080X буйынса төп мәғлүмәттәр типтары өсөн канонлы кодировкаларҙы сығанаҡҡа булдырыу.
+   - Өҫтәлгән doc тестары тикшерергә өлгө файҙалы йөк кодлау (`norito::schema::SamplePayload`).
+2. **Алтын бысраҡтар Яңыртыу**
+   - Яңыртыу `crates/norito/tests/*` алтын ҡоролмаларға тап килтерергә яңы WSV схемаһы бер тапҡыр рефактор ерҙәре.
+   - `scripts/norito_regen.sh` I18NT000000017X JSON алтын детерминистик рәүештә I18NI000000084X ярҙамсыһы аша регенерациялай.
+3. **I18NT000000026X/I18NT0000000018X Интеграция**
+   - I18NT000000008X Validate I18NT000000019X аша осона тиклем осона тиклем осона тиклем осона тиклем, күрһәткес ABI метамағлүмәттәре эҙмә-эҙлекле булыуын тәьмин итә.
+   - I18NI000000085X I18NT000000020X-та манифестар өсөн кодекс/декод паритетын һаҡлай.
 
-## 3. Cross-Cutting Concerns
-- **Testing Strategy**: Every phase promotes unit tests → crate tests → integration tests. Failing tests capture current regressions; new tests prevent them from resurfacing.
-- **Documentation**: After each phase lands, update `status.md` and roll open items into `roadmap.md` while pruning completed tasks.
-- **Performance Benchmarks**: Maintain existing benches in `iroha_core`, `ivm`, and `norito`; add baseline measurements post-refactor to validate no regressions.
-- **Feature Flags**: Keep crate-level toggles only for backends that require external toolchains (`cuda`, `zk-verify-batch`). CPU SIMD paths are always built and selected at runtime; provide deterministic scalar fallbacks for unsupported hardware.
+## 3. Кросс-ҡырҡыу борсолоуҙары
+- **Стратегия һынау**: Һәр фаза берәмек һынауҙарына булышлыҡ итә → йәшник һынауҙары → интеграция һынауҙары. Уңышһыҙлыҡ һынауҙары ағымдағы регрессияларҙы тота; яңы һынауҙар уларҙы ҡабаттан эшкәртергә ҡамасаулай.
+- **Документация**: Һәр фаза ерҙәренән һуң, яңыртыу I18NI000000086X һәм асыҡ әйберҙәрҙе I18NI000000087ХХХ-гә әйләндереп, шул уҡ ваҡытта тамамланған бурыстарҙы ҡырҡыу.
+- **Һөҙөмтәлелек эталондары**: I18NI000000088X, `ivm`, һәм I18NI000000090X-та булған эскәмйәләр һаҡлау; өҫтәү башланғыс үлсәүҙәр пост-рефактор раҫлау өсөн, регрессиялар юҡ.
+- **Функция флагтар**: Йәшник-кимәл кимәлендәге переключатель һаҡлау өсөн генә бэкэндтар, тышҡы ҡоралдар сылбырҙары талап итә (`cuda`, I18NI000000092X). Процессор SIMD юлдары һәр ваҡыт төҙөлгән һәм һайланған эшләү ваҡытында; ярҙамһыҙ аппарат өсөн детерминистик скаляр fallbacks тәьмин итеү.
 
-## 4. Immediate Next Actions
-- Phase A scaffolding (snapshot trait + telemetry wiring) – see actionable tasks in roadmap updates.
-- The recent defect audit for `sumeragi`, `state`, and `ivm` surfaced the following highlights:
-  - `sumeragi`: dead-code allowances guard view-change proof broadcast, VRF replay state, and EMA telemetry export. These stay gated until Phase C’s consensus flow simplification and lane/proof integration deliverables land.
-  - `state`: `Cell` cleanup and telemetry routing move onto the Phase A WSV telemetry track, while the SoA/parallel-apply notes fold into the Phase C pipeline optimisation backlog.
-  - `ivm`: CUDA toggle exposure, envelope validation, and Halo2/Metal coverage map to Phase D host-boundary work plus the cross-cutting GPU acceleration theme; kernels remain on the dedicated GPU backlog until ready.
-- Prepare cross-team RFC summarizing this plan for sign-off before landing invasive code changes.
+## 4. Киләһе ғәмәлдәр тиҙ арала
+- А фазаһы скафандрлау (сценарий һыҙаты + телеметрия проводкаһы) – юл карталарын яңыртыуҙа ғәмәлгә яраҡлы бурыстарҙы ҡарағыҙ.
+- Һуңғы ваҡытта I18NI000000093X, I18NI000000094X, һәм I18NI0000000955 өсөн дефект аудиты түбәндәге өҫтөнлөктәрҙе күтәрҙе:
+  - I18NI0000000966: үле код пособиелары һаҡсы ҡараш-үҙгәрештәр тапшырыу эфир, VRF реплей дәүләте, һәм EMA телеметрия экспорты. Был ҡапҡаға тиклем ҡала, тиклем фаза’s консенсус ағымы ябайлаштырыу һәм һыҙат/иҫбатлау интеграцияһы етештереү ер.
+  - I18NI000000097X: `Cell` өмәләре һәм телеметрия маршрутлаштырыуы A фазаһы WSV телеметрия трассаһына күсә, ә SoA/параллель-ҡулланыуын иҫкәрмәләр С фазаһы С торба үткәргес оптимизацияһы артта ҡалыуына йыйыла.
+  - I18NI000000099X: CUDA toggle экспозицияһы, конверт раҫлау, һәм Halo2/Металл ҡаплау картаһы D фазаһы хост-сиктәре эше плюс ҡырҡылған GPU тиҙләтеү темаһы; Ядролар әҙерләгәнсе махсус GPU артта ҡалыуында ҡала.
+- Әҙерләү кросс-команда RFC был планды дөйөмләштереү өсөн ҡул ҡуйыу-өҫтөндә десант инвазив код үҙгәрештәре.
 
-## 5. Open Questions
-- Should RBC remain optional past P1, or is it mandatory for Nexus ledger lanes? Requires stakeholder decision.
-- Do we enforce DS composability groups in P1 or keep them disabled until lane proofs mature?
-- What is the canonical location for ML-DSA-87 parameters? Candidate: new `crates/fastpq_isi` crate (pending creation).
+## 5. Асыҡ һорауҙар.
+- РБК-ның үткән Р1-гә опциональ булып ҡалырға тейешме, әллә I18NT000000025X леджер һыҙаттары өсөн мотлаҡмы? Ҡатнашыусылар ҡарары талап итә.
+- Беҙ Р1-ҙә DS композиторлыҡ төркөмдәрен үтәйбеҙме йәки уларҙы өҙөклөктәр өлгөргәнсе өҙөлгәнме?
+- ML-DSA-87 параметрҙары өсөн канонлы урын ниндәй? Кандидат: яңы I18NI000000100X йәшник (студия булдырыу).
 
 ---
 
-_Last updated: 2025-09-12_
+_Һуңғы яңыртылған: 2025-09-12_

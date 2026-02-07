@@ -7,91 +7,90 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fd1e43316c492cc96ed107f6318841ad8db160735d4698c4f05562ff6127fda9
 source_last_modified: "2026-01-22T14:35:37.492932+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Confidential asset rotation playbook referenced by `roadmap.md:M3`.
+//! `roadmap.md:M3`-аас иш татсан нууц хөрөнгийн эргэлтийн дэвтэр.
 
-# Confidential Asset Rotation Runbook
+# Нууц хөрөнгийн эргэлтийн дэвтэр
 
-This playbook explains how operators schedule and execute confidential asset
-rotations (parameter sets, verifying keys, and policy transitions) while
-ensuring wallets, Torii clients, and mempool guards remain deterministic.
+Энэхүү тоглоомын ном нь операторууд нууц хөрөнгийг хэрхэн төлөвлөх, хэрэгжүүлэх талаар тайлбарладаг
+эргэлтүүд (параметрийн багц, баталгаажуулах түлхүүрүүд, бодлогын шилжилтүүд).
+түрийвч, Torii үйлчлүүлэгчид, мемпулийн хамгаалагчид тодорхойлогч хэвээр байна.
 
-## Lifecycle & Statuses
+## Амьдралын мөчлөг ба статусууд
 
-Confidential parameter sets (`PoseidonParams`, `PedersenParams`, verifying keys)
-lattice and helper used to derive the effective status at a given height live in
-`crates/iroha_core/src/state.rs:7540`–`7561`. Runtime helpers sweep pending
-transitions as soon as the target height is reached and log failures for later
-rebroadcasts (`crates/iroha_core/src/state.rs:6725`–`6765`).
+Нууц параметрийн багц (`PoseidonParams`, `PedersenParams`, баталгаажуулах түлхүүрүүд)
+өгөгдсөн өндөрт үр дүнтэй статусыг гаргахад ашигладаг тор ба туслагч амьдардаг
+`crates/iroha_core/src/state.rs:7540`–`7561`. Ажиллах цагийн туслахууд хүлээгдэж байна
+Зорилтот өндөрт хүрсэн даруйд шилжилт хийж, дараа нь алдаа гарна
+дахин нэвтрүүлэг (`crates/iroha_core/src/state.rs:6725`–`6765`).
 
-Asset policies embed
+Хөрөнгийн бодлогыг оруулах
 `pending_transition { transition_id, new_mode, effective_height, conversion_window }`
-so governance can schedule upgrades via
-`ScheduleConfidentialPolicyTransition` and cancel them if required. See
-`crates/iroha_data_model/src/asset/definition.rs:320` and the Torii DTO mirrors
+тиймээс засаглал нь шинэчлэлтийн хуваарийг дамжуулан хийх боломжтой
+`ScheduleConfidentialPolicyTransition` ба шаардлагатай бол цуцлаарай. Харна уу
+`crates/iroha_data_model/src/asset/definition.rs:320` болон Torii DTO толь
 (`crates/iroha_torii/src/routing.rs:1539`–`1580`).
 
-## Rotation Workflow
+## Эргүүлэх ажлын урсгал
 
-1. **Publish new parameter bundles.** Operators submit
-   `PublishPedersenParams`/`PublishPoseidonParams` instructions (CLI
-   `iroha app zk params publish ...`) to stage new generator sets with metadata,
-   activation/deprecation windows, and status markers. The executor rejects
-   duplicate IDs, non-increasing versions, or bad status transitions per
-   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, and the
-   registry tests cover the failure modes (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`).
-2. **Register/verifying-key updates.** `RegisterVerifyingKey` enforces backend,
-   commitment, and circuit/version constraints before a key can enter the
-   registry (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`).
-   Updating a key automatically deprecates the old entry and wipes inline bytes,
-   as exercised by `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1`.
-3. **Schedule asset-policy transitions.** Once the new parameter IDs are live,
-   governance calls `ScheduleConfidentialPolicyTransition` with the desired
-   mode, transition window, and audit hash. The executor refuses conflicting
-   transitions or assets with outstanding transparent supply. Tests such as
-   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` verify that
-   aborted transitions clear `pending_transition`, while
-   `confidential_policy_transition_reaches_shielded_only_on_schedule` at
-   lines 385–433 confirms scheduled upgrades flip to `ShieldedOnly` exactly at
-   the effective height.
-4. **Policy application & mempool guard.** The block executor sweeps all pending
-   transitions at the start of each block (`apply_policy_if_due`) and emits
-   telemetry if a transition fails so operators can reschedule. During admission
-   the mempool refuses transactions whose effective policy would change mid-block,
-   ensuring deterministic inclusion across the transition window
+1. **Шинэ параметрийн багцуудыг нийтлэх.** Операторууд илгээдэг
+   `PublishPedersenParams`/`PublishPoseidonParams` заавар (CLI)
+   `iroha app zk params publish ...`) мета өгөгдөл бүхий шинэ генераторын багцуудыг гаргах,
+   идэвхжүүлэх/хасах цонх, төлөвийн тэмдэглэгээ. Гүйцэтгэгч татгалздаг
+   давхардсан ID, бус өсөх хувилбарууд, эсвэл муу статус шилжилт бүр
+   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, мөн
+   бүртгэлийн туршилтууд нь бүтэлгүйтлийн горимуудыг хамардаг (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`).
+2. **Түлхүүр шинэчлэлтүүдийг бүртгэх/баталгаажуулж байна.** `RegisterVerifyingKey` арын хэсгийг хэрэгжүүлдэг,
+   амлалт, түлхүүр оруулахаас өмнө хэлхээ/хувилбарын хязгаарлалт
+   бүртгэл (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`).
+   Түлхүүрийг шинэчлэх нь хуучин оруулгыг автоматаар хүчингүй болгож, доторлогооны байтыг арилгана.
+   `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1` хэрэгжүүлсэн.
+3. **Хөрөнгийн бодлогын шилжилтийн хуваарь гарга.** Шинэ параметрийн ID-г ажиллуулсны дараа,
+   засаглал нь хүссэнээрээ `ScheduleConfidentialPolicyTransition` руу залгадаг
+   горим, шилжилтийн цонх, аудитын хэш. Гүйцэтгэгч нь зөрчилдөхөөс татгалздаг
+   шилжилтүүд эсвэл ил тод нийлүүлэлттэй хөрөнгө. зэрэг тестүүд
+   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` гэдгийг баталгаажуулна уу
+   зогсоосон шилжилтүүд тодорхой `pending_transition`, харин
+   `confidential_policy_transition_reaches_shielded_only_on_schedule` цагт
+   lines385–433 нь хуваарьт шинэчлэлтүүдийг `ShieldedOnly` руу яг цагт нь эргүүлэхийг баталгаажуулдаг.
+   үр дүнтэй өндөр.
+4. **Бодлогын програм ба санах ойн хамгаалалт.** Блок гүйцэтгэгч хүлээгдэж буй бүх зүйлийг шүүрддэг.
+   блок бүрийн эхэнд шилжих шилжилтүүд (`apply_policy_if_due`) ба ялгаруулдаг
+   Хэрэв шилжилт амжилтгүй болбол операторууд дахин хуваарь гаргах боломжтой бол телеметр. Элсэлтийн үеэр
+   mempool нь үр дүнтэй бодлого нь блокийн дундуур өөрчлөгдөх гүйлгээнээс татгалзаж,
+   шилжилтийн цонхонд детерминист оролцоог хангах
    (`docs/source/confidential_assets.md:60`).
 
-## Wallet & SDK Requirements
+## Түрийвч ба SDK-д тавигдах шаардлага- Swift болон бусад гар утасны SDK-ууд нь идэвхтэй бодлогыг татахын тулд Torii туслахуудыг илрүүлдэг.
+  Дээрээс нь хүлээгдэж буй шилжилтүүд тул түрийвчнүүд гарын үсэг зурахаас өмнө хэрэглэгчдэд анхааруулах боломжтой. Харна уу
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) болон холбогдох
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591` дээрх туршилтууд.
+- CLI нь ижил мета өгөгдлийг `iroha ledger assets data-policy get`-ээр тусгадаг (туслах
+  `crates/iroha_cli/src/main.rs:1497`–`1670`), операторуудад аудит хийх боломжийг олгодог.
+  Бодлого/параметрийн ID-г тодорхой зааж өгөхгүйгээр хөрөнгийн тодорхойлолт руу холбоно
+  блок дэлгүүр.
 
-- Swift and other mobile SDKs expose Torii helpers to fetch the active policy
-  plus any pending transition, so wallets can warn users before signing. See
-  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) and the associated
-  tests at `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591`.
-- The CLI mirrors the same metadata via `iroha ledger assets data-policy get` (helper in
-  `crates/iroha_cli/src/main.rs:1497`–`1670`), enabling operators to audit the
-  policy/parameter IDs wired into an asset definition without spelunking the
-  block store.
+## Туршилт ба телеметрийн хамрах хүрээ
 
-## Test & Telemetry Coverage
+- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` энэ бодлогыг баталгаажуулдаг
+  Шилжилтүүд нь мета өгөгдлийн агшин зуурын агшинд тархаж, хэрэглэсний дараа арилдаг.
+- `crates/iroha_core/tests/zk_dedup.rs:1` нь `Preverify` кэш гэдгийг баталж байна.
+  хоёр дахин зарцуулсан/давхар нотолгоо, түүний дотор эргэлтийн хувилбаруудыг үгүйсгэдэг
+  амлалтууд нь ялгаатай.
+- `crates/iroha_core/tests/zk_confidential_events.rs` ба
+  `zk_shield_transfer_audit.rs` төгсгөл хоорондын бамбайг бүрхэвч → дамжуулах → хамгаалалт
+  урсаж, параметрийн эргэлтийн дагуу аудитын мөр үлдэхийг баталгаажуулна.
+- `dashboards/grafana/confidential_assets.json` ба
+  `docs/source/confidential_assets.md:401` CommitmentTree &-г баримтжуулах
+  шалгалт тохируулга/эргэлт бүрийг дагалддаг шалгагч-кэш хэмжигч.
 
-- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` verifies that policy
-  transitions propagate into metadata snapshots and clear once applied.
-- `crates/iroha_core/tests/zk_dedup.rs:1` proves that the `Preverify` cache
-  rejects double-spends/double-proofs, including rotation scenarios where
-  commitments differ.
-- `crates/iroha_core/tests/zk_confidential_events.rs` and
-  `zk_shield_transfer_audit.rs` cover end-to-end shield → transfer → unshield
-  flows, ensuring the audit trail survives across parameter rotations.
-- `dashboards/grafana/confidential_assets.json` and
-  `docs/source/confidential_assets.md:401` document the CommitmentTree &
-  verifier-cache gauges that accompany every calibration/rotation run.
+## Runbook эзэмшигч
 
-## Runbook Ownership
-
-- **DevRel / Wallet SDK Leads:** maintain SDK snippets + quickstarts that show
-  how to surface pending transitions and replay the mint → transfer → reveal
-  tests locally (tracked under `docs/source/project_tracker/confidential_assets_phase_c.md:M3.2`).
-- **Program Mgmt / Confidential Assets TL:** approve transition requests, keep
-  `status.md` updated with upcoming rotations, and ensure waivers (if any) are
-  recorded alongside the calibration ledger.
+- **DevRel / Wallet SDK-ийн тэргүүлэгчид:** SDK-н хэсгүүдийг хадгалах + харуулах хурдан эхлэлүүдийг
+  хэрхэн гадаргуу хүлээгдэж буй шилжилтүүд болон гаа дахин тоглуулах → шилжүүлэх → илчлэх
+  орон нутгийн тестүүд (`docs/source/project_tracker/confidential_assets_phase_c.md:M3.2` дор хянадаг).
+- **Program Mgmt / Confidential Assets TL:** шилжилтийн хүсэлтийг зөвшөөрөх, хадгалах
+  `status.md` нь удахгүй болох эргэлтүүдээр шинэчлэгдсэн бөгөөд чөлөөлөлтийг (хэрэв байгаа бол) баталгаажуулна уу.
+  шалгалт тохируулгын дэвтэртэй зэрэгцүүлэн тэмдэглэнэ.

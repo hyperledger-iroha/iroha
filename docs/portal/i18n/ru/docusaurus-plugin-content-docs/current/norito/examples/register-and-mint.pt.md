@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Registrar dominio e cunhar ativos
-description: Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+слизень: /norito/examples/register-and-mint
+титул: Регистратор dominio e cunhar ativos
+описание: Демонстрация разрешения на владение имуществом, регистрация активных действий и детерминированный доступ.
+источник: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
+Продемонстрируйте создание доменов с разрешениями, регистрацию активных действий и детерминированный доступ.
 
-## Roteiro do livro razao
+## Ротейру до Ливро Разау
 
-- Garanta que a conta de destino (por exemplo `ih58...`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
-- Invoque o entrypoint `register_and_mint` para criar a definicao do ativo ROSE e cunhar 250 unidades para Alice em uma unica transacao.
-- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` para confirmar que a cunhagem foi bem-sucedida.
+- Гарантия, что предназначение (например, `ih58...`) существует, необходимо выполнить этап настройки в каждом кратком руководстве по SDK.
+- Вызовите точку входа `register_and_mint`, чтобы вызвать определенное действие ROSE и выполнить 250 операций для Алисы в уникальной транзакции.
+- Проверьте свои данные через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить, что это удалось сделать.
 
-## Guias de SDK relacionados
+## Рекомендации по использованию SDK
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [Краткий старт работы с SDK Rust](/sdks/rust)
+- [Краткий старт работы с SDK Python](/sdks/python)
+- [Быстрый запуск SDK JavaScript](/sdks/javascript)
 
-[Baixe a fonte Kotodama](/norito-snippets/register-and-mint.ko)
+[Вставьте шрифт Kotodama](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

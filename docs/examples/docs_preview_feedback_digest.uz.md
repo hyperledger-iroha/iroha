@@ -7,17 +7,18 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4b1191d3475126df594d0f9f81d91f8ebbcd002c74a1f4d4176f2f42a59ca885
 source_last_modified: "2025-12-29T18:16:35.070397+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Feedback Digest (Template)
+# Hujjatlar portalini oldindan ko'rish uchun fikr-mulohazalar to'plami (shablon)
 
-Use this template when summarising a preview wave for governance, release
-reviews, or `status.md`. Copy the Markdown into the tracking ticket, replace
-placeholders with real data, and attach the JSON summary exported via
+Boshqarish, chiqarish uchun oldindan ko'rish to'lqinini umumlashtirganda ushbu shablondan foydalaning
+sharhlar yoki `status.md`. Markdownni kuzatuv chiptasiga nusxa ko'chiring, almashtiring
+haqiqiy ma'lumotlarga ega bo'lgan joy egalari va orqali eksport qilingan JSON xulosasini ilova qiling
 `npm run --prefix docs/portal preview:log -- --summary --summary-json`. The
-`preview:digest` helper (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
-generates the metrics section shown below so you only need to fill in the
-highlights/actions/artefacts rows.
+`preview:digest` yordamchi (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
+quyida ko'rsatilgan ko'rsatkichlar bo'limini yaratadi, shuning uchun siz faqat to'ldirishingiz kerak
+diqqatga sazovor joylar/harakatlar/artefaktlar qatorlari.
 
 ```markdown
 ## Wave preview-<tag> feedback digest (YYYY-MM-DD)
@@ -45,5 +46,5 @@ highlights/actions/artefacts rows.
 
 ```
 
-Keep each digest with the invite-tracking ticket so reviewers and governance can
-replay the evidence trail without digging through CI logs.
+Har bir dayjestni taklif-kuzatuv chiptasi bilan saqlang, shunda sharhlovchilar va boshqaruvchi
+CI jurnallarini qazmasdan dalil izini takrorlang.

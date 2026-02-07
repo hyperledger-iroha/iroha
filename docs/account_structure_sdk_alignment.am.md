@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
 source_last_modified: "2026-01-28T17:11:30.632934+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IH58 Rollout Note for SDK & Codec Owners
+# IH58 ልቀት ማስታወሻ ለኤስዲኬ እና ኮዴክ ባለቤቶች
 
-Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
+ቡድኖች፡ Rust SDK፣ TypeScript/JavaScript SDK፣ Python SDK፣ Kotlin SDK፣ Codec tooling
 
-Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
-implementation. Please align SDK behaviour and tests with the canonical spec.
+አውድ፡ I18NI0000000X አሁን የመላኪያ IH58 መለያ መታወቂያውን ያንጸባርቃል
+ትግበራ. እባክዎ የኤስዲኬ ባህሪን እና ሙከራዎችን ከቀኖናዊው ዝርዝር ጋር ያስተካክሉ።
 
-Key references:
-- Address codec + header layout — `docs/account_structure.md` §2
-- Curve registry — `docs/source/references/address_curve_registry.md`
-- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
-- Fixture vectors — `fixtures/account/address_vectors.json`
+ቁልፍ ማጣቀሻዎች፡-
+- የአድራሻ ኮዴክ + ራስጌ አቀማመጥ - I18NI0000001X §2
+- ከርቭ መዝገብ - `docs/source/references/address_curve_registry.md`
+- መደበኛ v1 ጎራ አያያዝ - `docs/source/references/address_norm_v1.md`
+- ቋሚ ቬክተሮች - `fixtures/account/address_vectors.json`
 
-Action items:
-1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
-   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
-2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
-   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
-   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
-   resolver unless the selector is implicit default (use the configured default
-   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
-   resolvers.
-4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
-   the first 2 bytes. Compressed alphabet base is **105**.
-5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
-   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
-   not assume secp256k1 is enabled by default outside Rust.
-6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
-   depend on CAIP‑10 conversions.
+የእርምጃ እቃዎች፡-
+1. ** ቀኖናዊ ውፅዓት፡** I18NI0000005X/ማሳያ IH58 ብቻ መልቀቅ አለበት
+   (አይ18NI00000006X ቅጥያ የለም)። ቀኖናዊ ሄክስ ለማረም (`0x...`) ነው።
+2. ** ተቀባይነት ያላቸው ግብዓቶች፡** ተንታኞች IH58 (የተመረጡ)፣ `sora` የታመቀ፣
+   እና ቀኖናዊ ሄክስ (`0x...` ብቻ፤ ባዶ ሄክስ ውድቅ ተደርጓል)። ግብዓቶች MAY ይይዛሉ
+   የ `@<domain>` ቅጥያ ጥቆማዎችን ለመምራት; `<label>@<domain>` ተለዋጭ ስሞች ያስፈልጋቸዋል
+   ፈቺ. ጥሬው `public_key@domain` (multihash hex) እንደተደገፈ ይቀራል።
+3. **መፍትሄዎች፡** ጎራ የለሽ IH58/sora መተንተን ጎራ-መራጭ ያስፈልገዋል።
+   መራጩ በተዘዋዋሪ ነባሪ ካልሆነ በስተቀር መፍትሄ ሰጪ (የተዋቀረውን ነባሪ ይጠቀሙ
+   የጎራ መለያ)። UAID (`uaid:...`) እና ግልጽ ያልሆነ (`opaque:...`) ቀጥተኛ ቃላት ያስፈልጋቸዋል
+   ፈታኞች.
+4. **IH58 checksum:** Blake2b-512 ከ `IH58PRE || prefix || payload` በላይ ይጠቀሙ፣ ይውሰዱ
+   የመጀመሪያዎቹ 2 ባይት. የታመቀ ፊደል መሠረት **105** ነው።
+5. ** ከርቭ ጋቲንግ፡** ኤስዲኬዎች ነባሪ ወደ Ed25519-ብቻ። ለ ግልጽ መርጦ መግባትን ያቅርቡ
+   ML-DSA/GOST/SM (ፈጣን የግንባታ ባንዲራዎች፣ JS/Android `configureCurveSupport`)። አድርግ
+   sep256k1 በነባሪነት ከዝገት ውጭ ነቅቷል ብለው አያስቡ።
+6. ** CAIP-10 የለም: ** እስካሁን የተላከ CAIP-10 ካርታ የለም; አለማጋለጥ ወይም
+   በ CAIP-10 ልወጣዎች ላይ የተመሠረተ ነው።
 
-Please confirm once the codecs/tests are updated; open questions can be tracked
-in the account-addressing RFC thread.
+እባክዎ አንዴ ኮዴኮች/ሙከራዎች ከተዘመኑ ያረጋግጡ፤ ክፍት ጥያቄዎችን መከታተል ይቻላል
+በመለያ-አድራሻ RFC ክር ውስጥ.

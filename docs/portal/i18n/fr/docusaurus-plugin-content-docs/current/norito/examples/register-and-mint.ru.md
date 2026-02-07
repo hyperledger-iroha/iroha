@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Зарегистрировать домен и выпустить активы
+slug : /norito/examples/register-and-mint
+title: Enregistrer la maison et activer les activités
 description: Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+source : crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
 Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
 
 ## Пошаговый обход реестра
 
-- Убедитесь, что аккаунт назначения (например `ih58...`) существует, повторяя фазу подготовки в каждом quickstart SDK.
-- Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE и выпустить 250 единиц для Alice в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить успешный выпуск.
+- Assurez-vous que le compte de démarrage (par exemple `ih58...`) soit disponible à l'étape suivante du SDK de démarrage rapide.
+- Vous avez choisi `register_and_mint` pour pouvoir exploiter l'action ROSE et gagner 250 éditions pour Alice dans une nouvelle transition.
+- Vérifiez les soldes correspondant à `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` pour pouvoir modifier votre compte.
 
-## Связанные руководства SDK
+## SDK de démarrage rapide
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [SDK de démarrage rapide Rust](/sdks/rust)
+- [SDK Python de démarrage rapide](/sdks/python)
+- [SDK JavaScript de démarrage rapide](/sdks/javascript)
 
 [Скачать исходник Kotodama](/norito-snippets/register-and-mint.ko)
 

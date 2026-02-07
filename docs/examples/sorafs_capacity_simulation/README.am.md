@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 727a648141405b0c8f12a131ff903d3e7ce5b74a7f899dd99fe9aa6490b55ef2
 source_last_modified: "2025-12-29T18:16:35.080764+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Capacity Simulation Toolkit
+# SoraFS የአቅም ማስመሰል መሣሪያ ስብስብ
 
-This directory ships the reproducible artefacts for the SF-2c capacity marketplace
-simulation. The toolkit exercises quota negotiation, failover handling, and slashing
-remediation using the production CLI helpers and a lightweight analysis script.
+ይህ ማውጫ ለSF-2c አቅም የገበያ ቦታ ሊባዙ የሚችሉ ቅርሶችን ይልካል።
+ማስመሰል. የመሳሪያ ኪቱ የኮታ ድርድርን፣ ያልተሳካ አያያዝን እና መቆራረጥን ይለማመዳል
+የምርት CLI አጋዥዎችን እና ቀላል ክብደት ያለው የትንታኔ ስክሪፕት በመጠቀም ማሻሻያ።
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-- Rust toolchain capable of running `cargo run` for workspace members.
-- Python 3.10+ (standard library only).
+- Rust toolchain ለስራ ቦታ አባላት `cargo run` ማስኬድ የሚችል።
+- Python 3.10+ (መደበኛ ቤተ-መጽሐፍት ብቻ)።
 
-## Quickstart
+## ፈጣን ጅምር
 
 ```bash
 # 1. Generate canonical CLI artefacts
@@ -30,39 +31,39 @@ remediation using the production CLI helpers and a lightweight analysis script.
 ./analyze.py --artifacts ./artifacts
 ```
 
-The `run_cli.sh` script invokes `sorafs_manifest_stub capacity` to build:
+የ`run_cli.sh` ስክሪፕት `sorafs_manifest_stub capacity` እንዲገነባ ጠይቋል፡-
 
-- Deterministic provider declarations for the quota negotiation fixture set.
-- A replication order matching the negotiation scenario.
-- Telemetry snapshots for the failover window.
-- A dispute payload capturing the slashing request.
+- ቆራጥ አቅራቢዎች ለኮታ ድርድር ማቀፊያ ስብስብ።
+- ከድርድር ሁኔታው ​​ጋር የሚዛመድ የማባዛት ትእዛዝ።
+- ለተሳካው መስኮት ቴሌሜትሪ ቅጽበተ-ፎቶዎች።
+- የመቁረጥ ጥያቄን የሚይዝ የሙግት ጭነት።
 
-The script writes Norito bytes (`*.to`), base64 payloads (`*.b64`), Torii request
-bodies, and human-readable summaries (`*_summary.json`) under the chosen artifact
-directory.
+ስክሪፕቱ I18NT0000005X ባይት (`*.to`)፣ ቤዝ64 የሚጫኑ ጭነቶች (`*.b64`)፣ Torii ጥያቄን ይጽፋል።
+አካላት እና በሰው ሊነበቡ የሚችሉ ማጠቃለያዎች (`*_summary.json`) በተመረጠው ቅርስ ስር
+ማውጫ.
 
-`analyze.py` consumes the generated summaries, produces an aggregated report
-(`capacity_simulation_report.json`), and emits a Prometheus textfile
-(`capacity_simulation.prom`) carrying:
+`analyze.py` የመነጨውን ማጠቃለያ ይበላል ፣የተጠቃለለ ሪፖርት ያወጣል።
+(`capacity_simulation_report.json`)፣ እና Prometheus የጽሑፍ ፋይል ያወጣል።
+(`capacity_simulation.prom`) ይዞ፡
 
-- `sorafs_simulation_quota_*` gauges describing negotiated capacity and allocation
-  share per provider.
-- `sorafs_simulation_failover_*` gauges highlighting downtime deltas and the selected
-  replacement provider.
-- `sorafs_simulation_slash_requested` recording the remediation percentage extracted
-  from the dispute payload.
+- `sorafs_simulation_quota_*` መለኪያዎች የመደራደር አቅም እና ምደባን የሚገልጹ
+  በአቅራቢው ያካፍሉ።
+- የ `sorafs_simulation_failover_*` መለኪያዎች የመቀነስ ዴልታዎችን እና የተመረጡትን ያደምቃሉ
+  ምትክ አቅራቢ.
+- `sorafs_simulation_slash_requested` የወጣውን የማገገሚያ መቶኛ በመመዝገብ ላይ
+  ከክርክር ጭነት.
 
-Import the Grafana bundle in `dashboards/grafana/sorafs_capacity_simulation.json`
-and point it at a Prometheus datasource that scrapes the generated textfile (for
-example via the node-exporter textfile collector). The runbook at
-`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` walks through the full
-workflow, including Prometheus configuration tips.
+የGrafana ጥቅልን በI18NI0000021X አስመጣ
+እና የመነጨውን የጽሁፍ ፋይሉን የሚጠርግ I18NT0000002X የመረጃ ምንጭ ላይ ጠቁመው (ለ
+ለምሳሌ በመስቀለኛ - ላኪ የጽሑፍ ፋይል ሰብሳቢ)። የ runbook በ
+`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` ሙሉ በሙሉ ያልፋል
+የስራ ሂደት፣ Prometheus ውቅር ምክሮችን ጨምሮ።
 
-## Fixtures
+## መለዋወጫዎች
 
-- `scenarios/quota_negotiation/` — Provider declaration specs and replication order.
-- `scenarios/failover/` — Telemetry windows for the primary outage and failover lift.
-- `scenarios/slashing/` — Dispute spec referencing the same replication order.
+- `scenarios/quota_negotiation/` - የአቅራቢ መግለጫ ዝርዝሮች እና የማባዛት ቅደም ተከተል።
+- `scenarios/failover/` - የቴሌሜትሪ መስኮቶች ለዋና መጥፋት እና ውድቀት ማንሻ።
+- `scenarios/slashing/` - ተመሳሳይ የማባዛት ቅደም ተከተልን የሚያመለክት ክርክር።
 
-These fixtures are validated in `crates/sorafs_car/tests/capacity_simulation_toolkit.rs`
-to guarantee they remain in sync with the CLI schema.
+እነዚህ ቋሚዎች በ `crates/sorafs_car/tests/capacity_simulation_toolkit.rs` ውስጥ የተረጋገጡ ናቸው።
+ከ CLI እቅድ ጋር እንደተመሳሰሉ እንዲቆዩ ዋስትና ለመስጠት።

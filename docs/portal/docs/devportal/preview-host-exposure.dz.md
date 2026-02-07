@@ -11,25 +11,26 @@ id: preview-host-exposure
 title: Preview host exposure guide
 sidebar_label: Preview host exposure
 description: Publish and verify the beta preview host before sending invites.
+translator: machine-google-reviewed
 ---
 
-The DOCS‑SORA roadmap requires every public preview to ride on the same
-checksum‑verified bundle that reviewers exercise locally. Use this runbook
-after reviewer onboarding (and the invite approval ticket) are complete to put
-the beta preview host online.
+DOCS‐I1NT0000004X མི་མང་གིས་ དེ་བཟུམ་མའི་ཐོག་ལུ་ སྔོན་ལྟ་འབད་དགོཔ་ཨིན།
+བསྐྱར་ཞིབ་པ་ཚུ་གིས་ ས་གནས་ནང་ ལུས་སྦྱོང་འབད་མི་ བདེན་དཔྱད་འབད་ཡོད་པའི་ བཱན་ཌལ་ཚུ། རན་བུད་འདི་ལག་ལེན་འཐབ།
+བསྐྱར་ཞིབ་པ་ བཀོད་སྒྲིག་འབད་བའི་ཤུལ་ལས་ (དང་ མགྲོན་བརྡ་གི་ཆ་འཇོག་ཤོག་འཛིན་) བཙུགས་ནིའི་དོན་ལུ་ མཇུག་བསྡུ་ཡོདཔ་ཨིན།
+the beta སྔོན་ལྟའི་ཧོསིཊི་ཡོངས་འབྲེལ་ནང་།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Reviewer onboarding wave approved and logged in the preview tracker.
-- Latest portal build present under `docs/portal/build/` and checksum
-  verified (`build/checksums.sha256`).
-- SoraFS preview credentials (Torii URL, authority, private key, submitted
-  epoch) stored either in environment variables or a JSON config such as
-  [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- DNS change ticket opened with the desired hostname (`docs-preview.sora.link`,
-  `docs.iroha.tech`, etc.) plus on-call contacts.
+- བསྐྱར་ཞིབ་པ་ ཨོན་བོང་ཌིང་རླབས་འདི་ ཆ་འཇོག་འབད་དེ་ སྔོན་ལྟའི་འཚོལ་ཞིབ་ནང་ ནང་བསྐྱོད་འབད་ཡོདཔ།
+- `docs/portal/build/` གི་འོག་ལུ་ཡོད་པའི་ མཐའ་མའི་དྲྭ་ཚིགས་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+  བདེན་དཔྱད་འབད་ཡོདཔ་ (`build/checksums.sha256`).
+- SoraFS སྔོན་ལྟའི་ངོ་རྟགས་ (Torii URL, དབང་ཚད་, སྒེར་གྱི་ལྡེ་མིག་, ཕུལ་ཡོདཔ།
+  epoch) མཐའ་འཁོར་འགྱུར་ཅན་ནང་ ཡང་ན་ ཇེ་ཨེསི་ཨོ་ཨེན་ རིམ་སྒྲིག་ཅིག་ དཔེར་ན་
+  [I18NI0000015X](../../../examples/sorafs_preview_publish.json).
+- ཌི་ཨེན་ཨེསི་བསྒྱུར་བཅོས་ཤོག་བྱང་འདི་ རེ་འདུན་བསྐྱེད་ཡོད་པའི་ཧོསཊི་མིང་ (I18NI000000016X, དང་ཅིག་ཁར་ཁ་ཕྱེ་ཡོདཔ་ཨིན།
+  `docs.iroha.tech` ལ་སོགས་པ།
 
-## Step 1 – Build and verify the bundle
+## གོ་རིམ་༡ པ་ – བརྩམ་ཞིནམ་ལས་ བདེན་དཔྱད་འབད་ནི།
 
 ```bash
 cd docs/portal
@@ -39,13 +40,13 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-The verify script refuses to continue when the checksum manifest is missing or
-tampered with, keeping every preview artefact audited.
+བདེན་བཤད་ཡིག་ཚུགས་འདི་གིས་ ཞིབ་དཔྱད་སམ་གསལ་སྟོན་འདི་མེད་པའི་སྐབས་ འཕྲོ་མཐུད་ནི་ལུ་ ངོས་ལེན་མི་འབད་ ཡང་ཅིན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ན་ ཡང་ཅིན།
+འདི་དང་གཅིག་ཁར་ སྔོན་ལྟ་གི་ཅ་ཆས་ཚུ་ རྩིས་ཞིབ་འབད་དེ་ བཞག་ཡོདཔ་ཨིན།
 
-## Step 2 – Package the SoraFS artefacts
+## གོ་རིམ་ ༢ – ཐུམ་སྒྲིལ་ I18NT0000001X ཅ་རྙིང་།
 
-Convert the static site into a deterministic CAR/manifest pair. `ARTIFACT_DIR`
-defaults to `docs/portal/artifacts/`.
+རྟག་བརྟན་གྱི་ས་ཁོངས་འདི་ གཏན་འབེབས་སི་ཨར་/སྣ་མང་ཆ་གཅིག་ནང་གཞི་བསྒྱུར་འབད། `ARTIFACT_DIR`
+སྔོན་སྒྲིག་ཚུ་ `docs/portal/artifacts/` ལུ།
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -61,47 +62,29 @@ node scripts/generate-preview-descriptor.mjs \
   --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Attach the generated `portal.car`, `portal.manifest.*`, descriptor, and checksum
-manifest to the preview wave ticket.
+བཟོ་བཏོན་འབད་ཡོད་མི་ `portal.car`, I18NI000000021X, འགྲེལ་བཤད་, དང་ ཅེག་སམ།
+སྔོན་ལྟ་རླབས་ཀྱི་ཤོག་འཛིན་ལུ་གསལ་སྟོན་འབད།
 
-## Step 3 – Publish the preview alias
+## གོམ་པ་ ༣ – སྔོན་ལྟའི་མིང་གཞན་དཔར་བསྐྲུན་འབད།
 
-Re-run the pin helper **without** `--skip-submit` once you are ready to expose
-the host. Supply either the JSON config or explicit CLI flags:
+ཁྱོད་ཀྱིས་ ཕྱིར་བཏོན་འབད་ནི་ལུ་ གྲ་སྒྲིག་ཡོད་པའི་སྐབས་ པིན་རོགས་རམ་པ་ **མེད་པའི་** I18NI0000022X ལོག་སྟེ་གཡོག་བཀོལ།
+ཧོསིཊི་. JSON རིམ་སྒྲིག་ཡང་ན་ གསལ་ཏོག་ཏོ་ CLI དར་ཆ་ཚུ་ བཀྲམ་སྤེལ་འབད།
 
-```bash
-./scripts/sorafs-pin-release.sh \
-  --alias docs-preview.sora \
-  --alias-namespace docs \
-  --alias-name preview \
-  --pin-label docs-preview \
-  --config ~/secrets/sorafs_preview_publish.json
-```
+I18NF0000008X
 
-The command writes `portal.pin.report.json`,
-`portal.manifest.submit.summary.json`, and `portal.submit.response.json`, which
-must ship with the invite evidence bundle.
+བརྡ་བཀོད་ཀྱིས་ `portal.pin.report.json` བྲིས།
+`portal.manifest.submit.summary.json`, དང་ I18NI0000025X, དེ་ཡང་།
+མགྲོན་པོའི་སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་དང་གཅིག་ཁར་ སྐྱེལ་འདྲེན་འབད་དགོ།
 
-## Step 4 – Generate the DNS cutover plan
+## གོ་རིམ་༤ པ་ – ཌི་ཨེན་ཨེསི་ བཤོལ་བཞག་འཆར་གཞི་བཟོ་བཏོན་འབད།
 
-```bash
-node scripts/generate-dns-cutover-plan.mjs \
-  --dns-hostname docs.iroha.tech \
-  --dns-zone sora.link \
-  --dns-change-ticket DOCS-SORA-Preview \
-  --dns-cutover-window "2026-03-05 18:00Z" \
-  --dns-ops-contact "pagerduty:sre-docs" \
-  --manifest artifacts/sorafs/portal.manifest.to \
-  --cache-purge-endpoint https://cache.api/purge \
-  --cache-purge-auth-env CACHE_PURGE_TOKEN \
-  --out artifacts/sorafs/portal.dns-cutover.json
-```
+I18NF0000009X
 
-Share the resulting JSON with Ops so the DNS switch references the exact
-manifest digest. When reusing an earlier descriptor as the rollback source,
-append `--previous-dns-plan path/to/previous.json`.
+གྲུབ་འབྲས་ཇེ་ཨེསི་ཨོ་ཨེན་ཨོཔ་དང་གཅིག་ཁར་བགོ་བཤའ་རྐྱབ་ཨིན་ དེ་འབདཝ་ལས་ ཌི་ཨེན་ཨེསི་སོར་བསྒྱུར་འདི་གིས་ ཏག་ཏག་ལུ་གཞི་བསྟུན་འབདཝ་ཨིན།
+གསལ་བསྒྲགས། སྔོན་མའི་འགྲེལ་བཤད་ཅིག་ ལོག་བཤུད་འབྱུང་ཁུངས་སྦེ་ལོག་ལག་ལེན་འཐབ་པའི་སྐབས།
+ཟུར་དེབ་ `--previous-dns-plan path/to/previous.json`.
 
-## Step 5 – Probe the deployed host
+## གོ་རིམ་ ༥ – བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ཧོསཊི་འཚོལ་ཞིབ་འབད།
 
 ```bash
 npm run probe:portal -- \
@@ -109,23 +92,23 @@ npm run probe:portal -- \
   --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-The probe confirms the served release tag, CSP headers, and signature metadata.
-Repeat the command from two regions (or attach curl output) so auditors can see
-that the edge cache is warm.
+འཚོལ་ཞིབ་འདི་གིས་ ཞབས་ཏོག་སྤྲོད་པའི་ངོ་རྟགས་དང་ སི་ཨེསི་པི་མགོ་ཡིག་ དེ་ལས་ མཚན་རྟགས་མེ་ཊ་ཌེ་ཊ་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+ལུང་ཕྱོགས་གཉིས་ལས་ བརྡ་བཀོད་འདི་ བསྐྱར་ལོག་འབད་ཡོདཔ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ མཐོང་ཚུགས།
+མཐའ་མཚམས་འདྲ་མཛོད་འདི་དྲོད་པོ་ཡོད།
 
-## Evidence bundle
+## བདེན་དཔང་བསྡམས།
 
-Include the following artefacts in the preview wave ticket and refer to them in
-the invite email:
+སྔོན་ལྟའི་རླབས་ཤོག་ནང་ འོག་གི་ཅ་རྙིང་ཚུ་བཙུགས་ཞིནམ་ལས་ དེ་ཚུ་ལུ་གཞི་བསྟུན་འབད།
+མགྲོན་པོའི་གློག་འཕྲིན་འདི།
 
-| Artefact | Purpose |
-|----------|---------|
-| `build/checksums.sha256` | Proves the bundle matches the CI build. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Canonical SoraFS payload + manifest. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Shows the manifest submission + alias binding succeeded. |
-| `artifacts/sorafs/portal.dns-cutover.json` | DNS metadata (ticket, window, contacts), route promotion (`Sora-Route-Binding`) summary, the `route_plan` pointer (plan JSON + header templates), cache purge info, and rollback instructions for Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Signed descriptor tying the archive + checksum together. |
-| `probe` output | Confirms the live host advertises the expected release tag. |
+| ཅ་ཆས། | དམིགས་ཡུལ། |
+|-----------------------------------------------------------------------------------------------------------------------------------------
+| I18NI0000027X | སི་ཨའི་བཟོ་བསྐྲུན་དང་མཐུན་སྒྲིག་ཡོད་པའི་ བཱན་ཌལ་འདི་བདེན་ཁུངས་བཀལཝ་ཨིན། |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | ཀེན་ནི་ཀལ་ I18NT0000002X པེ་ལོཌི་ + གསལ་སྟོན་. |
+| `portal.pin.report.json`, I18NI000000031X, `portal.submit.response.json`, གསལ་སྟོན་གྱི་ཕུལ་བཀོད་ + མིང་གཞན་བཱའིན་ཌིང་འདི་མཐར་འཁྱོལ་ཅན་སྟོན་ཡོདཔ། |
+| I18NI0000033X | ཌི་ཨེན་ཨེསི་ མེ་ཊ་ཌེ་ཊ་ (ཊིག་ཀེཊི་ སྒོ་སྒྲིག་ འབྲེལ་འཐུད་ཚུ་) འགྲུལ་ལམ་ཁྱབ་སྤེལ་ (`Sora-Route-Binding`) བཅུད་བསྡུས་དང་ I18NI000000035X དཔག་བྱེད་ (འཆར་གཞི་ JSON + མགོ་ཡིག་ཊེམ་པེལེཊི་) དང་ Ops གི་དོན་ལུ་ བསྐོར་རྒྱབ་བཀོད་རྒྱ་ཚུ་ འདྲ་མཛོད་འབད་ནི། |
+| `artifacts/sorafs/preview-descriptor.json` | ཡིག་མཛོད་ + ཅེག་སམ་གཅིག་ཁར་བསྡོམས་ཏེ་ མཚན་རྟགས་བཀོད་ཡོདཔ། |
+| `probe` ཐོན་འབྲས་ | ཐད་རི་བ་རི་ཧོསཊི་གིས་ རེ་བ་བསྐྱེད་པའི་གསར་བཏོན་ངོ་རྟགས་འདི་ ཁྱབ་བསྒྲགས་འབདཝ་ཨིན། |
 
-Once the host is live, follow the [preview invite playbook](./public-preview-invite.md)
-to distribute the link, log invites, and monitor telemetry.
+ཧོསིཊི་འདི་ ཐད་རི་བ་རི་ འབད་ཚརཝ་ད་ [preview gint glatbook](I18NU0000012X) ལུ་རྗེས་སུ་འཇུག་དགོ།
+འབྲེལ་ལམ་དང་ དྲན་དེབ་འབོད་བརྡ་ དེ་ལས་ ཊེ་ལི་མི་ཊི་ཚུ་ བཀྲམ་སྤེལ་འབད་ནི་ལུ་ཨིན།

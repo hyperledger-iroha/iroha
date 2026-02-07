@@ -4,43 +4,45 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Recorrido del libro mayor
-description: Reproduce un flujo determinista de register -> mint -> transfer con el CLI `iroha` y verifica el estado resultante del ledger.
-slug: /norito/ledger-walkthrough
+タイトル: 市長のレコリード
+説明: 登録の決定 -> ミント -> 転送コントロール CLI `iroha` を再現し、台帳の結果を検証します。
+スラッグ: /norito/ledger-walkthrough
 ---
 
-Este recorrido complementa el [inicio rapido de Norito](./quickstart.md) mostrando como mutar e inspeccionar el estado del ledger con el CLI `iroha`. Registraras una nueva definicion de activo, acunaras unidades en la cuenta de operador por defecto, transferiras parte del balance a otra cuenta y verificaras las transacciones y tenencias resultantes. Cada paso refleja los flujos cubiertos en los quickstarts de SDK de Rust/Python/JavaScript para que puedas confirmar la paridad entre CLI y SDK.
+検査は完全に補完され、[Norito](./quickstart.md) CLI `iroha` で検査が行われます。レジストラは新しい活動の定義、欠陥のあるオペラ座の管理、転送の部分のバランスを確認し、取引の結果を確認します。 Rust/Python/JavaScript の SDK クイックスタートを参照して、CLI と SDK を確認してください。
 
-## Requisitos previos
+## 以前の要件
 
-- Sigue el [quickstart](./quickstart.md) para iniciar la red de un solo peer via
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Asegurate de que `iroha` (el CLI) este compilado o descargado y que puedas
-  alcanzar el peer usando `defaults/client.toml`.
-- Helpers opcionales: `jq` (formateo de respuestas JSON) y un shell POSIX para
-  los snippets de variables de entorno usados abajo.
+- Sigue el [クイックスタート](./quickstart.md) ソロピア経由で最初に実行
+  `docker compose -f defaults/docker-compose.single.yml up --build`。
+- `iroha` (el CLI) のコンパイルを実行し、プエダを削除する
+  アルカンザール エル ピア ウサンド `defaults/client.toml`。
+- オプションのヘルパー: `jq` (JSON 形式) および POSIX パラメータのアンシェル
+  変数のスニペットが表示されます。
 
-A lo largo de la guia, reemplaza `$ADMIN_ACCOUNT` y `$RECEIVER_ACCOUNT` con los
-IDs de cuenta que planeas usar. El bundle por defecto ya incluye dos cuentas
-Derivadas de las claves demo:
+ギアのラルゴ、リエンプラザ `$ADMIN_ACCOUNT` と `$RECEIVER_ACCOUNT` コンロス
+ユーザーの飛行機の ID。欠陥やドス クエンタスを含むエル バンドル
+ラス クラーベスのデリバダのデモ:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirma los valores listando las primeras cuentas:
+ロス・ヴァローレス・リストアンド・ラス・プリメラス・クエンタスを確認:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspecciona el estado genesis
+## 1. 検査の起源
 
-Empieza explorando el ledger al que apunta el CLI:
+Empieza は CLI で帳簿を調べます:
 
 ```sh
 # Domains registrados en genesis
@@ -55,11 +57,11 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-Estos comandos se basan en respuestas respaldadas por Norito, por lo que el filtrado y la paginacion son deterministas y coinciden con lo que reciben los SDK.
+Norito からのコマンドの実行、フィルタリングとページの決定と、SDK の受信との一致。
 
-## 2. Registra una definicion de activo
+## 2. 活動定義登録
 
-Crea un nuevo activo infinitamente acunable llamado `coffee` dentro del dominio
+新しい活動を無限に作成し、実行可能なラマド `coffee` デントロ デル ドミニオを作成します。
 `wonderland`:
 
 ```sh
@@ -67,12 +69,12 @@ iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-El CLI imprime el hash de la transaccion enviada (por ejemplo, `0x5f...`). Guardalo para consultar el estado mas tarde.
+CLI のインプリメエル ハッシュ デ ラ トランザクション環境 (例、`0x5f...`)。グアルダロ パラ コンサルタント エル スタド マス タルデ。
 
-## 3. Acuna unidades en la cuenta del operador
+## 3. アクニャ ユニダデス アン ラ クエンタ デル オペラドール
 
-Las cantidades de activos viven bajo el par `(asset definition, account)`. Acuna
-250 unidades de `coffee#wonderland` en `$ADMIN_ACCOUNT`:
+`(asset definition, account)` での活動を続けてください。アクーニャ
+`coffee#wonderland` と `$ADMIN_ACCOUNT` の 250 単位:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -80,14 +82,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-De nuevo, captura el hash de transaccion (`$MINT_HASH`) de la salida del CLI. Para
-verificar el balance, ejecuta:
+新しい、トランザクション ハッシュ (`$MINT_HASH`) の CLI のキャプチャ。パラ
+検証残高、排出量:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-o, para apuntar solo al nuevo activo:
+ああ、新しい活動をするときは、ソロで活動してください:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -95,7 +97,7 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfiere parte del balance a otra cuenta
+## 4. バランスを保つためのトランスフィエレ
 
 Mueve 50 unidades de la cuenta del operador a `$RECEIVER_ACCOUNT`:
 
@@ -106,8 +108,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Guarda el hash de transaccion como `$TRANSFER_HASH`. Consulta los holdings en ambas
-cuentas para verificar los nuevos balances:
+ハッシュ デ トランザクション コモ `$TRANSFER_HASH` を保護します。アンバスでロスホールディングスに問い合わせてください
+cuentas para verificar los nuevos 残高:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -117,35 +119,35 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verifica la evidencia del ledger
+## 5. 台帳の証拠を検証する
 
-Usa los hashes guardados para confirmar que ambas transacciones se confirmaron:
+米国は、確認のための安全な措置を講じます:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-Tambien puedes transmitir bloques recientes para ver que bloque incluyo la transferencia:
+転送ブロックを含むブロックの確認:
 
 ```sh
 # Stream desde el ultimo bloque y detente despues de ~5 segundos
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Cada comando anterior usa los mismos payloads Norito que los SDK. Si replicas
-este flujo mediante codigo (ver quickstarts de SDK abajo), los hashes y balances
-coincidiran siempre que apuntes a la misma red y defaults.
+Cada commando anterior usa los missmos ペイロード Norito que los SDK。 Siレプリカ
+este flujo mediante codigo (SDK abajo のクイックスタート)、ハッシュとバランスの損失
+デフォルトと一致します。
 
-## Enlaces de paridad con SDK
+## SDK を実装する
 
-- [Rust SDK quickstart](../sdks/rust) - demuestra como registrar instrucciones,
-  enviar transacciones y consultar estado desde Rust.
-- [Python SDK quickstart](../sdks/python) - muestra las mismas operaciones de register/mint
-  con helpers JSON respaldados por Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) - cubre solicitudes Torii,
-  helpers de gobernanza y wrappers de queries tipados.
+- [Rust SDK クイックスタート](../sdks/rust) - 登録サービスの説明、
+  Rust との取引やコンサルタントのサポートに感謝します。
+- [Python SDK クイックスタート](../sdks/python) - 登録/ミント操作の管理
+  con helpers JSON respaldados por Norito。
+- [JavaScript SDK クイックスタート](../sdks/javascript) - キューブ ソリチュード Torii、
+  ゴベルナンザのヘルパーとクエリのラッパー。
 
-Ejecuta primero el recorrido del CLI, luego repite el escenario con tu SDK
-preferido para asegurar que ambas superficies concuerdan en hashes de transaccion,
-balances y resultados de consultas.
+CLI の最初の記録、SDK のシナリオの繰り返し
+取引上の優先権を確保するための優先権、
+相談結果のバランスをとります。

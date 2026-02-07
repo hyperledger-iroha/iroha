@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/api/overview.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import TryItConsole from '@site/src/components/TryItConsole.jsx';
+TryItConsole-г '@site/src/components/TryItConsole.jsx'-аас импортлох;
 
-# Torii API Overview
+# Torii API тойм
 
-The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha
-nodes. The canonical OpenAPI document is generated via:
+Torii гарц нь Iroha-тай харилцахын тулд REST + WebSocket гадаргууг нээж өгдөг.
+зангилаа. Каноник OpenAPI баримт бичгийг дараах байдлаар үүсгэнэ.
 
 ```bash
 cargo xtask openapi
 ```
 
-Running the command above writes `docs/portal/static/openapi/torii.json` and
-feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+Дээрх командыг ажиллуулснаар `docs/portal/static/openapi/torii.json` болон бичнэ
+`docusaurus-plugin-openapi-docs` интеграцийг тэжээдэг тул энэ хэсэг шинэчлэгдэнэ
+автоматаар. Генератор нь санах ойн Torii чиглүүлэгчийг эргүүлж,
+түүний OpenAPI төгсгөлийн цэгийг асуух; Хэрэв энэ нь амжилтгүй болвол (жишээлбэл, чиглүүлэгчийг эхлүүлэх
+алдаанууд) оронд нь тодорхойлогч орлуулагчийн үзүүлэлт ялгардаг.
 
-## Current status
+## Одоогийн байдал
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
-- **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
-- **Authentication:** The “Try it” sandbox now forwards requests through a
-  constrained staging proxy. Operators must supply a Torii endpoint and bearer
-  token before issuing calls.
-- **Version selector:** Swagger UI, RapiDoc, and the full Torii OpenAPI page
-  expose a dropdown that reads `openapi/versions.json` so you can compare
-  historical snapshots. The `Latest (tracked)` option points to
-  `/openapi/torii.json`, while all other entries load the corresponding
-  `openapi/versions/<version>/torii.json` artifact.
-- **Snapshot workflow:** After running `npm run docs:version -- <label>`, refresh
-  the matching OpenAPI file with `npm run sync-openapi -- --version=<label> --latest`
-  so the dropdown can load both the frozen snapshot and the rolling “Latest” build.
+- **Онцлох эх сурвалж:** `cargo xtask openapi` нь Torii чиглүүлэгчээс шууд асуудаг; нь
+  чиглүүлэгч нь OpenAPI-г гаргаж чадахгүй үед л нөөцийн бүдүүвч гарна.
+  баримт бичиг.
+- **Determinism:** CI-ийн тогтвортой ялгааг хангахын тулд JSON гаралтыг каноник болгосон.
+- **Баталгаажуулалт:** "Оролдоод үзээрэй" хамгаалагдсан хязгаарлагдмал орчин нь хүсэлтийг a-ээр дамжуулдаг
+  хязгаарлагдмал түвшний прокси. Операторууд Torii төгсгөлийн цэг болон зөөгчийг нийлүүлэх ёстой
+  дуудлага хийхээс өмнө токен.
+- **Хувилбар сонгогч:** Swagger UI, RapiDoc болон бүрэн Torii OpenAPI хуудас
+  `openapi/versions.json` гэж уншдаг унадаг цэсийг нээснээр та харьцуулах боломжтой
+  түүхэн агшин зуурын зургууд. `Latest (tracked)` сонголт нь үүнийг зааж байна
+  `/openapi/torii.json`, бусад бүх оруулгууд нь харгалзах ачааллыг
+  `openapi/versions/<version>/torii.json` олдвор.
+- **Ажлын агшин зуурын явц:** `npm run docs:version -- <label>` ажиллуулсны дараа дахин сэргээнэ үү
+  тохирох OpenAPI файл нь `npm run sync-openapi -- --version=<label> --latest`
+  Тиймээс унадаг цэс нь хөлдөөсөн хормын хувилбар болон "Хамгийн сүүлийн" хувилбарыг хоёуланг нь ачаалах боломжтой.
 
-The router-backed extractor now emits the full Torii surface. If you see the
-placeholder stub, treat it as a build-time failure and inspect the Torii
-router startup logs.
+Чиглүүлэгч дээр тулгуурласан олборлогч одоо Torii гадаргууг бүрэн хэмжээгээр ялгаруулж байна. Хэрэв та харвал
+орлуулагчийн stub, үүнийг бүтээх хугацааны алдаа гэж үзэж, Torii-г шалгана уу.
+чиглүүлэгчийг эхлүүлэх бүртгэлүүд.
 
-## Try it sandbox (DOCS-3)
+## Хамгаалалтын хязгаарлагдмал орчинд үзээрэй (DOCS-3)
 
-The developer portal embeds a small console that relays REST requests through a
-Node-based proxy. The proxy enforces CORS, rate limits, and optional bearer
-tokens so the widget can talk to staging gateways without exposing credentials.
-See `docs/devportal/try-it.md` for the full operator checklist.
+Хөгжүүлэгчийн портал нь REST хүсэлтийг a дамжуулан дамжуулдаг жижиг консолыг суулгасан
+Зангилаа дээр суурилсан прокси. Прокси нь CORS, ханшийн хязгаарлалт болон нэмэлт эзэмшигчийг хэрэгжүүлдэг
+токенууд тул виджет нь итгэмжлэлийг ил гаргахгүйгээр үе шаттай гарцтай ярих боломжтой.
+Операторын бүрэн хяналтын жагсаалтыг `docs/devportal/try-it.md`-с харна уу.
 
-Start the proxy alongside the Docusaurus dev server:
+Docusaurus dev серверийн хажууд прокси эхлүүлнэ үү:
 
 ```bash
 cd docs/portal
@@ -68,15 +70,15 @@ npm run tryit-proxy
 npm run start
 ```
 
-- The proxy listens on `TRYIT_PROXY_LISTEN` (default `127.0.0.1:8787`) and
-  forwards any `/proxy/...` requests to `TRYIT_PROXY_TARGET`.
-- Supply `TRYIT_PROXY_BEARER` for static bearer tokens or let callers provide
-  one per request via the “Bearer token” field.
-- Rate limits default to 60 requests per minute and can be tuned through
+- Прокси нь `TRYIT_PROXY_LISTEN` (анхдагч `127.0.0.1:8787`) дээр сонсдог ба
+  `/proxy/...` хүсэлтийг `TRYIT_PROXY_TARGET` руу дамжуулдаг.
+- `TRYIT_PROXY_BEARER`-ийг статик эзэмшигчийн жетоноор хангах эсвэл залгасан хүмүүст өгөхийг зөвшөөрөх.
+  "Bearer token" талбараар дамжуулан хүсэлт бүрт нэг.
+- Үнийн хэмжээг минутанд 60 хүсэлтээр хязгаарладаг бөгөөд үүнийг тохируулах боломжтой
   `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
 
-> ⚠️ The proxy is intended for staging/demo access. Production deployments
-> should run behind hardened ingress and reuse the same rate limiting policy in
-> front of Torii.
+> ⚠️ Прокси нь шатлалт/демо хандалт хийхэд зориулагдсан. Үйлдвэрлэлийн байршуулалт
+> хатуурсан нэвтрэлтийн ард гүйж, ижил хурдыг хязгаарлах бодлогыг дахин ашиглах ёстой
+> Torii урд.
 
 <TryItConsole />

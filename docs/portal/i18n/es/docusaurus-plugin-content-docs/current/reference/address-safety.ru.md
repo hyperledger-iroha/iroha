@@ -4,43 +4,41 @@ direction: ltr
 source: docs/portal/docs/reference/address-safety.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Безопасность и доступность адресов
-description: UX-требования для безопасного отображения и передачи адресов Iroha (ADDR-6c).
+título: Безопасность и доступность адресов
+descripción: UX-требования для безопасного отображения и передачи адресов Iroha (ADDR-6c).
 ---
 
-Эта страница фиксирует документ ADDR-6c. Применяйте эти ограничения к кошелькам, explorers, инструментам SDK и любым поверхностям портала, которые отображают или принимают адреса для людей. Каноническая модель данных находится в `docs/account_structure.md`; чек-лист ниже объясняет, как показывать эти форматы без ущерба для безопасности и доступности.
+Esta página contiene el documento ADDR-6c. Применяйте эти ограничения к кошелькам, explorers, инструментам SDK and любым поверхностям портала, которые отображают или принимают адреса для людей. Каноническая модель данных находится в `docs/account_structure.md`; La lista de verificación no está permitida, ya que puede colocar estos formatos en el usuario para el almacenamiento y la descarga.
 
 ## Безопасные сценарии обмена
 
-- По умолчанию каждое действие копирования/поделиться использует адрес IH58. Показывайте разрешенный домен как поддерживающий контекст, чтобы строка с checksum была на виду.
-- Предлагайте действие “Share”, которое включает полный plain-text адрес и QR-код, полученный из того же payload. Дайте пользователям проверить оба перед подтверждением.
-- Если места мало (маленькие карточки, уведомления), сохраняйте читаемый префикс, показывайте многоточие и оставляйте последние 4–6 символов, чтобы сохранить якорь checksum. Дайте тап/горячую клавишу для копирования полной строки без усечения.
-- Предотвращайте рассинхронизацию буфера обмена, показывая toast подтверждения с точной IH58 строкой, которая была скопирована. Там, где доступна telemetry, считайте попытки копирования и действия “поделиться”, чтобы быстро выявлять UX регрессии.
+- Para realizar una copia de diseño/uso en la dirección IH58. Показывайте разрешенный домен как поддерживающий контекст, чтобы строка с checksum была на виду.
+- Antes del diseño "Compartir", incluye direcciones de texto sin formato y códigos QR, así como la carga útil. Дайте пользователям проверить оба перед подтверждением.
+- Если места мало (маленькие карточки, уведомления), сохраняйте читаемый префикс, показывайте многоточие и оставляйте последние 4–6 símbolos, чтобы сохранить якорь suma de comprobación. Pulse/haga clic en el botón para copiar varias veces antes de su uso.
+- Antes de realizar la sincronización, coloque una tostada en la lámpara IH58 o una tostada. Además, cuando se instala telemetría, se realizan copias de seguridad y dispositivos “podidos” y se busca una regresión de UX.
 
-## IME и защита ввода
+## IME y защита ввода- Utilice la dirección не-ASCII en la dirección correcta. Когда появляются артефакты IME (ancho completo, Kana, знаки тона), показывайте предупреждение inline, объясняющее, как переключить клавиатуру на латинский ввод перед повтором.
+- Inserte archivos de texto sin formato, combine archivos de texto sin formato y conecte archivos ASCII antes de su validación. Esto no puede afectar el progreso de la configuración de IME en la sesión de fotos.
+- Усильте валидацию против de ancho cero, selectores de variación y más puntos de código Unicode. Al iniciar sesión en una categoría de código abierto, las suites fuzzing pueden importar telemetría.
 
-- Отклоняйте не-ASCII ввод в полях адреса. Когда появляются артефакты IME (full width, Kana, знаки тона), показывайте inline предупреждение, объясняющее, как переключить клавиатуру на латинский ввод перед повтором.
-- Дайте plain-text зону вставки, которая удаляет комбинируемые знаки и заменяет пробелы на ASCII пробелы перед валидацией. Это помогает не терять прогресс при отключении IME в середине потока.
-- Усильте валидацию против zero-width joiners, variation selectors и других скрытых Unicode code points. Логируйте категорию отклоненного кода, чтобы fuzzing suites могли импортировать telemetry.
+## Ожидания для asistencia técnica
 
-## Ожидания для assistive технологий
+- Anótese el bloque de direcciones con `aria-label` o `aria-describedby`, según las preferencias de configuración y la carga útil eliminada. группы по 4–8 символов (“ih guión b tres dos…”). Estos lectores de pantalla no utilizan símbolos de pantalla pequeños.
+- Сообщайте об успешных событиях копирования/поделиться через educada actualización de la región en vivo. Указывайте пункт назначения (portapapeles, hoja para compartir, QR), чтобы пользователь понимал, что действие завершено без переноса фокуса.
+- Utilice el texto original `alt` para la versión QR anterior (por ejemplo, “Dirección IH58 para `<account>` en la cadena `0x1234`”). El espacio con QR-kanvas activa el respaldo “Copiar dirección como texto” para buscar en ningún sitio.
 
-- Аннотируйте каждый блок адреса с `aria-label` или `aria-describedby`, который проговаривает читаемый префикс и разбивает payload на группы по 4–8 символов (“ih dash b three two …”). Это не дает screen readers читать бесконечную строку символов.
-- Сообщайте об успешных событиях копирования/поделиться через polite live region update. Указывайте пункт назначения (clipboard, share sheet, QR), чтобы пользователь понимал, что действие завершено без переноса фокуса.
-- Добавляйте описательный `alt` текст для QR-превью (например, “IH58 address for `<account>` on chain `0x1234`”). Рядом с QR-кanvas добавьте fallback “Copy address as text” для пользователей с низким зрением.
-
-## Сжатые адреса только для Sora
-
-- Gating: скрывайте сжатую строку `sora…` за явным подтверждением. Подтверждение должно повторять, что формат работает только на сетях Sora Nexus.
-- Labelling: каждое появление должно включать видимый бейдж “Sora-only” и tooltip с объяснением, почему другим сетям требуется форма IH58.
+## Сжатые адреса только для Sora- Puerta: скрывайте сжатую строку `sora…` за явным подтверждением. Para poder realizar la instalación, el formato del robot se puede realizar en Sora Nexus.
+- Etiquetado: каждое появление должно включать видимый бейдж “Sora-only” e información sobre herramientas con объяснением, почему другим сетям требуется форма IH58.
 - Guardrails: если активный discriminant цепочки не соответствует выделению Nexus, полностью отказывайтесь генерировать сжатый адрес и направляйте пользователя обратно к IH58.
-- Telemetry: записывайте частоту запросов и копирования сжатой формы, чтобы playbook инцидентов мог обнаруживать всплески случайного шаринга.
+- Telemetría: записывайте частоту запросов and копирования сжатой формы, чтобы playbook инцидентов мог обнаруживать всплески случайного шаринга.
 
 ## Качество
 
-- Расширьте автоматизированные UI-тесты (или storybook a11y suites), чтобы подтверждать наличие необходимых ARIA метаданных и появление сообщений об отказе IME.
-- Добавьте ручные QA сценарии для ввода IME (kana, pinyin), проверки screen reader (VoiceOver/NVDA) и копирования QR в высококонтрастных темах перед release.
-- Включите эти проверки в release checklist вместе с IH58 parity тестами, чтобы регрессии оставались заблокированными до исправления.
+- Pruebas de interfaz de usuario automáticas (o storybook a11y suites), que permiten nuevas metadanas y actualizaciones de ARIA сообщений об отказе IME.
+- Agregue aplicaciones de control de calidad para archivos IME (kana, pinyin), lector de pantalla de prueba (VoiceOver/NVDA) y copia de QR en temas de contacto antes del lanzamiento.
+- Tenga en cuenta estas pruebas en la lista de verificación de versiones relacionadas con los test de paridad del IH58, ya que se han producido regresiones en el dispositivo.

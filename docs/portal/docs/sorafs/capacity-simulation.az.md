@@ -11,41 +11,42 @@ id: capacity-simulation
 title: SoraFS Capacity Simulation Runbook
 sidebar_label: Capacity Simulation Runbook
 description: Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-This runbook explains how to run the SF-2c capacity marketplace simulation kit and visualise the resulting metrics. It validates quota negotiation, failover handling, and slashing remediation end-to-end using the deterministic fixtures in `docs/examples/sorafs_capacity_simulation/`. Capacity payloads still use `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
+Bu runbook SF-2c tutumlu bazar simulyasiya dəstini necə işə salmağı və nəticədə əldə edilən ölçüləri vizuallaşdırmağı izah edir. O, `docs/examples/sorafs_capacity_simulation/`-dəki deterministik qurğulardan istifadə edərək, kvota danışıqlarını, uğursuzluqla işləməyi və kəsintilərin aradan qaldırılmasını başdan sona doğrulayır. Tutumlu yüklər hələ də `sorafs_manifest_stub capacity`-dən istifadə edir; manifest/CAR qablaşdırma axınları üçün `iroha app sorafs toolkit pack` istifadə edin.
 
-## 1. Generate CLI artefacts
+## 1. CLI artefaktları yaradın
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` wraps `sorafs_manifest_stub capacity` to emit Norito payloads, base64 blobs, Torii request bodies, and JSON summaries for:
+`run_cli.sh`, Norito faydalı yükləri, base64 blobları, Torii sorğu gövdələrini və JSON xülasələrini yaymaq üçün `sorafs_manifest_stub capacity`-i əhatə edir:
 
-- Three provider declarations participating in the quota negotiation scenario.
-- A replication order allocating the staged manifest across those providers.
-- Telemetry snapshots for the pre-outage baseline, outage interval, and failover recovery.
-- A dispute payload requesting slashing after the simulated outage.
+- Kvota danışıqları ssenarisində iştirak edən üç provayder bəyannaməsi.
+- Mərhələli manifesti həmin provayderlər arasında bölüşdürən replikasiya sifarişi.
+- Kəsintidən əvvəl ilkin xətt, kəsilmə intervalı və uğursuzluğun bərpası üçün telemetriya snapshotları.
+- Simulyasiya edilmiş kəsilmədən sonra kəsilmə tələb edən mübahisə yükü.
 
-All artefacts land under `./artifacts` (override by passing a different directory as the first argument). Inspect the `_summary.json` files for human-readable context.
+Bütün artefaktlar `./artifacts` altında düşür (ilk arqument kimi fərqli qovluğu keçməklə ləğv edin). `_summary.json` fayllarını insanların oxuya biləcəyi kontekst üçün yoxlayın.
 
-## 2. Aggregate results & emit metrics
+## 2. Nəticələri birləşdirin və ölçüləri buraxın
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-The analyzer produces:
+Analizator istehsal edir:
 
-- `capacity_simulation_report.json` - aggregated allocations, failover deltas, and dispute metadata.
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) suitable for the node-exporter textfile collector or a standalone scrape job.
+- `capacity_simulation_report.json` - məcmu ayırmalar, uğursuzluq deltaları və mübahisə metadatası.
+- `capacity_simulation.prom` - Prometheus mətn faylı ölçüləri (`sorafs_simulation_*`) qovşaq ixrac edən mətn faylı kollektoru və ya müstəqil kazıma işi üçün uyğundur.
 
-Example Prometheus scrape configuration:
+Misal Prometheus kazıma konfiqurasiyası:
 
 ```yaml
 scrape_configs:
@@ -60,22 +61,22 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Point the textfile collector at `capacity_simulation.prom` (when using node-exporter copy it into the directory passed via `--collector.textfile.directory`).
+Mətn faylı kollektorunu `capacity_simulation.prom`-ə yönəldin (node-exporter istifadə edərkən onu `--collector.textfile.directory` vasitəsilə ötürülən qovluğa kopyalayın).
 
-## 3. Import the Grafana dashboard
+## 3. Grafana idarə panelini idxal edin
 
-1. In Grafana, import `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Bind the `Prometheus` datasource variable to the scrape target configured above.
-3. Verify the panels:
-   - **Quota Allocation (GiB)** shows committed/assigned balances for each provider.
-   - **Failover Trigger** flips to *Failover Active* when the outage metrics stream in.
-   - **Uptime Drop During Outage** charts the percentage loss for provider `alpha`.
-   - **Requested Slash Percentage** visualises the remediation ratio extracted from the dispute fixture.
+1. Grafana-də `dashboards/grafana/sorafs_capacity_simulation.json` idxal edin.
+2. `Prometheus` məlumat mənbəyi dəyişənini yuxarıda konfiqurasiya edilmiş qırış hədəfinə bağlayın.
+3. Panelləri yoxlayın:
+   - **Kvota Ayrılması (GiB)** hər bir provayder üçün müəyyən edilmiş/təyin edilmiş qalıqları göstərir.
+   - **Failover Trigger** kəsilmə göstəriciləri daxil olduqda *Failover Active* vəziyyətinə keçir.
+   - **Kəsinti zamanı iş vaxtının azalması** provayder `alpha` üçün faiz itkisini göstərir.
+   - **Tələb olunan Slash Faizi** mübahisə qurğusundan çıxarılan remediasiya nisbətini göstərir.
 
-## 4. Expected checks
+## 4. Gözlənilən yoxlamalar
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equals `600` while the committed total remains >=600.
-- `sorafs_simulation_failover_triggered` reports `1` and the replacement provider metric highlights `beta`.
-- `sorafs_simulation_slash_requested` reports `0.15` (15% slash) for the `alpha` provider identifier.
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` `600`-ə bərabərdir, halbuki təhvil verilən cəmi >=600 qalır.
+- `sorafs_simulation_failover_triggered` `1` hesabatını verir və əvəzedici provayder metrikası `beta` vurğulayır.
+- `sorafs_simulation_slash_requested`, `alpha` provayder identifikatoru üçün `0.15` (15% kəsik) bildirir.
 
-Run `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` to confirm the fixtures are still accepted by the CLI schema.
+Qurğuların hələ də CLI sxemi tərəfindən qəbul edildiyini təsdiqləmək üçün `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit`-i işə salın.

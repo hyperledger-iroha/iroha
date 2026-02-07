@@ -4,15 +4,17 @@ direction: ltr
 source: docs/portal/docs/sorafs/migration-ledger.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Razao de migracao SoraFS
-description: Log canonico de mudancas que acompanha cada marco de migracao, responsaveis e follow-ups necessarios.
+титул: Razao de migracao SoraFS
+описание: Канонический журнал событий, сопровождающих каждого мигрирующего человека, ответы и необходимые последующие действия.
 ---
 
-> Adaptado de [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+> Адаптация [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 
-# Razao de migracao SoraFS
+# Разао де мигракао SoraFS
 
-Este documento nao se aplica a primeira release. Nao ha migracoes pendentes; fica reservado para futuras atualizacoes.
+Этот документ не является приложением к первому выпуску. Nao ha migracoes pendentes; зарезервировано для будущего будущего.

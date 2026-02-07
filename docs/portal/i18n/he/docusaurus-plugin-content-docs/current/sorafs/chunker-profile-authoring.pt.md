@@ -4,53 +4,55 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-profile-authoring.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-profile-authoring
-title: Guia de autoria de perfis de chunker da SoraFS
+מזהה: chunker-profile-authoring
+כותרת: Guia de autoria de perfis de chunker da SoraFS
 sidebar_label: Guia de autoria de chunker
-description: Checklist para propor novos perfis e fixtures de chunker da SoraFS.
+תיאור: רשימת רשימת רשימת מאפיינים ופרפורמציות חדשות עבור chunker da SoraFS.
 ---
 
-:::note Fonte canonica
+:::שים לב Fonte canonica
 Esta pagina espelha `docs/source/sorafs/chunker_profile_authoring.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Guia de autoria de perfis de chunker da SoraFS
 
 Este guia explica como propor e publicar novos perfis de chunker para a SoraFS.
-Ele complementa o RFC de arquitetura (SF-1) e a referencia do registro (SF-2a)
+השלמה ל-RFC de arquitetura (SF-1) ו-Reference do registro (SF-2a)
 com requisitos concretos de autoria, etapas de validacao e modelos de proposta.
 Para um exemplo canonico, veja
 `docs/source/sorafs/proposals/sorafs_sf1_profile_v1.json`
 e o log de dry-run associado em
 `docs/source/sorafs/reports/sf1_determinism.md`.
 
-## Visao geral
+## Visao Geral
 
-Cada perfil que entra no registro deve:
+פרופיל לא ניתן לרשום:
 
-- anunciar parametros CDC deterministicos e configuracoes de multihash identicas entre
+- פרמטרים ידועים CDC קביעות והגדרות של multihash identicas entre
   arquiteturas;
-- entregar fixtures reproduziveis (JSON Rust/Go/TS + corpora fuzz + testemunhas PoR) que
-  os SDKs downstream possam verificar sem tooling sob medida;
-- incluir metadados prontos para governanca (namespace, name, semver) junto com orientacao
-  de rollout e janelas operacionais; e
+- מכשירי entregar reproduziveis (JSON Rust/Go/TS + corpora fuzz + testemunhas PoR) que
+  ערכות SDK של מערכת הפעלה במורד הזרם.
+- incluir metadados prontos para governanca (מרחב שם, שם, semver) junto com orientacao
+  de rollout e janelas operacionais; ה
 - passar pela suite de diff determinista antes da revisao do conselho.
 
-Siga a checklist abaixo para preparar uma proposta que atenda a essas regras.
+סיג רשימת בדיקה אבאיקסו להכנה אומה פרופוסטה que atenda a essas regras.
 
-## Resumo da carta do registro
+## רזומה דה קארטה לעשות רישום
 
 Antes de redigir uma proposta, confirme que ela atende a carta do registro aplicada por
 `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
 
 - IDs de perfil sao inteiros positivos que aumentam de forma monotona sem lacunas.
-- O handle canonico (`namespace.name@semver`) deve aparecer na lista de alias e
-  **deve** ser a primeira entrada. Aliases alternativos (ex., `sorafs.sf1@1.0.0`) vem depois.
+- O handle canonico (`namespace.name@semver`) deve aparecer na list de alias e
+  **פיתוח** סר אנטרדה ראשוני. כינויים אלטרנטיביים (לדוגמה, `sorafs.sf1@1.0.0`) vem depois.
 - Nenhum alias pode colidir com outro handle canonico ou aparecer mais de uma vez.
-- Aliases devem ser nao vazios e aparados de espacos em branco.
+- כינויים devem ser nao vazios e aparados de espacos em branco.
 
 Helpers de CLI:
 
@@ -66,72 +68,68 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 Esses comandos mantem as propostas alinhadas com a carta do registro e fornecem os
 metadados canonicos necessarios nas discussoes de governanca.
 
-## Metadados requeridos
-
-| Campo | Descricao | Exemplo (`sorafs.sf1@1.0.0`) |
-|-------|-----------|------------------------------|
+## דרישות המטאדוס| קמפו | תיאור | דוגמה (`sorafs.sf1@1.0.0`) |
+|-------|--------|------------------------------|
 | `namespace` | Agrupamento logico para perfis relacionados. | `sorafs` |
 | `name` | Rotulo legivel para humanos. | `sf1` |
 | `semver` | Cadeia de versao semantica para o conjunto de parametros. | `1.0.0` |
-| `profile_id` | Identificador numerico monotono atribuido quando o perfil entra. Reserve o proximo id mas nao reutilize numeros existentes. | `1` |
-| `profile_aliases` | Handles adicionais opcionais (nomes alternativos, abreviacoes) expostos a clientes durante a negociacao. Inclua sempre o handle canonico como primeira entrada. | `["sorafs.sf1@1.0.0"]` |
-| `profile.min_size` | Comprimento minimo do chunk em bytes. | `65536` |
-| `profile.target_size` | Comprimento alvo do chunk em bytes. | `262144` |
-| `profile.max_size` | Comprimento maximo do chunk em bytes. | `524288` |
-| `profile.break_mask` | Mascara adaptativa usada pelo rolling hash (hex). | `0x0000ffff` |
+| `profile_id` | זיהוי מספרי מונוטוני אטריבוידו quando או פרפיל פנימי. שמור או פרוקסימו id mas nao לנצל מחדש את numeros existentes. | `1` |
+| `profile_aliases` | מטפל ב-adicionais opcionais (nomes alternativos, abreviacoes) expostos a clientes durante a negociacao. כולל סמפר או ידית קנוניקו como primeira entrada. | `["sorafs.sf1@1.0.0"]` |
+| `profile.min_size` | תוספת מינימלית לעשות נתח בבתים. | `65536` |
+| `profile.target_size` | קומפרימנטו אלבו לעשות נתח בבתים. | `262144` |
+| `profile.max_size` | קומפרימנטו מקסימו לעשות נתח בבתים. | `524288` |
+| `profile.break_mask` | Mascara adaptativa usada pelo רולינג hash (hex). | `0x0000ffff` |
 | `profile.polynomial` | Constante do polinomio gear (hex). | `0x3da3358b4dc173` |
-| `gear_seed` | Seed usada para derivar a tabela gear de 64 KiB. | `sorafs-v1-gear` |
+| `gear_seed` | Seed usada עבור נגזרות של טבלת ציוד של 64 KiB. | `sorafs-v1-gear` |
 | `chunk_multihash.code` | Codigo multihash para digests por chunk. | `0x1f` (BLAKE3-256) |
 | `chunk_multihash.digest` | Digest do bundle canonico de fixtures. | `13fa...c482` |
 | `fixtures_root` | Diretorio relativo contendo os fixtures regenerados. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
-| `por_seed` | Seed para amostragem PoR deterministica (`splitmix64`). | `0xfeedbeefcafebabe` (exemplo) |
+| `por_seed` | Seed para amostragem PoR deterministica (`splitmix64`). | `0xfeedbeefcafebabe` (דוגמה) |
 
 Os metadados devem aparecer tanto no documento de proposta quanto dentro dos fixtures gerados
 para que o registro, o tooling de CLI e a automacao de governanca confirmem os valores sem
-cruzamentos manuais. Em caso de duvida, execute os CLIs de chunk-store e manifest com
-`--json-out=-` para transmitir os metadados calculados para notas de revisao.
+cruzamentos manuais. במקרה זה, הפעל את OS CLIs de chunk-store e manifest com
+`--json-out=-` עבור שידורים של חישובים מתקדמים עבור מסמכים דה רוויזאו.
 
-### Pontos de contato de CLI e registro
+### רישום של CLI
 
-- `sorafs_manifest_chunk_store --profile=<handle>` - reexecutar metadados de chunk,
-  digest do manifest e checks PoR com os parametros propostos.
-- `sorafs_manifest_chunk_store --json-out=-` - transmitir o relatorio do chunk-store para
+- `sorafs_manifest_chunk_store --profile=<handle>` - ביצועים חוזרים של ה-chunk,
+  לעכל לעשות מניפסט e בדיקות PoR com os parametros propostos.
+- `sorafs_manifest_chunk_store --json-out=-` - שידור או קשר לחנות chunk para para
   stdout para comparacoes automatizadas.
 - `sorafs_manifest_stub --chunker-profile=<handle>` - confirmar que manifests e planos CAR
-  embutem o handle canonico mais aliases.
-- `sorafs_manifest_stub --plan=-` - reenviar o `chunk_fetch_specs` anterior para
-  verificar offsets/digests apos a mudanca.
+  אבוטום או לטפל בכינויי canonico mais.
+- `sorafs_manifest_stub --plan=-` - reenviar o `chunk_fetch_specs` קדמית
+  אימות מקזז/מעכל את apos a mudanca.
 
-Registre a saida dos comandos (digests, raizes PoR, hashes de manifest) na proposta para que
+רשום a saida dos comandos (מעכל, מעלה PoR, hashes de manifest) בהצעה
 os revisores possam reproduzi-los literalmente.
 
-## Checklist de determinismo e validacao
-
-1. **Regenerar fixtures**
+## רשימת רשימת החלטות ותקינות1. **משחקי Regenerar**
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors \
      --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
    ```
 2. **Executar a suite de paridade** - `cargo test -p sorafs_chunker` e o harness diff
-   cross-language (`crates/sorafs_chunker/tests/vectors.rs`) devem ficar verdes com os
-   novos fixtures no lugar.
-3. **Reexecutar corpora fuzz/back-pressure** - execute `cargo fuzz list` e o harness de
-   streaming (`fuzz/sorafs_chunker`) contra os assets regenerados.
-4. **Verificar testemunhas Proof-of-Retrievability** - execute
-   `sorafs_manifest_chunk_store --por-sample=<n>` usando o perfil proposto e confirme
+   חוצה שפות (`crates/sorafs_chunker/tests/vectors.rs`) devem ficar verdes com os
+   נובוס מתקנים ללא lugar.
+3. **הפעל מחדש גופים מטושטש/לחץ אחורי** - בצע `cargo fuzz list` e o harness de
+   סטרימינג (`fuzz/sorafs_chunker`) contra os assets regenerados.
+4. **אמת הוכחה לשליפה** - ביצוע
+   `sorafs_manifest_chunk_store --por-sample=<n>` usando o perfil proposto e אישור
    que as raizes correspondem ao manifest de fixtures.
-5. **Dry run de CI** - execute `ci/check_sorafs_fixtures.sh` localmente; o script
+5. **Dry run de CI** - בצע `ci/check_sorafs_fixtures.sh` localmente; o תסריט
    deve ter sucesso com os novos fixtures e o `manifest_signatures.json` existente.
-6. **Confirmacao cross-runtime** - assegure que os bindings Go/TS consumam o JSON
+6. **Confirmacao זמן ריצה צולב** - הבטחת חיבורי מערכת ההפעלה Go/TS consumam o JSON
    regenerado e emitam limites e digests identicos.
 
-Documente os comandos e os digests resultantes na proposta para que o Tooling WG possa
+תוצאות מסמכים של מערכות מידע ומערכות מידע על כלי עבודה WG
 reexecuta-los sem adivinhacoes.
 
-### Confirmacao de manifest / PoR
+### Confirmacao de Manifest / PoR
 
-Depois de regenerar fixtures, execute o pipeline completo de manifest para garantir que
-metadados CAR e provas PoR continuem consistentes:
+Depois de regenerar fixtures, להפעיל או צנרת השלם דה מניפסט עבור garantir que
+שיטות CAR e provas PoR מתמשכות עקביות:
 
 ```bash
 # Validar metadados de chunk + PoR com o novo perfil
@@ -155,13 +153,13 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --plan=chunk_plan.json --json-out=-
 ```
 
-Substitua o arquivo de entrada por qualquer corpus representativo usado nos seus fixtures
-(ex., o stream deterministico de 1 GiB) e anexe os digests resultantes a proposta.
+גופי תחליפי או ארקיבו דה entrada por qualquer corpus representativo usado nos seus
+(לדוגמה, o stream deterministico de 1 GiB) e anexe os digests resultantes a proposta.
 
-## Modelo de proposta
+## Modelo de Proposta
 
-As propostas sao submetidas como registros Norito `ChunkerProfileProposalV1` registrados em
-`docs/source/sorafs/proposals/`. O template JSON abaixo ilustra o formato esperado
+כמו הצעות סאו תת-מדידס como registros Norito `ChunkerProfileProposalV1` registrados em
+`docs/source/sorafs/proposals/`. תבנית JSON תמונה או תבנית אספרדו
 (substitua seus valores conforme necessario):
 
 
@@ -172,24 +170,22 @@ saida dos comandos, digests de chunk e quaisquer desvios encontrados durante a v
 
 1. **Submeter PR com proposta + fixtures.** Inclua os assets gerados, a proposta
    Norito e atualizacoes em `chunker_registry_data.rs`.
-2. **Revisao do Tooling WG.** Revisores reexecutam a checklist de validacao e confirmam
+2. **Revisao do Tooling WG.** מבצע מחדש את רשימת הבדיקה של validacao e confirmam
    que a proposta segue as regras do registro (sem reutilizacao de id, determinismo satisfeito).
 3. **Envelope do conselho.** Uma vez aprovado, membros do conselho assinam o digest da
    proposta (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) e anexam suas
-   assinaturas ao envelope do perfil armazenado junto aos fixtures.
-4. **Publicacao do registro.** O merge atualiza o registro, docs e fixtures. O CLI
-   default permanece no perfil anterior ate que a governanca declare a migracao pronta.
+   assinaturas ao envelope do perfil armazenado junto aos גופי.
+4. **Publicacao do registro.** או מיזוג אוטואליזה או רישום, מסמכים ותקנים. O CLI
+   default permanece no perfil anterior ate que a governanca להכריז על migracao pronta.
 5. **Rastreamento de deprecacao.** Apos a janela de migracao, atualize o registro para
 
 ## Dicas de autoria
 
 - Prefira limites pares de potencia de dois para minimizar comportamento de chunking em bordas.
-- Evite mudar o codigo multihash sem coordenar consumidores de manifest e gateway; inclua uma
-  nota operacional quando fizer isso.
+- Evite mudar o codigo multihash sem coordenar consumidores de manifest e gateway; כולל אומה
+  not operation quando fizer isso.
 - Mantenha as seeds da tabela gear legiveis para humanos, mas globalmente unicas para simplificar auditorias.
-- Armazene artefatos de benchmarking (ex., comparacoes de throughput) em
-  `docs/source/sorafs/reports/` para referencia futura.
-
-Para expectativas operacionais durante o rollout, consulte o migration ledger
+- Armazene artefatos de benchmarking (לדוגמה, comparacoes de throughput) em
+  `docs/source/sorafs/reports/` עבור התייחסות עתידית.עבור פעולות צפויות במהלך ההשקה, התייעצות או פנקס ההגירה
 (`docs/source/sorafs/migration_ledger.md`). Para regras de conformidade em runtime, veja
 `docs/source/sorafs/chunker_conformance.md`.

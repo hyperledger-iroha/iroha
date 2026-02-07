@@ -5,25 +5,27 @@ source: docs/portal/docs/sns/local-to-global-toolkit.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Local → Global Address Toolkit
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This page mirrors [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)
-from the mono-repo. It packages the CLI helpers and runbooks required by roadmap item **ADDR-5c**.
+此頁面鏡像 [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)
+來自單一倉庫。它打包了路線圖項 **ADDR-5c** 所需的 CLI 幫助程序和 Runbook。
 
-## Overview
+## 概述
 
-- `scripts/address_local_toolkit.sh` wraps the `iroha` CLI to produce:
-  - `audit.json` — structured output from `iroha tools address audit --format json`.
-  - `normalized.txt` — converted preferred IH58 / second-best compressed (`sora`) literals for every Local-domain selector.
-- Pair the script with the address ingest dashboard (`dashboards/grafana/address_ingest.json`)
-  and Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) to prove the Local-8 /
-  Local-12 cutover is safe. Watch the Local-8 and Local-12 collision panels plus the
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, and `AddressInvalidRatioSlo` alerts before
-  promoting manifest changes.
-- Reference the [Address Display Guidelines](address-display-guidelines.md) and the
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) for UX and incident-response context.
+- `scripts/address_local_toolkit.sh` 包裝 `iroha` CLI 以生成：
+  - `audit.json` — `iroha tools address audit --format json` 的結構化輸出。
+  - `normalized.txt` — 每個本地域選擇器的已轉換首選 IH58/第二佳壓縮 (`sora`) 文字。
+- 將腳本與地址提取儀表板配對 (`dashboards/grafana/address_ingest.json`)
+  和Alertmanager規則（`dashboards/alerts/address_ingest_rules.yml`）來證明Local-8 /
+  Local-12 切換是安全的。觀看 Local-8 和 Local-12 碰撞面板以及
+  `AddressLocal8Resurgence`、`AddressLocal12Collision` 和 `AddressInvalidRatioSlo` 之前的警報
+  促進明顯的變化。
+- 參考[地址顯示指南](address-display-guidelines.md) 和
+  [地址清單操作手冊](../../../source/runbooks/address_manifest_ops.md)，用於用戶體驗和事件響應上下文。
 
-## Usage
+## 用法
 
 ```bash
 scripts/address_local_toolkit.sh \
@@ -33,24 +35,24 @@ scripts/address_local_toolkit.sh \
   --format ih58
 ```
 
-Options:
+選項：
 
-- `--format compressed` for `sora…` output instead of IH58.
-- `--no-append-domain` to emit bare literals.
-- `--audit-only` to skip the conversion step.
-- `--allow-errors` to keep scanning when malformed rows appear (matches the CLI behaviour).
+- `--format compressed` 用於 `sora…` 輸出而不是 IH58。
+- `--no-append-domain` 發出裸文字。
+- `--audit-only` 跳過轉換步驟。
+- `--allow-errors` 在出現格式錯誤的行時繼續掃描（與 CLI 行為匹配）。
 
-The script writes the artefact paths at the end of the run. Attach both files to
-your change-management ticket alongside the Grafana screenshot that proves zero
-Local-8 detections and zero Local-12 collisions for ≥30 days.
+該腳本在運行結束時寫入工件路徑。將兩個文件附加到
+您的變更管理票以及證明為零的 Grafana 屏幕截圖
+≥30 天的 Local-8 檢測和零 Local-12 衝突。
 
-## CI integration
+## CI 集成
 
-1. Run the script in a dedicated job and upload its outputs.
-2. Block merges when `audit.json` reports Local selectors (`domain.kind = local12`).
-   at its default `true` value (only override to `false` on dev/test clusters when
-   diagnosing regressions) and add
-   `iroha tools address normalize --fail-on-warning --only-local` to CI so regression
-   attempts fail before hitting production.
+1. 在專用作業中運行腳本並上傳其輸出。
+2. 當 `audit.json` 報告本地選擇器 (`domain.kind = local12`) 時阻止合併。
+   以其默認的 `true` 值（僅在開發/測試集群上覆蓋 `false` 時）
+   診斷回歸）並添加
+   `iroha tools address normalize --fail-on-warning --only-local` 到 CI 所以回歸
+   在投入生產之前嘗試失敗。
 
-See the source document for more details, sample evidence checklists, and the release-note snippet you can reuse when announcing the cutover to customers.
+請參閱源文檔以了解更多詳細信息、示例證據清單以及在向客戶宣布切換時可以重複使用的發行說明片段。

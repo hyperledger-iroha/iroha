@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Partner SLA Discovery Notes — Template
+# Android Partner SLA Discovery Notes — Andoza
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+Har bir AND8 SLA kashfiyot seansi uchun ushbu shablondan foydalaning. To'ldirilgan nusxani saqlang
+`docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md` ostida
+va qo'llab-quvvatlovchi artefaktlarni ilova qiling (so'rovga javoblar, minnatdorchilik,
+qo'shimchalar) xuddi shu katalogda.
 
 ```
 Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
@@ -27,55 +28,55 @@ Android attendees: <Program Lead / Partner Eng / Support Eng / Compliance>
 Meeting link / ticket: <URL or ID>
 ```
 
-## 1. Agenda & Context
+## 1. Kun tartibi va kontekst
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
-  telemetry dashboards).
+- Sessiyaning maqsadi (uchuvchi doirasi, relizlar oynasi, telemetriyani kutish).
+- Qo'ng'iroqdan oldin ulashilgan ma'lumotnoma hujjatlari (qo'llab-quvvatlash kitobi, nashr taqvimi,
+  telemetriya asboblar paneli).
 
-## 2. Workload Overview
+## 2. Ish yukining umumiy ko'rinishi
 
-| Topic | Notes |
+| Mavzu | Eslatmalar |
 |-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+| Maqsadli ish yuklari / zanjirlar | |
+| Kutilayotgan tranzaksiya hajmi | |
+| Muhim biznes oynalari / o'chirish davrlari | |
+| Tartibga solish rejimlari (GDPR, MAS, FISC va boshqalar) | |
+| Kerakli tillar / mahalliylashtirish | |
 
-## 3. SLA Discussion
+## 3. SLA muhokamasi
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
-|-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| SLA klassi | Hamkor kutish | Dastlabki delta? | Harakat talab qilinadi |
+|----------|--------------------|----------------------|-----------------|
+| Kritik tuzatish (48 soat) | | Ha/Yo'q | |
+| Yuqori jiddiylik (5 ish kuni) | | Ha/Yo'q | |
+| Xizmat (30 kun) | | Ha/Yo'q | |
+| Kesish xabari (60 kun) | | Ha/Yo'q | |
+| Voqea sodir bo'lgan aloqa tezligi | | Ha/Yo'q | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+Hamkor soʻragan har qanday qoʻshimcha SLA bandlarini hujjatlashtiring (masalan, bagʻishlangan
+telefon ko'prigi, qo'shimcha telemetriya eksporti).
 
-## 4. Telemetry & Access Requirements
+## 4. Telemetriya va kirish talablari
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / Prometheus kirish talablari:
+- Jurnal/track eksport talablari:
+- Oflayn dalillar yoki ma'lumotlarning taxminlari:
 
-## 5. Compliance & Legal Notes
+## 5. Muvofiqlik va huquqiy eslatmalar
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- Yurisdiksiya bildirishnomalariga qo'yiladigan talablar (nizom + vaqt).
+- Voqealarni yangilash uchun zarur bo'lgan yuridik kontaktlar.
+- Ma'lumotlar rezidentligi cheklovlari / saqlash talablari.
 
-## 6. Decisions & Action Items
+## 6. Qarorlar va harakatlar bandlari
 
-| Item | Owner | Due | Notes |
+| Element | Egasi | Muddati | Eslatmalar |
 |------|-------|-----|-------|
 | | | | |
 
-## 7. Acknowledgement
+## 7. Tasdiqlash
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- Hamkor asosiy SLAni tan oldimi? (Y/N)
+- Kuzatuvni tasdiqlash usuli (elektron pochta / chipta / imzo):
+- Yopishdan oldin ushbu katalogga tasdiqlovchi elektron pochta yoki yig'ilish bayonnomalarini ilova qiling.

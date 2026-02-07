@@ -4,112 +4,110 @@ direction: rtl
 source: docs/portal/docs/sorafs/node-plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-plan
-title: План реализации узла SoraFS
-sidebar_label: План реализации узла
-description: Преобразует дорожную карту хранилища SF-3 в инженерную работу с вехами, задачами и покрытием тестами.
+ID: نوڈ پلان
+عنوان: نوڈ SoraFS کے لئے عمل درآمد کا منصوبہ
+سائڈبار_لیبل: نوڈ عمل درآمد کا منصوبہ
+تفصیل: SF-3 اسٹوریج روڈ میپ کو سنگ میل ، کاموں اور ٹیسٹ کوریج کے ساتھ انجینئرنگ کے کام میں تبدیل کرتا ہے۔
 ---
 
-:::note Канонический источник
+::: نوٹ کینونیکل ماخذ
 :::
 
-SF-3 поставляет первый исполняемый crate `sorafs-node`, который превращает процесс Iroha/Torii в провайдера хранения SoraFS. Используйте этот план вместе с [гайдом по хранилищу узла](node-storage.md), [политикой допуска провайдеров](provider-admission-policy.md) и [дорожной картой маркетплейса емкости хранения](storage-capacity-marketplace.md) при выстраивании последовательности работ.
+SF-3 میں پہلا عملدرآمد کریٹ `sorafs-node` ، جو عمل Iroha/Torii کو اسٹوریج فراہم کرنے والے SoraFS میں تبدیل کرتا ہے۔ اس منصوبے کو [نوڈ اسٹوریج گائیڈ] (node-storage.md) ، [فراہم کنندہ قبولیت پالیسی] (provider-admission-policy.md) اور [اسٹوریج کی گنجائش مارکیٹ پلیس روڈ میپ] (storage-capacity-marketplace.md) کے ساتھ مل کر استعمال کریں۔
 
-## Целевой объем (веха M1)
+## ہدف حجم (سنگ میل M1)
 
-1. **Интеграция chunk store.** Обернуть `sorafs_car::ChunkStore` в персистентный backend, который хранит байты чанков, манифесты и PoR-деревья в заданной директории данных.
-2. **Эндпоинты gateway.** Открыть Norito HTTP эндпоинты для подачи pin, fetch чанков, PoR sampling и телеметрии хранилища внутри процесса Torii.
-3. **Прокладка конфигурации.** Добавить структуру конфигурации `SoraFsStorage` (флаг включения, емкость, директории, лимиты конкурентности), проведенную через `iroha_config`, `iroha_core` и `iroha_torii`.
-4. **Квоты/планирование.** Применять лимиты диска/параллелизма оператора и ставить запросы в очередь с back-pressure.
-5. **Телеметрия.** Эмитить метрики/логи по успехам pin, задержке fetch чанков, загрузке емкости и результатам PoR sampling.
+1. ** حصہ اسٹور انضمام۔
+2. ** گیٹ وے کے اختتامی مقامات۔
+3.
+4.
+5. ** ٹیلی میٹری۔
 
-## Разбиение работ
+## کام کی خرابی
 
-### A. Структура крейта и модулей
+### A. ریک اور ماڈیول ڈھانچہ
 
-| Задача | Ответственный(е) | Примечания |
-|------|------------------|------------|
-| Создать `crates/sorafs_node` с модулями: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Реэкспортировать переиспользуемые типы для интеграции с Torii. |
-| Реализовать `StorageConfig`, сопоставленный с `SoraFsStorage` (user → actual → defaults). | Storage Team / Config WG | Гарантировать детерминизм слоев Norito/`iroha_config`. |
-| Предоставить фасад `NodeHandle`, который Torii использует для pins/fetches. | Storage Team | Инкапсулировать внутренности хранения и async-проводку. |
+| مسئلہ | ذمہ دار (زبانیں) | نوٹ |
+| ------ | ----------------- | -------------- |
+| ماڈیولز کے ساتھ `crates/sorafs_node` بنائیں: `config` ، `store` ، `gateway` ، `scheduler` ، `telemetry`۔ | اسٹوریج ٹیم | Torii کے ساتھ انضمام کے لئے دوبارہ برآمد شدہ اقسام کو دوبارہ برآمد کریں۔ |
+| `StorageConfig` کو `SoraFsStorage` (صارف → اصل → ڈیفالٹس) پر میپڈ کریں۔ | اسٹوریج ٹیم/کنفیگ ڈبلیو جی | پرتوں کے عزم کی ضمانت Norito/`iroha_config`۔ |
+| `NodeHandle` اگواڑا فراہم کریں جو Torii پنوں/بازیافتوں کے لئے استعمال کرتا ہے۔ | اسٹوریج ٹیم | اسٹوریج انٹرنلز اور async وائرنگ کو انفولیٹ کریں۔ |
 
-### B. Персистентный chunk store
+### B. مستقل حصہ اسٹور
 
-| Задача | Ответственный(е) | Примечания |
-|------|------------------|------------|
-| Построить дисковый backend вокруг `sorafs_car::ChunkStore` с on-disk индексом манифестов (`sled`/`sqlite`). | Storage Team | Детерминированный layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Поддерживать PoR метаданные (деревья 64 KiB/4 KiB) через `ChunkStore::sample_leaves`. | Storage Team | Поддерживает replay после рестарта; fail fast при коррупции. |
-| Реализовать integrity replay на старте (rehash манифестов, чистка незавершенных pins). | Storage Team | Блокирует старт Torii до завершения replay. |
+| مسئلہ | ذمہ دار (زبانیں) | نوٹ |
+| ------ | ----------------- | -------------- |
+| آن ڈسک مینی فیسٹ انڈیکس (`sled`/`sqlite`) کے ساتھ `sorafs_car::ChunkStore` کے ارد گرد ایک ڈسک پسدید بنائیں۔ | اسٹوریج ٹیم | تعی .ن کی ترتیب: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`۔ |
+| `ChunkStore::sample_leaves` کے ذریعے پور میٹا ڈیٹا (64 KIB/4 KIB درخت) کی حمایت کریں۔ | اسٹوریج ٹیم | دوبارہ شروع کرنے کے بعد ری پلے کی حمایت کرتا ہے۔ بدعنوانی کے ساتھ تیزی سے ناکام. |
+| اسٹارٹ اپ میں سالمیت کے ری پلے کو نافذ کریں (ریہش منشور ، نامکمل پنوں کو صاف کریں)۔ | اسٹوریج ٹیم | ری پلے مکمل ہونے تک Torii کے آغاز کو روکتا ہے۔ |
 
-### C. Эндпоинты gateway
+### C. گیٹ وے اینڈپوائنٹس| اختتامی نقطہ | سلوک | کام |
+| --------- | ---------- | -------- |
+| `POST /sorafs/pin` | `PinProposalV1` کو قبول کرتا ہے ، ظاہر ہوتا ہے ، توثیق ، ​​قطار کی کھوج کی توثیق کرتا ہے ، ظاہر کرتا ہے۔ | چنکر پروفائل کی توثیق کریں ، کوٹہ لگائیں ، کنٹ اسٹور کے ذریعے ڈیٹا اسٹریم کریں۔ |
+| `GET /sorafs/chunks/{cid}` + رینج استفسار | ہیڈر کے ساتھ حصہ بائٹس دیتا ہے `Content-Chunker` ؛ رینج کی اہلیت کی تفصیلات کے مطابق ہے۔ | شیڈولر + اسٹریم بجٹ استعمال کریں (SF-2D رینج کی اہلیت کے ساتھ لنک)۔ |
+| `POST /sorafs/por/sample` | POR کے نمونے لینے کو مینی فیسٹ پر چلاتا ہے اور پروف بنڈل لوٹاتا ہے۔ | نمونے لینے والے اسٹور کو دوبارہ استعمال کریں ، جواب دیں Norito JSON پے لوڈ۔ |
+| `GET /sorafs/telemetry` | خلاصہ: صلاحیت ، پور کامیابی ، غلطی کاؤنٹرز بازیافت۔ | ڈیش بورڈز/آپریٹرز کے لئے ڈیٹا فراہم کریں۔ |
 
-| Эндпоинт | Поведение | Задачи |
-|---------|-----------|--------|
-| `POST /sorafs/pin` | Принимает `PinProposalV1`, валидирует манифесты, ставит ingestion в очередь, отвечает CID манифеста. | Валидировать профиль chunker, применять квоты, стримить данные через chunk store. |
-| `GET /sorafs/chunks/{cid}` + range query | Отдает байты чанка с заголовками `Content-Chunker`; соблюдает спецификацию range capability. | Использовать scheduler + бюджеты стрима (связать с SF-2d range capability). |
-| `POST /sorafs/por/sample` | Запускает PoR sampling для манифеста и возвращает proof bundle. | Переиспользовать sampling chunk store, отвечать Norito JSON payloads. |
-| `GET /sorafs/telemetry` | Сводки: емкость, успех PoR, счетчики ошибок fetch. | Предоставлять данные для дашбордов/операторов. |
+`sorafs_node::por` کے ذریعے رن ٹائم وائرنگ کے راستے Torii. 【creats/sorafs_node/src/sciriveler.rs#l147】
 
-Рантайм-проводка направляет PoR взаимодействия через `sorafs_node::por`: трекер фиксирует каждый `PorChallengeV1`, `PorProofV1` и `AuditVerdictV1`, чтобы метрики `CapacityMeter` отражали вердикты governance без отдельной логики Torii.【crates/sorafs_node/src/scheduler.rs#L147】
+نفاذ کے نوٹ:
 
-Примечания по реализации:
+- `norito::json` پے لوڈ کے ساتھ AXUM اسٹیک Torii استعمال کریں۔
+- Norito رسپانس اسکیمیں (`PinResultV1` ، `FetchErrorV1` ، ٹیلی میٹری ڈھانچے) شامل کریں۔
 
-- Использовать Axum стек Torii с `norito::json` payloads.
-- Добавить Norito схемы ответов (`PinResultV1`, `FetchErrorV1`, telemetry structs).
+- I `/v1/sorafs/por/ingestion/{manifest_digest_hex}` اب بیک بلاگ کی گہرائی ، سب سے قدیم عہد/آخری تاریخ اور `sorafs_node::NodeHandle::por_ingestion_status` کی وجہ سے ، ہر فراہم کنندہ کے لئے تازہ ترین کامیابی/ناکامی کے ٹائم اسٹیمپ کو ظاہر کرتا ہے ، اور Torii ریکارڈز Prometheus ڈیش بورڈز۔ 【کریٹس/sorafs_node/src/lib.rs: 510 】【 کریٹس/اروہہ_ٹوری/ایس آر سی/سورافس/api.rs: 188 3 】【 کریٹس/آئروہ_ٹوری/ایس آر سی/روٹنگ۔
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` теперь показывает глубину backlog, самый старый epoch/deadline и последние success/failure timestamps по каждому провайдеру, за счет `sorafs_node::NodeHandle::por_ingestion_status`, а Torii фиксирует метрики `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` для дашбордов.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+### D. شیڈیولر اور کوٹہ نفاذ
 
-### D. Scheduler и применение квот
+| مسئلہ | تفصیلات |
+| ----------- | -------- |
+| ڈسک کوٹہ | ڈسک پر بائٹس کو ٹریک کریں۔ `max_capacity_bytes` سے زیادہ ہونے پر نئے پنوں کو مسترد کریں۔ آئندہ کی پالیسیوں کے لئے بے دخلی کے ہکس تیار کریں۔ |
+| مقابلہ بازیافت | گلوبل سیمفور (`max_parallel_fetches`) کے علاوہ SF-2D رینج کی حدود سے فی فراہم کنندہ بجٹ۔ |
+| قطار پنوں | نامکمل ادخال کی ملازمتوں کو محدود کریں۔ قطار کی گہرائی کے لئے Norito اسٹیٹس اینڈ پوائنٹس فراہم کریں۔ |
+| پور کیڈینس | پس منظر کے کارکن کو `por_sample_interval_secs` کے ذریعہ کنٹرول کیا جاتا ہے۔ |
 
-| Задача | Детали |
-|------|--------|
-| Дисковая квота | Отслеживать байты на диске; отклонять новые pins при превышении `max_capacity_bytes`. Подготовить хуки эвикции для будущих политик. |
-| Конкурентность fetch | Глобальный семафор (`max_parallel_fetches`) плюс бюджеты per-provider из лимитов SF-2d range. |
-| Очередь pins | Лимитировать незавершенные ingestion jobs; предоставить Norito статус эндпоинты для глубины очереди. |
-| Каденция PoR | Фоновый воркер, управляемый `por_sample_interval_secs`. |
+### E. ٹیلی میٹری اور لاگنگ
 
-### E. Телеметрия и логирование
+میٹرکس (Prometheus):
 
-Метрики (Prometheus):
-
-- `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (гистограмма с метками `result`)
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
-- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
+- `sorafs_pin_success_total` ، `sorafs_pin_failure_total`
+- `sorafs_chunk_fetch_duration_seconds` (لیبل کے ساتھ ہسٹگرام `result`)
+- `torii_sorafs_storage_bytes_used` ، `torii_sorafs_storage_bytes_capacity`
+- `torii_sorafs_storage_pin_queue_depth` ، `torii_sorafs_storage_fetch_inflight`
 - `torii_sorafs_storage_fetch_bytes_per_sec`
 - `torii_sorafs_storage_por_inflight`
-- `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
+- `torii_sorafs_storage_por_samples_success_total` ، `torii_sorafs_storage_por_samples_failed_total`
 
-Логи / события:
+نوشتہ جات/واقعات:
 
-- Структурированная Norito телеметрия для governance ingestion (`StorageTelemetryV1`).
-- Алерты при использовании > 90% или превышении порога серии PoR-ошибок.
+- منظم Norito ٹیلی میٹری برائے گورننس انجشن (`StorageTelemetryV1`)۔
+- استعمال کرتے وقت انتباہات> 90 ٪ یا پور غلطیوں کی ایک سیریز کی دہلیز سے زیادہ۔
 
-### F. Стратегия тестирования
+### F. ٹیسٹ کی حکمت عملی1. ** یونٹ ٹیسٹ۔
+2. ** انضمام ٹیسٹ ** (`crates/sorafs_node/tests`)۔ پن → راؤنڈ ٹرپ ، بازیافت کے بعد بازیافت ، کوٹہ کی ناکامی ، پور پروف نمونے لینے کے بعد بازیافت۔
+3. ** Torii انضمام ٹیسٹ۔
+4. ** روڈ میپ افراتفری۔
 
-1. **Юнит-тесты.** Персистентность chunk store, вычисления квот, инварианты scheduler (см. `crates/sorafs_node/src/scheduler.rs`).
-2. **Интеграционные тесты** (`crates/sorafs_node/tests`). Pin → fetch round trip, восстановление после рестарта, отказ по квоте, проверка PoR proof sampling.
-3. **Torii интеграционные тесты.** Запустить Torii с включенным хранилищем, прогнать HTTP эндпоинты через `assert_cmd`.
-4. **Roadmap chaos.** Будущие drills моделируют исчерпание диска, медленный IO, удаление провайдеров.
+## انحصار
 
-## Зависимости
+- SF -2B داخلہ پالیسی - اس بات کو یقینی بنائیں کہ اشتہارات شائع کرنے سے پہلے نوڈس داخلہ کے لفافے چیک کریں۔
+- SF -2C صلاحیت کا بازار - صلاحیت کے اعلامیہ کے ساتھ ٹیلی میٹری کو لنک کریں۔
+- ایس ایف -2 ڈی ایکسٹینشنز کا اشتہار دیں - رینج کی اہلیت + اسٹریم بجٹ استعمال کرتے وقت استعمال کریں۔
 
-- Политика допуска SF-2b — убедиться, что узлы проверяют admission envelopes до публикации advert.
-- Маркетплейс емкости SF-2c — связать телеметрию с декларациями емкости.
-- Расширения advert SF-2d — использовать range capability + бюджеты стримов по мере появления.
+## سنگ میل کی تکمیل کا معیار
 
-## Критерии завершения вехи
+- `cargo run -p sorafs_node --example pin_fetch` مقامی فکسچر پر کام کرتا ہے۔
+- Torii `--features sorafs-storage` کے ساتھ جمع ہے اور انضمام ٹیسٹ پاس کرتا ہے۔
+- دستاویزات ([نوڈ اسٹوریج گائیڈ] (node-storage.md)) ڈیفالٹ کنفیگریشن + CLI مثالوں کے ساتھ تازہ کاری ؛ آپریٹرز کے لئے رن بک دستیاب ہے۔
+- اسٹیجنگ ڈیش بورڈ میں ٹیلی میٹری نظر آتی ہے۔ صلاحیتوں کی سنترپتی اور پور غلطیوں کے لئے انتباہات تشکیل دیئے جاتے ہیں۔
 
-- `cargo run -p sorafs_node --example pin_fetch` работает на локальных fixtures.
-- Torii собирается с `--features sorafs-storage` и проходит интеграционные тесты.
-- Документация ([гайд по хранилищу узла](node-storage.md)) обновлена с default конфигурацией + примерами CLI; runbook для операторов доступен.
-- Телеметрия видна в staging dashboard; алерты настроены на насыщение емкости и PoR ошибки.
+## دستاویزات اور آپریشنل ڈیلیوریبلز
 
-## Документация и операционные deliverables
-
-- Обновить [справочник по хранилищу узла](node-storage.md) с дефолтами конфигурации, использованием CLI и шагами troubleshooting.
-- Держать [runbook операций узла](node-operations.md) в соответствии с реализацией по мере эволюции SF-3.
-- Опубликовать ссылки на API `/sorafs/*` в портале разработчиков и связать с OpenAPI manifest, когда Torii handlers появятся.
+- اپ ڈیٹ [نوڈ اسٹوریج ریفرنس] (node-storage.md) کنفیگریشن ڈیفالٹس ، CLI کے استعمال اور خرابیوں کا سراغ لگانے والے اقدامات کے ساتھ۔
+- [نوڈ آپریشنز رن بک] (node-operations.md) SF-3 ارتقاء کے طور پر عمل درآمد کے مطابق رکھیں۔
+- ڈویلپر پورٹل میں API `/sorafs/*` کے لنکس شائع کریں اور جب Torii ہینڈلر ظاہر ہوں تو OpenAPI مینی فیسٹ سے لنک کریں۔

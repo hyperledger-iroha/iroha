@@ -6,91 +6,89 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2026-01-03T18:07:57.068055+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
+Modelo de % de arquivamento de vendas e uso SM2/SM3/SM4 (销售/使用备案)
+% Hyperledger Iroha Grupo de Trabalho de Conformidade
 % 2026-05-06
 
-# Instructions
+# Instruções
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+Use este modelo ao registrar o uso de implantação em um escritório SCA para onshore
+operadores. Forneça um envio por cluster de implementação ou espaço de dados. Atualizar
+os espaços reservados com detalhes específicos do operador e anexe as evidências listadas
+na lista de verificação.
 
-# 1. Operator & Deployment Summary
+Nº 1. Resumo do operador e implantação
 
-| Field | Value |
+| Campo | Valor |
 |-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Nome do operador | {{OPERATOR_NAME }} |
+| ID de registro comercial | {{REG_ID}} |
+| Endereço registrado | {{ ENDEREÇO ​​}} |
+| Contato principal (nome/cargo/e-mail/telefone) | {{ CONTATO }} |
+| Identificador de implantação | {{ DEPLOYMENT_ID }} |
+| Local(is) de implantação | {{ LOCAIS }} |
+| Tipo de arquivamento | Vendas/Uso (销售/使用备案) |
+| Data de depósito | {{AAAA-MM-DD }} |
 
-# 2. Deployment Details
+# 2. Detalhes de implantação
 
-- Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
+- ID/hash de compilação de software: `{{ BUILD_HASH }}`
+- Fonte de compilação: {{ BUILD_SOURCE }} (por exemplo, construído pelo operador a partir da fonte, binário fornecido pelo fornecedor).
+- Data de ativação: {{ ACTIVATION_DATE }}
+- Janelas de manutenção planejada: {{ MAINTENANCE_CADENCE }}
+- Funções dos nós que participam da assinatura SM:
+  | Nó | Função | Recursos SM habilitados | Localização do cofre de chaves |
   |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+  | {{ NODE_ID }} | {{ PAPEL }} | {{ RECURSOS }} | {{ VAULT }} |
 
-# 3. Cryptographic Controls
+# 3. Controles criptográficos
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
-  |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+- Algoritmos permitidos: {{ ALGORITMOS }} (garantir que o conjunto SM corresponda à configuração).
+- Resumo principal do ciclo de vida:
+  | Palco | Descrição |
+  |-------|------------|
+  | Geração | {{ KEY_GENERATION }} |
+  | Armazenamento | {{KEY_STORAGE}} |
+  | Rotação | {{KEY_ROTATION}} |
+  | Revogação | {{ KEY_REVOCATION }} |
+- Política de identidade distinta (`distid`): {{ DISTID_POLICY }}
+- Trecho de configuração (seção `crypto`): fornece instantâneo Norito/JSON com hashes.
 
-# 4. Telemetry & Audit Trails
+# 4. Telemetria e trilhas de auditoria
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- Monitoramento de endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, painéis).
+- Métricas registradas: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
+  histogramas de latência, contadores de erros.
+- Política de retenção de logs: {{ LOG_RETENTION }} (≥ três anos recomendado).
+- Local de armazenamento do registro de auditoria: {{ AUDIT_STORAGE }}
 
-# 5. Incident Response & Contacts
+# 5. Resposta a incidentes e contatos
 
-| Role | Name | Phone | Email | SLA |
+| Função | Nome | Telefone | E-mail | SLA |
 |------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+| Líder de operações de segurança | {{ NOME }} | {{ TELEFONE }} | {{ E-MAIL }} | {{SLA}} |
+| Criptografia de plantão | {{ NOME }} | {{ TELEFONE }} | {{ E-MAIL }} | {{SLA}} |
+| Jurídico/conformidade | {{ NOME }} | {{ TELEFONE }} | {{ E-MAIL }} | {{SLA}} |
+| Suporte ao fornecedor (se aplicável) | {{ NOME }} | {{ TELEFONE }} | {{ E-MAIL }} | {{SLA}} |
 
-# 6. Attachments Checklist
+# 6. Lista de verificação de anexos- [] Instantâneo de configuração (Norito + JSON) com hashes.
+- [ ] Prova de construção determinística (hashes, SBOM, notas de reprodutibilidade).
+- [] Exportações de painel de telemetria e definições de alerta.
+- [ ] Plano de resposta a incidentes e documento de rotação de plantão.
+- [ ] Confirmação de treinamento do operador ou recebimento do runbook.
+- [] Instrução de controle de exportação espelhando artefatos entregues.
+- [ ] Cópias de acordos contratuais relevantes ou isenções de apólices.
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+# 7. Declaração do Operador
 
-# 7. Operator Declaration
+> Confirmamos que a implantação listada acima está em conformidade com as normas comerciais da RPC
+> regulamentos de criptografia, que os serviços habilitados para SM sigam o documentado
+> políticas de resposta a incidentes e telemetria, e que os artefatos de auditoria serão
+> retidos por pelo menos três anos.
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- Signatário autorizado: ________________________
+- Data: ________________________

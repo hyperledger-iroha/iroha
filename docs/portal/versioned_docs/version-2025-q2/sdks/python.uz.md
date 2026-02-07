@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4d1af3021d94540c338c921ea8393a10dd918ee1549965cdc09fbc612c938444
 source_last_modified: "2025-12-29T18:16:35.908874+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Python SDK Quickstart
+# Python SDK tezkor ishga tushirish
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+Python SDK (`iroha-python`) Rust mijoz yordamchilarini aks ettiradi.
+Torii bilan skriptlar, noutbuklar yoki veb-versiyalardan o'zaro aloqada bo'ling. Bu tezkor boshlanish
+o'rnatish, tranzaktsiyalarni yuborish va voqealar oqimini o'z ichiga oladi. Chuqurroq uchun
+qamrov omborida `python/iroha_python/README.md` ga qarang.
 
-## 1. Install
+## 1. O'rnatish
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+Ixtiyoriy qo'shimchalar:
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- `pip install aiohttp`, agar siz asinxron variantlarni ishga tushirishni rejalashtirmoqchi bo'lsangiz
+  oqim yordamchilari.
+- `pip install pynacl`, SDK dan tashqarida Ed25519 kalitini olish kerak bo'lganda.
 
-## 2. Create a client and signers
+## 2. Mijoz va imzolovchilarni yarating
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` qo'shimcha kalit so'z argumentlarini qabul qiladi, masalan, `timeout_ms`,
+`max_retries` va `tls_config`. Yordamchi `resolve_torii_client_config`
+Rust CLI bilan tenglikni xohlasangiz, JSON konfiguratsiya foydali yukini tahlil qiladi.
 
-## 3. Submit a transaction
+## 3. Tranzaksiyani yuboring
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+SDK ko'rsatmalar quruvchilar va tranzaksiya yordamchilarini yuboradi, shuning uchun siz kamdan-kam hollarda tuzasiz
+Norito foydali yuklarni qo'lda:
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
-JSON-centric `submit_transaction_json`.
+`build_and_submit_transaction` imzolangan konvertni ham, oxirgisini ham qaytaradi
+kuzatilgan holat (masalan, `Committed`, `Rejected`). Agar sizda allaqachon imzolangan bo'lsa
+tranzaksiya konvertida `client.submit_transaction_envelope(envelope)` yoki
+JSON-markazli `submit_transaction_json`.
 
-## 4. Query state
+## 4. So'rov holati
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+Barcha REST so'nggi nuqtalarida JSON yordamchilari mavjud va ko'plab kiritilgan ma'lumotlar sinflari mavjud. uchun
+Masalan, domenlar ro'yxati:
 
 ```python
 domains = client.list_domains_typed()
@@ -88,13 +89,13 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+Sahifani biladigan yordamchilar (masalan, `list_accounts_typed`) ob'ektni qaytaradi
+`items` va `next_cursor` ikkalasini ham o'z ichiga oladi.
 
-## 5. Stream events
+## 5. Voqealarni translatsiya qilish
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii SSE so'nggi nuqtalari generatorlar orqali ochiladi. SDK avtomatik ravishda davom etadi
+qachon `resume=True` va siz `EventCursor` taqdim etasiz.
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -110,19 +111,19 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+Boshqa qulaylik usullari orasida `stream_pipeline_transactions`,
+`stream_events` (yozilgan filtr quruvchilar bilan) va `stream_verifying_key_events`.
 
-## 6. Next steps
+## 6. Keyingi qadamlar
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- `python/iroha_python/src/iroha_python/examples/` ostidagi misollarni o'rganing
+  boshqaruv, ISO ko'prik yordamchilari va Connectni qamrab oluvchi uchdan-end oqimlar uchun.
+- `create_torii_client` / `resolve_torii_client_config` dan foydalaning
+  mijozni `iroha_config` JSON fayli yoki muhitidan yuklash.
+- Norito RPC yoki Connect-ga xos API uchun maxsus modullarni tekshiring, masalan
+  `iroha_python.norito_rpc` va `iroha_python.connect`.
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+Ushbu qurilish bloklari bilan siz yozmasdan Python'dan Torii mashq qilishingiz mumkin
+o'zingizning HTTP elimingiz yoki Norito kodeklaringiz. SDK etuk bo'lganda, qo'shimcha yuqori daraja
+quruvchilar qo'shiladi; `python/iroha_python` da README bilan maslahatlashing
+oxirgi holat va migratsiya qaydlari uchun katalog.

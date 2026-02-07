@@ -7,99 +7,96 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ac9b1fa221c6de46c139ee3a3c280957adad4910b49015fbb746259a4af22659
 source_last_modified: "2026-01-30T12:29:10.190473+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Language Grammar and Semantics
+# Kotodama ဘာသာစကား သဒ္ဒါနှင့် ဝေါဟာရများ
 
-This document specifies the Kotodama language syntax (lexing, grammar), typing rules, deterministic semantics, and how programs lower to IVM bytecode (.to) with Norito pointer-ABI conventions. Kotodama sources use the .ko extension. The compiler emits IVM bytecode (.to) and can optionally return a manifest.
+ဤစာတမ်းတွင် Kotodama ဘာသာစကား အထားအသို (lexing၊ သဒ္ဒါ)၊ စာရိုက်စည်းမျဉ်းများ၊ အဆုံးအဖြတ် သဘောတရားများနှင့် ပရိုဂရမ်များသည် IVM bytecode (.to) ဖြင့် Norito pointer-ABI ကွန်ဗင်းရှင်းများဖြင့် မည်သို့နိမ့်ကျသည်ကို ဖော်ပြသည်။ Kotodama ရင်းမြစ်များသည် .ko တိုးချဲ့မှုကို အသုံးပြုသည်။ compiler သည် IVM bytecode (.to) ကို ထုတ်လွှတ်ပြီး မန်နီးဖက်စ်ကို ရွေးချယ်နိုင်သည်။
 
-Contents
-- Overview and Goals
-- Lexical Structure
-- Types and Literals
-- Declarations and Modules
-- Contract Container and Metadata
-- Functions and Parameters
-- Statements
-- Expressions
-- Builtins and Pointer-ABI Constructors
-- Collections and Maps
-- Deterministic Iteration and Bounds
-- Errors and Diagnostics
-- Codegen Mapping to IVM
-- ABI, Header, and Manifest
-- Roadmap
+မာတိကာ
+- ခြုံငုံသုံးသပ်ချက်နှင့်ပန်းတိုင်များ
+- အဘိဓာန်ဖွဲ့စည်းပုံ
+- အမျိုးအစားများနှင့် စာလုံးများ
+- ကြေငြာချက်များနှင့် Modules
+- စာချုပ်ကွန်တိန်နာနှင့် မက်တာဒေတာ
+- လုပ်ဆောင်ချက်များနှင့် ကန့်သတ်ချက်များ
+- ပြောဆိုချက်များ
+- အသုံးအနှုန်းများ
+- Builtins နှင့် Pointer-ABI တည်ဆောက်မှုများ
+- စုဆောင်းမှုများနှင့်မြေပုံများ
+- Deterministic Iteration နှင့် Bounds များ
+- အမှားများနှင့်ရောဂါရှာဖွေရေး
+- IVM သို့ Codegen မြေပုံဆွဲခြင်း။
+- ABI၊ Header နှင့် Manifest
+- လမ်းပြမြေပုံ
 
-## Overview and Goals
+## ခြုံငုံသုံးသပ်ချက်နှင့် ပန်းတိုင်များ
 
-- Deterministic: Programs must produce identical results across hardware; no floating point or nondeterministic sources. All host interactions happen through syscalls with Norito-encoded arguments.
-- Portable: Targets Iroha Virtual Machine (IVM) bytecode, not a physical ISA. RISC‑V–like encodings visible in the repository are implementation details of IVM decoding and must not change observable behavior.
-- Auditable: Small, explicit semantics; clear mapping of syntax to IVM opcodes and to host syscalls.
-- Boundedness: Loops over unbounded data must carry explicit bounds. Map iteration has strict rules to guarantee determinism.
+- Deterministic- ပရိုဂရမ်များသည် ဟာ့ဒ်ဝဲတစ်လျှောက် တူညီသောရလဒ်များကို ထုတ်ပေးရပါမည်။ ရေပေါ်အမှတ် သို့မဟုတ် အဆုံးအဖြတ်မရှိသော အရင်းအမြစ်များ မရှိပါ။ Norito-ကုဒ်ဝှက်ထားသော အကြောင်းပြချက်များဖြင့် syscalls များမှတစ်ဆင့် လက်ခံလုပ်ဆောင်မှုအားလုံးသည် ဖြစ်ပေါ်လာပါသည်။
+- အိတ်ဆောင်- ပစ်မှတ်သည် Iroha Virtual Machine (IVM) bytecode၊ ရုပ်ပိုင်းဆိုင်ရာ ISA မဟုတ်ပါ။ RISC‑V-ကဲ့သို့သော ကုဒ်နံပါတ်များသည် သိုလှောင်မှုတွင် မြင်နိုင်သော IVM ကုဒ်ဖော်ပြခြင်း၏ အကောင်အထည်ဖော်မှုအသေးစိတ်များဖြစ်ပြီး မြင်သာမြင်သာသောအပြုအမူကို မပြောင်းလဲရပါ။
+- စာရင်းစစ်- သေးငယ်ပြီး ပြတ်သားသော ဝေါဟာရများ။ IVM opcodes များနှင့် syscalls များကို လက်ခံဆောင်ရွက်ပေးရန်အတွက် အထားအသို၏ ရှင်းလင်းသောမြေပုံ။
+- နယ်နိမိတ်မျဉ်း- အကန့်အသတ်မရှိသော ဒေတာများပေါ်တွင် လှည့်ပတ်မှုများသည် ရှင်းလင်းပြတ်သားစွာ ကန့်သတ်ချက်များကို သယ်ဆောင်သွားရပါမည်။ မြေပုံပြန်ဆိုခြင်းသည် သတ်မှတ်ပြဋ္ဌာန်းမှုကို အာမခံရန် တင်းကျပ်သော စည်းမျဉ်းများရှိသည်။
 
-## Lexical Structure
+## အဘိဓာန်ဖွဲ့စည်းပုံ
 
-Whitespace and comments
-- Whitespace separates tokens and is otherwise insignificant.
-- Line comments start with `//` and run to end-of-line.
-- Block comments `/* ... */` do not nest.
+နေရာလွတ်နှင့် မှတ်ချက်များ
+- Whitespace သည် တိုကင်များကို ခွဲခြားထားပြီး အခြားနည်းဖြင့် အရေးမပါပါ။
+- လိုင်းမှတ်ချက်များကို `//` ဖြင့် စတင်ပြီး လိုင်းအဆုံးအထိ လည်ပတ်ပါ။
+- မှတ်ချက်များ `/* ... */` ကို ပိတ်ဆို့မထားပါနှင့်။
 
-Identifiers
-- Start: `[A-Za-z_]` then continue `[A-Za-z0-9_]*`.
-- Case-sensitive; `_` is a valid identifier but discouraged.
+ခွဲခြားသတ်မှတ်သည်။
+- စတင်ရန်- `[A-Za-z_]` ထို့နောက် `[A-Za-z0-9_]*` ကို ဆက်သွားပါ။
+- စာလုံးအကြီးအသေးသတိထားရမည်; `_` သည် မှန်ကန်သော အမှတ်အသားတစ်ခုဖြစ်သော်လည်း စိတ်ပျက်အားလျော့သွားသည်။
 
-Keywords (reserved)
-- `seiyaku`, `hajimari`, `kotoage`, `kaizen`, `state`, `struct`, `fn`, `let`, `const`, `return`, `if`, `else`, `while`, `for`, `in`, `break`, `continue`, `true`, `false`, `permission`, `kotoba`.
+သော့ချက်စာလုံးများ (သီးသန့်)
+- `seiyaku`, `hajimari`, `kotoage`, `kaizen`, `state`, `struct`, `fn` `const`, `return`, `if`, `else`, `while`, `for`, `const`, `continue`, `true`, `false`, `permission`, `kotoba`။
 
-Operators and punctuation
-- Arithmetic: `+ - * / %`
-- Bitwise: `& | ^ ~`, shifts `<< >>`
-- Compare: `== != < <= > >=`
-- Logical: `&& || !`
-- Assign: `= += -= *= /= %= &= |= ^= <<= >>=`
-- Misc: `: , ; . :: ->`
-- Brackets: `() [] {}`
+အော်ပရေတာ သတ်ပုံ
+- ဂဏန်းသင်္ချာ- `+ - * / %`
+- နည်းနည်းချင်း- `& | ^ ~`၊ ဆိုင်း `<< >>`
+- နှိုင်းယှဉ်- `== != < <= > >=`
+- ယုတ္တိဗေဒ- `&& || !`
+- တာဝန်- `= += -= *= /= %= &= |= ^= <<= >>=`
+- အထွေထွေ- `: , ; . :: ->`
+- ကွင်းပိတ်များ- `() [] {}`စာလုံးများ
+- ကိန်းပြည့်- ဒသမ (`123`)၊ hex (`0x2A`)၊ ဒွိစုံ (`0b1010`)။ ကိန်းပြည့်အားလုံးကို runtime တွင် 64-bit ဖြင့် ရေးထိုးထားသည်။ နောက်ဆက်တွဲမပါသော စာလုံးများကို ပုံသေအားဖြင့် အနုမာန သို့မဟုတ် `int` အဖြစ် ရိုက်ထည့်သည်။
+- စာတန်း- လွတ်မြောက်မှုများဖြင့် နှစ်ထပ်ကိုးကား (`\n`၊ `\r`၊ `\t`၊ `\0`၊ `\xNN`၊ `\u{...}`, `\u{...}`, `\u{...}`, `\\`); UTF-8။ Raw strings များ `r"..."` သို့မဟုတ် `r#"..."#` လွတ်မြောက်မှုများကို ပိတ်ပြီး လိုင်းအသစ်များကို ခွင့်ပြုပါ။
+- Bytes များ- `b"..."` သို့မဟုတ် ကုန်ကြမ်း `br"..."` / `rb"..."`; `bytes` သည် ပကတိအတိုင်း ထွက်သည်။
+- Boolean- `true`၊ `false`။
 
-Literals
-- Integer: decimal (`123`), hex (`0x2A`), binary (`0b1010`). All integers are signed 64-bit at runtime; literals without suffix are typed via inference or as `int` by default.
-- String: double-quoted with escapes (`\n`, `\r`, `\t`, `\0`, `\xNN`, `\u{...}`, `\"`, `\\`); UTF‑8. Raw strings `r"..."` or `r#"..."#` disable escapes and allow newlines.
-- Bytes: `b"..."` with escapes, or raw `br"..."` / `rb"..."`; yields a `bytes` literal.
-- Boolean: `true`, `false`.
+## အမျိုးအစားများနှင့် စာလုံးများ
 
-## Types and Literals
+Scalar အမျိုးအစားများ
+- `int`- 64-bit two's-complement; add/sub/mul အတွက် ဂဏန်းသင်္ချာဆိုင်ရာ မော်ဒူလို 2^64၊ ဌာနခွဲသည် IVM တွင် လက်မှတ်မထိုးထားသော/လက်မှတ်မထိုးထားသော မူကွဲများကို သတ်မှတ်ခဲ့သည်။ compiler သည် semantics အတွက် သင့်လျော်သော op ကို ရွေးချယ်သည်။
+- `fixed_u128`, `Amount`, `Balance`- Norito `Numeric` (512-ဘစ်အထိရှိသော ဒဿမဖြင့် ရေးထိုးထားသော ဒဿမ)။ mantissa နှင့် mantissa နှင့် Kotodama သည် ဤအမည်တူများကို အနုတ်လက္ခဏာမဟုတ်သော ပမာဏများအဖြစ် သတ်မှတ်သည်။ ဂဏန်းသင်္ချာကို စစ်ဆေးပြီး alias ကို ထိန်းသိမ်းထားကာ သုညဖြင့် ပြည့်လျှံနေသော သို့မဟုတ် ပိုင်းခြားခြင်းတွင် ထောင်ချောက်များရှိသည်။ `int` မှ ဖန်တီးထားသော တန်ဖိုးများသည် အတိုင်းအတာ 0 ကို အသုံးပြုသည်၊ `int` သို့/မှပြောင်းခြင်းများကို runtime တွင် အကွာအဝေး-စစ်ဆေးသည် (အနုတ်လက္ခဏာမဟုတ်သော၊ တစ်သားတည်း၊ i64 နှင့်ကိုက်ညီသည်)။
+- `bool`: ယုတ္တိတန်ဘိုး၊ `0`/`1` သို့ လျှော့ချထားသည်။
+- `string`- မပြောင်းလဲနိုင်သော UTF-8 စာတန်း၊ syscalls များသို့ပေးပို့သောအခါ Norito TLV အဖြစ်ကိုယ်စားပြုသည်။ in-VM လုပ်ဆောင်ချက်များသည် ဘိုက်ချပ်များနှင့် အရှည်ကို အသုံးပြုသည်။
+- `bytes`: ကုန်ကြမ်း Norito payload; hashing/crypto/proof inputs များနှင့် တာရှည်ခံသော ထပ်လောင်းများ အတွက် pointer-ABI `Blob` အမျိုးအစားကို နာမည်တူသည်။
 
-Scalar types
-- `int`: 64-bit two’s-complement; arithmetic wraps modulo 2^64 for add/sub/mul; division has defined signed/unsigned variants in IVM; the compiler chooses the appropriate op for semantics.
-- `fixed_u128`, `Amount`, `Balance`: numeric aliases backed by Norito `Numeric` (signed decimal with up to 512-bit mantissa and scale). Kotodama treats these aliases as non-negative quantities; arithmetic is checked, preserves the alias, and traps on overflow or division by zero. Values created from `int` use scale 0; conversions to/from `int` are range-checked at runtime (non-negative, integral, fits in i64).
-- `bool`: logical truth value; lowered to `0`/`1`.
-- `string`: immutable UTF‑8 string; represented as Norito TLV when passed to syscalls; in-VM operations use byte slices and length.
-- `bytes`: raw Norito payload; aliases the pointer-ABI `Blob` type for hashing/crypto/proof inputs and durable overlays.
+ပေါင်းစပ်အမျိုးအစားများ
+- `struct Name { field: Type, ... }` အသုံးပြုသူသတ်မှတ်ထားသော ထုတ်ကုန်အမျိုးအစားများ။ တည်ဆောက်သူများသည် ခေါ်ဆိုမှု အထားအသို `Name(a, b, ...)` ကို အသုံးအနှုန်းများတွင် အသုံးပြုသည်။ Field access `obj.field` ကို ပံ့ပိုးထားပြီး tuple-စတိုင် နေရာချထားသော အကွက်များကို အတွင်းပိုင်းသို့ နိမ့်ကျစေသည်။ တာရှည်ခံသော ABI ကွင်းဆက်သည် Norito ဖြင့် ကုဒ်လုပ်ထားသည်။ compiler သည် struct order နှင့် လတ်တလော စမ်းသပ်မှုများ (`crates/iroha_core/tests/kotodama_struct_overlay.rs`) မှ ဖြန့်ကျက်ထားသော အပြင်အဆင်ကို သော့ခတ်ထားစေသည့် ထပ်ဆင့်များကို ထုတ်လွှတ်သည်။
+- `Map<K, V>`- အဆုံးအဖြတ်ပေးသော ဆက်စပ်မြေပုံ။ အဓိပ္ပါယ်ဖွင့်ဆိုချက်သည် ထပ်ကာထပ်ကာနှင့် ပြောင်းလဲမှုများကို ကန့်သတ်သည် (အောက်တွင်ကြည့်ပါ)။
+- `Tuple (T1, T2, ...)`- တည်နေရာအကွက်များပါသည့် အမည်မသိ ထုတ်ကုန်အမျိုးအစား၊ multi-return အတွက်သုံးသည်။
 
-Composite types
-- `struct Name { field: Type, ... }` user-defined product types. Constructors use call syntax `Name(a, b, ...)` in expressions. Field access `obj.field` is supported and lowers to tuple-style positional fields internally. Durable state ABI on-chain is Norito-encoded; the compiler emits overlays that mirror the struct order and recent tests (`crates/iroha_core/tests/kotodama_struct_overlay.rs`) keep the layout locked in across releases.
-- `Map<K, V>`: deterministic associative map; semantics restrict iteration and mutations during iteration (see below).
-- `Tuple (T1, T2, ...)`: anonymous product type with positional fields; used for multi-return.
+အထူးညွှန်ပြ-ABI အမျိုးအစားများ (အိမ်ရှင်မျက်နှာစာ)
+- `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`, `Blob` နှင့် အလားတူသော ပထမတန်းစား runtime အမျိုးအစားများ မဟုတ်ပါ။ ၎င်းတို့သည် INPUT ဒေသ (Norito TLV စာအိတ်များ) သို့ ရိုက်ထည့်၍ မပြောင်းလဲနိုင်သော ညွှန်ပြချက်များကို ထုတ်ပေးသည့် တည်ဆောက်သူများဖြစ်ပြီး syscall အကြောင်းပြချက်များအဖြစ်သာ အသုံးပြုနိုင်ပြီး ပြောင်းလဲမှုမရှိဘဲ ကိန်းရှင်များကြားတွင်သာ ပြောင်းရွှေ့နိုင်သည်။
 
-Special pointer-ABI types (host-facing)
-- `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`, `Blob`, and similar are not first-class runtime types. They are constructors that yield typed, immutable pointers into the INPUT region (Norito TLV envelopes) and can only be used as syscall arguments or moved between variables without mutation.
+အနုမာနရိုက်ပါ။
+- Local `let` bindings infer type ကို initializer မှ။ လုပ်ဆောင်ချက် ဘောင်များကို ပြတ်သားစွာ ရိုက်ထည့်ရပါမည်။ မသေချာပါက ပြန်ပေးမည့်အမျိုးအစားများကို ကောက်ချက်ချနိုင်သည်။
 
-Type inference
-- Local `let` bindings infer type from initializer. Function parameters must be explicitly typed. Return types may be inferred unless ambiguous.
+## ကြေငြာချက်များနှင့် မော်ဂျူးများထိပ်တန်းအရာများ
+- စာချုပ်များ- `seiyaku Name { ... }` တွင် လုပ်ဆောင်ချက်များ၊ ပြည်နယ်၊ တည်ဆောက်ပုံများနှင့် မက်တာဒေတာများ ပါဝင်ပါသည်။
+- ဖိုင်တစ်ခုလျှင် စာချုပ်အများအပြားကို ခွင့်ပြုသော်လည်း စိတ်ဓာတ်ကျခြင်း၊ အဓိက `seiyaku` တစ်ခုကို မန်နီးဖက်စ်များတွင် ပုံသေထည့်သွင်းမှုအဖြစ် အသုံးပြုသည်။
+- `struct` ကြေငြာချက်များသည် စာချုပ်တစ်ခုအတွင်း သုံးစွဲသူအမျိုးအစားများကို သတ်မှတ်သည်။
 
-## Declarations and Modules
+မြင်နိုင်စွမ်း
+- `kotoage fn` သည် အများသူငှာ ဝင်ခွင့်အမှတ်ကို ရည်ညွှန်းသည်။ မြင်နိုင်စွမ်းသည် codegen မဟုတ်ဘဲ dispatcher ခွင့်ပြုချက်များကို သက်ရောက်မှုရှိသည်။
+- ရွေးချယ်နိုင်သောဝင်ရောက်ခွင့် အရိပ်အမြွက်များ- `#[access(read=..., write=...)]` သည် `fn`/`kotoage fn` ကို မန်နီးဖက်စ်စာဖတ်ခြင်း/ရေးခြင်းသော့များကို ပံ့ပိုးပေးနိုင်သည်။ compiler သည် အကြံပေး အရိပ်အမြွက်များကို အလိုအလျောက် ထုတ်လွှတ်သည်။ ပွင့်လင်းမြင်သာသောလက်ခံဆောင်ရွက်ပေးသည့်ခေါ်ဆိုမှုများသည် ရှေးရိုးစွဲသော့ကတ်ခလုတ်များ (`*`) သို့ ပြန်ရောက်သွားပြီး တိကျသေချာသောဝင်ရောက်ခွင့်အရိပ်အမြွက်များမပေးမချင်း အဖြေရှာခြင်းတစ်ခုပေါ်နေသောကြောင့် အချိန်ဇယားရေးဆွဲသူများသည် ပိုမိုအသေးစိတ်သော့များအတွက် သွက်လက်စွာကြိုတင်ရွေးချယ်နိုင်မည်ဖြစ်သည်။
 
-Top-level items
-- Contracts: `seiyaku Name { ... }` contain functions, state, structs, and metadata.
-- Multiple contracts per file are allowed but discouraged; one primary `seiyaku` is used as default entry in manifests.
-- `struct` declarations define user types within a contract.
+## စာချုပ်ကွန်တိန်နာနှင့် မက်တာဒေတာ
 
-Visibility
-- `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
-- Optional access hints: `#[access(read=..., write=...)]` can precede `fn`/`kotoage fn` to supply manifest read/write keys. The compiler also emits advisory hints automatically; opaque host calls fall back to conservative wildcard keys (`*`) and surface a diagnostic unless explicit access hints are provided, so schedulers can opt into a dynamic prepass for finer-grained keys.
-
-## Contract Container and Metadata
-
-Syntax
+အထားအသို
 ```
 seiyaku Name {
   meta {
@@ -117,35 +114,33 @@ seiyaku Name {
 }
 ```
 
-Semantics
-- `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). The compiler treats `max_cycles: 0` as “use default” and emits the configured non‑zero default to satisfy admission requirements. Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
-- `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
-- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Access hints are emitted for literal state paths; dynamic keys fall back to map-level conflict keys. For explicit host-backed reads/writes, use the `state_get/state_set/state_del` helpers and the `get_or_insert_default` map helpers; these route through Norito TLVs and keep names/field order stable.
-- State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
-- State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
-- Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
-- Durable state fields must be `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer-ABI types (including structs/tuples composed of these fields); `string` is not supported for durable state.
+ဝေါဟာရများ
+- `meta { ... }` အကွက်များသည် ထုတ်လွှတ်သော IVM ခေါင်းစီးအတွက် ကွန်ပလီ၏ ပုံသေများကို အစားထိုးသည်- `abi_version`၊ `vector_length` (0 ဆိုသည်မှာ မသတ်မှတ်ရသေးပါ)၊ `max_cycles` (0 ဆိုသည်မှာ default 100000138X) header feature bits (ZK ခြေရာခံခြင်း၊ vector ကြေငြာခြင်း)။ compiler သည် `max_cycles: 0` ကို "ပုံသေသုံးရန်" အဖြစ် မှတ်ယူထားပြီး ဝင်ခွင့်လိုအပ်ချက်များကို ဖြည့်ဆည်းရန်အတွက် ပြင်ဆင်ထားသော သုညမဟုတ်သော ပုံသေကို ထုတ်လွှတ်ပါသည်။ သတိပေးချက်ဖြင့် ပံ့ပိုးမထားသော ဝန်ဆောင်မှုများကို လျစ်လျူရှုထားသည်။ `meta {}` ကို ချန်လှပ်ထားသောအခါ၊ compiler သည် `abi_version = 1` ကို ထုတ်လွှတ်ပြီး ကျန်ရှိသော header အကွက်များအတွက် ရွေးချယ်စရာ ပုံသေများကို အသုံးပြုသည်။
+- `features: ["zk", "simd"]` (aliases: `"vector"`) သည် သက်ဆိုင်ရာ header bits များကို အတိအလင်း တောင်းဆိုပါသည်။ ယခုအခါ အမည်မသိ အင်္ဂါရပ်လိုင်းများသည် လျစ်လျူရှုခံရမည့်အစား ခွဲခြမ်းစိတ်ဖြာမှုအမှားကို ဖြစ်ပေါ်စေပါသည်။
+- `state` သည် တာရှည်ခံ စာချုပ်ပြောင်းလွဲချက်များကို ကြေငြာသည်။ compiler သည် `STATE_GET/STATE_SET/STATE_DEL` syscalls များအတွင်းသို့ ဝင်ရောက်မှုများကို လျှော့ချပေးပြီး host မှ ၎င်းတို့ကို တစ်ကြိမ် ငွေပေးငွေယူ ထပ်ဆင့်ခြင်း ( checkpoint/restore rollback ၊ WSV သို့ flush-on-commit ) ဖြင့် အဆင့်သတ်မှတ်ပေးပါသည်။ လက်လှမ်းမီသော အရိပ်အမြွက်များကို ပကတိပြည်နယ်လမ်းကြောင်းများအတွက် ထုတ်လွှတ်သည်။ ဒိုင်းနမစ်သော့များသည် မြေပုံအဆင့်ပဋိပက္ခခလုတ်များထံ ပြန်ရောက်သွားပါသည်။ ရှင်းလင်းပြတ်သားစွာ လက်ခံဆောင်ရွက်ပေးသော ကျောထောက်နောက်ခံပြု ဖတ်ရှုခြင်း/ရေးခြင်းများအတွက် `state_get/state_set/state_del` အကူအညီများနှင့် `get_or_insert_default` မြေပုံအထောက်အကူများကို အသုံးပြုပါ။ ဤလမ်းကြောင်းသည် Norito TLVs များကိုဖြတ်၍ အမည်များ/အကွက်အမှာကို တည်ငြိမ်အောင်ထားပါ။
+- ပြည်နယ်သတ်မှတ်ခြင်းများကို လက်ဝယ်ထားရှိသည်။ ဘောင်များတွင် `state` အမည်ကို အရိပ်ထိုးခြင်း သို့မဟုတ် `let` စည်းနှောင်ခြင်းကို ပယ်ချသည် (`E_STATE_SHADOWED`)။
+- ပြည်နယ်မြေပုံတန်ဖိုးများသည် ပထမတန်းစားမဟုတ်ပါ- မြေပုံလုပ်ဆောင်ချက်များနှင့် ထပ်ခါထပ်ခါပြုလုပ်ရန်အတွက် ပြည်နယ်သတ်မှတ်စနစ်ကို တိုက်ရိုက်အသုံးပြုပါ။ အသုံးပြုသူသတ်မှတ်ထားသော လုပ်ဆောင်ချက်များသို့ ပြည်နယ်မြေပုံများကို ချိတ်တွဲခြင်း သို့မဟုတ် ဖြတ်သန်းခြင်းကို ငြင်းပယ်သည် (`E_STATE_MAP_ALIAS`)။
+- တာရှည်ခံသောပြည်နယ်မြေပုံများသည် လက်ရှိတွင် `int` နှင့် pointer-ABI သော့အမျိုးအစားများကိုသာ ထောက်ပံ့ပေးသည်။ အခြားသော့အမျိုးအစားများကို compile တွင် ပယ်ချပါသည်။
+- တာရှည်ခံသည့်အခြေအနေအကွက်များသည် `int`၊ `bool`၊ `Json`၊ `Blob`/`bytes`၊ သို့မဟုတ် pointer-ABI အမျိုးအစားများ (ဤဖွဲ့စည်းပုံများ/ tuple များအပါအဝင်)၊ `string` ကို တာရှည်ခံသော အခြေအနေအတွက် ပံ့ပိုးမထားပါ။
 
-### Kotoba localization
-Syntax
+### Kotoba ဘာသာပြန်ဆိုချက်
+အထားအသို
 ```
 kotoba {
   "E_UNBOUNDED_ITERATION": { en: "Loop over map lacks a bound." }
 }
-```
+```ဝေါဟာရများ
+- `kotoba` ထည့်သွင်းမှုများသည် စာချုပ်ဖော်ပြချက် (`kotoba` အကွက်) သို့ ဘာသာပြန်ခြင်းဇယားများကို ပူးတွဲပါရှိသည်။
+- မက်ဆေ့ဂျ် ID များနှင့် ဘာသာစကားတဂ်များသည် identifiers သို့မဟုတ် string literals ကိုလက်ခံသည်။ ထည့်သွင်းမှုများသည် အလွတ်မဟုတ်ရပါ။
+- ပွားနေသော `msg_id` + ဘာသာစကား တဂ်အတွဲများကို စုစည်းချိန်၌ ပယ်ချပါသည်။
 
-Semantics
-- `kotoba` entries attach translation tables to the contract manifest (`kotoba` field).
-- Message IDs and language tags accept identifiers or string literals; entries must be non-empty.
-- Duplicate `msg_id` + language tag pairs are rejected at compile time.
+## ကြေငြာချက်များကို အစပျိုးပါ။
 
-## Trigger Declarations
+Trigger declarations များသည် အချိန်ဇယားဆွဲခြင်း မက်တာဒေတာကို entrypoint manifests တွင် ပူးတွဲပြီး အလိုအလျောက် မှတ်ပုံတင်သည်
+စာချုပ်တစ်ခုအား အသက်သွင်းသည့်အခါ (ပိတ်သိမ်းသည့်အခါ ဖယ်ရှားသည်)။ အထဲမှာ သူတို့ ခွဲခြမ်းစိတ်ဖြာတယ်။
+`seiyaku` ဘလောက်။
 
-Trigger declarations attach scheduling metadata to entrypoint manifests and are auto-registered
-when a contract instance is activated (removed on deactivation). They are parsed inside a
-`seiyaku` block.
-
-Syntax
+အထားအသို
 ```
 register_trigger wake {
   call run;
@@ -156,71 +151,69 @@ register_trigger wake {
 }
 ```
 
-Notes
-- `call` must reference a public `kotoage fn` entrypoint in the same contract; an optional
-  `namespace::entrypoint` is recorded in the manifest but cross-contract callbacks are rejected
-  by the runtime for now (local callbacks only).
-- Supported filters: `time pre_commit` and `time schedule(start_ms, period_ms?)`, plus
-  `execute trigger <name>` for by-call triggers, `data any`, and pipeline filters
-  (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
-- `authority` optionally overrides the trigger authority (AccountId string literal). If omitted,
-  the runtime uses the contract-activation authority.
-- Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
-- Runtime-injected trigger metadata keys: `contract_namespace`, `contract_id`,
-  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
+မှတ်စုများ
+- `call` သည် တူညီသောစာချုပ်တွင် အများသူငှာ `kotoage fn` ဝင်ခွင့်အမှတ်ကို ကိုးကားရပါမည်။ ရွေးချယ်ခွင့်တစ်ခု
+  `namespace::entrypoint` ကို မန်နီးဖက်စ်တွင် မှတ်တမ်းတင်ထားသော်လည်း စာချုပ်ဖြတ်၍ ပြန်ခေါ်ခြင်းကို ပယ်ချသည်
+  လက်ရှိအချိန်အားဖြင့် (ပြည်တွင်းခေါ်ဆိုမှုများအတွက်သာ)။
+- ပံ့ပိုးထားသော စစ်ထုတ်မှုများ- `time pre_commit` နှင့် `time schedule(start_ms, period_ms?)`၊
+  ဖုန်းခေါ်ဆိုမှု အစပျိုးမှုများအတွက် `execute trigger <name>`၊ `data any` နှင့် ပိုက်လိုင်းစစ်ထုတ်ခြင်းများ
+  (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`)။
+- `authority` သည် အစပျိုးအာဏာပိုင် (AccountId string literal) ကို ရွေးချယ်နိုင်သည်။ ချန်လှပ်ထားရင်၊
+  runtime သည် စာချုပ်-အသက်သွင်းခြင်းအာဏာကို အသုံးပြုသည်။
+- မက်တာဒေတာတန်ဖိုးများသည် JSON စာလုံးများ (`string`၊ ​​`number`၊ `bool`၊ `null`) သို့မဟုတ် `json!(...)` ဖြစ်ရပါမည်။
+- Runtime-injected trigger metadata keys- `contract_namespace`, `contract_id`၊
+  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`။
 
-## Functions and Parameters
+## လုပ်ဆောင်ချက်များနှင့် ကန့်သတ်ချက်များ
 
-Syntax
-- Declaration: `fn name(param1: Type, param2: Type, ...) -> Ret { ... }`
-- Public: `kotoage fn name(...) { ... }`
-- Initializer: `hajimari() { ... }` (invoked on deploy by the runtime, not by the VM itself).
-- Upgrade hook: `kaizen(args...) permission(Role) { ... }`.
+အထားအသို
+- ကြေငြာချက်- `fn name(param1: Type, param2: Type, ...) -> Ret { ... }`
+- အများသူငှာ- `kotoage fn name(...) { ... }`
+- Initializer- `hajimari() { ... }` (VM ကိုယ်တိုင်မဟုတ်ဘဲ runtime ဖြင့် deploy ကိုခေါ်သည်)။
+- အဆင့်မြှင့်ချိတ်- `kaizen(args...) permission(Role) { ... }`။
 
-Parameters and returns
-- Arguments are passed in registers `r10..r22` as values or INPUT pointers (Norito TLV) per ABI; additional args spill to stack.
-- Functions return zero or one scalar or tuple. Primary return value is in `r10` for scalar; tuples are materialized in stack/OUTPUT by convention.
+ကန့်သတ်ချက်များနှင့် ပြန်ပေးသည်။
+- ABI အလိုက် တန်ဖိုးများ သို့မဟုတ် INPUT ညွှန်ပြချက်များ (Norito TLV) အဖြစ် `r10..r22` တွင် အထောက်အထားများ ပေးပို့ပါသည်။ ထပ်လောင်း args ဖိတ်စင်မှု
+- လုပ်ဆောင်ချက်များသည် သုည သို့မဟုတ် စကေးတစ်ခု သို့မဟုတ် tuple ကို ပြန်ပေးသည်။ စကလာအတွက် မူလပြန်တန်ဖိုးသည် `r10` တွင်ဖြစ်သည်။ tuple များကို စည်းဝေးကြီးဖြင့် stack/OUTPUT တွင် ရုပ်လုံးပေါ်လာပါသည်။
 
-## Statements
+## ထုတ်ပြန်ချက်- Variable bindings များ- `let x = expr;`, `let mut x = expr;` (ပြောင်းလဲနိုင်စွမ်းသည် compile-time check; runtime mutation ကို ဒေသခံများအတွက်သာ ခွင့်ပြုသည်)။
+- တာဝန်- `x = expr;` နှင့် ပေါင်းစပ်ပုံစံများ `x += 1;` စသည်တို့ဖြစ်သည်။ ပစ်မှတ်များသည် ကိန်းရှင်များ သို့မဟုတ် မြေပုံညွှန်းကိန်းများ ဖြစ်ရပါမည်။ tuple/struct အကွက်များသည် မပြောင်းလဲနိုင်ပါ။
+- ကိန်းဂဏာန်းအမည်များ (`fixed_u128`၊ `Amount`၊ `Balance`) များသည် ထူးခြားသော `Numeric` ကျောထောက်နောက်ခံပြုထားသော အမျိုးအစားများဖြစ်သည်။ ဂဏန်းသင်္ချာသည် alias ကို ထိန်းသိမ်းထားပြီး နာမည်တူများကို ရောစပ်ခြင်းဖြင့် `int` binding မှတဆင့် ပြောင်းရန် လိုအပ်သည်။ `int` သို့ ပြောင်းခြင်းများကို runtime (အနုတ်လက္ခဏာမဟုတ်သော၊ ပေါင်းစည်းထားသော၊ အကွာအဝေး-ကန့်သတ်) တွင် အမှန်ခြစ်ထားသည်။
+- ထိန်းချုပ်မှု- `if (cond) { ... } else { ... }`၊ `while (cond) { ... }`၊ C-စတိုင် `for (init; cond; step) { ... }`။
+  - `for` ကနဦးအသုံးပြုမှုများနှင့် အဆင့်များသည် ရိုးရှင်းသော `let name = expr` သို့မဟုတ် စကားရပ်ဖော်ပြချက်များဖြစ်ရမည်။ ရှုပ်ထွေးသော ဖျက်ဆီးမှုကို ငြင်းပယ်သည် (`E0005`၊ `E0006`)။
+  - `for` အတိုင်းအတာ- init clause မှ binding များကို loop တွင်မြင်ရပြီး ၎င်းနောက်၊ ကိုယ်ထည် သို့မဟုတ် ခြေလှမ်းများဖြင့် ဖန်တီးထားသော နှောင်ကြိုးများသည် ကွင်းဆက်မှ မလွတ်ကင်းပါ။
+- တန်းတူညီမျှမှု (`==`၊ `!=`) ကို `int`၊ `bool`၊ `string`၊ ညွှန်ပြ-ABI စကေးလာများ (ဥပမာ၊ I102500) `Name`, `Blob`/`bytes`, `Json`); tuples၊ structs နှင့် maps ကို နှိုင်းယှဉ်၍မရပါ။
+- မြေပုံကွင်းဆက်- `for (k, v) in map { ... }` (အဆုံးအဖြတ်အချက်၊ အောက်တွင်ကြည့်ပါ)။
+- စီးဆင်းမှု- `return expr;`, `break;`, `continue;`။
+- ခေါ်ဆိုရန်- `name(args...);` သို့မဟုတ် `call name(args...);` (နှစ်ခုလုံးလက်ခံသည်၊ စုစည်းမှုသည် ခေါ်ဆိုမှုထုတ်ပြန်ချက်များကို ပုံမှန်ဖြစ်စေသည်)။
+- အခိုင်အမာပြောဆိုချက်များ- ZK မဟုတ်သော သို့မဟုတ် ZK မုဒ်တွင် ZK ကန့်သတ်ချက်များရှိ IVM IVM `ASSERT*` သို့ `assert(cond);`၊ `assert_eq(a, b);`
 
-- Variable bindings: `let x = expr;`, `let mut x = expr;` (mutability is a compile-time check; runtime mutation is allowed for locals only).
-- Assignment: `x = expr;` and compound forms `x += 1;` etc. Targets must be variables or map indices; tuple/struct fields are immutable.
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed types; arithmetic preserves the alias and mixing aliases requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (non-negative, integral, range-limited).
-- Control: `if (cond) { ... } else { ... }`, `while (cond) { ... }`, C-style `for (init; cond; step) { ... }`.
-  - `for` initializers and steps must be simple `let name = expr` or expression statements; complex destructuring is rejected (`E0005`, `E0006`).
-  - `for` scoping: bindings from the init clause are visible in the loop and after it; bindings created in the body or step do not escape the loop.
-- Equality (`==`, `!=`) is supported for `int`, `bool`, `string`, pointer-ABI scalars (e.g., `AccountId`, `Name`, `Blob`/`bytes`, `Json`); tuples, structs, and maps are not comparable.
-- Map loop: `for (k, v) in map { ... }` (deterministic; see below).
-- Flow: `return expr;`, `break;`, `continue;`.
-- Call: `name(args...);` or `call name(args...);` (both accepted; compiler normalizes to call statements).
-- Assertions: `assert(cond);`, `assert_eq(a, b);` map to IVM `ASSERT*` in non-ZK builds or ZK constraints in ZK mode.
+## အသုံးအနှုန်းများ
 
-## Expressions
-
-Precedence (high → low)
-1. Member/index: `a.b`, `a[b]`
+ရှေ့တန်း (မြင့် → အနိမ့်)
+1. အဖွဲ့ဝင်/အညွှန်း- `a.b`၊ `a[b]`
 2. Unary: `! ~ -`
-3. Multiplicative: `* / %`
-4. Additive: `+ -`
+3. ပွားများ- `* / %`
+4. အပိုပစ္စည်း- `+ -`
 5. Shifts: `<< >>`
-6. Relational: `< <= > >=`
-7. Equality: `== !=`
-8. Bitwise AND/XOR/OR: `& ^ |`
-9. Logical AND/OR: `&& ||`
+6. ဆက်စပ်မှု- `< <= > >=`
+7. တန်းတူညီမျှမှု- `== !=`
+8. အနည်းငယ်သော AND/XOR/OR- `& ^ |`
+9. Logical AND/OR- `&& ||`
 10. Ternary: `cond ? a : b`
 
-Calls and tuples
-- Calls use positional arguments: `f(a, b, c)`.
-- Tuple literal: `(a, b, c)` and destructure: `let (x, y) = pair;`.
-- Tuple destructuring requires tuple/struct types with matching arity; mismatches are rejected.
+ဖုန်းခေါ်ဆိုမှုများနှင့် tuples
+- ခေါ်ဆိုမှုများသည် အနေအထားဆိုင်ရာ အကြောင်းပြချက်များကို အသုံးပြုသည်- `f(a, b, c)`။
+- Tuple literal- `(a, b, c)` နှင့် ပျက်စီးမှု- `let (x, y) = pair;`။
+- Tuple destructuring သည် ကိုက်ညီသော arity ဖြင့် tuple/struct အမျိုးအစားများ လိုအပ်သည်။ မကိုက်ညီမှုများကို ပယ်ချပါသည်။
 
-Strings and bytes
-- Strings are UTF‑8; raw string and byte literal forms are accepted in source.
-- Byte literals (`b"..."`, `br"..."`, `rb"..."`) lower to `bytes` (Blob) pointers; wrap with `norito_bytes(...)` when a syscall expects NoritoBytes TLV payloads.
+ကြိုးများနှင့် ဘိုက်များ
+- စာကြောင်းများသည် UTF-8; raw string နှင့် byte ပကတိပုံစံများကို အရင်းအမြစ်တွင် လက်ခံပါသည်။
+- Byte literals (`b"..."`, `br"..."`, `rb"..."`) အောက်ပိုင်း `bytes` (Blob) pointers; NoritoBytes TLV payloads များကို syscall က မျှော်လင့်နေချိန်တွင် `norito_bytes(...)` ဖြင့် ထုပ်ပိုးထားသည်။
 
-## Builtins and Pointer-ABI Constructors
+## Builtins နှင့် Pointer-ABI တည်ဆောက်မှုများ
 
-Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
+Pointer constructors (Norito TLV ကို INPUT သို့ ထုတ်ပြီး ရိုက်ထည့်ထားသော pointer ကို ပြန်ပေးသည်)
 - `account_id(string) -> AccountId*`
 - `asset_definition(string) -> AssetDefinitionId*`
 - `asset_id(string) -> AssetId*`
@@ -233,28 +226,26 @@ Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
 - `dataspace_id(string|0xhex) -> DataSpaceId*`
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
-- `proof_blob(string|0xhex) -> ProofBlob*`
-
-Prelude macros provide shorter aliases and inline validation for these constructors:
+- `proof_blob(string|0xhex) -> ProofBlob*`Prelude macro သည် တိုတောင်းသော aliases နှင့် inline validation ကို ပေးစွမ်းသည်-
 - `account!("ih58...")`, `account_id!("ih58...")`
 - `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
-- `domain!("wonderland")`, `domain_id!("wonderland")`
+- `domain!("wonderland")`၊ `domain_id!("wonderland")`
 - `name!("example")`
-- `json!("{\"hello\":\"world\"}")` or structured literals such as `json!{ hello: "world" }`
-- `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`
+- `json!("{\"hello\":\"world\"}")` သို့မဟုတ် `json!{ hello: "world" }` ကဲ့သို့သော ဖွဲ့စည်းတည်ဆောက်ထားသော စာလုံးများ
+- `nft_id!("dragon$demo")`၊ `blob!("bytes")`၊ `norito_bytes!("...")`
 
-The macros expand to the constructors above and reject invalid literals at compile time.
+မက်ခရိုများသည် အထက်ဖော်ပြပါ တည်ဆောက်သူများထံ ချဲ့ထွင်ပြီး စုစည်းနေချိန်တွင် မမှန်ကန်သော စာလုံးများကို ငြင်းပယ်သည်။
 
-Implementation status
-- Implemented: constructors above accept string literal arguments and lower to typed Norito TLV envelopes placed in the INPUT region. They return immutable typed pointers usable as syscall arguments. Non-literal string expressions are rejected; use `Blob`/`bytes` for dynamic inputs. `blob`/`norito_bytes` also accept `bytes`-typed values at runtime without macro shims.
-- Extended forms:
-  - `json(Blob[NoritoBytes]) -> Json*` via `JSON_DECODE` syscall.
-  - `name(Blob[NoritoBytes]) -> Name*` via `NAME_DECODE` syscall.
-  - Pointer decode from Blob/NoritoBytes: any pointer constructor (including AXT types) accepts a `Blob`/`NoritoBytes` payload and lowers to `POINTER_FROM_NORITO` with the expected type id.
-  - Pass-through for pointer forms: `name(Name) -> Name*`, `blob(Blob) -> Blob*`, `norito_bytes(Blob) -> Blob*`.
-  - Method sugar is supported: `s.name()`, `s.json()`, `b.blob()`, `b.norito_bytes()`.
+အကောင်အထည်ဖော်မှုအခြေအနေ
+- အကောင်အထည်ဖော်ခဲ့သည်- အထက်တွင်တည်ဆောက်သူများသည် string literal arguments များကိုလက်ခံပြီး Norito TLV စာအိတ်များကို INPUT ဒေသတွင်ထည့်ထားသောစာအိတ်များအထိနိမ့်သည်။ ၎င်းတို့သည် syscall အငြင်းအခုံများအဖြစ် အသုံးပြုနိုင်သော မပြောင်းလဲနိုင်သော ရိုက်နှိပ်ထားသော အမှတ်အသားများကို ပြန်ပေးသည်။ ပကတိမဟုတ်သော စာကြောင်းအသုံးအနှုန်းများကို ပယ်ချသည်။ တက်ကြွသောထည့်သွင်းမှုများအတွက် `Blob`/`bytes` ကို အသုံးပြုပါ။ `blob`/`norito_bytes` သည်လည်း macro shims မပါဘဲ runtime တွင် `bytes` အမျိုးအစားတန်ဖိုးများကို လက်ခံပါသည်။
+- တိုးချဲ့ပုံစံများ
+  - `json(Blob[NoritoBytes]) -> Json*` မှတဆင့် `JSON_DECODE` syscall။
+  - `name(Blob[NoritoBytes]) -> Name*` မှတဆင့် `NAME_DECODE` syscall။
+  - Blob/NoritoBytes မှ ညွှန်ပြကုဒ်- ညွှန်ပြတည်ဆောက်သူ (AXT အမျိုးအစားများ အပါအဝင်) သည် `Blob`/`NoritoBytes` payload ကို လက်ခံပြီး `POINTER_FROM_NORITO` သို့ မျှော်မှန်းထားသော အမျိုးအစား ID ဖြင့် လျှော့ပေးသည်။
+  - ညွှန်ပြပုံစံများအတွက် ဖြတ်သွားခြင်း- `name(Name) -> Name*`၊ `blob(Blob) -> Blob*`၊ `norito_bytes(Blob) -> Blob*`။
+  - နည်းလမ်းသကြားကို `s.name()`၊ `s.json()`၊ `b.blob()`၊ `b.norito_bytes()`။
 
-Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
+host/syscall builtins (SCALL သို့ မြေပုံ၊ ivm.md ရှိ နံပါတ်အတိအကျ)
 - `mint_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `burn_asset(AccountId*, AssetDefinitionId*, numeric)`
 - `transfer_asset(AccountId*, AccountId*, AssetDefinitionId*, numeric)`
@@ -280,116 +271,110 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `axt_commit()`
 - `contains(Map<K,V>, K) -> bool`
 
-Utility builtins
-- `info(string|int)`: emits a structured event/message via OUTPUT.
-- `hash(blob) -> Blob*`: returns a Norito-encoded hash as Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` and `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI builders; all arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
+အသုံးဝင်ပုံများ
+- `info(string|int)`- OUTPUT မှတစ်ဆင့် ဖွဲ့စည်းတည်ဆောက်ထားသော အစီအစဉ်/မက်ဆေ့ဂျ်ကို ထုတ်လွှတ်သည်။
+- `hash(blob) -> Blob*`- Blob အဖြစ် Norito-ကုဒ်ဝှက်ထားသော hash ကို ပြန်ပေးသည်။
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` နှင့် `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`- inline ISI တည်ဆောက်သူများ၊ အငြင်းအခုံအားလုံးသည် compile-time literals (string literals သို့မဟုတ် literals မှ pointer constructors) ဖြစ်ရပါမည်။ `nullifier32` နှင့် `inputs32` သည် 32 bytes (အကြမ်းမျဉ်း သို့မဟုတ် `0x` hex) အတိအကျဖြစ်ရမည်၊ `amount` သည် အနုတ်လက္ခဏာမဟုတ်ရပါ။
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
-- `encode_schema(Name*, Json*) -> Blob`: encodes JSON using the host schema registry (DefaultRegistry supports `QueryRequest` and `QueryResponse` in addition to Order/Trade samples).
-- `decode_schema(Name*, Blob|bytes) -> Json*`: decodes Norito bytes using the host schema registry.
-- `pointer_to_norito(ptr) -> NoritoBytes*`: wraps an existing pointer-ABI TLV as NoritoBytes for storage or transport.
-- `isqrt(int) -> int`: integer square root (`floor(sqrt(x))`) implemented as an IVM opcode.
-- `min(int, int) -> int`, `max(int, int) -> int`, `abs(int) -> int`, `div_ceil(int, int) -> int`, `gcd(int, int) -> int`, `mean(int, int) -> int` — fused arithmetic helpers backed by native IVM opcodes (ceil division traps on divide-by-zero).
+- `encode_schema(Name*, Json*) -> Blob`- မှာယူမှု/ကုန်သွယ်မှုနမူနာများအပြင် အမှာစာ/ကုန်သွယ်မှုနမူနာများအပြင် DefaultRegistry သည် `QueryResponse` ကို အသုံးပြု၍ JSON ကို ကုဒ်လုပ်သည်။
+- `decode_schema(Name*, Blob|bytes) -> Json*`- host schema registry ကို အသုံးပြု၍ Norito bytes ကို ကုဒ်လုပ်သည်။
+- `pointer_to_norito(ptr) -> NoritoBytes*`- သိုလှောင်မှု သို့မဟုတ် သယ်ယူပို့ဆောင်ရေးအတွက် NoritoBytes အဖြစ် ရှိပြီးသား pointer-ABI TLV ကို ခြုံထားသည်။
+- `isqrt(int) -> int`- integer square root (`floor(sqrt(x))`) သည် IVM opcode အဖြစ် ဆောင်ရွက်ခဲ့ပါသည်။
+- `min(int, int) -> int`, `max(int, int) -> int`, `abs(int) -> int`, `div_ceil(int, int) -> int`, `gcd(int, int) -> int`, `mean(int, int) -> int` — ပေါင်းစပ်ထားသော ဂဏန်းသင်္ချာအကူအညီများ18000ce (ဇာတိကုဒ်နံပါတ် 50 ဖြင့် ကျောထောက်နောက်ခံပြုထားသော I10NT30ce division traps on division-by-zero)။မှတ်စုများ
+- Builtins များသည် ပါးလွှာသော shims; compiler သည် ရွေ့လျားမှုများကို စာရင်းသွင်းရန် သူတို့ကို နှိမ့်ပေးပြီး `SCALL`။
+- Pointer constructors များသည် သန့်ရှင်းသည်- VM သည် INPUT တွင် Norito TLV ကို ခေါ်ဆိုမှုကြာချိန်အတွက် မပြောင်းလဲနိုင်ကြောင်း သေချာစေသည်။
+ - pointer-ABI အကွက်များပါရှိသော အဆောက်အဦများ (ဥပမာ၊ `DomainId`၊ `AccountId`) ကို syscall အကြောင်းပြချက်များကို ergonomically အုပ်စုဖွဲ့ရန် အသုံးပြုနိုင်သည်။ compiler သည် အပိုခွဲတမ်းများမပါဘဲ `obj.field` ကို မှန်ကန်သော မှတ်ပုံတင်ခြင်း/တန်ဖိုးသို့ မြေပုံဆွဲသည်။
 
-Notes
-- Builtins are thin shims; the compiler lowers them to register moves and a `SCALL`.
-- Pointer constructors are pure: the VM ensures the Norito TLV in INPUT is immutable for the call duration.
- - Structs with pointer-ABI fields (e.g., `DomainId`, `AccountId`) can be used to group syscall arguments ergonomically. The compiler maps `obj.field` to the correct register/value without extra allocations.
+## စုစည်းမှုများနှင့်မြေပုံများ
 
-## Collections and Maps
+အမျိုးအစား- `Map<K, V>`
+- မမ်မိုရီမြေပုံများ (`Map::new()` မှတဆင့် အစုအပုံလိုက်ခွဲဝေပေးသည် သို့မဟုတ် ကန့်သတ်ချက်များအဖြစ် ကျော်သွားသည်) သော့/တန်ဖိုးအတွဲတစ်ခုကို သိမ်းဆည်းပါ။ သော့များနှင့် တန်ဖိုးများသည် စကားလုံးအရွယ်အစား အမျိုးအစားများ ဖြစ်ရမည်- `int`, `bool`, `string`, `Blob`, `bytes`, `Json` (သို့မဟုတ် point types. `AccountId`၊ `Name`)။
+- တာရှည်ခံသောပြည်နယ်မြေပုံများ (`state Map<...>`) Norito-ကုဒ်နံပါတ်များ/တန်ဖိုးများကို အသုံးပြုသည်။ ပံ့ပိုးထားသောသော့များ- `int` သို့မဟုတ် ညွှန်ပြချက်အမျိုးအစားများ။ ပံ့ပိုးထားသော တန်ဖိုးများ- `int`၊ `bool`၊ `Json`၊ `Blob`/`bytes` သို့မဟုတ် ညွှန်ပြချက် အမျိုးအစားများ။
+- `Map::new()` သည် တစ်ခုတည်းသော မမ်မိုရီအတွင်း ဝင်ရောက်မှုကို သုညခွဲဝေပေးသည် (သော့/တန်ဖိုး = 0); `Map<int,int>` မဟုတ်သောမြေပုံများအတွက်၊ တိကျပြတ်သားသော မှတ်ချက်အမျိုးအစား သို့မဟုတ် ပြန်ပေးမည့်အမျိုးအစားကို ပေးပါ။
+- ပြည်နယ်မြေပုံများသည် ပထမတန်းစားတန်ဖိုးများမဟုတ်ပါ- ၎င်းတို့ကို ပြန်လည်သတ်မှတ်၍မရပါ (ဥပမာ၊ `M = Map::new()`); အညွှန်းကိန်းများ (`M[key] = value`) မှတစ်ဆင့် ထည့်သွင်းမှုများကို အပ်ဒိတ်လုပ်ပါ။
+- လည်ပတ်မှုများ
+  - အညွှန်းကိန်း- `map[key]` ရယူ/သတ်မှတ်တန်ဖိုး (လက်ခံဆောင်ရွက်ပေးသည့် syscall မှတစ်ဆင့် လုပ်ဆောင်သည့်သတ်မှတ်မှု၊ runtime API မြေပုံကို ကြည့်ပါ)။
+  - ဖြစ်တည်မှု- `contains(map, key) -> bool` (အထောက်အမ၊ ပင်ကိုယ် syscall ဖြစ်နိုင်သည်)။
+  - တိကျသောအမိန့်စာနှင့် ပြောင်းလဲမှုစည်းမျဉ်းများပါရှိသော `for (k, v) in map { ... }`။
 
-Type: `Map<K, V>`
-- In-memory maps (heap-allocated via `Map::new()` or passed as parameters) store a single key/value pair; keys and values must be word-sized types: `int`, `bool`, `string`, `Blob`, `bytes`, `Json`, or pointer types (e.g., `AccountId`, `Name`).
-- Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer types.
-- `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
-- State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
-- Operations:
-  - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
-  - Existence: `contains(map, key) -> bool` (lowered helper; may be an intrinsic syscall).
-  - Iteration: `for (k, v) in map { ... }` with deterministic order and mutation rules.
+Deterministic iteration စည်းမျဉ်းများ
+- ထပ်ခါထပ်ခါသတ်မှတ်မှုသည် loop entry ကိုရှိသော့များ၏လျှပ်တစ်ပြက်ဓာတ်ပုံဖြစ်သည်။
+- အမှာစာသည် Norito-ကုဒ်လုပ်ထားသောသော့များ၏ byte-lexicographic အစီအစဥ်အတိုင်း တင်းကြပ်စွာတက်နေသည်။
+- ကွင်းဆက်အတွင်း ထပ်တလဲလဲပြုလုပ်ထားသောမြေပုံသို့ ဖွဲ့စည်းပုံမွမ်းမံမှုများ (ထည့်သွင်း/ဖယ်ရှား/ရှင်းလင်း) သည် အဆုံးအဖြတ်ပေးသော `E_ITER_MUTATION` ထောင်ချောက်ကို ဖြစ်စေသည်။
+- နယ်နိမိတ်သတ်မှတ်မှု လိုအပ်သည်- မြေပုံပေါ်တွင် ကြေငြာထားသော အမြင့်ဆုံး (`@max_len`)၊ တိကျပြတ်သားသော ရည်ညွှန်းချက် `#[bounded(n)]` သို့မဟုတ် `.take(n)`/`.range(..)` တို့ကို အသုံးပြု၍ တိကျပြတ်သားစွာ ချည်နှောင်ထားသည်။ မဟုတ်ပါက compiler သည် `E_UNBOUNDED_ITERATION` ကို ထုတ်လွှတ်သည်။
 
-Deterministic iteration rules
-- The iteration set is the snapshot of keys at loop entry.
-- Order is strictly ascending byte-lexicographic order of Norito-encoded keys.
-- Structural modifications (insert/remove/clear) to the iterated map during the loop cause a deterministic `E_ITER_MUTATION` trap.
-- Boundedness is required: either a declared max (`@max_len`) on the map, an explicit attribute `#[bounded(n)]`, or an explicit bound using `.take(n)`/`.range(..)`; otherwise the compiler emits `E_UNBOUNDED_ITERATION`.
+အထောက်အပံများ ပေးသည်။
+- `#[bounded(n)]`- မြေပုံအသုံးအနှုန်းပေါ်ရှိ ရွေးချယ်နိုင်သော အရည်အချင်း၊ ဥပမာ၊ `for (k, v) in my_map #[bounded(2)] { ... }`။
+- `.take(n)`- ပထမဆုံး `n` ကို အစမှ ပြန်စပါ။
+- `.range(start, end)`- တစ်ဝက်ဖွင့်သည့်ကြားကာလ `[start, end)` တွင် ထပ်လောင်းထည့်သွင်းမှုများ။ ဝေါဟာရများသည် `start` နှင့် `n = end - start` နှင့် ညီမျှသည်။ဒိုင်းနမစ်ဘောင်များဆိုင်ရာ မှတ်စုများ
+- ပကတိဘောင်များ- `n`၊ `start`၊ နှင့် `end` တို့ကို ကိန်းပြည့်အက္ခရာများကို အပြည့်အဝထောက်ခံပြီး ပုံသေအကြိမ်အရေအတွက်တစ်ခုသို့ စုစည်းထားသည်။
+- ပကတိမဟုတ်သောဘောင်များ- `kotodama_dynamic_bounds` အင်္ဂါရပ်ကို `ivm` သေတ္တာတွင်ဖွင့်ထားသောအခါ၊ ကွန်ပြူတာသည် သွက်လက်သော `n`၊ `start`၊ နှင့် `end`၊ ဘေးကင်းသောအသုံးအနှုန်းများနှင့် ထည့်သွင်းမှုများအတွက် `end` ကိုလက်ခံသည် `end >= start`)။ အပိုကိုယ်ထည် ကွပ်မျက်ခြင်းကို ရှောင်ရှားရန် `if (i < n)` စစ်ဆေးမှုများဖြင့် K guarded ထပ်လုပ်ခြင်းအထိ နှိမ့်ချခြင်းသည် အပိုကိုယ်ထည်ကို ကွပ်မျက်ခြင်း (မူလ K=2)။ K ကို `CompilerOptions { dynamic_iter_cap, .. }` မှတစ်ဆင့် ပရိုဂရမ်ဖြင့် ချိန်ညှိနိုင်သည်။
+- စုဆောင်းခြင်းမပြုမီ Kotodama သံချပ်သတိပေးချက်များကိုစစ်ဆေးရန် `koto_lint` ကိုဖွင့်ပါ။ main compiler သည် parsing နှင့် type-checking ပြီးနောက် နှိမ့်ချခြင်းနှင့်အတူ အမြဲတမ်း ဆက်လက်လုပ်ဆောင်သည်။
+- အမှားကုဒ်များကို [Kotodama Compiler Error Codes](./kotodama_error_codes.md); အမြန်ရှင်းပြချက်များအတွက် `koto_compile --explain <code>` ကိုသုံးပါ။
 
-Bounds helpers
-- `#[bounded(n)]`: optional attribute on the map expression, e.g. `for (k, v) in my_map #[bounded(2)] { ... }`.
-- `.take(n)`: iterate the first `n` entries from the start.
-- `.range(start, end)`: iterate entries in the half-open interval `[start, end)`. Semantics are equivalent to `start` and `n = end - start`.
+## အမှားများနှင့် ရောဂါရှာဖွေမှုများ
 
-Notes on dynamic bounds
-- Literal bounds: `n`, `start`, and `end` as integer literals are fully supported and compile to a fixed number of iterations.
-- Non-literal bounds: when the `kotodama_dynamic_bounds` feature is enabled in the `ivm` crate, the compiler accepts dynamic `n`, `start`, and `end` expressions and inserts runtime assertions for safety (non-negative, `end >= start`). Lowering emits up to K guarded iterations with `if (i < n)` checks to avoid extra body executions (default K=2). You can tune K programmatically via `CompilerOptions { dynamic_iter_cap, .. }`.
-- Run `koto_lint` to inspect Kotodama lint warnings prior to compilation; the main compiler always proceeds with lowering after parsing and type-checking.
-- Error codes are documented in [Kotodama Compiler Error Codes](./kotodama_error_codes.md); use `koto_compile --explain <code>` for quick explanations.
+အချိန်စစ်ဆေးခြင်းများကို စုစည်းပါ (ဥပမာများ)
+- `E_UNBOUNDED_ITERATION`- မြေပုံပေါ်တွင် ကွင်းပတ်သည် ဘောင်မရှိပေ။
+- `E_MUT_DURING_ITER`- ကွင်းပတ်ကိုယ်ထည်ရှိ ထပ်ကာထပ်ကာမြေပုံ၏ ဖွဲ့စည်းပုံပြောင်းလဲမှု။
+- `E_STATE_SHADOWED`- ဒေသတွင်းချိတ်ဆက်မှုများသည် `state` ကြေငြာချက်များကို အရိပ်မပြနိုင်ပါ။
+- `E_BREAK_OUTSIDE_LOOP`: `break` သည် loop အပြင်ဘက်တွင်သုံးသည်။
+- `E_CONTINUE_OUTSIDE_LOOP`: `continue` သည် loop အပြင်ဘက်တွင်သုံးသည်။
+- `E0005`- for-loop initializer သည် ပံ့ပိုးထားသည်ထက် ပိုမိုရှုပ်ထွေးသည်။
+- `E0006`- for-loop step clause သည် ပံ့ပိုးထားသည်ထက် ပိုမိုရှုပ်ထွေးသည်။
+- `E_BAD_POINTER_USE`- ပထမတန်းစားအမျိုးအစားလိုအပ်သည့် pointer-ABI constructor ရလဒ်ကိုအသုံးပြုခြင်း။
+- `E_UNRESOLVED_NAME`, `E_TYPE_MISMATCH`, `E_ARITY_MISMATCH`, `E_DUP_SYMBOL`။
+- ကိရိယာတန်ဆာပလာ- `koto_compile` သည် ဘိုက်ကုဒ်မထုတ်မီ lint pass ကို လုပ်ဆောင်သည်။ ကျော်ရန် `--no-lint` ကိုသုံးပါ သို့မဟုတ် `--deny-lint-warnings` ကို lint output ပေါ်တွင် တည်ဆောက်မှု မအောင်မြင်ရန်။
 
-## Errors and Diagnostics
+Runtime VM အမှားများ (ရွေးချယ်ထားသည်၊ ivm.md တွင် စာရင်းအပြည့်အစုံ)
+- `E_NORITO_INVALID`, `E_OOB`, `E_UNALIGNED`, `E_SCALL_UNKNOWN`, `E_ASSERT`, `E_ASSERT_EQ`, `E_ITER_MUTATION`
 
-Compile-time diagnostics (examples)
-- `E_UNBOUNDED_ITERATION`: loop over map lacks a bound.
-- `E_MUT_DURING_ITER`: structural mutation of iterated map in loop body.
-- `E_STATE_SHADOWED`: local bindings cannot shadow `state` declarations.
-- `E_BREAK_OUTSIDE_LOOP`: `break` used outside a loop.
-- `E_CONTINUE_OUTSIDE_LOOP`: `continue` used outside a loop.
-- `E0005`: for-loop initializer is more complex than supported.
-- `E0006`: for-loop step clause is more complex than supported.
-- `E_BAD_POINTER_USE`: using a pointer-ABI constructor result where a first-class type is required.
-- `E_UNRESOLVED_NAME`, `E_TYPE_MISMATCH`, `E_ARITY_MISMATCH`, `E_DUP_SYMBOL`.
-- Tooling: `koto_compile` runs the lint pass before emitting bytecode; use `--no-lint` to skip or `--deny-lint-warnings` to fail the build on lint output.
+အမှားမက်ဆေ့ချ်များ
+- ရောဂါရှာဖွေသူများသည် `msg_id` များကိုရရှိနိုင်သောအခါတွင် `kotoba {}` ဘာသာပြန်ခြင်းဇယားများတွင် ထည့်သွင်းမှုများကို မြေပုံဆွဲပေးပါသည်။
 
-Runtime VM errors (selected; full list in ivm.md)
-- `E_NORITO_INVALID`, `E_OOB`, `E_UNALIGNED`, `E_SCALL_UNKNOWN`, `E_ASSERT`, `E_ASSERT_EQ`, `E_ITER_MUTATION`.
+## Codegen Mapping ကို IVM
 
-Error messages
-- Diagnostics carry stable `msg_id`s that map to entries in `kotoba {}` translation tables when available.
+ပိုက်လိုင်း
+1. Lexer/parser သည် AST ကို ထုတ်လုပ်သည်။
+2. Semantic analysis သည် အမည်များကို ဖြေရှင်းပေးသည်၊ အမျိုးအစားများကို စစ်ဆေးပြီး သင်္ကေတဇယားများကို ဖြည့်ပေးသည်။
+3. IR သည် ရိုးရှင်းသော SSA ကဲ့သို့သော ပုံစံသို့ နိမ့်ကျသွားသည် ။
+4. IVM GPRs (ခေါ်ဆိုမှုကွန်ဗင်းရှင်းတစ်ခုအတွက် args/ret အတွက် `r10+`) stack လုပ်ဖို့ spills ။
+5. Bytecode ထုတ်လွှတ်မှု- ခွင့်ပြုထားသည့်အတိုင်း IVM-native နှင့် RV-compat ကုဒ်များ ရောနှောခြင်း၊ မက်တာဒေတာ ခေါင်းစီးကို `abi_version`၊ အင်္ဂါရပ်များ၊ ကွက်လပ်အရှည်နှင့် `max_cycles` တို့ဖြင့် ထုတ်လွှတ်သည်။ပေါ်လွင်ချက်များကို ပုံဖော်ခြင်း။
+- IVM ALU ops အတွက် ဂဏန်းသင်္ချာနှင့် ယုတ္တိဗေဒမြေပုံ။
+- အခြေအနေအရ အကိုင်းအခက်များနှင့် ခုန်ခြင်းများအတွက် အကိုင်းအခက်နှင့် ထိန်းချုပ်မှုမြေပုံ။ compiler သည် အမြတ်အစွန်းရနိုင်သော compressed forms ကိုအသုံးပြုသည်။
+- ဒေသခံများအတွက် Memory သည် VM stack သို့ဖိတ်သည်။ alignment ကိုပြဌာန်းထားသည်။
+- ရွှေ့ခြင်းကိုမှတ်ပုံတင်ရန် Builtin နှင့် 8-bit နံပါတ်ပါသော `SCALL`။
+- Pointer constructors များသည် Norito TLVs များကို INPUT ဒေသတွင် နေရာချပြီး ၎င်းတို့၏လိပ်စာများကို ထုတ်လုပ်သည်။
+- ZK လုပ်ဆောင်မှုမဟုတ်သော လုပ်ဆောင်ချက်များတွင် ထောင်ချောက်ဆင်ပြီး ZK တည်ဆောက်မှုများတွင် ကန့်သတ်ချက်များကို ထုတ်လွှတ်သည့် `ASSERT`/`ASSERT_EQ` သို့ အခိုင်အမာဖော်ပြချက်များ မြေပုံ။
 
-## Codegen Mapping to IVM
+Determinism ကန့်သတ်ချက်များ
+- FP မရှိပါ။ အတိအကျမဟုတ်သော syscalls မရှိပါ။
+- SIMD/GPU အရှိန်မြှင့်ခြင်းကို bytecode တွင် မမြင်နိုင်ဘဲ ဘစ်-ထပ်တူဖြစ်ရပါမည်။ compiler သည် hardware-specific ops ကို ထုတ်မပေးပါ။
 
-Pipeline
-1. Lexer/Parser produce AST.
-2. Semantic analysis resolves names, checks types, and populates symbol tables.
-3. IR lowering to a simple SSA-like form.
-4. Register allocation to IVM GPRs (`r10+` for args/ret per calling convention); spills to stack.
-5. Bytecode emission: mix of IVM-native and RV-compat encodings as allowed; metadata header emitted with `abi_version`, features, vector length, and `max_cycles`.
+## ABI၊ Header နှင့် Manifest
 
-Mapping highlights
-- Arithmetic and logic map to IVM ALU ops.
-- Branching and control map to conditional branches and jumps; the compiler uses compressed forms where profitable.
-- Memory for locals spills to the VM stack; alignment is enforced.
-- Builtins lower to register moves and `SCALL` with 8-bit number.
-- Pointer constructors place Norito TLVs into the INPUT region and produce their addresses.
-- Assertions map to `ASSERT`/`ASSERT_EQ` which trap in non-ZK execution and emit constraints in ZK builds.
+IVM ခေါင်းစီးအကွက်များ
+- `version`: IVM bytecode ဖော်မတ်ဗားရှင်း (major.minor)။
+- `abi_version`- syscall table နှင့် pointer-ABI schema ဗားရှင်း။
+- `feature_bits`- အင်္ဂါရပ်အလံများ (ဥပမာ၊ `ZK`၊ `VECTOR`)။
+- `vector_len`- ယုတ္တိဗေဒ အားနည်းချက် (0 → မသတ်မှတ်ထားပါ)။
+- `max_cycles`- ဝင်ခွင့်ဘောင်နှင့် ZK padding အရိပ်အမြွက်။
 
-Determinism constraints
-- No FP; no nondeterministic syscalls.
-- SIMD/GPU acceleration is invisible to bytecode and must be bit-identical; compiler does not emit hardware-specific ops.
+မန်နီးဖက်စ် (ရွေးချယ်နိုင်သော ဘေးတွဲ)
+- `code_hash`၊ `abi_hash`၊ `meta {}` ဘလောက်မှ မက်တာဒေတာ၊ စုစည်းမှုဗားရှင်းနှင့် ပြန်လည်ထုတ်လုပ်နိုင်မှုအတွက် အရိပ်အမြွက်များ တည်ဆောက်ပါ။
 
-## ABI, Header, and Manifest
+## လမ်းပြမြေပုံ
 
-IVM header fields set by the compiler
-- `version`: IVM bytecode format version (major.minor).
-- `abi_version`: syscall table and pointer-ABI schema version.
-- `feature_bits`: feature flags (e.g., `ZK`, `VECTOR`).
-- `vector_len`: logical vector length (0 → unset).
-- `max_cycles`: admission bound and ZK padding hint.
+- **KD-231 (Apr 2026)-** ထပ်ကာထပ်ကာ ကန့်သတ်ချက်များအတွက် စုစည်းမှု-အချိန်အပိုင်းအခြားခွဲခြမ်းစိတ်ဖြာမှုကို ပေါင်းထည့်ခြင်းဖြင့် loops များသည် အကန့်အသတ်ရှိသော access sets များကို အချိန်ဇယားရေးဆွဲသူထံ ဖော်ထုတ်ပေးပါသည်။
+- **KD-235 (မေလ 2026):** ညွှန်ပြတည်ဆောက်သူများနှင့် ABI ကြည်လင်ပြတ်သားမှုအတွက် `bytes` နှင့် ABI ကြည်လင်ပြတ်သားမှုအတွက် ပထမတန်းစား `bytes` ကို မိတ်ဆက်ပါ။
+- **KD-242 (Jun2026):** အင်္ဂါရပ်အလံများ၏နောက်ကွယ်တွင် တည်ဆောက်ထားသော opcode set (hash / signature verification) ကို အဆုံးအဖြတ်ပေးသော တုံ့ပြန်မှုများဖြင့် ချဲ့ထွင်ပါ။
+- **KD-247 (Jun2026):** error `msg_id`s ကို တည်ငြိမ်အောင် ထိန်းပြီး မြေပုံကို `kotoba {}` ဇယားများတွင် ထိန်းသိမ်းပါ။
+### ထင်ရှားစွာ ထုတ်လွှတ်ခြင်း။
 
-Manifest (optional sidecar)
-- `code_hash`, `abi_hash`, metadata from `meta {}` block, compiler version, and build hints for reproducibility.
-
-## Roadmap
-
-- **KD-231 (Apr 2026):** add compile-time range analysis for iteration bounds so loops expose bounded access sets to the scheduler.
-- **KD-235 (May 2026):** introduce a first-class `bytes` scalar distinct from `string` for pointer constructors and ABI clarity.
-- **KD-242 (Jun 2026):** expand the builtin opcode set (hash / signature verification) behind feature flags with deterministic fallbacks.
-- **KD-247 (Jun 2026):** stabilize error `msg_id`s and maintain the mapping in `kotoba {}` tables for localized diagnostics.
-### Manifest Emission
-
-- The Kotodama compiler API can return a `ContractManifest` alongside the compiled `.to` via `ivm::kotodama::compiler::Compiler::compile_source_with_manifest`.
-- Fields:
-  - `code_hash`: hash of the code bytes (excluding the IVM header and literals) computed by the compiler to bind the artifact.
-  - `abi_hash`: stable digest of the allowed syscall surface for the program's `abi_version` (see `ivm.md` and `ivm::syscalls::compute_abi_hash`).
-- Optional `compiler_fingerprint` and `features_bitmap` are reserved for toolchains.
-- `entrypoints`: ordered list of exported entrypoints (public, `hajimari`, `kaizen`) including their required `permission(...)` strings and the compiler’s best-effort read/write key hints so admission logic and schedulers can reason about expected WSV access.
-- The manifest is intended for admission-time checks and for registries; see `docs/source/new_pipeline.md` for lifecycle.
+- Kotodama compiler API သည် စုစည်းထားသော `.to` နှင့်အတူ `ivm::kotodama::compiler::Compiler::compile_source_with_manifest` နှင့်အတူ `ContractManifest` ကို ပြန်ပေးနိုင်ပါသည်။
+- အကွက်များ
+  - `code_hash`- ကွန်ပြူလာမှ တွက်ချက်ထားသော ကုဒ်ဘိုက်များ (IVM ခေါင်းစီးနှင့် စာလုံးများ မပါ) hash of the code bytes.
+  - `abi_hash`- ပရိုဂရမ်၏ `abi_version` အတွက် ခွင့်ပြုထားသော syscall မျက်နှာပြင်၏ တည်ငြိမ်သောချေဖျက်ချက် (`ivm.md` နှင့် `ivm::syscalls::compute_abi_hash` ကိုကြည့်ပါ)။
+- ရွေးချယ်နိုင်သော `compiler_fingerprint` နှင့် `features_bitmap` ကို toolchains အတွက် သီးသန့်ထားသည်။
+- `entrypoints`- မှာယူထားသော ပို့ကုန် entrypoints စာရင်း (အများပြည်သူ၊ `hajimari`၊ `kaizen`) အပါအဝင် ၎င်းတို့၏ လိုအပ်သော `permission(...)` စာကြောင်းများနှင့် compiler ၏ အကောင်းဆုံးကြိုးစားအားထုတ်မှု ဖတ်ရှုခြင်း/ရေးခြင်း သော့ချက်အချိန်ဇယားများ နှင့် Wrs မှ မျှော်လင့်ထားသော အကြံကောင်းများကို ရယူနိုင်ပါသည်။
+- မန်နီးဖက်စ်သည် ဝင်ခွင့်အချိန်စစ်ဆေးမှုများနှင့် မှတ်ပုံတင်ခြင်းအတွက် ရည်ရွယ်ပါသည်။ ဘဝစက်ဝန်းအတွက် `docs/source/new_pipeline.md` ကိုကြည့်ပါ။

@@ -11,95 +11,96 @@ id: chunker-registry-rollout-checklist
 title: SoraFS Chunker Registry Rollout Checklist
 sidebar_label: Chunker Rollout Checklist
 description: Step-by-step rollout plan for chunker registry updates.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-# SoraFS Registry Rollout Checklist
+# SoraFS Registry Rollout Yoxlama Siyahısı
 
-This checklist captures the steps required to promote a new chunker profile or
-provider admission bundle from review to production after the governance
-charter has been ratified.
+Bu yoxlama siyahısı yeni chunker profili və ya tanıtmaq üçün tələb olunan addımları əks etdirir
+nəzarətdən sonra istehsala qədər provayderin qəbul paketi
+nizamnaməsi təsdiq edilmişdir.
 
-> **Scope:** Applies to all releases that modify
-> `sorafs_manifest::chunker_registry`, provider admission envelopes, or the
-> canonical fixture bundles (`fixtures/sorafs_chunker/*`).
+> **Əhatə dairəsi:** Dəyişdirən bütün buraxılışlara aiddir
+> `sorafs_manifest::chunker_registry`, provayderin qəbulu zərfləri və ya
+> kanonik qurğu dəstələri (`fixtures/sorafs_chunker/*`).
 
-## 1. Pre-flight Validation
+## 1. Uçuşdan əvvəl Qiymətləndirmə
 
-1. Regenerate fixtures and verify determinism:
+1. Armaturları bərpa edin və determinizmi yoxlayın:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Confirm determinism hashes in
-   `docs/source/sorafs/reports/sf1_determinism.md` (or the relevant profile
-   report) match the regenerated artifacts.
-3. Ensure `sorafs_manifest::chunker_registry` compiles with
-   `ensure_charter_compliance()` by running:
+2. Determinizm hashlərini təsdiq edin
+   `docs/source/sorafs/reports/sf1_determinism.md` (və ya müvafiq profil
+   hesabat) bərpa edilmiş artefaktlara uyğun gəlir.
+3. `sorafs_manifest::chunker_registry` ilə tərtib olunduğundan əmin olun
+   `ensure_charter_compliance()` işlətməklə:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Update the proposal dossier:
+4. Təklif faylını yeniləyin:
    - `docs/source/sorafs/proposals/<profile>.json`
-   - Council minutes entry under `docs/source/sorafs/council_minutes_*.md`
-   - Determinism report
+   - `docs/source/sorafs/council_minutes_*.md` altında Şura protokolu girişi
+   - Determinizm hesabatı
 
-## 2. Governance Sign-off
+## 2. İdarəetmənin imzalanması
 
-1. Present the Tooling Working Group report and proposal digest to the Sora
-   Parliament Infrastructure Panel.
-2. Record approval details in
+1. Alətlər üzrə İşçi Qrupun hesabatını və təkliflər toplusunu Sora təqdim edin
+   Parlament İnfrastruktur Paneli.
+2. Təsdiq təfərrüatlarını qeyd edin
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Publish the Parliament-signed envelope alongside the fixtures:
+3. Parlament tərəfindən imzalanmış zərfi qurğularla yanaşı dərc edin:
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Verify the envelope is accessible via the governance fetch helper:
+4. Zərfin idarəçiliyin əldə edilməsi köməkçisi vasitəsilə əlçatan olduğunu yoxlayın:
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Staging Rollout
+## 3. Mərhələli Yayılma
 
-Refer to the [staging manifest playbook](./staging-manifest-playbook) for a
-detailed walkthrough of these steps.
+üçün [təhsil manifestinin dərs kitabına](./staging-manifest-playbook) baxın
+bu addımların ətraflı təsviri.
 
-1. Deploy Torii with `torii.sorafs` discovery enabled and admission
-   enforcement turned on (`enforce_admission = true`).
-2. Push the approved provider admission envelopes to the staging registry
-   directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Verify provider adverts propagate via the discovery API:
+1. `torii.sorafs` kəşfi aktiv və qəbul ilə Torii yerləşdirin
+   icra aktivləşdirildi (`enforce_admission = true`).
+2. Təsdiq edilmiş provayderin qəbulu zərflərini səhnələşdirmə reyestrinə itələyin
+   `torii.sorafs.discovery.admission.envelopes_dir` tərəfindən istinad edilən kataloq.
+3. Provayder reklamlarının kəşf API vasitəsilə yayıldığını yoxlayın:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Exercise manifest/plan endpoints with governance headers:
+4. İdarəetmə başlıqları ilə manifest/planın son nöqtələrini həyata keçirin:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Confirm telemetry dashboards (`torii_sorafs_*`) and alert rules report the
-   new profile without errors.
+5. Telemetriya tablosunu təsdiqləyin (`torii_sorafs_*`) və xəbərdarlıq qaydaları
+   səhvsiz yeni profil.
 
-## 4. Production Rollout
+## 4. İstehsalın yayılması
 
-1. Repeat the staging steps against production Torii nodes.
-2. Announce the activation window (date/time, grace period, rollback plan) to
-   operator and SDK channels.
-3. Merge the release PR containing:
-   - Updated fixtures and envelope
-   - Documentation changes (charter references, determinism report)
-   - Roadmap/status refresh
-4. Tag the release and archive the signed artifacts for provenance.
+1. İstehsal Torii qovşaqlarına qarşı mərhələli addımları təkrarlayın.
+2. Aktivləşdirmə pəncərəsini (tarix/vaxt, güzəşt müddəti, geri qaytarma planı) elan edin.
+   operator və SDK kanalları.
+3. Aşağıdakıları ehtiva edən buraxılış PR-ni birləşdirin:
+   - Yenilənmiş qurğular və zərf
+   - Sənəd dəyişiklikləri (nizamnamə istinadları, determinizm hesabatı)
+   - Yol xəritəsi/statusun yenilənməsi
+4. Buraxılışı etiketləyin və imzalanmış artefaktları mənşəyə görə arxivləşdirin.
 
-## 5. Post-Rollout Audit
+## 5. Yayımdan Sonra Audit
 
-1. Capture final metrics (discovery counts, fetch success rate, error
-   histograms) 24h after rollout.
-2. Update `status.md` with a short summary and link to the determinism report.
-3. File any follow-up tasks (e.g., additional profile authoring guidance) in
+1. Yekun ölçüləri əldə edin (kəşf sayları, əldə etmə müvəffəqiyyət dərəcəsi, xəta
+   histoqramlar) buraxıldıqdan 24 saat sonra.
+2. Qısa xülasə və determinizm hesabatına keçid ilə `status.md`-i yeniləyin.
+3. İstənilən təqib tapşırıqlarını (məsələn, əlavə profil yaratma təlimatı) faylı
    `roadmap.md`.

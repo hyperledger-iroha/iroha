@@ -6,29 +6,30 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4d1af3021d94540c338c921ea8393a10dd918ee1549965cdc09fbc612c938444
 source_last_modified: "2026-01-03T18:07:58.457499+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Python SDK Quickstart
+# Python SDK クイックスタート
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+Python SDK (`iroha-python`) は Rust クライアント ヘルパーをミラーリングしているため、
+スクリプト、ノートブック、または Web バックエンドから Torii と対話します。このクイックスタート
+インストール、トランザクションの送信、イベントのストリーミングについて説明します。より深く
+適用範囲については、リポジトリの `python/iroha_python/README.md` を参照してください。
 
-## 1. Install
+## 1. インストール
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+オプションの追加物:
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- `pip install aiohttp` の非同期バリアントを実行する予定の場合
+  ストリーミングヘルパー。
+- SDK の外部で Ed25519 キーの導出が必要な場合は、`pip install pynacl`。
 
-## 2. Create a client and signers
+## 2. クライアントと署名者を作成する
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` は、`timeout_ms` などの追加のキーワード引数を受け入れます。
+`max_retries`、および `tls_config`。ヘルパー `resolve_torii_client_config`
+Rust CLIと同等の機能が必要な場合は、JSON設定ペイロードを解析します。
 
-## 3. Submit a transaction
+## 3. トランザクションを送信する
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+SDK には命令ビルダーとトランザクション ヘルパーが同梱されているため、ビルドすることはほとんどありません。
+Norito ペイロードを手動で作成します。
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
-JSON-centric `submit_transaction_json`.
+`build_and_submit_transaction` は、署名されたエンベロープと最後のエンベロープの両方を返します。
+観察されたステータス (例: `Committed`、`Rejected`)。すでに署名をお持ちの場合
+トランザクション エンベロープは `client.submit_transaction_envelope(envelope)` または
+JSON 中心の `submit_transaction_json`。
 
-## 4. Query state
+## 4. クエリ状態
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+すべての REST エンドポイントには JSON ヘルパーがあり、多くは型指定されたデータクラスを公開します。のために
+ドメインをリストする例:
 
 ```python
 domains = client.list_domains_typed()
@@ -88,13 +89,13 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+ページネーションを認識するヘルパー (`list_accounts_typed` など) は、次のオブジェクトを返します。
+`items` と `next_cursor` の両方が含まれています。
 
-## 5. Stream events
+## 5. ストリームイベント
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii SSE エンドポイントはジェネレーター経由で公開されます。 SDKは自動的に再開します
+`resume=True` で、`EventCursor` を指定した場合。
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -110,19 +111,19 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+その他の便利なメソッドには、`stream_pipeline_transactions`、
+`stream_events` (型付きフィルター ビルダーを使用)、および `stream_verifying_key_events`。
 
-## 6. Next steps
+## 6. 次のステップ
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- `python/iroha_python/src/iroha_python/examples/` の例を調べてください。
+  ガバナンス、ISO ブリッジ ヘルパー、接続をカバーするエンドツーエンド フロー向け。
+- 必要な場合は、`create_torii_client` / `resolve_torii_client_config` を使用します。
+  `iroha_config` JSON ファイルまたは環境からクライアントをブートストラップします。
+- Norito RPC または Connect 固有の API については、次のような特殊なモジュールを確認してください。
+  `iroha_python.norito_rpc` および `iroha_python.connect`。
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+これらのビルディング ブロックを使用すると、書かずに Python から Torii を実行できます。
+独自の HTTP グルーまたは Norito コーデック。 SDK が成熟するにつれて、追加の高レベルの
+ビルダーが追加されます。 `python/iroha_python` の README を参照してください。
+最新のステータスと移行メモのディレクトリ。

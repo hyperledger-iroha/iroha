@@ -4,41 +4,43 @@ direction: ltr
 source: docs/portal/docs/sorafs/dispute-revocation-runbook.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: dispute-revocation-runbook
+идентификатор: книга споров-отзывов
 title: Runbook de disputas y revocaciones de SoraFS
-sidebar_label: Runbook de disputas y revocaciones
-description: Flujo de gobernanza para presentar disputas de capacidad de SoraFS, coordinar revocaciones y evacuar datos de forma determinista.
+Sidebar_label: Сборник споров и отзывов
+описание: Губернаторский переход для представления споров о емкости SoraFS, координации отзыва и эвакуации данных детерминированной формы.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/dispute_revocation_runbook.md`. Mantén ambas copias sincronizadas hasta que se retire la documentación heredada de Sphinx.
+:::примечание Фуэнте каноника
+Эта страница отражает `docs/source/sorafs/dispute_revocation_runbook.md`. Мантену пришлось скопировать синхронизированные документы, чтобы удалить наследственную документацию о Сфинксе.
 :::
 
-## Propósito
+## Предложение
 
-Este runbook guía a los operadores de gobernanza para presentar disputas de capacidad de SoraFS, coordinar revocaciones y garantizar que la evacuación de datos se complete de forma determinista.
+Этот runbook предназначен для операторов правительства, чтобы представить споры о емкости SoraFS, координировать отзыв и гарантировать, что эвакуация данных будет завершена в определенной форме.
 
-## 1. Evaluar el incidente
+## 1. Оцените инцидент
 
-- **Condiciones de activación:** detección de incumplimiento de SLA (tiempo de actividad/fallo de PoR), déficit de replicación o desacuerdo de facturación.
-- **Confirmar telemetría:** captura snapshots de `/v1/sorafs/capacity/state` y `/v1/sorafs/capacity/telemetry` para el proveedor.
-- **Notificar a las partes interesadas:** Storage Team (operaciones del proveedor), Governance Council (órgano decisorio), Observability (actualizaciones de dashboards).
+- **Условия активации:** обнаружение нарушения SLA (время активации/выпадение PoR), дефицит репликации или прекращение фактурирования.
+- **Подтвердить телеметрию:** сделать снимки `/v1/sorafs/capacity/state` и `/v1/sorafs/capacity/telemetry` для поставщика.
+- **Уведомление об интересующих сторонах:** Группа хранения (операции провайдера), Совет управления (решительный орган), Наблюдательность (актуализация информационных панелей).
 
-## 2. Preparar el paquete de evidencias
+## 2. Подготовьте пакет доказательств
 
-1. Recopila artefactos en bruto (telemetry JSON, logs de CLI, notas de auditoría).
-2. Normaliza en un archivo determinista (por ejemplo, un tarball); registra:
-   - digest BLAKE3-256 (`evidence_digest`)
-   - tipo de media (`application/zip`, `application/jsonl`, etc.)
-   - URI de alojamiento (object storage, pin de SoraFS o endpoint accesible por Torii)
-3. Guarda el paquete en el bucket de recolección de evidencias de gobernanza con acceso de escritura única.
+1. Грубое копирование артефактов (телеметрия JSON, журналы CLI, аудиторские записи).
+2. Нормализация в определенном архиве (например, в архиве); регистрация:
+   - дайджест BLAKE3-256 (`evidence_digest`)
+   - тип носителя (`application/zip`, `application/jsonl` и т. д.)
+   - URI-адрес alojamiento (хранилище объектов, контакт SoraFS или конечная точка, доступная для Torii)
+3. Храните пакет в ведре для хранения доказательств губернатора с доступом к уникальной письменной форме.
 
-## 3. Presentar la disputa
+## 3. Представить спор
 
-1. Crea un JSON spec para `sorafs_manifest_stub capacity dispute`:
+1. Создайте спецификацию JSON для `sorafs_manifest_stub capacity dispute`:
 
    ```json
    {
@@ -58,7 +60,7 @@ Este runbook guía a los operadores de gobernanza para presentar disputas de cap
    }
    ```
 
-2. Ejecuta la CLI:
+2. Включение CLI:
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -71,38 +73,36 @@ Este runbook guía a los operadores de gobernanza para presentar disputas de cap
      --private-key=ed25519:<key>
    ```
 
-3. Revisa `dispute_summary.json` (confirma tipo, digest de evidencias y timestamps).
-4. Envía el JSON de la solicitud a Torii `/v1/sorafs/capacity/dispute` a través de la cola de transacciones de gobernanza. Captura el valor de respuesta `dispute_id_hex`; ancla las acciones de revocación posteriores y los informes de auditoría.
+3. Revisa `dispute_summary.json` (подтверждение типа, дайджест доказательств и временные метки).
+4. Отправьте запрос в формате JSON на Torii `/v1/sorafs/capacity/dispute` и на страницы государственных транзакций. Каптура доблести спасения `dispute_id_hex`; а также действия по отзыву задних дверей и информированию аудитории.
 
-## 4. Evacuación y revocación
+## 4. Эвакуация и отзыв
 
-1. **Ventana de gracia:** notifica al proveedor sobre la revocación inminente; permite la evacuación de datos fijados cuando la política lo permita.
-2. **Genera `ProviderAdmissionRevocationV1`:**
-   - Usa `sorafs_manifest_stub provider-admission revoke` con la razón aprobada.
-   - Verifica firmas y el digest de revocación.
-3. **Publica la revocación:**
-   - Envía la solicitud de revocación a Torii.
-   - Asegura que los adverts del proveedor estén bloqueados (se espera que `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` aumente).
-4. **Actualiza dashboards:** marca al proveedor como revocado, referencia el ID de disputa y enlaza el paquete de evidencias.
+1. **Вентана де грация:** уведомление о неизбежном отзыве; разрешите эвакуацию данных из Фихадо, если политика будет разрешена.
+2. **Род `ProviderAdmissionRevocationV1`:**
+   - США `sorafs_manifest_stub provider-admission revoke` с проверенным разумом.
+   - Проверка фирм и дайджест отзыва.
+3. **Публикация отзыва:**
+   - Отправьте запрос на отзыв на номер Torii.
+   - Убедитесь, что рекламные объявления блокируются (видимо, что `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` увеличивается).
+4. **Актуализация информационных панелей:** отображать доказательства как отозванные, ссылаться на идентификатор спора и открывать пакет доказательств.
 
-## 5. Post-mortem y seguimiento
+## 5. Вскрытие и заключение- Зарегистрируйте время, причину возникновения и действия по исправлению ситуации в трекере происшествий правительства.
+- Determina la restitución (снижение ставок, возврат комиссий, возврат клиентов).
+- Подготовка документов; актуализация зон SLA или оповещений мониторинга, если это необходимо.
 
-- Registra la línea de tiempo, la causa raíz y las acciones de remediación en el tracker de incidentes de gobernanza.
-- Determina la restitución (slashing de stake, clawbacks de comisiones, reembolsos a clientes).
-- Documenta aprendizajes; actualiza umbrales de SLA o alertas de monitoreo si es necesario.
-
-## 6. Materiales de referencia
+## 6. Справочные материалы
 
 - `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (sección de disputas)
-- `docs/source/sorafs/provider_admission_policy.md` (flujo de revocación)
-- Dashboard de observabilidad: `SoraFS / Capacity Providers`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (раздел споров)
+- `docs/source/sorafs/provider_admission_policy.md` (переход к отзыву)
+- Панель наблюдения: `SoraFS / Capacity Providers`
 
-## Checklist
+## Контрольный список
 
-- [ ] Paquete de evidencias capturado y hasheado.
-- [ ] Payload de disputa validado localmente.
-- [ ] Transacción de disputa en Torii aceptada.
-- [ ] Revocación ejecutada (si fue aprobada).
-- [ ] Dashboards/runbooks actualizados.
-- [ ] Post-mortem presentado ante el consejo de gobernanza.
+- [ ] Пакет доказательств, снятых и захваченных.
+- [ ] Полезная нагрузка, действующая локально.
+- [ ] Сделка по спору на Torii принята.
+- [ ] Отзыв (если это возможно).
+- [ ] Актуализированы информационные панели/runbooks.
+- [ ] Посмертное представление перед советом губернатора.

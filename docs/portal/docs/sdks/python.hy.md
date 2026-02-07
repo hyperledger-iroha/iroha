@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1f2dd6b790ce0252c355db5218b64ca9a15f4200879fe874499df079ae168872
 source_last_modified: "2026-01-30T18:06:01.646084+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Python SDK Quickstart
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+Python SDK-ն (`iroha-python`) արտացոլում է Rust հաճախորդի օգնականներին, որպեսզի կարողանաք
+փոխազդել Torii-ի հետ սկրիպտներից, նոթատետրերից կամ վեբ հետնամասերից: Այս արագ մեկնարկը
+ընդգրկում է տեղադրումը, գործարքների ներկայացումը և իրադարձությունների հոսքը: Ավելի խորության համար
+ծածկույթը տես `python/iroha_python/README.md` պահոցում:
 
-## 1. Install
+## 1. Տեղադրեք
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+Ընտրովի հավելումներ.
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- `pip install aiohttp`, եթե նախատեսում եք գործարկել ասինխրոն տարբերակները
+  հոսքային օգնականներ.
+- `pip install pynacl`, երբ ձեզ անհրաժեշտ է Ed25519 ստեղնաշարի ստացում SDK-ից դուրս:
 
-## 2. Create a client and signers
+## 2. Ստեղծեք հաճախորդ և ստորագրողներ
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` ընդունում է լրացուցիչ հիմնաբառերի փաստարկներ, ինչպիսիք են `timeout_ms`,
+`max_retries` և `tls_config`: Օգնական `resolve_torii_client_config`
+վերլուծում է JSON կազմաձևման օգտակար բեռը, եթե ցանկանում եք հավասարություն Rust CLI-ի հետ:
 
-## 3. Submit a transaction
+## 3. Ներկայացրե՛ք գործարք
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+SDK-ն ուղարկում է հրահանգներ կառուցողներ և գործարքների օգնականներ, այնպես որ դուք հազվադեպ եք կառուցում
+Norito բեռնատարներ ձեռքով.
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
-JSON-centric `submit_transaction_json`.
+`build_and_submit_transaction`-ը վերադարձնում է և՛ ստորագրված ծրարը, և՛ վերջինը
+դիտարկված կարգավիճակը (օրինակ՝ `Committed`, `Rejected`): Եթե դուք արդեն ստորագրված եք
+գործարքի ծրարի օգտագործումը `client.submit_transaction_envelope(envelope)` կամ
+JSON-կենտրոն `submit_transaction_json`:
 
-## 4. Query state
+## 4. Հարցման վիճակ
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+Բոլոր REST վերջնակետերն ունեն JSON օգնականներ և շատերը բացահայտում են մուտքագրված տվյալների դասակարգերը: Համար
+օրինակ՝ ցուցակագրելով տիրույթները.
 
 ```python
 domains = client.list_domains_typed()
@@ -88,11 +89,11 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+Էջագրման տեղյակ օգնականները (օրինակ՝ `list_accounts_typed`) վերադարձնում են օբյեկտ, որը
+պարունակում է և՛ `items`, և՛ `next_cursor`:
 
-Account inventory helpers accept an optional `asset_id` filter when you only
-care about a specific asset:
+Հաշվի գույքագրման օգնականները ընդունում են կամընտիր `asset_id` զտիչ, երբ դուք միայն
+հոգ տանել կոնկրետ ակտիվի մասին.
 
 ```python
 asset_id = "rose#wonderland#alice@test"
@@ -102,11 +103,11 @@ holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=
 print(assets, txs, holders)
 ```
 
-## 5. Offline allowances
+## 5. Անցանց նպաստներ
 
-Use the offline allowance endpoints to issue wallet certificates and register
-them on-ledger. `top_up_offline_allowance` chains the issue + register steps
-(there is no single top-up endpoint):
+Օգտագործեք անցանց նպաստի վերջնակետերը՝ դրամապանակի վկայագրեր տրամադրելու և գրանցելու համար
+դրանք գրանցամատյանում: `top_up_offline_allowance`-ը կապում է խնդիրը + գրանցման քայլերը
+(չկա մեկ լիցքավորման վերջնակետ):
 
 ```python
 from iroha_python import ToriiClient
@@ -132,7 +133,7 @@ top_up = client.top_up_offline_allowance(
 print("registered", top_up.registration.certificate_id_hex)
 ```
 
-For renewals, call `top_up_offline_allowance_renewal` with the current certificate id:
+Թարմացումների համար զանգահարեք `top_up_offline_allowance_renewal`՝ ընթացիկ վկայագրի ID-ով.
 
 ```python
 renewed = client.top_up_offline_allowance_renewal(
@@ -144,14 +145,14 @@ renewed = client.top_up_offline_allowance_renewal(
 print("renewed", renewed.registration.certificate_id_hex)
 ```
 
-If you need to split the flow, call `issue_offline_certificate` (or
-`issue_offline_certificate_renewal`) followed by `register_offline_allowance`
-or `renew_offline_allowance`.
+Եթե Ձեզ անհրաժեշտ է բաժանել հոսքը, զանգահարեք `issue_offline_certificate` (կամ
+`issue_offline_certificate_renewal`), որին հաջորդում է `register_offline_allowance`
+կամ `renew_offline_allowance`.
 
-## 6. Stream events
+## 6. Հեռարձակեք իրադարձությունները
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii SSE վերջնակետերը բացահայտվում են գեներատորների միջոցով: SDK-ն ավտոմատ կերպով վերսկսվում է
+երբ `resume=True` և դուք տրամադրում եք `EventCursor`:
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -167,28 +168,28 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+Այլ հարմար մեթոդներ ներառում են `stream_pipeline_transactions`,
+`stream_events` (տպագրված ֆիլտր կառուցողներով) և `stream_verifying_key_events`:
 
-## 7. Next steps
+## 7. Հաջորդ քայլերը
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- Ուսումնասիրեք `python/iroha_python/src/iroha_python/examples/`-ի օրինակները
+  կառավարման, ISO կամուրջի օգնականների և Connect-ի համար ծայրից ծայր հոսքերի համար:
+- Օգտագործեք `create_torii_client` / `resolve_torii_client_config`, երբ ցանկանում եք
+  բեռնել հաճախորդը `iroha_config` JSON ֆայլից կամ միջավայրից:
+- Norito RPC կամ Connect-ի հատուկ API-ների համար ստուգեք մասնագիտացված մոդուլները, ինչպիսիք են.
+  `iroha_python.norito_rpc` և `iroha_python.connect`:
 
-## Related Norito examples
+## Առնչվող Norito օրինակներ
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — mirrors the compile/run
-  workflow from this quickstart so you can deploy the same starter contract from Python.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — matches the domain +
-  asset flows above and is useful when you want the ledger-side implementation instead of SDK builders.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — showcases the `transfer_asset`
-  syscall so you can compare contract-driven transfers with the Python helper methods.
+- [Hajimari մուտքի կետի կմախք] (../norito/examples/hajimari-entrypoint) — արտացոլում է կոմպիլյացիան/գործարկումը
+  աշխատանքային հոսք այս արագ մեկնարկից, որպեսզի կարողանաք գործարկել նույն մեկնարկային պայմանագիրը Python-ից:
+- [Գրանցեք տիրույթի և դրամահատարանի ակտիվները] (../norito/examples/register-and-mint) — համապատասխանում է տիրույթին +
+  Ակտիվը հոսում է վերևում և օգտակար է, երբ ցանկանում եք մատյանում իրականացնել SDK ստեղծողների փոխարեն:
+- [Ակտիվների փոխանցում հաշիվների միջև] (../norito/examples/transfer-asset) — ցուցադրում է `transfer_asset`-ը
+  syscall, որպեսզի կարողանաք համեմատել պայմանագրով պայմանավորված փոխանցումները Python-ի օգնական մեթոդների հետ:
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+Այս շինարարական բլոկների միջոցով դուք կարող եք իրականացնել Torii Python-ից առանց գրելու
+ձեր սեփական HTTP սոսինձը կամ Norito կոդեկները: Քանի որ SDK-ն հասունանում է, լրացուցիչ բարձր մակարդակ
+կավելացվեն շինարարներ; խորհրդակցեք README-ի հետ `python/iroha_python`-ում
+տեղեկատու կարգավիճակի և միգրացիայի վերջին նշումների համար:

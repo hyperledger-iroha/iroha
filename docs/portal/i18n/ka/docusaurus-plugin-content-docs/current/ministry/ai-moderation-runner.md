@@ -6,64 +6,66 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: AI Moderation Runner Specification
 summary: Deterministic moderation committee design for the Ministry of Information (MINFO-1) deliverable.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# AI Moderation Runner Specification
+# AI Moderation Runner სპეციფიკაცია
 
-This specification fulfils the documentation portion of **MINFO-1 — Establish AI
-moderation baseline**. It defines the deterministic execution contract for the
-Ministry of Information moderation service so every gateway can run identical
-pipelines before appeals and transparency flows (SFM-4/SFM-4b). All behaviour
-described here is normative unless explicitly marked as informational.
+ეს სპეციფიკაცია აკმაყოფილებს **MINFO-1-ის დოკუმენტაციის ნაწილს — დაადგინეთ AI
+ზომიერება საბაზისო **. იგი განსაზღვრავს დეტერმინისტულ აღსრულების ხელშეკრულებას
+ინფორმაციის სამინისტროს მოდერაციის სერვისი, რათა ყველა კარიბჭე იდენტური იყოს
+მილსადენები გასაჩივრებამდე და გამჭვირვალობის ნაკადები (SFM-4/SFM-4b). ყველა ქცევა
+აქ აღწერილი ნორმატიულია, თუ ცალსახად არ არის მონიშნული, როგორც ინფორმაციული.
 
-## 1. Goals & Scope
-- Provide a reproducible moderation committee that evaluates gateway content
-  (objects, manifests, metadata, audio) using heterogeneous models.
-- Guarantee deterministic execution across operators: fixed opset, seeded
-  tokenisation, bounded precision, and versioned artefacts.
-- Produce audit-ready artefacts: manifests, scorecards, calibration evidence,
-  and transparency digests suitable for publication in the governance DAG.
-- Surface telemetry so SREs can detect drift, false positives, and downtime
-  without collecting raw user data.
+## 1. მიზნები და სფერო
+- უზრუნველყოთ რეპროდუცირებადი მოდერაციის კომიტეტი, რომელიც აფასებს კარიბჭის შინაარსს
+  (ობიექტები, მანიფესტები, მეტამონაცემები, აუდიო) ჰეტეროგენული მოდელების გამოყენებით.
+- გარანტია დეტერმინისტული შესრულების ოპერატორებს შორის: ფიქსირებული opset, seeded
+  ტოკენიზაცია, შეზღუდული სიზუსტე და ვერსიული არტეფაქტები.
+- შექმენით აუდიტისთვის მზა არტეფაქტები: მანიფესტები, ქულების ბარათები, კალიბრაციის მტკიცებულებები,
+  და გამჭვირვალობის დაიჯესტები, რომლებიც შესაფერისია მმართველობით DAG-ში გამოსაქვეყნებლად.
+- ზედაპირის ტელემეტრია, რათა SRE-ებმა შეძლონ დრეიფის, ცრუ დადებითი და შეფერხების ამოცნობა
+  მომხმარებლის ნედლეული მონაცემების შეგროვების გარეშე.
 
-## 2. Deterministic Execution Contract
-- **Runtime:** ONNX Runtime 1.19.x (CPU backend) compiled with AVX2 disabled and
-  `--enable-extended-minimal-build` to keep the opcode set fixed. CUDA/Metal
-  runtimes are explicitly disallowed in production.
-- **Opset:** `opset=17`. Models targeting newer opsets must be down-converted
-  and validated before admission.
-- **Seed derivation:** Every evaluation derives an RNG seed from
-  `BLAKE3(content_digest || manifest_id || run_nonce)` where `run_nonce` comes
-  from the governance-approved manifest. Seeds feed all stochastic components
-  (beam search, dropout toggles) so results are bit-for-bit reproducible.
-- **Threading:** One worker per model. Concurrency is coordinated by the runner
-  orchestrator to avoid shared-state race conditions. BLAS libraries operate in
-  single-threaded mode.
-- **Numerics:** FP16 accumulation is forbidden. Use FP32 intermediates and clamp
-  outputs to four decimal places before aggregation.
+## 2. დეტერმინისტული აღსრულების ხელშეკრულება
+- **გაშვების დრო:** ONNX Runtime 1.19.x (CPU backend) შედგენილი AVX2 გამორთულია და
+  `--enable-extended-minimal-build` ოპკოდის ნაკრების დაფიქსირების მიზნით. კუდა/მეტალი
+  გაშვების დრო აშკარად აკრძალულია წარმოებაში.
+- **ოპსეტი:** `opset=17`. მოდელები, რომლებიც მიზნად ისახავს უახლეს ოპსეტებს, უნდა იყოს გადაყვანილი
+  და დამოწმებული მიღებამდე.
+- ** თესლის წარმოშობა:** ყოველი შეფასება გამომდინარეობს RNG თესლიდან
+  `BLAKE3(content_digest || manifest_id || run_nonce)` სადაც მოდის `run_nonce`
+  მმართველობის მიერ დამტკიცებული მანიფესტიდან. თესლი კვებავს ყველა სტოქასტურ კომპონენტს
+  (სხივის ძებნა, გამოშვების გადართვა) ასე რომ, შედეგები ბიტ-ბიტი რეპროდუცირებადია.
+- ** ძაფები: ** ერთი მუშა თითო მოდელზე. კონკურენტულობა კოორდინაციას უწევს მორბენალი
+  ორკესტრატორი, რათა თავიდან აიცილოს საერთო სახელმწიფო რბოლის პირობები. BLAS ბიბლიოთეკები მოქმედებს
+  ერთძაფის რეჟიმი.
+- **რიცხვები:** FP16 დაგროვება აკრძალულია. გამოიყენეთ FP32 შუალედური საშუალებები და დამჭერი
+  აგრეგაციამდე გამოაქვს ოთხი ათობითი ადგილი.
 
-## 3. Committee Composition
-The baseline committee contains three model families. Governance may add
-models, but the minimum quorum must remain satisfied.
+## 3. კომიტეტის შემადგენლობა
+საბაზისო კომიტეტი შეიცავს სამ მოდელის ოჯახს. მმართველობამ შეიძლება დაამატოს
+მოდელები, მაგრამ მინიმალური კვორუმი უნდა დარჩეს დაკმაყოფილებული.
 
-| Family | Baseline Model | Purpose |
-|--------|----------------|---------|
-| Vision | OpenCLIP ViT-H/14 (safety fine-tuned) | Detects visual contraband, violence, CSAM indicators. |
-| Multimodal | LLaVA-1.6 34B Safety | Captures text + image interactions, contextual cues, harassment. |
-| Perceptual | pHash + aHash + NeuralHash-lite ensemble | Fast near-duplicate detection and recall of known bad material. |
+| ოჯახი | საბაზისო მოდელი | დანიშნულება |
+|--------|---------------|---------|
+| ხედვა | OpenCLIP ViT-H/14 (უსაფრთხოების დაზუსტება) | აღმოაჩენს ვიზუალურ კონტრაბანდას, ძალადობას, CSAM ინდიკატორებს. |
+| მულტიმოდალური | LLaVA-1.6 34B უსაფრთხოება | იჭერს ტექსტს + გამოსახულების ურთიერთქმედებებს, კონტექსტურ მინიშნებებს, შევიწროებას. |
+| აღქმადი | pHash + aHash + NeuralHash-lite ანსამბლი | ცნობილი ცუდი მასალის სწრაფი თითქმის დუბლიკატის აღმოჩენა და გახსენება. |
 
-Each model entry specifies:
+თითოეული მოდელის ჩანაწერი მიუთითებს:
 - `model_id` (UUID)
-- `artifact_digest` (BLAKE3-256 of OCI image)
-- `weights_digest` (BLAKE3-256 of ONNX or merged safetensors blob)
-- `opset` (must equal `17`)
-- `weight` (committee weight, default `1.0`)
-- `critical_labels` (set of labels that immediately trigger `Escalate`)
-- `max_eval_ms` (guardrail for deterministic watchdogs)
+- `artifact_digest` (BLAKE3-256 of OCI გამოსახულება)
+- `weights_digest` (BLAKE3-256 of ONNX ან შერწყმული დამცავი ბლოკი)
+- `opset` (უნდა ტოლი იყოს `17`)
+- `weight` (კომიტეტის წონა, ნაგულისხმევი `1.0`)
+- `critical_labels` (ეტიკეტების ნაკრები, რომელიც დაუყოვნებლივ ააქტიურებს `Escalate`-ს)
+- `max_eval_ms` (დამცავი მოაჯირი დეტერმინისტული მცველებისთვის)
 
-## 4. Norito Manifests & Results
+## 4. Norito მანიფესტები და შედეგები
 
-### 4.1 Committee Manifest
+### 4.1 საკომიტეტო მანიფესტი
 ```norito
 struct AiModerationManifestV1 {
     manifest_id: Uuid,
@@ -90,7 +92,7 @@ struct AiModerationModelV1 {
 }
 ```
 
-### 4.2 Evaluation Result
+### 4.2 შეფასების შედეგი
 ```norito
 struct AiModerationResultV1 {
     manifest_id: Uuid,
@@ -116,14 +118,14 @@ struct AiModerationModelScoreV1 {
 }
 ```
 
-The runner MUST emit a deterministic `AiModerationDigestV1` (BLAKE3 over the
-serialized result) for transparency logs and append results to the moderation
-ledger when the verdict is not `pass`.
+მორბენალმა უნდა გამოსცეს დეტერმინისტული `AiModerationDigestV1` (BLAKE3 მეტი
+სერიული შედეგი) გამჭვირვალობის ჟურნალებისთვის და შედეგების დამატება მოდერაციისთვის
+წიგნი, როდესაც განაჩენი არ არის `pass`.
 
-### 4.3 Adversarial Corpus Manifest
+### 4.3 საპირისპირო კორპუსის მანიფესტი
 
-Gateway operators now ingest a companion manifest that enumerates perceptual
-hash/embedding “families” derived from the calibration runs:
+Gateway-ის ოპერატორები ახლა იღებენ კომპანიონ მანიფესტს, რომელიც აღიქვამს
+კალიბრაციის ოპერაციებიდან მიღებული „ოჯახების“ ჩაშენება:
 
 ```norito
 struct AdversarialCorpusManifestV1 {
@@ -150,138 +152,136 @@ struct AdversarialPerceptualVariantV1 {
 }
 ```
 
-The schema lives in `crates/iroha_data_model/src/sorafs/moderation.rs` and is
-validated via `AdversarialCorpusManifestV1::validate()`. The manifest allows the
-gateway denylist loader to populate `perceptual_family` entries that block
-entire near-duplicate clusters instead of individual bytes. A runnable fixture
-(`docs/examples/ai_moderation_perceptual_registry_202602.json`) demonstrates
-the expected layout and feeds directly into the sample gateway denylist.
+სქემა ცხოვრობს `crates/iroha_data_model/src/sorafs/moderation.rs`-ში და არის
+დადასტურებულია `AdversarialCorpusManifestV1::validate()`-ით. მანიფესტი იძლევა საშუალებას
+კარიბჭის უარმყოფელი ჩამტვირთავი `perceptual_family` ჩანაწერების შესავსებად, რომლებიც ბლოკავს
+მთლიანი თითქმის დუბლიკატი კლასტერები ცალკეული ბაიტების ნაცვლად. გასაშვები მოწყობილობა
+(`docs/examples/ai_moderation_perceptual_registry_202602.json`) აჩვენებს
+მოსალოდნელი განლაგება და მიეწოდება პირდაპირ ნიმუშის კარიბჭის უარყოფის სიაში.
 
-## 5. Execution Pipeline
-1. Load `AiModerationManifestV1` from the governance DAG. Reject if
-   `runner_hash` or `runtime_version` mismatch the deployed binary.
-2. Fetch model artefacts via OCI digest, verifying digests before loading.
-3. Construct evaluation batches by content type; ordering must sort by
-   `(content_digest, manifest_id)` to ensure deterministic aggregation.
-4. Execute each model with the derived seed. For perceptual hashes, combine
-   the ensemble via majority vote -> score in `[0,1]`.
-5. Aggregate scores into `combined_score` using weighted clipped ratio:
+## 5. შესრულების მილსადენი
+1. დატვირთვა `AiModerationManifestV1` მართვის DAG-დან. უარი თუ
+   `runner_hash` ან `runtime_version` არ შეესაბამება განლაგებულ ბინარს.
+2. მოდელის არტეფაქტების მოძიება OCI დაიჯესტის მეშვეობით, გადაამოწმეთ დაიჯესტები ჩატვირთვამდე.
+3. შეფასების პარტიების აგება შინაარსის ტიპის მიხედვით; შეკვეთა უნდა დალაგდეს
+   `(content_digest, manifest_id)` დეტერმინისტული აგრეგაციის უზრუნველსაყოფად.
+4. შეასრულეთ თითოეული მოდელი მიღებული თესლით. აღქმის ჰეშებისთვის, დააკავშირეთ
+   ანსამბლი უმრავლესობით -> ქულა `[0,1]`-ში.
+5. შეაგროვეთ ქულები `combined_score`-ში შეწონილი დაჭერილი თანაფარდობის გამოყენებით:
    ```
    combined = Σ_i weight_i * clamp(score_i / threshold_i, 0, 1) / Σ_i weight_i
    ```
-6. Produce `ModerationVerdictV1`:
-   - `escalate` if any `critical_labels` fire or `combined ≥ thresholds.escalate`.
-   - `quarantine` if above `thresholds.quarantine` but below `escalate`.
-   - `pass` otherwise.
-7. Persist `AiModerationResultV1` and enqueue downstream processes:
-   - Quarantine service (if verdict escalates/quarantines)
-   - Transparency log writer (`ModerationLedgerV1`)
-   - Telemetry exporter
+6. აწარმოე `ModerationVerdictV1`:
+   - `escalate` თუ არის `critical_labels` ცეცხლი ან `combined ≥ thresholds.escalate`.
+   - `quarantine` თუ ზემოთ `thresholds.quarantine`, მაგრამ ქვემოთ `escalate`.
+   - `pass` სხვაგვარად.
+7. გააგრძელეთ `AiModerationResultV1` და დააყენეთ ქვემოთ პროცესები:
+   - საკარანტინო მომსახურება (თუ განაჩენი გამწვავდება/კარანტინი ხდება)
+   - გამჭვირვალობის ჟურნალის დამწერი (`ModerationLedgerV1`)
+   - ტელემეტრიის ექსპორტიორი
 
-## 6. Calibration & Evaluation
-- **Datasets:** Baseline calibration uses the mixed corpus curated with policy
-  team approval. Reference recorded in `calibration_dataset`.
-- **Metrics:** Compute Brier score, Expected Calibration Error (ECE), and AUROC
-  per model and combined verdict. Monthly recalibration MUST keep
-  `Brier ≤ 0.18` and `ECE ≤ 0.05`. Results stored in the SoraFS reports tree
-  (e.g., [February 2026 calibration](../sorafs/reports/ai-moderation-calibration-202602.md)).
-- **Schedule:** Monthly recalibration (first Monday). Emergency recalibration
-  allowed if drift alerts fire.
-- **Process:** Run deterministic evaluation pipeline on calibration set,
-  regenerate `thresholds`, update manifest, stage changes for governance vote.
+## 6. კალიბრაცია და შეფასება
+- **მონაცემთა ნაკრები:** საბაზისო კალიბრაცია იყენებს შერეულ კორპუსს, რომელიც კურირებს პოლიტიკას
+  გუნდის დამტკიცება. მითითება ჩაწერილია `calibration_dataset`-ში.
+- **მეტრიკა:** გამოთვალეთ ბრიერის ქულა, მოსალოდნელი კალიბრაციის შეცდომა (ECE) და AUROC
+  თითო მოდელი და კომბინირებული ვერდიქტი. ყოველთვიური რეკალიბრაცია უნდა შენარჩუნდეს
+  `Brier ≤ 0.18` და `ECE ≤ 0.05`. SoraFS ანგარიშების ხეში შენახული შედეგები
+  (მაგ., [2026 წლის თებერვლის კალიბრაცია] (../sorafs/reports/ai-moderation-calibration-202602.md)).
+- **განრიგი:** ყოველთვიური რეკალიბრაცია (პირველი ორშაბათი). გადაუდებელი გადაკალიბრება
+  ნებადართულია, თუ დრიფტი აფრთხილებს ცეცხლს.
+- **პროცესი:** დეტერმინისტული შეფასების მილსადენის გაშვება კალიბრაციის კომპლექტზე,
+  განაახლეთ `thresholds`, განაახლეთ მანიფესტი, დადგით ცვლილებები მმართველობის ხმის მიცემისთვის.
 
-## 7. Packaging & Deployment
-- Build OCI images via `docker buildx bake -f docker/ai_moderation.hcl`.
-- Images include:
-  - Locked Python env (`poetry.lock`) or Rust binary `Cargo.lock`.
-  - `models/` directory with hashed ONNX weights.
-  - Entry point `run_moderation.py` (or Rust equivalent) exposing HTTP/gRPC API.
-- Publish artefacts to `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`.
-- Runner binary ships as part of `sorafs_ai_runner` crate. The build pipeline
-  embeds manifest hash in the binary (exposed via `/v1/info`).
+## 7. შეფუთვა და განლაგება
+- შექმენით OCI სურათები `docker buildx bake -f docker/ai_moderation.hcl`-ის საშუალებით.
+- სურათები მოიცავს:
+  - ჩაკეტილი Python env (`poetry.lock`) ან Rust ორობითი `Cargo.lock`.
+  - `models/` დირექტორია ჰეშირებული ONNX წონებით.
+  - შესვლის წერტილი `run_moderation.py` (ან Rust ექვივალენტი), რომელიც ავლენს HTTP/gRPC API-ს.
+- გამოაქვეყნეთ არტეფაქტები `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`-ზე.
+- ორობითი გემები, როგორც `sorafs_ai_runner` კრატის ნაწილი. მილსადენის მშენებლობა
+  ჩაშენებულია მანიფესტ ჰეშის ბინარში (გამოვლენილი `/v1/info`-ის მეშვეობით).
 
-## 8. Telemetry & Observability
-- Prometheus metrics:
+## 8. ტელემეტრია და დაკვირვება
+- Prometheus მეტრიკა:
   - `moderation_requests_total{verdict}`
   - `moderation_model_score_bucket{model_id,label}`
   - `moderation_combined_score_bucket`
   - `moderation_inference_latency_seconds_bucket`
   - `moderation_runner_manifest_info{manifest_id, runtime_version}`
-- Logs: JSON lines with `request_id`, `manifest_id`, `verdict`, and the digest
-  of the stored result. Raw scores are redacted to two decimal places in logs.
-- Dashboards stored in `dashboards/grafana/ministry_moderation_overview.json`
-  (published alongside the first calibration report).
-- Alert thresholds:
-  - Missing ingestion (`moderation_requests_total` stalled for 10 minutes).
-  - Drift detection (average model score delta >20% versus rolling 7-day mean).
-  - False-positive backlog (quarantine queue > 50 items for >30 minutes).
+- ჟურნალები: JSON ხაზები `request_id`, `manifest_id`, `verdict` და დაიჯესტით
+  შენახული შედეგიდან. ნედლეული ქულები რედაქტირდება ჟურნალებში ორ ათწილადამდე.
+- `dashboards/grafana/ministry_moderation_overview.json`-ში შენახული დაფები
+  (გამოქვეყნებულია კალიბრაციის პირველ მოხსენებასთან ერთად).
+- გაფრთხილების ზღურბლები:
+  - არ არის გადაყლაპვა (`moderation_requests_total` შეჩერებულია 10 წუთის განმავლობაში).
+  - დრიფტის გამოვლენა (მოდელის საშუალო ქულა დელტა >20% მოძრავი 7 დღის საშუალოზე).
+  - ცრუ დადებითი ჩამორჩენა (კარანტინის რიგი > 50 ელემენტი > 30 წუთის განმავლობაში).
 
-## 9. Governance & Change Control
-- Manifests require dual signatures: Ministry council member + moderation SRE
-  lead. Signatures recorded in `AiModerationManifestV1.governance_signature`.
-- Changes follow `ModerationManifestChangeProposalV1` through Torii. Hashes
-  entered into the governance DAG; deployment blocked until the proposal is
-  enacted.
-- Runner binaries embed `runner_hash`; CI refuses deployment if hashes diverge.
-- Transparency: weekly `ModerationScorecardV1` summarising volume, verdict mix,
-  and appeal outcomes. Published to Sora Parliament portal.
+## 9. მმართველობა და ცვლილებების კონტროლი
+- მანიფესტებისთვის საჭიროა ორმაგი ხელმოწერა: სამინისტროს საბჭოს წევრი + მოდერაცია SRE
+  ტყვია. `AiModerationManifestV1.governance_signature`-ში ჩაწერილი ხელმოწერები.
+- ცვლილებები მოჰყვება `ModerationManifestChangeProposalV1`-დან Torii-მდე. ჰეშები
+  შევიდა მმართველობის DAG-ში; განლაგება დაბლოკილია წინადადებამდე
+  ამოქმედდა.
+- Runner binaries ჩაშენება `runner_hash`; CI უარს ამბობს განლაგებაზე, თუ ჰეშები განსხვავდება.
+- გამჭვირვალობა: ყოველკვირეული `ModerationScorecardV1` შემაჯამებელი მოცულობა, განაჩენის ნაზავი,
+  და გასაჩივრების შედეგები. გამოქვეყნდა სორა პარლამენტის პორტალზე.
 
-## 10. Security & Privacy
-- Content digests use BLAKE3. Raw payloads never persist outside quarantine.
-- Access to quarantine requires Just-In-Time approvals; all accesses logged.
-- Runner sandboxes untrusted content, enforcing 512 MiB memory limits and 120s
-  wall-clock guards.
-- Differential privacy is NOT applied here; gateways rely on quarantine + audit
-  workflows instead. Redaction policies follow the gateway compliance plan
-  (`docs/source/sorafs_gateway_compliance_plan.md`; portal copy pending).
+## 10. უსაფრთხოება და კონფიდენციალურობა
+- შინაარსის დაიჯესტს იყენებს BLAKE3. ნედლი ტვირთი არასოდეს რჩება კარანტინის გარეთ.
+- კარანტინზე წვდომა მოითხოვს მხოლოდ დროულად დამტკიცებას; ყველა წვდომა შესულია.
+- Runner sandboxes არასანდო შინაარსს, ახორციელებს 512 MiB მეხსიერების ლიმიტს და 120 წმ.
+  კედლის საათის მცველები.
+- დიფერენციალური კონფიდენციალურობა აქ არ გამოიყენება; კარიბჭეები ეყრდნობა კარანტინს + აუდიტს
+  სამუშაო პროცესების ნაცვლად. რედაქციის პოლიტიკა მიჰყვება კარიბჭის შესაბამისობის გეგმას
+  (`docs/source/sorafs_gateway_compliance_plan.md`; პორტალი მოლოდინშია).
 
-## 11. Calibration Publication (2026-02)
-- **Manifest:** `docs/examples/ai_moderation_calibration_manifest_202602.json`
-  records the governance-signed `AiModerationManifestV1` (ID
-  `c9bdf0b2-63a3-4a90-8d70-908d119c2c7e`), dataset reference
-  `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`, runner hash
-  `ea3c0fd0ff4bd4510e94c7c293b261f601cc0c4f9fbacd99b0401d233a7cdc20`, and the
-  2026-02 calibration thresholds (`quarantine = 0.42`, `escalate = 0.78`).
-- **Scoreboard:** `docs/examples/ai_moderation_calibration_scorecard_202602.json`
-  plus the human-readable report in
+## 11. კალიბრაციის პუბლიკაცია (2026-02)
+- **მანიფესტი:** `docs/examples/ai_moderation_calibration_manifest_202602.json`
+  ჩაწერს მმართველობით ხელმოწერილი `AiModerationManifestV1` (ID
+  `c9bdf0b2-63a3-4a90-8d70-908d119c2c7e`), მონაცემთა ბაზის მითითება
+  `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`, მორბენალი ჰეში
+  `ea3c0fd0ff4bd4510e94c7c293b261f601cc0c4f9fbacd99b0401d233a7cdc20` და
+  2026-02 კალიბრაციის ზღურბლები (`quarantine = 0.42`, `escalate = 0.78`).
+- **შეფასების დაფა:** `docs/examples/ai_moderation_calibration_scorecard_202602.json`
+  პლუს ადამიანის მიერ წასაკითხი ანგარიში
   `[SoraFS Reports › AI Moderation Calibration 2026-02](../sorafs/reports/ai-moderation-calibration-202602.md)`
-  capture Brier, ECE, AUROC, and verdict mix for every model. Combined metrics
-  met the targets (`Brier = 0.126`, `ECE = 0.034`).
-- **Dashboards & alerts:** `dashboards/grafana/ministry_moderation_overview.json`
-  and `dashboards/alerts/ministry_moderation_rules.yml` (with regression tests in
-  `dashboards/alerts/tests/ministry_moderation_rules.test.yml`) provide the
-  moderation ingest/latency/drift monitoring story required for rollout.
-
-## 12. Reproducibility schema & validator (MINFO-1b)
-- Canonical Norito types now live alongside the rest of the SoraFS schema in
+  დააფიქსირეთ Brier, ECE, AUROC და განაჩენის მიქსი ყველა მოდელისთვის. კომბინირებული მეტრიკა
+  მიაღწია მიზნებს (`Brier = 0.126`, `ECE = 0.034`).
+- ** დაფები და გაფრთხილებები:** `dashboards/grafana/ministry_moderation_overview.json`
+  და `dashboards/alerts/ministry_moderation_rules.yml` (რეგრესიის ტესტებით
+  `dashboards/alerts/tests/ministry_moderation_rules.test.yml`) უზრუნველყოფს
+  ზომიერად მიღება/დაყოვნება/დრიფტის მონიტორინგის ამბავი საჭიროა გასაშვებად.## 12. განმეორებადობის სქემა და ვალიდატორი (MINFO-1b)
+- კანონიკური Norito ტიპები ახლა ცხოვრობენ დანარჩენ SoraFS სქემასთან ერთად
   `crates/iroha_data_model/src/sorafs/moderation.rs`. The
-  `ModerationReproManifestV1`/`ModerationReproBodyV1` structs capture the
-  manifest UUID, runner hash, model digests, threshold set, and seed material.
-  `ModerationReproManifestV1::validate` enforces schema version
-  (`MODERATION_REPRO_MANIFEST_VERSION_V1`), ensures every manifest carries at
-  least one model and signer, and verifies each `SignatureOf<ModerationReproBodyV1>`
-  before returning a machine-readable summary.
-- Operators can invoke the shared validator via
+  `ModerationReproManifestV1`/`ModerationReproBodyV1` სტრუქტურები აღბეჭდავს
+  მანიფესტის UUID, მორბენალი ჰეში, მოდელის დაჯესტები, ბარიერის ნაკრები და სათესლე მასალა.
+  `ModerationReproManifestV1::validate` ახორციელებს სქემის ვერსიას
+  (`MODERATION_REPRO_MANIFEST_VERSION_V1`), უზრუნველყოფს ყველა მანიფესტს
+  მინიმუმ ერთი მოდელი და ხელმომწერი და ამოწმებს თითოეულ `SignatureOf<ModerationReproBodyV1>`
+  მანქანით წაკითხვადი რეზიუმეს დაბრუნებამდე.
+- ოპერატორებს შეუძლიათ გამოიძახონ საერთო ვალიდატორის მეშვეობით
   `sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]`
-  (implemented in `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`). The CLI
-  accepts either the JSON artefacts published under
-  `docs/examples/ai_moderation_calibration_manifest_202602.json` or the raw
-  Norito encoding and prints the model/signature counts alongside the manifest
-  timestamp once validation succeeds.
-- Gateways and automation hook into the same helper so reproducibility manifests
-  can be rejected deterministically when schemas drift, digests are missing, or
-  signatures fail verification.
-- Adversarial corpus bundles follow the same pattern:
+  (დანერგილია `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`-ში). CLI
+  იღებს JSON არტეფაქტებს, რომლებიც გამოქვეყნებულია ქვეშ
+  `docs/examples/ai_moderation_calibration_manifest_202602.json` ან ნედლეული
+  Norito კოდირება და ბეჭდავს მოდელის/ხელმოწერის რაოდენობას მანიფესტთან ერთად
+  დროის ანაბეჭდი დადასტურების წარმატებით დასრულების შემდეგ.
+- კარიბჭეები და ავტომატიზაცია ერთსა და იმავე დამხმარეს უერთდებიან, რათა გამოვლინდეს გამეორებადობა
+  შეიძლება უარყოფილი იყოს დეტერმინისტულად, როდესაც სქემები ტრიალებს, დაიჯესტები აკლია, ან
+  ხელმოწერები ვერ გადამოწმებულია.
+- საპირისპირო კორპუსის პაკეტები მიჰყვება იმავე ნიმუშს:
   `sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]`
-  parses `AdversarialCorpusManifestV1`, enforces the schema version, and refuses
-  manifests that omit families, variants, or fingerprint metadata. Successful
-  runs emit the issued-at timestamp, cohort label, and the family/variant counts
-  so operators can pin the evidence before updating the gateway denylist entries
-  described in Section 4.3.
+  აანალიზებს `AdversarialCorpusManifestV1`-ს, ახორციელებს სქემის ვერსიას და უარს ამბობს
+  მანიფესტებს, რომლებიც გამოტოვებენ ოჯახებს, ვარიანტებს ან თითის ანაბეჭდის მეტამონაცემებს. წარმატებული
+  გაშვებები ასხივებენ გაცემული დროის ნიშანს, კოჰორტის ეტიკეტს და ოჯახის/ვარიანტის თვლებს
+  ასე რომ, ოპერატორებს შეუძლიათ დაამაგრონ მტკიცებულება კარიბჭის უარმყოფელი ჩანაწერების განახლებამდე
+  აღწერილია 4.3 ნაწილში.
 
-## 13. Open Follow-Ups
-- Monthly recalibration windows after 2026-03-02 continue to follow the
-  procedure in Section 6; publish `ai-moderation-calibration-<YYYYMM>.md`
-  alongside updated manifest/scorecard bundles under the SoraFS reports tree.
-- MINFO-1b and MINFO-1c (reproducibility manifest validators plus adversarial
-  corpus registry) remain tracked separately in the roadmap.
+## 13. გახსენით შემდგომი საქმიანობა
+- ყოველთვიური რეკალიბრაციის ფანჯრები 2026-03-02 წლების შემდეგ კვლავაც მიჰყვება
+  პროცედურა მე-6 ნაწილში; გამოაქვეყნეთ `ai-moderation-calibration-<YYYYMM>.md`
+  განახლებული მანიფესტის/ქულების ბარათის პაკეტებთან ერთად SoraFS მოხსენებების ხის ქვეშ.
+- MINFO-1b და MINFO-1c (განმეორებადობის მანიფესტის ვალიდატორები პლუს საპირისპირო
+  კორპუსის რეესტრი) ცალკე რჩება საგზაო რუქაში მიკვლევა.

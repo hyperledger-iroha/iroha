@@ -4,307 +4,297 @@ direction: ltr
 source: docs/portal/docs/da/threat-model.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Source canonique
-Reflete `docs/source/da/threat_model.md`. Gardez les deux versions en sync
+:::note ソースカノニク
+リフレテ`docs/source/da/threat_model.md`。 Gardez les deux バージョンと同期
 :::
 
-# Modele de menaces Data Availability Sora Nexus
+# 脅威のモデル データの可用性 Sora Nexus
 
-_Derniere revision: 2026-01-19 -- Prochaine revision planifiee: 2026-04-19_
+_Derniere 改訂: 2026-01-19 -- Prochaine 改訂計画者: 2026-04-19_
 
-Cadence de maintenance: Data Availability Working Group (<=90 jours). Chaque
-revision doit apparaitre dans `status.md` avec des liens vers les tickets de
-mitigation actifs et les artefacts de simulation.
+メンテナンスの間隔: データ可用性ワーキング グループ (<=90 時間)。チャケ
+`status.md` のチケットに対するリビジョンの変更方法
+緩和策とシミュレーションのアーティファクト。
 
-## But et perimetre
+## しかし、周囲
 
-Le programme Data Availability (DA) maintient les broadcasts Taikai, les blobs
-Nexus lane et les artefacts de gouvernance recuperables sous des fautes
-byzantines, reseau et operateur. Ce modele de menaces ancre le travail
-engineering pour DA-1 (architecture et modele de menaces) et sert de baseline
-pour les taches DA suivantes (DA-2 a DA-10).
+プログラム データ アベイラビリティ (DA) メンテナンス、ブロードキャスト タイカイ、ブロブ
+Nexus レーンと管理回復可能な成果物、スー・デ・フォート
+ビザンチン、研究者、そして経営者。苦難の脅威のモデル
+DA-1 (脅威のアーキテクチャとモデル) とベースラインを構築するエンジニアリング
+プール レ タッシュ DA スイバンテス (DA-2、DA-10)。
 
-Composants dans le scope:
-- Extension d'ingest DA Torii et writers de metadata Norito.
-- Arbres de stockage de blobs adosses a SoraFS (tiers hot/cold) et politiques de
-  replication.
-- Commitments de bloc Nexus (wire formats, proofs, APIs light-client).
-- Hooks d'enforcement PDP/PoTR specifiques aux payloads DA.
-- Workflows operateur (pinning, eviction, slashing) et pipelines
-  d'observabilite.
-- Approbations de gouvernance qui admettent ou expulsent les operateurs et
-  contenus DA.
+範囲内のコンポーネント:
+- インジェスト DA Torii およびメタデータ ライター Norito の拡張子。
+- ブロブの在庫管理は、SoraFS (ホット/コールド階層) と政治政策を採用しています。
+  レプリケーション。
+- ブロック Nexus のコミットメント (ワイヤ形式、プルーフ、API ライトクライアント)。
+- フック施行 PDP/PoTR は補助ペイロード DA を特定します。
+- ワークフローオペレーター (ピン留め、エビクション、スラッシュ) とパイプライン
+  観察可能性。
+- 運営者らの追放に対する統治の承認
+  コンテヌスDA。
 
-Hors scope pour ce document:
-- Modelisation economique complete (capturee dans le workstream DA-7).
-- Protocoles base SoraFS deja couverts par le modele de menaces SoraFS.
-- Ergonomie des SDK clients au-dela des considerations de surface de menace.
+馬のスコープの注ぐドキュメント:
+- モデル化の経済性が完了しました (ワークストリーム DA-7 によるキャプチャー)。
+- プロトコルベース SoraFS は脅威モデル SoraFS を示します。
+- SDK クライアントは、表面の脅威を考慮した人間工学を実現します。
 
-## Vue d'ensemble architecturale
+## アンサンブル建築
 
-1. **Soumission:** Les clients soumettent des blobs via l'API d'ingest DA Torii.
-   Le noeud decoupe les blobs, encode les manifests Norito (type de blob, lane,
-   epoch, flags de codec), et stocke les chunks dans le tier hot SoraFS.
-2. **Annonce:** Pin intents et hints de replication se propagent vers les
-   providers via le registry (SoraFS marketplace) avec des tags de politique qui
-   indiquent les objectifs de retention hot/cold.
-3. **Commitment:** Les sequencers Nexus incluent des commitments de blobs (CID +
-   racines KZG optionnelles) dans le bloc canonique. Les light clients se basent
-   sur le hash de commitment et la metadata annoncee pour verifier
-   l'availability.
-4. **Replication:** Les noeuds de stockage tirent les shares/chunks assignes,
-   satisfont les challenges PDP/PoTR, et promeuvent les donnees entre tiers hot
-   et cold selon la politique.
-5. **Fetch:** Les consommateurs recuperent les donnees via SoraFS ou des gateways
-   DA-aware, verifient les proofs et emettent des demandes de reparation quand
-   des replicas disparaissent.
-6. **Gouvernance:** Le Parlement et le comite de supervision DA approuvent les
-   operateurs, schedules de rent et escalations d'enforcement. Les artefacts de
-   gouvernance sont stockes via la meme voie DA pour garantir la transparence.
+1. **提案:** DA Torii の API を介してクライアントのブロブの管理を行います。
+   ブロブのデクープ、マニフェストのエンコード Norito (ブロブ、レーンのタイプ、
+   エポック、コーデックのフラグ）、ホット SoraFS のチャンクと層のストック。
+2. **お知らせ:** プロパジェントとレプリケーションのピンの意図とヒント
+   ファイル レジストリ (SoraFS マーケットプレイス) 経由のプロバイダーは、政治的タグの平均値を取得できます。
+   ホット/コールドの滞留に関する問題。
+3. **コミットメント:** BLOB のコミットメントに含まれるシーケンサー Nexus (CID +
+   racines KZG optionnelles) dans le bloc canonique。ライトクライアントの数が少ない
+   コミットメントのハッシュとメタデータの通知を検証者に提供する
+   可用性。
+4. **レプリケーション:** 株式/チャンクの割り当てを行う在庫管理、
+   PDP/PoTR の課題を満足し、各層のホットな取り組みを推進します
+   そして冷たいセロン・ラ・ポリティック。
+5. **フェッチ:** SoraFS ou des ゲートウェイ経由のコンソマチュール回復者レドニー
+   DA を意識した、検証可能な証拠と賠償要求の実現
+   レプリカの違い。
+6. **統治:** Le Parlement et le comite de Supervision DA Approuvent les
+   オペレーター、レンタルスケジュール、および執行のエスカレーション。成果物
+   gouvernance Sont は、meme voie DA を介して、透明性を保証します。## 活動と所有権
 
-## Actifs et proprietaires
+Echelle d'impact: **批評** casse la securite/vivacite duledger; **イレブン**
+ブロック ファイル バックフィル DA のクライアント。 **Modere** la qualite maisreste を劣化させる
+回復可能; **不合格** 効果制限。
 
-Echelle d'impact: **Critique** casse la securite/vivacite du ledger; **Eleve**
-bloque le backfill DA ou les clients; **Modere** degrade la qualite mais reste
-recuperable; **Faible** effet limite.
-
-| Actif | Description | Integrite | Disponibilite | Confidentialite | Owner |
+|アクティフ |説明 |インテグライト |ディスポニビライト |社外秘 |オーナー |
 | --- | --- | --- | --- | --- | --- |
-| Blobs DA (chunks + manifests) | Blobs Taikai, lane, gouvernance stockes dans SoraFS | Critique | Critique | Modere | DA WG / Storage Team |
-| Manifests Norito DA | Metadata typee decrivant les blobs | Critique | Eleve | Modere | Core Protocol WG |
-| Commitments de bloc | CIDs + racines KZG dans les blocs Nexus | Critique | Eleve | Faible | Core Protocol WG |
-| Schedules PDP/PoTR | Cadence d'enforcement pour les replicas DA | Eleve | Eleve | Faible | Storage Team |
-| Registry operateur | Providers de stockage approuves et politiques | Eleve | Eleve | Faible | Governance Council |
-| Registres de rent et incentives | Entrees ledger pour rent DA et penalites | Eleve | Modere | Faible | Treasury WG |
-| Dashboards d'observabilite | SLOs DA, profondeur de replication, alertes | Modere | Eleve | Faible | SRE / Observability |
-| Intents de reparation | Requetes pour rehydrater des chunks manquants | Modere | Modere | Faible | Storage Team |
+| BLOB DA (チャンク + マニフェスト) | Blobs Taikai、レーン、ガバナンス ストック ダン SoraFS |批評 |批評 |モデーレ | DA WG / ストレージ チーム |
+|マニフェスト Norito DA |メタデータ タイプ derivant les blob |批評 |エレブ |モデーレ |コアプロトコルWG |
+|ブロックごとの取り組み | CID + ラシーン KZG ダン レ ブロック Nexus |批評 |エレブ |フェイブル |コアプロトコルWG |
+| PDP/PoTR のスケジュール |レプリカのケイデンス ダンフォース DA |エレブ |エレブ |フェイブル |ストレージチーム |
+|レジストリ運営者 |在庫の承認と政治のプロバイダー |エレブ |エレブ |フェイブル |ガバナンス評議会 |
+|家賃とインセンティブの登録 |エントリ台帳は家賃を注ぎます DA と罰則 |エレブ |モデーレ |フェイブル |財務WG |
+|観測可能なダッシュボード | SLO DA、レプリケーションのプロフォン、アラート |モデーレ |エレブ |フェイブル | SRE / 可観測性 |
+|賠償の意図 |再水和剤の塊をマンカントに注ぐリクエスト |モデーレ |モデーレ |フェイブル |ストレージチーム |
 
-## Adversaires et capacites
+## 敵対勢力
 
-| Acteur | Capacites | Motivations | Notes |
+|俳優 |キャパシテス |動機 |メモ |
 | --- | --- | --- | --- |
-| Client malveillant | Soumettre des blobs malformes, rejouer des manifests obsoletes, tenter DoS sur l'ingest. | Perturber les broadcasts Taikai, injecter des donnees invalides. | Pas de cles privilegiees. |
-| Noeud de stockage byzantin | Dropper des replicas assignees, forger des proofs PDP/PoTR, colluder. | Reduire la retention DA, eviter la rent, retenir les donnees. | Possede des credentials valides. |
-| Sequencer compromis | Omettre des commitments, equivoker sur les blocs, reordonner la metadata. | Cacher des submissions DA, creer des incoherences. | Limite par la majorite de consensus. |
-| Operateur interne | Abuser de l'acces gouvernance, manipuler les politiques de retention, fuir des credentials. | Gain economique, sabotage. | Acces a l'infrastructure hot/cold. |
-| Adversaire reseau | Partitioner les noeuds, retarder la replication, injecter trafic MITM. | Reduire l'availability, degrader les SLOs. | Ne peut pas casser TLS mais peut dropper/ralentir les liens. |
-| Attaquant observabilite | Tamper dashboards/alertes, supprimer les incidents. | Cacher les outages DA. | Necessite un acces a la pipeline telemetrie. |
+|クライアントの悪意のある人 |奇形の塊の大量発生、時代遅れの顕現の喜び、最も摂取量の多い DoS の脅威。 | Perturber les 放送 Taikai、injecter des donnees valides。 |パ・ド・クレの特権。 |
+|ビザンチンのストックケージ |レプリカのドロッパー、証拠偽造者、PDP/PoTR、共謀者。 |保持 DA を要求し、レントを削除し、ドネを保持します。 |認証情報の有効性を保持します。 |
+|シーケンサーの侵害 |コミットメントのオメットレ、ブロック間の不一致、メタデータの再順序付け。 |提出物をキャッシュし、DA をキャッシュし、支離滅裂をキャッシュします。 |多数派の合意による制限。 |
+|オペレーターインターン |統治権の濫用、保持のための政治の操作、資格情報の取得。 |経済を得る、妨害する。 |インフラストラクチャのホット/コールドにアクセスします。 |
+|アドヴェルセール・リサーチ |パーティショナ レ ヌー、リターダ ラ レプリケーション、インジェクタ トラフィック MITM。 |可用性を要求し、SLO を劣化させます。 | TLS はドロッパー/ラレンティル レ リアンを作成します。 |
+|アッタカント可観測性 |ダッシュボード/アラートの改ざん、インシデントの監視。 | Cacher les 停止 DA. |パイプライン テレメトリにアクセスする必要があります。 |
 
-## Frontieres de confiance
+## 挑戦のフロンティア- **フロンティアイングレス:** クライアント対拡張子 DA Torii。認証パーを要求する
+  リクエスト、レート制限、ペイロードの検証。
+- **フロンティア レプリケーション:** 在庫の変更チャンクやプルーフは不要です。レ
+  noeuds Sont mutuellement は mais peuvent se comporter en byzantin を認証します。
+- **フロンティア台帳:** ドニーのブロックコミットとオフチェーンのストック。ル
+  コンセンサスは完全性を保ち、可用性には強制力が必要です
+  オフチェーン。
+- **フロンティアガバナンス:** 決定評議会/議会の承認者、
+  予算と削減。影響力のある指示、展開 DA を作成します。
+- **Frontiere observability:** エクスポート先とダッシュボードなどのメトリクス/ログを収集します
+  アラートツール。改ざんによるキャッシュの停止や攻撃。
 
-- **Frontiere ingress:** Client vers l'extension DA Torii. Requiert auth par
-  requete, rate limiting et validation du payload.
-- **Frontiere replication:** Noeuds de stockage echangent chunks et proofs. Les
-  noeuds sont mutuellement authentifies mais peuvent se comporter en byzantin.
-- **Frontiere ledger:** Donnees de bloc commits vs stockage off-chain. Le
-  consensus garde l'integrite, mais l'availability requiert un enforcement
-  off-chain.
-- **Frontiere gouvernance:** Decisions Council/Parliament approuvant operateurs,
-  budgets et slashing. Les bris ici impactent directement le deploiement DA.
-- **Frontiere observabilite:** Collecte metrics/logs exportee vers dashboards et
-  alert tooling. Le tampering cache outages ou attaques.
-
-## Scenarios de menace et controles
+## 脅威と統制のシナリオ
 
 ### Attaques sur le chemin d'ingest
 
-**Scenario:** Client malveillant soumet des payloads Norito malformes ou des
-blobs surdimensionnes pour epuiser les ressources ou injecter une metadata
-invalide.
+**シナリオ:** クライアントのペイロードの不正な数 Norito の不正な形式
+blob surdimensionnes は、epuiser les resources ou injecter une メタデータを注ぎます
+無効になります。
 
-**Controles**
-- Validation de schema Norito avec negotiation stricte de version; rejeter les
-  flags inconnus.
-- Rate limiting et authentification sur l'endpoint d'ingest Torii.
-- Bornes de chunk size et encoding deterministe forces par le chunker SoraFS.
-- Pipeline d'admission ne persiste les manifests qu'apres match du checksum.
-- Replay cache deterministe (`ReplayCache`) suit les fenetres `(lane, epoch,
-  sequence)`, persiste des high-water marks sur disque, et rejette les duplicates
-  et replays obsoletes; harnesses property et fuzz couvrent les fingerprints
-  divergents et submissions hors ordre. [crates/iroha_core/src/da/replay_cache.rs:1]
+**コントロール**
+- スキーマ Norito の厳密なバージョンのネゴシエーションの検証。拒否者レス
+  フラグが不連続です。
+- Torii を取り込むエンドポイントに対するレート制限と認証。
+- チャンク サイズとエンコーディングによって、チャンカー SoraFS が強制的に決定されます。
+- パイプラインは、チェックサムと一致するマニフェストを永続的に受け入れます。
+- リプレイ キャッシュ決定 (`ReplayCache`) フェネトルに適合 `(レーン、エポック、
+  sequence)`、ディスク上の最高水位マークを保持し、重複を排除します
+  et は時代遅れのものをリプレイします。ハーネスの財産と指紋の情報を取得する
+  分岐と提出物が大量に発生します。 [crates/iroha_core/src/da/replay_cache.rs:1]
   [fuzz/da_replay_cache.rs:1] [crates/iroha_torii/src/da/ingest.rs:1]
 
-**Lacunes residuelles**
-- Torii ingest doit relier le replay cache a l'admission et persister les curseurs
-  de sequence a travers les redemarrages.
-- Les schemas Norito DA ont maintenant un fuzz harness dedie
-  (`fuzz/da_ingest_schema.rs`) pour stresser les invariants d'encode/decode; les
-  dashboards de couverture doivent alerter si la cible regress.
+**ラクネス残留物**
+- Torii は、許可と永続的なカーソルのリプレイ キャッシュを取り込みます
+  再婚を繰り返します。
+- スキーマ Norito DA はファズ ハーネスのメンテナンスを行っていません
+  (`fuzz/da_ingest_schema.rs`) ストレッサの不変条件をエンコード/デコードに注ぎます。レ
+  ダッシュボードは、システムの退行を警告するクーベルチュールを提供します。
 
-### Retention par withholding de replication
+### 保持とレプリケーションの源泉徴収
 
-**Scenario:** Operateurs de stockage byzantins acceptent les pins mais dropent les
-chunks, passant les challenges PDP/PoTR via des reponses forgees ou collusion.
+**シナリオ:** ビザンチンの在庫管理業者が、すべての取引を受け入れる
+チャンク、パッサントは、応答を介して PDP/PoTR に異議を唱え、共謀を偽造します。
 
-**Controles**
-- Le schedule de challenges PDP/PoTR s'etend aux payloads DA avec couverture par
-  epoch.
-- Replication multi-source avec seuils de quorum; l'orchestrateur detecte les
-  shards manquants et declenche la reparation.
-- Slashing de gouvernance lie aux proofs echoues et aux replicas manquantes.
-- Job de reconciliation automatisee (`cargo xtask da-commitment-reconcile`) qui
-  compare les receipts d'ingest avec les commitments DA (SignedBlockWire,
-  `.norito` ou JSON), emet un bundle JSON d'evidence pour la gouvernance, et
-  echoue sur tickets manquants/mismatches pour que Alertmanager puisse pager.
+**コントロール**
+- PDP/PoTR のスケジュールと補助ペイロードの DA 平均クーベルチュールパーの比較
+  時代。
+- レプリケーションのマルチソースのクォーラムの確保。オーケストラの検出者
+  破片はマンカントと賠償を要求します。
+- 統治の嘘と証拠、そして模造品を斬り裂く。
+- 調整自動化ジョブ (`cargo xtask da-commitment-reconcile`) qui
+  平均コミットメントを取り込んだレシートを比較 DA (SignedBlockWire,
+  `.norito` ou JSON)、JSON の証拠をバンドルせずに管理するなど
+  Alertmanager のポケットベルにチケットのマンクアン/不一致が反映されます。**ラクネス残留物**
+- `integration_tests/src/da/pdp_potr.rs` によるシミュレーションのハーネス (クーベール)
+  par `integration_tests/tests/da/pdp_potr_simulation.rs`) シナリオの演習
+  共謀と分割の防止、有効なクエリ スケジュール PDP/PoTR 検出ファイル
+  決定的なビザンティンの服飾。 Continuer a l'etendre avec DA-5
+  クヴリール・ド・ヌーベルの表面にプルーフを注ぎます。
+- La politique d'evictionのコールド層は監査証跡の署名を要求し、予防策を講じます
+  レドロップファーティフ。
 
-**Lacunes residuelles**
-- Le harness de simulation dans `integration_tests/src/da/pdp_potr.rs` (couvert
-  par `integration_tests/tests/da/pdp_potr_simulation.rs`) exerce des scenarios
-  de collusion et partition, validant que le schedule PDP/PoTR detecte le
-  comportement byzantin de facon deterministe. Continuer a l'etendre avec DA-5
-  pour couvrir de nouvelles surfaces de proof.
-- La politique d'eviction cold-tier requiert un audit trail signe pour prevenir
-  les drops furtifs.
+### コミットメントの操作
 
-### Manipulation des commitments
+**シナリオ:** シーケンサーがブロックの公開と変更ファイルを侵害します
+コミットメント DA、provoquant のフェッチ失敗または一貫性のないライトクライアント。
 
-**Scenario:** Sequencer compromis publie des blocs omettant ou modifiant les
-commitments DA, provoquant des fetch failures ou des incoherences light-client.
+**コントロール**
+- 提出されたブロック会議ファイルの提案のコンセンサス検証
+  DA;仲間が拒絶することはなく、コミットメントが必要ない提案もありません。
+- ライトクライアントの検証、包含証明、前衛的な暴露の処理
+  デフェッチ。
+- 補助コミットメントを一括して取り込み、領収書と比較する監査証跡。
+- 調整自動化ジョブ (`cargo xtask da-commitment-reconcile`) qui
+  平均コミットメントを取り込んだレシートを比較 DA (SignedBlockWire,
+  `.norito` ou JSON)、JSON の証拠をバンドルせずに管理するなど
+  Alertmanager のポケットベルにチケットの問い合わせや不一致が反映されます。
 
-**Controles**
-- Le consensus verifie les propositions de bloc contre les files de submission
-  DA; les peers rejettent les propositions sans commitments requis.
-- Les light clients verifient les inclusion proofs avant d'exposer les handles
-  de fetch.
-- Audit trail comparant les receipts d'ingest aux commitments de bloc.
-- Job de reconciliation automatisee (`cargo xtask da-commitment-reconcile`) qui
-  compare les receipts d'ingest avec les commitments DA (SignedBlockWire,
-  `.norito` ou JSON), emet un bundle JSON d'evidence pour la gouvernance, et
-  echoue sur tickets manquants ou mismatches pour que Alertmanager puisse pager.
+**ラクネス残留物**
+- 調整作業の実行 + アラートマネージャーのフック。レパケットド
+  ガバナンスは、デフォルトのメンテナンス ファイル バンドル JSON の証拠を保持します。
 
-**Lacunes residuelles**
-- Couvert par le job de reconciliation + hook Alertmanager; les paquets de
-  gouvernance ingere nt maintenant le bundle JSON d'evidence par defaut.
+### 分割の再検討と非難
 
-### Partition reseau et censure
+**シナリオ:** レプリケーションの分割、優位性の侵害
+チャンクは PDP/PoTR チャレンジの応答を割り当てません。
 
-**Scenario:** Adversaire partitionne le reseau de replication, empechant les
-noeuds d'obtenir les chunks assignes ou de repondre aux challenges PDP/PoTR.
+**コントロール**
+- プロバイダーは、複数地域の化学研究者を保証します。
+- 平均的なジッターとフォールバックに対する異議申し立てのフェネトルと賠償金の請求
+  オーバンド。
+- レプリケーションの詳細を監視するためのダッシュボード
+  チャレンジの成功とフェッチの遅延はすべて達成できます。
 
-**Controles**
-- Exigences de providers multi-region garantissent des chemins reseau divers.
-- Fenetres de challenge avec jitter et fallback vers des canaux de reparation
-  hors bande.
-- Dashboards d'observabilite surveillent la profondeur de replication, les
-  succes de challenge et la latence de fetch avec seuils d'alerte.
+**ラクネス残留物**
+- Taikai ライブ アンコール マンカンテスのパーティション プール シミュレーション。
+  浸漬テストを行ってください。
+- 補償法で定められた一時的な留保の政治。
 
-**Lacunes residuelles**
-- Simulations de partition pour les evenements Taikai live encore manquantes;
-  besoin de soak tests.
-- Politique de reservation de bande passante de reparation pas encore codifiee.
+### アブスインターン
 
-### Abus interne
+**シナリオ:** オペレータはレジストリにアクセスし、政治政策を管理しています
+保持、プロバイダーの悪意のある警告や最高の警告をホワイトリストに登録します。
 
-**Scenario:** Operateur avec acces au registry manipule les politiques de
-retention, whitelist des providers malveillants ou supprime les alertes.
+**コントロール**
+- 複数の政党間の署名と記録を必要とする統治行為
+  Norito を公証します。
+- イベントの政治的変更と監視とログの記録
+  アーカイブ。
+- ログ Norito 追加専用の avec ハッシュを実行するパイプライン
+  連鎖する。
+- L'automatisation d'audit trimestriel (`cargo xtask da-privilege-audit`) パルコート
+  レパートリー マニフェスト/リプレイ (プラス オペレーターごとのパス)、シグナル ファイル
+  エントリ manquantes/non-directory/world-writable など、JSON 署名のバンドル解除
+  ダッシュボードにガバナンスを注ぎます。
 
-**Controles**
-- Actions de gouvernance requierent des signatures multi-party et des records
-  notarises Norito.
-- Les changements de politique emettent des evenements vers monitoring et logs
-  d'archive.
-- Le pipeline d'observabilite impose des logs Norito append-only avec hash
-  chaining.
-- L'automatisation d'audit trimestriel (`cargo xtask da-privilege-audit`) parcourt
-  les repertoires manifest/replay (plus paths fournis par operateurs), signale les
-  entries manquantes/non-directory/world-writable, et emet un bundle JSON signe
-  pour dashboards de gouvernance.
+**ラクネス残留物**
+- 不正改ざんダッシュボードにはスナップショットの署名が必要です。
 
-**Lacunes residuelles**
-- La preuve de tamper dashboard requiert des snapshots signes.
-
-## Registre de risques residuels
-
-| Risque | Probabilite | Impact | Owner | Plan de mitigation |
+## 危険な残留物登録|きわどい |確率 |影響 |オーナー |緩和策を計画する |
 | --- | --- | --- | --- | --- |
-| Replay de manifests DA avant l'arrivee du sequence cache DA-2 | Possible | Modere | Core Protocol WG | Implementer sequence cache + validation de nonce en DA-2; ajouter des tests de regression. |
-| Collusion PDP/PoTR quand >f noeuds sont compromis | Peu probable | Eleve | Storage Team | Deriver un nouveau schedule de challenges avec sampling cross-provider; valider via harness de simulation. |
-| Gap d'audit d'eviction cold-tier | Possible | Eleve | SRE / Storage Team | Attacher des logs signes & receipts on-chain pour evictions; monitorer via dashboards. |
-| Latence de detection d'omission de sequencer | Possible | Eleve | Core Protocol WG | `cargo xtask da-commitment-reconcile` nocturne compare receipts vs commitments (SignedBlockWire/`.norito`/JSON) et page la gouvernance sur tickets manquants ou mismatches. |
-| Resilience partition pour streams Taikai live | Possible | Critique | Networking TL | Executer des drills de partition; reserver la bande passante de reparation; documenter SOP de failover. |
-| Derive de privilege de gouvernance | Peu probable | Eleve | Governance Council | `cargo xtask da-privilege-audit` trimestriel (dirs manifest/replay + paths extra) avec JSON signe + gate dashboard; ancrer les artefacts d'audit on-chain. |
+|シーケンス キャッシュ DA-2 の到着を前にマニフェスト DA を再生します。可能 |モデーレ |コアプロトコルWG | DA-2 の実装者シーケンス キャッシュ + ノンス検証。回帰テストの結果を説明します。 |
+|共謀 PDP/PoTR Quand >f noeuds not compromis |ペウの可能性が高い |エレブ |ストレージチーム |クロスプロバイダー間の平均的なサンプリングに挑戦する新しいスケジュールを提供します。シミュレーションのハーネスを介して検証します。 |
+|監査と立ち退きのギャップ コールド層 |可能 |エレブ | SRE / ストレージ チーム |ログの署名と領収書の添付者がオンチェーンで立ち退きを行います。ダッシュボード経由のモニター。 |
+|シーケンサーの検出と省略の遅延 |可能 |エレブ |コアプロトコルWG | `cargo xtask da-commitment-reconcile` 夜想曲は、レシートとコミットメントを比較します (SignedBlockWire/`.norito`/JSON) とチケット管理のページと不一致を確認します。 |
+|レジリエンス パーティション 注ぐストリーム Taikai ライブ |可能 |批評 |ネットワーキングTL |分割のドリルの実行者。賠償金の準備金。フェイルオーバーの文書化 SOP。 |
+|統治特権を導き出す |ペウの可能性が高い |エレブ |ガバナンス評議会 | `cargo xtask da-privilege-audit` trimestriel (ディレクトリ マニフェスト/リプレイ + 追加パス) avec JSON 署名 + ゲート ダッシュボード; ancrer les artefacts d'audit オンチェーン。 |
 
-## Follow-ups requis
+## フォローアップが必要です
 
-1. Publier les schemas Norito d'ingest DA et des vecteurs d'exemple (porte dans
-   DA-2).
-2. Brancher le replay cache dans l'ingest DA Torii et persister les curseurs de
-   sequence a travers les redemarrages.
-3. **Termine (2026-02-05):** Le harness de simulation PDP/PoTR exerce maintenant
-   collusion + partition avec modelisation de backlog QoS; voir
-   `integration_tests/src/da/pdp_potr.rs` (tests sous
-   `integration_tests/tests/da/pdp_potr_simulation.rs`) pour l'implementation et
-   les resumes deterministes captures ci-dessous.
-4. **Termine (2026-05-29):** `cargo xtask da-commitment-reconcile` compare les
-   receipts d'ingest aux commitments DA (SignedBlockWire/`.norito`/JSON), emet
-   `artifacts/da/commitment_reconciliation.json`, et est branche a
-   Alertmanager/paquets de gouvernance pour alertes d'omission/tampering
-   (`xtask/src/da.rs`).
-5. **Termine (2026-05-29):** `cargo xtask da-privilege-audit` parcourt le spool
-   manifest/replay (plus paths fournis par operateurs), signale des entries
-   manquantes/non-directory/world-writable, et produit un bundle JSON signe pour
-   dashboards/revues de gouvernance (`artifacts/da/privilege_audit.json`),
-   fermant la lacune d'automatisation d'acces.
+1. Publier les schemas Norito d'ingest DA et des vecteurs d'example (porte dans)
+   DA-2)。
+2. DA Torii を取り込んだときのリプレイ キャッシュの分岐とカーソルの永続化
+   再婚を繰り返すシーケンス。
+3. **終了 (2026-02-05):** シミュレーション PDP/PoTR 演習メンテナンスのハーネス
+   共謀 + パーティション バックログ QoS の avec モデル化。ヴォワール
+   `integration_tests/src/da/pdp_potr.rs` (テスト
+   `integration_tests/tests/da/pdp_potr_simulation.rs`) 実装などを注ぐ
+   les 再開 deterministes は ci-dessous をキャプチャします。
+4. **終了 (2026-05-29):** `cargo xtask da-commitment-reconcile` 比較ファイル
+   aux コミットメント DA (SignedBlockWire/`.norito`/JSON) のレシート、emet
+   `artifacts/da/commitment_reconciliation.json`、その他の分岐
+   アラートマネージャー/管理パケットは、不作為/改ざんのアラートを送信します
+   (`xtask/src/da.rs`)。
+5. **終了 (2026-05-29):** `cargo xtask da-privilege-audit` パルコート ル スプール
+   マニフェスト/リプレイ (およびオペレーターごとのパス)、シグナル・デ・エントリー
+   manquantes/non-directory/world-writable、および製品のバンドルによる JSON 署名の提供
+   ダッシュボード/政府レビュー (`artifacts/da/privilege_audit.json`)、
+   自動化を実現するための努力。
 
-**Ou regarder ensuite:**
+**バスルームにご注目ください:**- DA-2 のリプレイ キャッシュとカーソルの永続化。ヴォワール
+  `crates/iroha_core/src/da/replay_cache.rs` による実装 (ロジック
+  キャッシュ) と統合 Torii と `crates/iroha_torii/src/da/ingest.rs`、スレッド
+  `/v1/da/ingest` 経由で指紋をチェックします。
+- ハーネスプルーフストリームを介したストリーミングPDP/PoTRソントのシミュレーション
+  `crates/sorafs_car/tests/sorafs_cli.rs`、リクエストに対する要求
+  PoR/PDP/PoTR および脅威のモデルの失敗アニメのシナリオ。
+- 容量と修理の結果が生き生きとしている
+  `docs/source/sorafs/reports/sf2c_capacity_soak.md`、マトリックスのタンディス
+  Sumeragi と最大のスイビ ダン `docs/source/sumeragi_soak_matrix.md` を浸します
+  (バリアントは次のものをローカライズします)。長期にわたる訓練で得られた成果物を捕捉
+  危険な残留物を参照します。
+- 自動調整 + 特権監査の機能
+  `docs/automation/da/README.md` および新しいコマンド
+  `cargo xtask da-commitment-reconcile` / `cargo xtask da-privilege-audit`;活用する
+  デフォルトで出撃する `artifacts/da/` lors de l'attachement d'evidence aux
+  パケット・ド・ガバナンス。
 
-- Le replay cache et la persistence des curseurs ont atterri en DA-2. Voir
-  l'implementation dans `crates/iroha_core/src/da/replay_cache.rs` (logique de
-  cache) et l'integration Torii dans `crates/iroha_torii/src/da/ingest.rs`, qui thread
-  les checks de fingerprint via `/v1/da/ingest`.
-- Les simulations de streaming PDP/PoTR sont exercees via le harness proof-stream
-  dans `crates/sorafs_car/tests/sorafs_cli.rs`, couvrant les flux de requete
-  PoR/PDP/PoTR et les scenarios de failure animes dans le modele de menaces.
-- Les resultats de capacity et repair soak vivent sous
-  `docs/source/sorafs/reports/sf2c_capacity_soak.md`, tandis que la matrice de
-  soak Sumeragi plus large est suivie dans `docs/source/sumeragi_soak_matrix.md`
-  (variants localises inclus). Ces artefacts capturent les drills long terme
-  referencees dans le registre de risques residuels.
-- L'automatisation reconciliation + privilege-audit vit dans
-  `docs/automation/da/README.md` et les nouvelles commandes
-  `cargo xtask da-commitment-reconcile` / `cargo xtask da-privilege-audit`; utilisez
-  les sorties par defaut sous `artifacts/da/` lors de l'attachement d'evidence aux
-  paquets de gouvernance.
+## QoS のシミュレーションとモデル化の証拠 (2026-02)
 
-## Evidence de simulation et modelisation QoS (2026-02)
-
-Pour fermer le follow-up DA-1 #3, nous avons code un harness de simulation
-PDP/PoTR deterministe sous `integration_tests/src/da/pdp_potr.rs` (couvert par
-`integration_tests/tests/da/pdp_potr_simulation.rs`). Le harness alloue des
-noeuds sur trois regions, injecte partitions/collusion selon les probabilites du
-roadmap, suit la lateness PoTR, et alimente un modele de backlog de reparation
-qui reflecte le budget de reparation du tier hot. L'execution du scenario par
-defaut (12 epochs, 18 challenges PDP + 2 fenetres PoTR par epoch) a produit les
-metriques suivantes:
+DA-1 #3 のフォローアップを注ぐ、エイボン コードとシミュレーションを利用する
+PDP/PoTR 決定性 `integration_tests/src/da/pdp_potr.rs` (クーバートパー
+`integration_tests/tests/da/pdp_potr_simulation.rs`)。ル・ハーネス・アロウ・デ
+トロワ地域のヌー、分割/共謀の可能性を注入する
+ロードマップ、PoTR の遅れに適した、未払いの賠償金のモデルなど
+賠償金の予算を反映してください。シナリオ通りの実行
+デフォルト (エポックごとに 12 エポック、18 チャレンジ PDP + 2 フェネトル PoTR) の製品
+メトリケス・スイバンテス:
 
 <!-- BEGIN_DA_SIM_TABLE -->
 <!-- AUTO-GENERATED by scripts/docs/render_da_threat_model_tables.py; do not edit manually. -->
-| Metrique | Valeur | Notes |
+|メトリク |ヴァルール |メモ |
 | --- | --- | --- |
-| PDP failures detectees | 48 / 49 (98.0%) | Les partitions declenchent encore la detection; un seul echec non detecte vient d'un jitter honnete. |
-| PDP mean detection latency | 0.0 epochs | Les echecs sont signales dans l'epoch d'origine. |
-| PoTR failures detectees | 28 / 77 (36.4%) | La detection se declenche quand un noeud rate >=2 fenetres PoTR, laissant la plupart des evenements dans le registre de risques residuels. |
-| PoTR mean detection latency | 2.0 epochs | Correspond au seuil de lateness a deux epochs integre dans l'escalation d'archivage. |
-| Repair queue peak | 38 manifests | Le backlog monte quand les partitions s'empilent plus vite que les quatre reparations disponibles par epoch. |
-| Response latency p95 | 30,068 ms | Reflete la fenetre de challenge 30 s avec jitter de +/-75 ms applique au sampling QoS. |
+| PDP 障害の検出者 | 48 / 49 (98.0%) |不気味なアンコールの検出を分割します。正確な情報を検出しないでください。 |
+| PDP 平均検出遅延 | 0.0 エポック |時代の起源を示す信号です。 |
+| PoTR 障害の検出者 | 28 / 77 (36.4%) |検出率は 2 フェネトル以上の PoTR を検出し、危険な残留物を登録します。 |
+| PoTR 平均検出待ち時間 | 2.0 エポック |アーカイブのエスカレーションの統合に対応します。 |
+|修復キューのピーク | 38 マニフェスト |未処理の残務は、国民の分割期間に加えて、時代ごとに支払われる賠償金の残高を補う必要があります。 |
+|応答待ち時間 p95 | 30,068ミリ秒 |サンプリング QoS のアップリケで 30 秒の平均ジッター +/-75 ms を達成しました。 |
 <!-- END_DA_SIM_TABLE -->
 
-Ces sorties alimentent maintenant les prototypes de dashboard DA et satisfont
-les criteres d'acceptation "simulation harness + QoS modelling" references dans
-le roadmap.
+ダッシュボード DA と満足のフォントのプロトタイプを維持するために出撃します
+受け入れ基準「シミュレーション ハーネス + QoS モデリング」の参照
+ロードマップ。
 
-L'automatisation vit derriere
-`cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`,
-qui appelle le harness partage et emet Norito JSON vers
-`artifacts/da/threat_model_report.json` par defaut. Les jobs nocturnes
-consomment ce fichier pour rafraichir les matrices dans ce document et alerter
-sur la derive des taux de detection, des queues de reparation ou des samples QoS.
-
-Pour rafraichir la table ci-dessus pour les docs, executer `make docs-da-threat-model`,
-qui invoque `cargo xtask da-threat-model-report`, regenere
-`docs/source/da/_generated/threat_model_report.json`, et reecrit cette section
-via `scripts/docs/render_da_threat_model_tables.py`. Le miroir `docs/portal`
-(`docs/portal/docs/da/threat-model.md`) est mis a jour dans le meme passage pour
-que les deux copies restent en sync.
+デリエールの自動化
+`cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`、
+Norito JSON バージョンのハーネス部分に関する質問
+`artifacts/da/threat_model_report.json` デフォルト。レ・ジョブズ・ノクターン
+マトリクスダンスのドキュメントとアラートを収集し、rafraichirを注ぐ
+検出、修復、サンプル QoS を導き出します。rafraichir la table ci-dessus pour les docs、実行者 `make docs-da-threat-model`、
+`cargo xtask da-threat-model-report` を呼び出し、再生成します
+`docs/source/da/_generated/threat_model_report.json`、その他のセクションの説明
+`scripts/docs/render_da_threat_model_tables.py`経由。ル・ミロワール `docs/portal`
+(`docs/portal/docs/da/threat-model.md`) ミームの一節を注いでください。
+que les deux のコピーは同期を維持します。

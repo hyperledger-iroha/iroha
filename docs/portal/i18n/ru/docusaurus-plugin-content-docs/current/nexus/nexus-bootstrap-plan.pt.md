@@ -4,101 +4,99 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-bootstrap-plan
-title: Bootstrap e observabilidade do Sora Nexus
-description: Plano operacional para colocar o cluster central de validadores Nexus online antes de adicionar servicos SoraFS e SoraNet.
+идентификатор: Nexus-Bootstrap-план
+заголовок: Bootstrap и наблюдение за Сорой Nexus
+описание: Операционный план для подключения к центральному кластеру валидаторов Nexus онлайн перед дополнительными услугами SoraFS и SoraNet.
 ---
 
-:::note Fonte canonica
-Esta pagina reflete `docs/source/soranexus_bootstrap_plan.md`. Mantenha as duas copias alinhadas ate que as versoes localizadas cheguem ao portal.
+:::примечание Fonte canonica
+Эта страница отражает `docs/source/soranexus_bootstrap_plan.md`. Mantenha, как duas copyas alinhadas, ел то, что локализованные версии проходят через портал.
 :::
 
-# Plano de bootstrap e observabilidade do Sora Nexus
+# План начальной загрузки и наблюдения за Сорой Nexus
 
-## Objetivos
-- Levantar a rede base de validadores/observadores Sora Nexus com chaves de governanca, APIs Torii e monitoramento de consenso.
-- Validar servicos centrais (Torii, consenso, persistencia) antes de habilitar deploys piggyback SoraFS/SoraNet.
-- Estabelecer workflows de CI/CD e dashboards/alertas de observabilidade para garantir a saude da rede.
+## Объективос
+- Левантар представляет собой новую базу валидаторов/наблюдателей Sora Nexus с руководителями управления, API Torii и мониторинг консенсуса.
+- Validar servicos centrais (Torii, согласование, постоянство) до хабилитарного развертывания параллельного подключения SoraFS/SoraNet.
+- Настройка рабочих процессов CI/CD и информационных панелей/предупреждений наблюдения для гарантии надежности.
 
-## Prerequisitos
-- Material de chaves de governanca (multisig do conselho, chaves de comite) disponivel em HSM ou Vault.
-- Infraestrutura base (clusters Kubernetes ou nos bare-metal) em regioes primaria/secundaria.
-- Configuracao de bootstrap atualizada (`configs/nexus/bootstrap/*.toml`) refletindo os parametros de consenso mais recentes.
+## Предварительные требования
+- Материалы управления (множественные советы, комментарии) доступны в HSM или Vault.
+- База инфраструктуры (кластеры Kubernetes или наши «голые железки») в регионах Primaria/Seundaria.
+- Атуализированная конфигурация начальной загрузки (`configs/nexus/bootstrap/*.toml`) отображает параметры последнего согласования.
 
-## Ambientes de rede
-- Operar dois ambientes Nexus com prefixos de rede distintos:
-- **Sora Nexus (mainnet)** - prefixo de rede de producao `nexus`, hospedando governanca canonica e servicos piggyback SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefixo de rede de staging `testus`, espelhando a configuracao da mainnet para testes de integracao e validacao pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Manter arquivos genesis separados, chaves de governanca e footprints de infraestrutura para cada ambiente. Testus atua como campo de provas para rollouts SoraFS/SoraNet antes de promover para Nexus.
-- Pipelines de CI/CD devem fazer deploy primeiro em Testus, executar smoke tests automatizados e exigir promocao manual para Nexus quando os checks passarem.
-- Bundles de configuracao de referencia vivem em `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet), cada um contendo `config.toml`, `genesis.json` e diretorios de admissao Torii de exemplo.
+## Окружающая среда
+- Операции в окружении Nexus с разными префиксами:
+- **Sora Nexus (основная сеть)** - префикс производства `nexus`, управление каноническими службами и дополнительные услуги SoraFS/SoraNet (идентификатор цепи `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
+- **Sora Testus (testnet)** — префикс промежуточной версии `testus`, предназначенный для настройки основной сети для интеграции тестов и проверки предварительной версии (цепочка UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- Отдельные архивы происхождения, части управления и следы инфраструктуры для каждого окружения. Тестируйтесь в качестве места проведения испытаний для развертывания SoraFS/SoraNet перед продвижением для Nexus.
+- Конвейеры разработки CI/CD развертываются в первую очередь в Testus, автоматически выполняются дымовые тесты и выводятся вручную для Nexus, когда проходят проверки.
+- Пакеты конфигураций ссылок в реальном времени в `configs/soranexus/nexus/` (основная сеть) и `configs/soranexus/testus/` (тестовая сеть), включая `config.toml`, `genesis.json` и каталоги доступа Torii в качестве примера.
 
-## Etapa 1 - Revisao de configuracao
-1. Auditar documentacao existente:
-   - `docs/source/nexus/architecture.md` (consenso, layout de Torii).
-   - `docs/source/nexus/deployment_checklist.md` (requisitos de infraestrutura).
-   - `docs/source/nexus/governance_keys.md` (procedimentos de custodia de chaves).
-2. Validar que arquivos genesis (`configs/nexus/genesis/*.json`) alinham com o roster atual de validadores e pesos de staking.
-3. Confirmar parametros de rede:
-   - Tamanho do comite de consenso e quorum.
-   - Intervalo de blocos / limites de finalidade.
-   - Portas do servico Torii e certificados TLS.
+## Этап 1 — Проверка конфигурации
+1. Аудиторская документация существует:
+   - `docs/source/nexus/architecture.md` (согласно, макет Torii).
+   - `docs/source/nexus/deployment_checklist.md` (требования инфраструктуры).
+   - `docs/source/nexus/governance_keys.md` (процедуры хранения ключей).
+2. Подтвердить происхождение архива (`configs/nexus/genesis/*.json`) в составе или актуальном списке валидаторов и песо для ставок.
+3. Подтвердите параметры восстановления:
+   - Таманхо должен быть комитетом по согласию и кворуму.
+   - Интервал блоков/ограничения финала.
+   - Порты обслуживания Torii и сертификаты TLS.## Этап 2 — Развертывание начальной загрузки кластера
+1. Предварительные номера валидаторов:
+   - Развертывание экземпляров `irohad` (validadores) с постоянными томами.
+   - Гарантия, что разрешение брандмауэра разрешает трафик согласия и Torii между номерами.
+2. Запустите сервис Torii (REST/WebSocket) при каждой проверке с помощью TLS.
+3. Разверните наших наблюдателей (некоторое время) для дополнительной устойчивости.
+4. Выполните сценарии начальной загрузки (`scripts/nexus_bootstrap.sh`) для создания источника распространения, первоначального согласия и номеров регистраторов.
+5. Выполнение дымовых испытаний:
+   - Отправьте тестовые транзакции через Torii (`iroha_cli tx submit`).
+   - Проверка производства/завершения блоков с помощью телеметрии.
+   - Проверка репликации реестра между валидаторами/наблюдателями.
 
-## Etapa 2 - Deploy do cluster bootstrap
-1. Provisionar nos validadores:
-   - Deploy de instancias `irohad` (validadores) com volumes persistentes.
-   - Garantir que regras de firewall permitam trafego de consenso e Torii entre nos.
-2. Iniciar servicos Torii (REST/WebSocket) em cada validador com TLS.
-3. Deploy de nos observadores (somente leitura) para resiliencia adicional.
-4. Executar scripts de bootstrap (`scripts/nexus_bootstrap.sh`) para distribuir genesis, iniciar consenso e registrar nos.
-5. Executar smoke tests:
-   - Enviar transacoes de teste via Torii (`iroha_cli tx submit`).
-   - Verificar producao/finalidade de blocos via telemetria.
-   - Checar replicacao do ledger entre validadores/observadores.
+## Этап 3 - Управление и управление чавесами
+1. Выполните настройку мультиподписи по совету; Подтвердите, что предложения по управлению могут быть поданы и ратифицированы.
+2. Armazenar com seguranca chaves de consenso/comite; настроить автоматическое резервное копирование с доступом к журналу.
+3. Настройте процедуры поворота аварийных команд (`docs/source/nexus/key_rotation.md`) и проверьте Runbook.
 
-## Etapa 3 - Governanca e gestao de chaves
-1. Carregar configuracao multisig do conselho; confirmar que propostas de governanca podem ser submetidas e ratificadas.
-2. Armazenar com seguranca chaves de consenso/comite; configurar backups automaticos com logging de acesso.
-3. Configurar procedimentos de rotacao de chaves de emergencia (`docs/source/nexus/key_rotation.md`) e verificar o runbook.
+## Этап 4 — Интеграция CI/CD
+1. Настройте конвейеры:
+   - Создайте общедоступный валидатор изображений/Torii (GitHub Actions или GitLab CI).
+   - Автоматическая проверка конфигурации (проверка генезиса, проверка подлинности).
+   - Конвейеры развертывания (Helm/Kustomize) для кластеров подготовки и производства.
+2. Внедрить дымовые тесты без CI (субвир-кластер эфемеро, Rodar Suite Canonica de Transacoes).
+3. Дополнительные сценарии отката для развертывания файлов и документирования модулей Runbook.
 
-## Etapa 4 - Integracao CI/CD
-1. Configurar pipelines:
-   - Build e publicacao de imagens validator/Torii (GitHub Actions ou GitLab CI).
-   - Validacao automatizada de configuracao (lint de genesis, verificacao de assinaturas).
-   - Pipelines de deploy (Helm/Kustomize) para clusters de staging e producao.
-2. Implementar smoke tests no CI (subir cluster efemero, rodar suite canonica de transacoes).
-3. Adicionar scripts de rollback para deploys com falha e documentar runbooks.
-
-## Etapa 5 - Observabilidade e alertas
-1. Deploy do stack de monitoramento (Prometheus + Grafana + Alertmanager) por regiao.
+## Этап 5 – Наблюдение и оповещения
+1. Разверните стек монитора (Prometheus + Grafana + Alertmanager) по региону.
 2. Coletar metricas centrais:
   - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Logs via Loki/ELK para servicos Torii e consenso.
-3. Dashboards:
-   - Saude do consenso (altura de bloco, finalidade, status de peers).
-   - Latencia e taxa de erro da API Torii.
-   - Transacoes de governanca e status de propostas.
-4. Alertas:
-   - Parada de producao de blocos (>2 intervalos de bloco).
-   - Queda no numero de peers abaixo do quorum.
-   - Picos na taxa de erro de Torii.
-   - Backlog da fila de propostas de governanca.
+   - Журналы через Loki/ELK для обслуживания Torii и согласования.
+3. Панели мониторинга:
+   - Saude do consenso (altura de bloco, Finalidade, status de Peers).
+   - Задержка и таксы ошибок API Torii.
+   - Транзакции управления и статус предложений.
+4. Оповещения:
+   - Парад производства блоков (>2 интервала блоков).
+   - Кворум не имеет числа равных.
+   - Пиктограммы ошибок Torii.
+   - Отставание в работе по предложениям правительства.
 
-## Etapa 6 - Validacao e handoff
-1. Rodar validacao end-to-end:
-   - Submeter proposta de governanca (ex. mudanca de parametro).
-   - Processar a aprovacao do conselho para garantir que o pipeline de governanca funciona.
-   - Rodar diff de estado do ledger para garantir consistencia.
-2. Documentar o runbook para on-call (resposta a incidentes, failover, scaling).
-3. Comunicar prontidao para equipes SoraFS/SoraNet; confirmar que deploys piggyback podem apontar para nos Nexus.
-
-## Checklist de implementacao
-- [ ] Auditoria de genesis/configuracao concluida.
-- [ ] Nos validadores e observadores deployados com consenso saudavel.
-- [ ] Chaves de governanca carregadas, proposta testada.
-- [ ] Pipelines CI/CD rodando (build + deploy + smoke tests).
-- [ ] Dashboards de observabilidade ativos com alertas.
-- [ ] Documentacao de handoff entregue aos times downstream.
+## Этап 6 – Проверка и передача
+1. Комплексная проверка радара:
+   - Субметр пропоста управления (например, mudanca de parametro).
+   - Выполните согласование, чтобы гарантировать функционирование трубопровода управления.
+   - Просмотр различий в состоянии бухгалтерской книги для гарантии стабильности.
+2. Документирование Runbook для дежурства (ответ на инциденты, отработка отказа, масштабирование).
+3. Быстрое подключение к оборудованию SoraFS/SoraNet; Подтвердите, что развертывает дополнительный модуль для номера Nexus.## Контрольный список реализации
+- [ ] Аудитория генезиса/конфигурации заключения.
+- [ ] Наши валидаторы и наблюдатели развернуты с согласия Саудавела.
+- [ ] Chaves degovanca carregadas, proposta testada.
+- [ ] Родандо конвейеров CI/CD (сборка + развертывание + дымовые тесты).
+- [ ] Панели мониторинга активности с оповещениями.
+- [ ] Документирование передачи обслуживания происходит несколько раз ниже по течению.

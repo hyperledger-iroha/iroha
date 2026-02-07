@@ -4,13 +4,15 @@ direction: rtl
 source: docs/portal/docs/norito/examples/call-transfer-asset.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/call-transfer-asset
 title: استدعاء نقل المضيف من Kotodama
 description: يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+מקור: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
 يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.

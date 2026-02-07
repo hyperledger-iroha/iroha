@@ -4,243 +4,224 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-spec.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-spec
-title: Especificacion tecnica de Sora Nexus
-description: Espejo completo de `docs/source/nexus.md`, que cubre la arquitectura y las restricciones de diseno para el ledger Iroha 3 (Sora Nexus).
+идентификатор: Nexus-спецификация
+Название: Especificacion tecnica de Sora Nexus
+описание: Полный текст `docs/source/nexus.md`, который содержит архитектуру и ограничения дизайна для бухгалтерской книги Iroha 3 (Sora Nexus).
 ---
 
-:::note Fuente canonica
-Esta pagina refleja `docs/source/nexus.md`. Manten ambas copias alineadas hasta que el backlog de traduccion llegue al portal.
+:::обратите внимание на Фуэнте каноника
+Эта страница отражена `docs/source/nexus.md`. Мы поговорили с вами, что у вас есть отставание в переводе на портале.
 :::
 
-#! Iroha 3 - Sora Nexus Ledger: Especificacion tecnica de diseno
+#! Iroha 3 - Сора Nexus Книга: Технические характеристики проекта
 
-Este documento propone la arquitectura del Sora Nexus Ledger para Iroha 3, evolucionando Iroha 2 hacia un ledger global unico y logicamente unificado organizado alrededor de Data Spaces (DS). Data Spaces proveen dominios fuertes de privacidad ("private data spaces") y participacion abierta ("public data spaces"). El diseno preserva la composabilidad a traves del ledger global mientras asegura aislamiento estricto y confidencialidad para los datos de private-DS, e introduce escalado de disponibilidad de datos via codificacion de borrado en Kura (block storage) y WSV (World State View).
+Этот документ предлагает архитектуру Соры Nexus Ledger для Iroha 3, эволюционировавшую Iroha 2, которая содержит глобальный единый реестр и унифицированную логику, организованную ранее пространств данных (DS). Пространства данных доказали dominios fuertes de privacidad («частные пространства данных») и participacion abierta («общественные пространства данных»). Задумано сохранить композицию и перемещать глобальный реестр с соблюдением ограничений безопасности и конфиденциальности для данных частного DS, а также ввести возможность расширения диспонибилидада данных через кодификацию боррадо в Kura (блочное хранилище) и WSV (World State View).
 
-El mismo repositorio compila tanto Iroha 2 (redes autoalojadas) como Iroha 3 (SORA Nexus). La ejecucion esta impulsada por la Iroha Virtual Machine (IVM) compartida y la toolchain de Kotodama, por lo que los contratos y artefactos de bytecode permanecen portables entre despliegues autoalojados y el ledger global de Nexus.
+Компилированный репозиторий неправильно Iroha 2 (автоалохада) как Iroha 3 (SORA Nexus). Импульс выброса виртуальной машины Iroha (IVM) связан с цепочкой инструментов Kotodama, поэтому контракты и артефакты постоянного байт-кода переносятся между автоматическими автоблоками и глобальным реестром. Nexus.
 
-Objetivos
-- Un ledger logico global compuesto por muchos validadores cooperantes y Data Spaces.
-- Data Spaces privados para operacion con permisos (p. ej., CBDC), con datos que nunca salen del DS privado.
-- Data Spaces publicos con participacion abierta, acceso sin permisos estilo Ethereum.
-- Contratos inteligentes composables entre Data Spaces, sujetos a permisos explicitos para acceso a activos de private-DS.
-- Aislamiento de rendimiento para que la actividad publica no degrade las transacciones internas de private-DS.
-- Disponibilidad de datos a escala: Kura y WSV con codificacion de borrado para soportar datos efectivamente ilimitados manteniendo los datos de private-DS privados.
+Объективос
+- Глобальные логические вычисления для многих сотрудничающих валидаторов и пространств данных.
+- Частные пространства данных для работы с разрешениями (например, CBDC), с данными, которые не были проданы частным лицам DS.
+- Публичные пространства данных с новым участием, доступ без разрешений в стиле Ethereum.
+- Интеллектуальные компоновочные соглашения между пространствами данных дают явные разрешения для доступа к действиям частного DS.
+- Aislamiento de rendimiento для того, чтобы публичная активность не ухудшала внутренние транзакции частного лица-DS.
+- Disponibilidad de datas a escala: Kura y WSV с кодификацией данных для поддержки эффективных неограниченных данных, сохраняемых в личных данных DS.
 
-No objetivos (fase inicial)
-- Definir economia de token o incentivos de validadores; las politicas de scheduling y staking son enchufables.
-- Introducir una nueva version de ABI; los cambios apuntan a ABI v1 con extensiones explicitas de syscalls y pointer-ABI segun la politica de IVM.
+No objetivos (начальная фаза)
+- Определить экономию токенов или стимулов для валидаторов; las политика планирования и ставок на сына enchufables.
+- Представлена ​​новая версия ABI; мы добавили ABI v1 с явными расширениями системных вызовов и указателем-ABI, начиная с политики IVM.Терминология
+- Nexus Леджер: глобальный логический регистр для компонентов пространства данных (DS) в историческом порядке и компромиссе государства.
+- Пространство данных (DS): Dominio acotado de ejecucion y almacenamiento con sus propios validadores, gobernanza, clase de privacidad, politica de DA, cuotas y politica de tarifas. Существуют классы дос: общедоступные DS и частные DS.
+- Пространство частных данных: Validadores con Permisos y Control de Accesso; данные о транзакциях и статусе nunca salen del DS. Соло является глобальным компромиссом/метадатами.
+- Пространство общедоступных данных: участие без разрешения; Лос-датос завершено и el estado son publicos.
+- Манифест пространства данных (DS Manifest): Кодифицированный манифест с Norito, в котором объявляются параметры DS (действительные/обязательные параметры QC, секрет конфиденциальности, политика ISI, параметры DA, сохранение, политика ZK, тарифы). Хэш-дель-манифест находится в каденском связующем звене. В ответ на это вы получили сертификаты кворума DS, использующие ML-DSA-87 (класс Dilithium5), как фирма, ушедшая после дефекта.
+- Пространственный каталог: соглашение о глобальном директории в цепочке, которое отображает DS, версии и события управления/поворота для разрешения и аудитории.
+- DSID: единый глобальный идентификатор пространства данных. Используйте пространство имен для всех объектов и ссылок.
+- Привязка: криптографическое компромиссное решение блока/заголовка DS, включенного в каденовую связь, для передачи истории DS во всемирный реестр.
+- Кура: Блок-блоки Iroha. Se extiende aqui con almacenamiento de blobs codeificados con Borrado and Compromisos.
+- WSV: Iroha Представление состояния мира. Вы можете расширить эти сегменты с существующими версиями, снимками и кодифицировать их с помощью изображений.
+- IVM: Iroha Виртуальная машина для извлечения интеллектуальных контрактов (байт-код Kotodama `.to`).
+  - AIR: алгебраическое промежуточное представление. Алгебраическая перспектива вычислений для применения в стиле STARK, описывает выброс в виде промежутков между базами в кампусах с ограничениями перехода и фронта.Модель пространств данных
+- Идентификатор: `DataSpaceId (DSID)`, идентифицирующий DS и пространство имен в задаче. Los DS может быть мгновенным и детализированным:
+  - Домен-DS: `ds::domain::<domain_name>` - изгнание и пребывание в собственности.
+  - Asset-DS: `ds::asset::<domain_name>::<asset_name>` - выброс и состояние, соответствующее единому определению активности.
+  Формы амбаса сосуществуют; Транзакции могут быть кратными DSID атомной формы.
+- Цикл жизни манифеста: создание DS, актуализация (вращение рабочих мест, политические кампании) и отмена регистрации в Space Directory. Это артефакт DS для ссылки на слот хэша манифеста полученной информации.
+- Классы: Публичный DS (участие при открытии, DA publica) и Частный DS (разрешение, конфиденциальность DA). Политика гибридов возможна через флаги манифеста.
+- Политика для DS: разрешения ISI, параметры DA `(k,m)`, цифра, сохранение, ограничения (мин/макс. участие в передаче по блоку), политика платежей ZK/оптимисты, тарифы.
+- Управление: членство в DS и ротация валидаторов, определенных для раздела управления манифестом (propuestas on-chain, multisig o gobernanza externa anclada por transacciones nexus y atestaciones).
 
-Terminologia
-- Nexus Ledger: El ledger logico global formado al componer bloques de Data Space (DS) en una historia ordenada y un compromiso de estado.
-- Data Space (DS): Dominio acotado de ejecucion y almacenamiento con sus propios validadores, gobernanza, clase de privacidad, politica de DA, cuotas y politica de tarifas. Existen dos clases: public DS y private DS.
-- Private Data Space: Validadores con permisos y control de acceso; los datos de transaccion y estado nunca salen del DS. Solo se anclan compromisos/metadatos globalmente.
-- Public Data Space: Participacion sin permisos; los datos completos y el estado son publicos.
-- Data Space Manifest (DS Manifest): Manifest codificado con Norito que declara parametros DS (validadores/llaves QC, clase de privacidad, politica ISI, parametros DA, retencion, cuotas, politica ZK, tarifas). El hash del manifest se ancla en la cadena nexus. Salvo que se anule, los certificados de quorum DS usan ML-DSA-87 (clase Dilithium5) como esquema de firma post-cuantico por defecto.
-- Space Directory: Contrato de directorio global on-chain que rastrea manifests DS, versiones y eventos de gobernanza/rotacion para resolvibilidad y auditorias.
-- DSID: Identificador globalmente unico para un Data Space. Se usa para namespacing de todos los objetos y referencias.
-- Anchor: Compromiso criptografico de un bloque/header DS incluido en la cadena nexus para vincular la historia DS al ledger global.
-- Kura: Almacenamiento de bloques de Iroha. Se extiende aqui con almacenamiento de blobs codificados con borrado y compromisos.
-- WSV: Iroha World State View. Se extiende aqui con segmentos de estado versionados, con snapshots, y codificados con borrado.
-- IVM: Iroha Virtual Machine para ejecucion de contratos inteligentes (bytecode Kotodama `.to`).
-  - AIR: Algebraic Intermediate Representation. Vista algebraica del computo para pruebas estilo STARK, describiendo la ejecucion como trazas basadas en campos con restricciones de transicion y frontera.
+Манифесты возможностей и UAID
+- Универсальные действия: каждый участник получает детерминированный UAID (`UniversalAccountId` и `crates/iroha_data_model/src/nexus/manifest.rs`), который открывает все пространства данных. Манифесты возможностей (`AssetPermissionManifest`) связаны с UAID в конкретном пространстве данных, сроками активации/истечения срока действия и списком правил разрешения/запрета `ManifestEntry`, которые указаны `dataspace`, `program_id`, `method`, `asset` и дополнительные роли AMX. Las reglas отрицает Siempre ganan; Оценщик выдает `ManifestVerdict::Denied` с аудиторией или грантом `Allowed` с совпадающими метаданными разрешения.
+- Припуски: каждый вход позволяет определять ковши `AllowanceWindow` (`PerSlot`, `PerMinute`, `PerDay`), а также `max_amount` опционально. Хосты и SDK используют неправильную полезную нагрузку Norito, так как постоянное приложение идентифицируется между оборудованием и SDK.
+- Телеметрия аудитории: космический каталог `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`), когда проявляется камбия на месте. Новый интерфейс `SpaceDirectoryEventFilter` позволяет подписке Torii/data-event отслеживать актуализацию манифеста UAID, отзыв и принятие решений об отказе в персонализированной сантехнике.
 
-Modelo de Data Spaces
-- Identidad: `DataSpaceId (DSID)` identifica un DS y da namespacing a todo. Los DS pueden instanciarse en dos granularidades:
-  - Domain-DS: `ds::domain::<domain_name>` - ejecucion y estado acotados a un dominio.
-  - Asset-DS: `ds::asset::<domain_name>::<asset_name>` - ejecucion y estado acotados a una definicion de activo unica.
-  Ambas formas coexisten; las transacciones pueden tocar multiples DSID de forma atomica.
-- Ciclo de vida del manifest: la creacion de DS, actualizaciones (rotacion de llaves, cambios de politica) y retiro se registran en Space Directory. Cada artefacto DS por slot referencia el hash del manifest mas reciente.
-- Clases: Public DS (participacion abierta, DA publica) y Private DS (permisionado, DA confidencial). Politicas hibridas son posibles via flags del manifest.
-- Politicas por DS: permisos ISI, parametros DA `(k,m)`, cifrado, retencion, cuotas (min/max participacion de tx por bloque), politica de pruebas ZK/optimistas, tarifas.
-- Gobernanza: membresia DS y rotacion de validadores definidas por la seccion de gobernanza del manifest (propuestas on-chain, multisig o gobernanza externa anclada por transacciones nexus y atestaciones).
+Для сквозных доказательств, примечаний о миграции SDK и контрольных списков публикации манифестов, также есть раздел с универсальным руководством по учетным записям (`docs/source/universal_accounts_guide.md`). Поддерживайте документы, когда они становятся политическими или государственными органами UAID.Архитектура Альто Нивель
+1) Глобальный Capa de Composicion (Nexus Chain)
+- В течение 1 секунды подтвердите канонический единый порядок блоков Nexus, который завершает атомарные транзакции, открывающие одно или несколько пространств данных (DS). Каждая транзакция подтверждает актуализацию мирового состояния глобального объединения (корневой вектор для DS).
+- Содержит минимальные метаданные для проверок/QC, объединенных для гарантированной компоновки, завершения и обнаружения мошенничества (DSID tocados, root de estado por DS раньше/отмены, компромисы DA, pruebas de validez por DS, и el certificado de quorum DS при использовании ML-DSA-87). Никакие конфиденциальные данные не включены.
+- Согласие: создать глобальный конвейер BFT с тамано 22 (3f+1 с f=7), выбрать пул на 200 000 потенциальных валидаторов с помощью механизма VRF/ставки для эпох. El comite nexus ordena transacciones y Finaliza el bloque en 1s.
 
-Manifests de capacidades y UAID
-- Cuentas universales: cada participante recibe un UAID deterministico (`UniversalAccountId` en `crates/iroha_data_model/src/nexus/manifest.rs`) que abarca todos los dataspaces. Los manifests de capacidades (`AssetPermissionManifest`) vinculan un UAID a un dataspace especifico, epocas de activacion/expiracion y una lista ordenada de reglas allow/deny `ManifestEntry` que acotan `dataspace`, `program_id`, `method`, `asset` y roles AMX opcionales. Las reglas deny siempre ganan; el evaluador emite `ManifestVerdict::Denied` con una razon de auditoria o un grant `Allowed` con la metadata de allowance coincidente.
-- Allowances: cada entrada allow lleva buckets deterministas `AllowanceWindow` (`PerSlot`, `PerMinute`, `PerDay`) mas un `max_amount` opcional. Hosts y SDK consumen el mismo payload Norito, asi que la aplicacion permanece identica entre hardware y SDK.
-- Telemetria de auditoria: Space Directory emite `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) cuando un manifest cambia de estado. La nueva superficie `SpaceDirectoryEventFilter` permite a suscriptores de Torii/data-event monitorear actualizaciones de manifest UAID, revocaciones y decisiones deny-wins sin plumbing personalizado.
+2) Пространство данных (публичное/частное)
+- Выбрасываются фрагменты глобальных DS-транзакций, актуализируются локальные WSV-файлы DS и создаются артефакты валидности блока (агрегированные DS и компромиссы DA), которые объединяются в блоке Nexus в течение 1 секунды.
+- Частные цифровые данные DS в хранилище и при транзите между авторизованными валидаторами; соло-компромисы и проверки PQ Salen del DS.
+- Публичный DS экспортирует полные данные (через DA) и проверяет валидность PQ.
 
-Para evidencia operativa end-to-end, notas de migracion de SDK y checklists de publicacion de manifests, espejea esta seccion con la Universal Account Guide (`docs/source/universal_accounts_guide.md`). Manten ambos documentos alineados cuando cambien la politica o las herramientas UAID.
+3) Атомные транзакции между пространством данных (AMX)
+- Модель: каждая транзакция пользователя может быть кратна DS (например, домен DS и один актив DS). Если вы подтверждаете атомную форму в одиночном блоке Nexus или прерываете операцию; никаких эффектов сена.
+- Подготовка-фиксация в течение 1 секунды: для каждой кандидатуры транзакции, потоки DS выводятся параллельно с моментальным снимком неправильного состояния (корни DS в начале слота), производятся проверки PQ для DS (FASTPQ-ISI) и компрометация DA. Комитэ-нексус подтверждает транзакцию соло, если все проверки DS требуют проверки и сертификатов DA, ​​легальных на время (объект <= 300 мс); Напротив, транзакция будет перепрограммирована для выбранного слота.
+- Consistencia: los conjuntos de lectura/escritura se declaran; Обнаружение конфликтов происходит вопреки первоначальным корням слота. La ejecucion optimista sin locks por DS evita bloqueos globales; атомицид будет нарушен по правилам фиксации связи (все или ничего между DS).
+- Конфиденциальность: частный DS экспортируется соло, pruebas/compromisos ligados и корнями DS до/после. Нет данных о продаже privada cruda del DS.
 
-Arquitectura de alto nivel
-1) Capa de composicion global (Nexus Chain)
-- Mantiene un orden canonico unico de bloques Nexus de 1 segundo que finalizan transacciones atomicas que abarcan uno o mas Data Spaces (DS). Cada transaccion confirmada actualiza el world state global unificado (vector de roots por DS).
-- Contiene metadatos minimos mas pruebas/QC agregados para garantizar composabilidad, finalizacion y deteccion de fraude (DSIDs tocados, roots de estado por DS antes/despues, compromisos DA, pruebas de validez por DS, y el certificado de quorum DS usando ML-DSA-87). No se incluye data privada.
-- Consenso: comite BFT global con pipeline de tamano 22 (3f+1 con f=7), seleccionado de un pool de hasta ~200k validadores potenciales via un mecanismo VRF/stake por epocas. El comite nexus ordena transacciones y finaliza el bloque en 1s.
+4) Disponibilidad de datos (DA) с кодификацией данных
+- Kura almacena cuerpos de bloques и snapshots WSV в виде закодированных объектов с зашифрованным изображением. Публичные пузыри представляют собой фрагментированные обширные фрагменты; los blobs privados se almacenan only dentro de validadores Private-DS, с частями цифр.
+- Los compromisos DA, если вы зарегистрировались как артефакты DS как блоки Nexus, должны быть обеспечены muestreo и гарантии восстановления без раскрытия частной собственности.Структура блоков и обязательств
+- Артефакт проверки пространства данных (для слота 1, для DS)
+  — Кампо: dsid, slot, pre_state_root, post_state_root, ds_tx_set_hash, kura_da_commitment, wsv_da_commitment, Manifest_hash, ds_qc (ML-DSA-87), ds_validity_proof (FASTPQ-ISI).
+  - Частный DS экспортирует артефакты без изменений; общедоступный DS разрешает восстановление отложенных повреждений через DA.
 
-2) Capa de Data Space (Public/Private)
-- Ejecuta fragmentos por DS de transacciones globales, actualiza el WSV local del DS y produce artefactos de validez por bloque (pruebas agregadas por DS y compromisos DA) que se agregan en el bloque Nexus de 1 segundo.
-- Private DS cifran datos en reposo y en transito entre validadores autorizados; solo compromisos y pruebas de validez PQ salen del DS.
-- Public DS exportan cuerpos completos de datos (via DA) y pruebas de validez PQ.
+- Блок Nexus (каденция де 1с)
+  - Кампос: номер_блока, родительский_хэш, слот_время, tx_list (атомные транзакции между DS и DSID), ds_artifacts[], nexus_qc.
+  - Функция: завершение всех атомных транзакций с артефактами DS, требующими проверки; актуализация вектора корней DS мирового состояния в глобальном масштабе в одиночку.
 
-3) Transacciones atomicas cross-Data-Space (AMX)
-- Modelo: cada transaccion de usuario puede tocar multiples DS (p. ej., domain DS y uno o mas asset DS). Se confirma de forma atomica en un solo bloque Nexus o se aborta; no hay efectos parciales.
-- Prepare-Commit dentro de 1s: para cada transaccion candidata, los DS tocados ejecutan en paralelo contra el mismo snapshot (roots DS al inicio del slot) y producen pruebas de validez PQ por DS (FASTPQ-ISI) y compromisos DA. El comite nexus confirma la transaccion solo si todas las pruebas DS requeridas verifican y los certificados DA llegan a tiempo (objetivo <=300 ms); de lo contrario, la transaccion se reprograma para el siguiente slot.
-- Consistencia: los conjuntos de lectura/escritura se declaran; la deteccion de conflictos ocurre al commit contra los roots de inicio de slot. La ejecucion optimista sin locks por DS evita bloqueos globales; la atomicidad se impone por la regla de commit nexus (todo o nada entre DS).
-- Privacidad: private DS exportan solo pruebas/compromisos ligados a roots DS pre/post. No sale data privada cruda del DS.
+Согласование и планирование
+- Согласие на цепочку Nexus: глобальный конвейер BFT (класс Sumeragi) с 22 узлами (3f+1 с f=7), которые включают блоки 1 и завершение 1. Члены комиссии выбираются на эпоху через VRF/количество среди ~200 тыс. кандидатов; la rotacion mantiene decentralizacion и сопротивление цензуре.
+- Согласие с пространством данных: каждый DS извлекается из собственного BFT и передается валидаторам для создания артефактов для слота (pruebas, компромиссы DA, DS QC). Коммиты Lane-Relay имеют размеры в `3f+1`, используя конфигурацию `fault_tolerance` пространства данных, и вы должны выбрать форму, определённую для эпохи, из пула валидаторов пространства данных, используя семя эпохи VRF, связанное с `(dataspace_id, lane_id)`. Рядовой DS, сын разрешения; общественный DS разрешает жизнь и антисивиллскую политику. El comite global nexus no cambia.
+- Планирование транзакций: лос-usuarios envian transacciones атомные объявленные DSID tocados y conjuntos de lectura/escritura. Los DS выбрасывается параллельно этому слоту; Комите Nexus включает транзакцию в блоке 1s со всеми артефактами DS, проверенными и сертификатами DA, в точках (<=300 мс).
+- Aislamiento de rendimiento: Cada DS Tiene Mempools и Ejecucion Independentes. Ограничения на количество транзакций для DS могут быть подтверждены для блокировки, чтобы избежать блокировки начала линии и защитить задержку частного DS.
 
-4) Disponibilidad de datos (DA) con codificacion de borrado
-- Kura almacena cuerpos de bloques y snapshots WSV como blobs codificados con borrado. Los blobs publicos se fragmentan ampliamente; los blobs privados se almacenan solo dentro de validadores private-DS, con chunks cifrados.
-- Los compromisos DA se registran tanto en artefactos DS como en bloques Nexus, habilitando muestreo y garantias de recuperacion sin revelar contenido privado.
-
-Estructura de bloques y commit
-- Artefacto de prueba de Data Space (por slot de 1s, por DS)
-  - Campos: dsid, slot, pre_state_root, post_state_root, ds_tx_set_hash, kura_da_commitment, wsv_da_commitment, manifest_hash, ds_qc (ML-DSA-87), ds_validity_proof (FASTPQ-ISI).
-  - Private-DS exporta artefactos sin cuerpos de datos; public DS permite recuperacion de cuerpos via DA.
-
-- Bloque Nexus (cadencia de 1s)
-  - Campos: block_number, parent_hash, slot_time, tx_list (transacciones atomicas cross-DS con DSIDs tocados), ds_artifacts[], nexus_qc.
-  - Funcion: finaliza todas las transacciones atomicas cuyos artefactos DS requeridos verifican; actualiza el vector de roots DS del world state global en un solo paso.
-
-Consenso y scheduling
-- Consenso de Nexus Chain: BFT global con pipeline (clase Sumeragi) con comite de 22 nodos (3f+1 con f=7) apuntando a bloques de 1s y finalizacion de 1s. Los miembros del comite se seleccionan por epocas via VRF/stake entre ~200k candidatos; la rotacion mantiene descentralizacion y resistencia a censura.
-- Consenso de Data Space: cada DS ejecuta su propio BFT entre sus validadores para producir artefactos por slot (pruebas, compromisos DA, DS QC). Los comites lane-relay se dimensionan en `3f+1` usando la configuracion `fault_tolerance` del dataspace y se muestrean de forma determinista por epoca desde el pool de validadores del dataspace usando el seed de epoca VRF ligado a `(dataspace_id, lane_id)`. Private DS son permisionados; public DS permiten liveness abierta sujeta a politicas anti-Sybil. El comite global nexus no cambia.
-- Scheduling de transacciones: los usuarios envian transacciones atomicas declarando DSIDs tocados y conjuntos de lectura/escritura. Los DS ejecutan en paralelo dentro del slot; el comite nexus incluye la transaccion en el bloque de 1s si todos los artefactos DS verifican y los certificados DA son puntuales (<=300 ms).
-- Aislamiento de rendimiento: cada DS tiene mempools y ejecucion independientes. Las cuotas por DS limitan cuantas transacciones que tocan un DS se pueden confirmar por bloque para evitar head-of-line blocking y proteger la latencia de private DS.
-
-Modelo de datos y namespacing
-- IDs calificados por DS: todas las entidades (dominios, cuentas, activos, roles) se califican por `dsid`. Ejemplo: `ds::<domain>::account`, `ds::<domain>::asset#precision`.
-- Referencias globales: una referencia global es una tupla `(dsid, object_id, version_hint)` y puede colocarse on-chain en la capa nexus o en descriptores AMX para uso cross-DS.
-- Serializacion Norito: todos los mensajes cross-DS (descriptores AMX, pruebas) usan codecs Norito. No se usa serde en paths de produccion.
-
-Contratos inteligentes y extensiones de IVM
-- Contexto de ejecucion: agregar `dsid` al contexto de ejecucion de IVM. Los contratos Kotodama siempre se ejecutan dentro de un Data Space especifico.
-- Primitivas atomicas cross-DS:
-  - `amx_begin()` / `amx_commit()` delimitan una transaccion atomica multi-DS en el host IVM.
-  - `amx_touch(dsid, key)` declara intencion de lectura/escritura para deteccion de conflictos contra roots snapshot del slot.
-  - `verify_space_proof(dsid, proof, statement)` -> bool
-  - `use_asset_handle(handle, op, amount)` -> result (operacion permitida solo si la politica lo permite y el handle es valido)
-- Handles de activos y tarifas:
-  - Las operaciones de activos se autorizan por las politicas ISI/rol del DS; las tarifas se pagan en el token de gas del DS. Los tokens de capacidad opcionales y politicas mas ricas (multi-approver, rate-limits, geofencing) se pueden agregar mas adelante sin cambiar el modelo atomico.
-- Determinismo: todas las nuevas syscalls son puras y deterministas dadas las entradas y los conjuntos de lectura/escritura AMX declarados. Sin efectos ocultos de tiempo o entorno.
-
-Pruebas de validez post-cuanticas (ISI generalizados)
-- FASTPQ-ISI (PQ, sin trusted setup): un argumento hash-based que generaliza el diseno de transfer a todas las familias ISI mientras apunta a prueba sub-segundo para lotes de escala 20k en hardware clase GPU.
-  - Perfil operativo:
-    - Los nodos de produccion construyen el prover via `fastpq_prover::Prover::canonical`, que ahora siempre inicializa el backend de produccion; el mock determinista fue removido. [crates/fastpq_prover/src/proof.rs:126]
-    - `zk.fastpq.execution_mode` (config) y `irohad --fastpq-execution-mode` permiten a los operadores fijar ejecucion CPU/GPU de forma determinista mientras el observer hook registra triples solicitados/resueltos/backend para auditorias de flota. [crates/iroha_config/src/parameters/user.rs:1357] [crates/irohad/src/main.rs:270] [crates/irohad/src/main.rs:2192] [crates/iroha_telemetry/src/metrics.rs:8887]
-- Aritmetizacion:
-  - KV-Update AIR: trata WSV como un mapa key-value tipado comprometido via Poseidon2-SMT. Cada ISI se expande a un conjunto pequeno de filas read-check-write sobre claves (cuentas, activos, roles, dominios, metadata, supply).
-  - Restricciones con puertas de opcode: una sola tabla AIR con columnas selectoras impone reglas por ISI (conservacion, contadores monotonic, permisos, range checks, actualizaciones de metadata acotadas).
-  - Argumentos de lookup: tablas transparentes comprometidas por hash para permisos/roles, precisiones de activos y parametros de politica evitan constraints bitwise pesadas.
-- Compromisos y actualizaciones de estado:
-  - Prueba SMT agregada: todas las claves tocadas (pre/post) se prueban contra `old_root`/`new_root` usando un frontier comprimido con siblings deduplicados.
-  - Invariantes: invariantes globales (p. ej., supply total por activo) se imponen via igualdad de multiconjuntos entre filas de efecto y contadores rastreados.
-- Sistema de prueba:
-  - Compromisos polinomiales estilo FRI (DEEP-FRI) con alta aridad (8/16) y blow-up 8-16; hashes Poseidon2; transcript Fiat-Shamir con SHA-2/3.
-  - Recursion opcional: agregacion recursiva local a DS para comprimir micro-lotes a una prueba por slot si se necesita.
+Модель данных и пространства имен
+- Идентификаторы, подтвержденные для DS: все данные (домины, cuentas, activos, роли) указаны для `dsid`. Например: `ds::<domain>::account`, `ds::<domain>::asset#precision`.
+- Глобальные ссылки: глобальная ссылка представляет собой тупла `(dsid, object_id, version_hint)` и может быть объединена в цепочку в связке или в дескрипторах AMX для использования между DS.
+- Сериализация Norito: все сообщения между DS (дескрипторы AMX, pruebas) с использованием кодеков Norito. Мы не следуем путям производства.Интеллектуальные соглашения и расширения IVM
+- Контекст выброса: объединить `dsid` с контекстом выброса IVM. Контракты Kotodama всегда выполняются в конкретном пространстве данных.
+- Примитивас атомикас кросс-ДС:
+  - `amx_begin()` / `amx_commit()` разделитель атомной транзакции multi-DS на хосте IVM.
+  - `amx_touch(dsid, key)` объявляет намерение лекций/описаний для обнаружения конфликтов, противоречащих корневым снимкам слота.
+  - `verify_space_proof(dsid, proof, statement)` -> логическое значение
+  - `use_asset_handle(handle, op, amount)` -> результат (операция разрешена в одиночку и политика ло разрешена и эль-дескриптор действителен)
+- Сведения об активах и тарифах:
+  - Активные действия разрешены политической ISI/роль DS; Лас-тарифы являются языческими и являются жетонами газа дель DS. Токены дополнительных возможностей и политики (множественное утверждение, ограничения скорости, геозоны) могут быть объединены, если вы хотите использовать атомную модель.
+- Детерминизм: все новые системные вызовы сын чисты и детерминисты дадас лас входы и лос конъюнтос де лектура/эскритура AMX declarados. Непонятный эффект таймпо или энторно.Pruebas de validez post-cuantis (ISI Generalizados)
+- FASTPQ-ISI (PQ, без доверенной настройки): аргумент на основе хеш-функции, который обобщает схему передачи всех семейств ISI в течение нескольких минут, а затем выполняет подсекундную операцию для увеличения 20 000 на аппаратном уровне графического процессора.
+  - Оперативный профиль:
+    - Производственные узлы создают проверку через `fastpq_prover::Prover::canonical`, и сейчас они просто инициализируют серверную часть производства; эль-макет детерминиста был удален. [crates/fastpq_prover/src/proof.rs:126]
+    - `zk.fastpq.execution_mode` (конфигурация) и `irohad --fastpq-execution-mode` позволяют операторам выбрасывать CPU/GPU в форму, определяющую время, когда наблюдатель регистрирует тройки запросов/результатов/бэкэнд для аудиторий флота. [crates/iroha_config/src/parameters/user.rs:1357] [crates/irohad/src/main.rs:270] [crates/irohad/src/main.rs:2192] [crates/iroha_telemetry/src/metrics.rs:8887]
+- Арифметизация:
+  - KV-Update AIR: использование WSV в качестве карты типа «ключ-значение», компрометированной через Poseidon2-SMT. Cada ISI расширяет объединение файлов чтения-проверки-записи на отдельные клавиши (cuentas, activos, roles, dominios, метаданные, снабжение).
+  - Ограничения на ввод кода операции: одна таблица AIR с селекторами столбцов, которые не регулируют правила ISI (сохранение, монотонные действия, разрешения, проверки диапазона, актуализация выбранных метаданных).
+  - Аргументы поиска: прозрачные таблицы с данными о хеш-значениях для разрешений/ролей, точность действий и параметры политики, исключающие побитовые ограничения.
+- Компромиссы и актуализации состояния:
+  - Prueba SMT agregada: все клавы tocadas (до/после) se prueban contra `old_root`/`new_root`, используя границу, объединенную с удаленными братьями и сестрами.
+  - Инварианты: глобальные инварианты (например, общая поставка por activo) могут быть импонированы через iualdad de multiconjuntos entre filas de efecto y contadores rastreados.
+- Система де-пруэба:
+  - Compromisos polinomiales estilo FRI (DEEP-FRI) с высоким уровнем сухости (8/16) и увеличением 8-16; хеширует Poseidon2; расшифровка Fiat-Shamir с SHA-2/3.
+  - Необязательная рекурсия: рекурсивная агрегация локально в DS для компримирования микрочастей в нужное место.
 - Alcance y ejemplos cubiertos:
-  - Activos: transfer, mint, burn, register/unregister asset definitions, set precision (acotado), set metadata.
-  - Cuentas/Dominios: create/remove, set key/threshold, add/remove signatories (solo estado; las verificaciones de firma se atestan por validadores DS, no se prueban dentro del AIR).
-  - Roles/Permisos (ISI): grant/revoke roles y permisos; impuestos por tablas de lookup y checks de politica monotonic.
-  - Contratos/AMX: marcadores begin/commit AMX, capability mint/revoke si esta habilitado; se prueban como transiciones de estado y contadores de politica.
-- Checks fuera del AIR para preservar latencia:
-  - Firmas y criptografia pesada (p. ej., firmas ML-DSA de usuarios) se verifican por validadores DS y se atestan en el DS QC; la prueba de validez cubre solo consistencia de estado y cumplimiento de politicas. Esto mantiene pruebas PQ y rapidas.
-- Objetivos de rendimiento (ilustrativos, CPU de 32 cores + una GPU moderna):
-  - 20k ISI mixtas con key-touch pequeno (<=8 claves/ISI): ~0.4-0.9 s de prueba, ~150-450 KB de prueba, ~5-15 ms de verificacion.
-  - ISI mas pesadas (mas claves/constraints ricas): micro-lotes (p. ej., 10x2k) + recursion para mantener por slot <1 s.
-- Configuracion de DS Manifest:
+  - Activos: передача, выпуск, запись, регистрация/отмена регистрации определений активов, установка точности (acotado), установка метаданных.
+  - Cuentas/Dominios: создание/удаление, установка ключа/порога, добавление/удаление подписавших сторон (только estado; las verificaciones de Firma se atestan por validadores DS, no se prueban dentro del AIR).
+  - Роли/разрешения (ISI): предоставление/отзыв ролей и разрешений; Импульсы для таблиц поиска и монотонные проверки политики.
+  - Contratos/AMX: маркеры начинают/фиксируют AMX, возможность создавать/отменять контракты, если они уже готовы; se prueban como transiciones de estado y contadores de politica.
+- Проверяет функцию AIR для сохранения задержки:- Фирмы и криптографические песада (например, фирмы ML-DSA de usuarios), проверенные для валидаторов DS и проверенные в DS QC; la prueba de validez cubre Solo Constatement de estado y cumplimiento de politicas. Esto mantiene pruebas PQ и Rapidas.
+- Объекты визуализации (иллюстрации: 32-ядерный процессор + современный графический процессор):
+  - 20 тысяч ISI-смесей с сенсорными клавишами (<= 8 клавиш/ISI): ~0,4–0,9 с проверки, ~150–450 КБ проверки, ~5–15 мс проверки.
+  - ISI mas pesadas (mas claves/constraints ricas): микролоты (стр. ej., 10x2k) + рекурсия для управления слотом <1 с.
+- Конфигурация манифеста DS:
   - `zk.policy = "fastpq_isi"`
-  - `zk.hash = "poseidon2"`, `zk.fri = { blowup: 8|16, arity: 8|16 }`
+  - И18НИ00000093Х, И18НИ00000094Х
   - `state.commitment = "smt_poseidon2"`
   - `zk.recursion = { none | local }`
-  - `attestation.signatures_in_proof = false` (firmas verificadas por DS QC)
-  - `attestation.qc_signature = "ml_dsa_87"` (por defecto; alternativas deben declararse explicitamente)
-- Fallbacks:
-  - ISI complejas/personalizadas pueden usar un STARK general (`zk.policy = "stark_fri_general"`) con prueba diferida y finalizacion de 1 s via atestacion QC + slashing en pruebas invalidas.
-  - Opciones no PQ (p. ej., Plonk con KZG) requieren trusted setup y ya no se soportan en el build por defecto.
+  - `attestation.signatures_in_proof = false` (фирмы проверены DS QC)
+  - `attestation.qc_signature = "ml_dsa_87"` (по дефекту; альтернативы должны быть явно объявлены)
+- Резервные варианты:
+  - Заполненные/персонализированные ISI могут быть использованы в качестве общего STARK (`zk.policy = "stark_fri_general"`) с проверкой разницы и завершением 1 секунды с помощью аттестации QC + косая черта и недействительные проверки.
+  - Опции no PQ (стр. например, Plonk con KZG) требуют надежной настройки и не поддерживаются в сборке из-за дефекта.
 
-Introduccion a AIR (para Nexus)
-- Traza de ejecucion: matriz con ancho (columnas de registros) y longitud (pasos). Cada fila es un paso logico del procesamiento ISI; las columnas contienen valores pre/post, selectores y flags.
-- Restricciones:
-  - Restricciones de transicion: imponen relaciones fila a fila (p. ej., post_balance = pre_balance - amount para una fila de debito cuando `sel_transfer = 1`).
-  - Restricciones de frontera: vinculan E/S publica (old_root/new_root, contadores) a la primera/ultima fila.
-  - Lookups/permutations: aseguran membresia e igualdades de multiconjuntos contra tablas comprometidas (permisos, parametros de activos) sin circuitos pesados de bits.
-- Compromiso y verificacion:
-  - El prover compromete trazas via codificaciones hash y construye polinomios de bajo grado que son validos si las restricciones se cumplen.
-  - El verifier comprueba bajo grado via FRI (hash-based, post-cuantico) con pocas aperturas Merkle; el costo es logaritmico en los pasos.
-- Ejemplo (Transfer): los registros incluyen pre_balance, amount, post_balance, nonce y selectores. Las restricciones imponen no negatividad/rango, conservacion y monotonicidad de nonce, mientras una multiprueba SMT agregada vincula hojas pre/post a los roots old/new.
+Знакомство с AIR (пункт Nexus)
+- Порядок выброса: матрица с анкером (столбцы регистров) и долгота (пасы). Cada fila es un paso logico del procesamiento ISI; las Columnas содержит значения до/после, селекторы и флаги.
+- Ограничения:
+  - Ограничения перехода: не учитываются отношения между файлами и файлами (стр. например, post_balance = pre_balance - сумма для дебетового файла cuando `sel_transfer = 1`).
+  - Фронтальные ограничения: vinculan E/S publica (old_root/new_root, contadores) a la primera/ultima fila.
+  - Поиск/перестановки: безопасные элементы и соединения нескольких конъюнкций с компрометидами таблиц (разрешения, параметры активных действий) без цепочек песадных битов.
+- Компромисс и проверка:
+  - Он проверяет компромиссные действия с помощью кодификационных хэшей и строит полиномы из каждого градиента, которые действуют, если ограничения являются совокупными.
+  - El verifier Comprueba Bajo Grado через FRI (на основе хеш-функции, пост-куантико) с pocas aperturas Merkle; стоимость — это логарифмический коэффициент в лос-пасосе.
+- Пример (перенос): регистры включают pre_balance, сумму, post_balance, nonce и селекторы. Ограничения не применяются ни к отрицательным/рангом, ни к консервации, ни к монотонности, в течение нескольких дней, когда SMT объединяется до и после старых/новых корней.
 
-Evolucion de ABI y syscalls (ABI v1)
-- Syscalls a agregar (nombres ilustrativos):
+Эволюция ABI и системных вызовов (ABI v1)
+- Системные вызовы агрегатора (номера иллюстративос):
   - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- Tipos Pointer-ABI a agregar:
-  - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`.
-- Actualizaciones requeridas:
-  - Agregar a `ivm::syscalls::abi_syscall_list()` (mantener orden), gatear por politica.
-  - Mapear numeros desconocidos a `VMError::UnknownSyscall` en hosts.
-  - Actualizar tests: syscall list golden, ABI hash, pointer type ID goldens y policy tests.
-  - Docs: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.
+- Типос Pointer-ABI в агрегате:
+  - И18НИ00000106Х, И18НИ00000107Х, И18НИ00000108Х, И18НИ00000109Х.
+- Требуются актуализации:
+  - Присоединяйтесь к `ivm::syscalls::abi_syscall_list()` (порядок управления), воротам в политику.
+  - Отобразите устаревшие номера на хостах `VMError::UnknownSyscall`.
+  - Актуальные тесты: золотой список системных вызовов, хеш ABI, золотые идентификаторы типа указателя и тесты политики.
+  - Документы: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.Модель конфиденциальности
+- Утверждение личных данных: транзакций, различий в состоянии и снимков WSV частного DS, не проданного субконъюнктом частных лиц.
+- Публичное раскрытие: отдельные заголовки, компрометации DA и проверки достоверности PQ, которые экспортируются.
+- Pruebas ZK optionales: частный DS pueden producir pruebas ZK (p. ej., Balance достаточно, политика cumplida) habilitando Acciones Cross-DS Sin Revelar estado Interno.
+- Контроль доступа: авторизация может быть применена к политике ISI/роль в отношении DS. Дополнительные жетоны емкости и возможность ввести их в курс дела.
 
-Modelo de privacidad
-- Contencion de datos privados: cuerpos de transaccion, diffs de estado y snapshots WSV de private DS nunca salen del subconjunto privado de validadores.
-- Exposicion publica: solo headers, compromisos DA y pruebas de validez PQ se exportan.
-- Pruebas ZK opcionales: private DS pueden producir pruebas ZK (p. ej., balance suficiente, politica cumplida) habilitando acciones cross-DS sin revelar estado interno.
-- Control de acceso: la autorizacion se impone por politicas ISI/rol dentro del DS. Los tokens de capacidad son opcionales y pueden introducirse mas adelante.
+Информирование о передаче и QoS
+- Согласовано, мемпулы и отдельные хранилища для DS.
+- Связующие параметры планирования для DS для ограничения времени включения якорей и устранения блокировки начала строки.
+- Предполагаемые повторы контракта для DS (вычисления/память/IO), импульсы для хоста IVM. Конкуренция в общедоступных DS не может быть использована для частных DS.
+- Llamadas cross-DS asincronas evitan esperas sincronas largas dentro de ejecucion Private-DS.
 
-Aislamiento de rendimiento y QoS
-- Consenso, mempools y almacenamiento separados por DS.
-- Cuotas de scheduling nexus por DS para limitar el tiempo de inclusion de anchors y evitar head-of-line blocking.
-- Presupuestos de recursos de contrato por DS (compute/memory/IO), impuestos por el host IVM. La contencion en public DS no puede consumir presupuestos de private DS.
-- Llamadas cross-DS asincronas evitan esperas sincronas largas dentro de ejecucion private-DS.
+Disponibilidad de datos и diseno de almacenamiento
+1) Кодификация боррадо
+- Систематически используйте Рида-Соломона (стр. например, GF(2^16)) для кодификации уровня блоков Kura и снимков WSV: параметры `(k, m)` с осколками `n = k + m`.
+- Параметры дефекта (собственные, общедоступные DS): `k=32, m=16` (n=48), разрешено восстановление 16 потерянных осколков с расширением ~1,5x. Для частного DS: `k=16, m=8` (n=24) в разрешенное соединение. Множество конфигураций для манифеста DS.
+- Публичные объекты Blobs: шарды распределяются по маршрутам многих узлов DA/validadores с проверками доступности для Muestreo. Компромиссные данные в заголовках позволяют выполнять проверку для легких клиентов.
+- Частные BLOB-объекты: шарды, зашифрованные и распространяемые только между валидаторами частных DS (или назначенными хранителями). La cadena global Solo lleva Compromisos DA (без использования осколков и llaves).
 
-Disponibilidad de datos y diseno de almacenamiento
-1) Codificacion de borrado
-- Usar Reed-Solomon sistematico (p. ej., GF(2^16)) para codificacion de borrado a nivel de blob de bloques Kura y snapshots WSV: parametros `(k, m)` con `n = k + m` shards.
-- Parametros por defecto (propuestos, public DS): `k=32, m=16` (n=48), permitiendo recuperacion de hasta 16 shards perdidos con ~1.5x expansion. Para private DS: `k=16, m=8` (n=24) dentro del conjunto permisionado. Ambos configurables por DS Manifest.
-- Blobs publicos: shards distribuidos a traves de muchos nodos DA/validadores con checks de disponibilidad por muestreo. Los compromisos DA en headers permiten verificacion por light clients.
-- Blobs privados: shards cifrados y distribuidos solo entre validadores private-DS (o custodios designados). La cadena global solo lleva compromisos DA (sin ubicaciones de shards ni llaves).
+2) Компромисс и Муэстрео
+- Для каждого BLOB-объекта: вычислите корень Меркла с осколками и включите его в `*_da_commitment`. Mantener PQ исключает компромиссы с эллиптической кривизной.
+- DA Attesters: региональные подтверждатели, необходимые для VRF (стр. ej., 64 по региону), выдающие сертификат ML-DSA-87, проверенный на выходе из осколков. Объект задержки подтверждения DA <=300 мс. У вас есть действительные сертификаты связи и дополнительные осколки.
 
-2) Compromisos y muestreo
-- Para cada blob: calcular un Merkle root sobre shards e incluirlo en `*_da_commitment`. Mantener PQ evitando compromisos de curva eliptica.
-- DA Attesters: attesters regionales muestreados por VRF (p. ej., 64 por region) emiten un certificado ML-DSA-87 atestando muestreo exitoso de shards. Objetivo de latencia de atestacion DA <=300 ms. El comite nexus valida certificados en lugar de extraer shards.
+3) Интеграция с Курой
+- Los bloques almacenan cuerpos de transaccion como blobs codificados con Borrado con Compromisos Merkle.
+- Потеря заголовков для компрометации больших двоичных объектов; Los cuerpos восстанавливаются через красный DA для общедоступных DS и через каналы частных DS.4) Интеграция с WSV
+- Снимки WSV: периодически появляются контрольные точки состояния DS и снимки для фрагментов, кодифицированных с нарушением компрометации, зарегистрированных в заголовках. Вы можете создавать снимки и журналы изменений. Публичные снимки выглядят фрагментарно; лос-снимки частных лиц остаются навсегда в проверенных частных лицах.
+- Доступ к соглашению: лос-контракты могут быть пропорциональны (или ходатайствовать) о соглашении о состоянии (Меркле/Веркле) и о компрометации снимка. Частный сержант может получить аттестацию о знании того, что происходит, и о том, как проводить крудас.
 
-3) Integracion con Kura
-- Los bloques almacenan cuerpos de transaccion como blobs codificados con borrado con compromisos Merkle.
-- Los headers llevan compromisos de blob; los cuerpos se recuperan via la red DA para public DS y via canales privados para private DS.
+5) Сохранение и обрезка
+- Обрезка для общедоступных DS: сохранение всех файлов Kura и снимков WSV через DA (горизонтальное расширение). Частный DS может определить внутреннее сохранение, но компромиссы экспортируются навсегда, неизменяемые. La capa nexus сохраняет все блоки Nexus и компромиссы с артефактами DS.
 
-4) Integracion con WSV
-- Snapshots WSV: periodicamente se hace checkpoint del estado DS en snapshots por chunks codificados con borrado con compromisos registrados en headers. Entre snapshots, se mantienen change logs. Los snapshots publicos se fragmentan ampliamente; los snapshots privados permanecen dentro de validadores privados.
-- Acceso con pruebas: los contratos pueden proporcionar (o solicitar) pruebas de estado (Merkle/Verkle) ancladas por compromisos de snapshot. Private DS pueden suministrar atestaciones de conocimiento cero en lugar de pruebas crudas.
+Red и роли de nodos
+- Глобальные проверки: участник согласованной связи, действительные блоки Nexus и артефакты DS, реализуемые проверки DA для общедоступных DS.
+- Подтверждения пространства данных: согласование DS, согласование контрактов, локальное использование Kura/WSV, управление DA для DS.
+- Nodos DA (опционально): almacenan/publican blobs publicos, facilitan muestreo. Для частных DS, узлы DA являются кубинскими с валидаторами или доверенными лицами-опекунами.Лучшее и соображение на уровне системы
+- Удаление секвенции/мемпула: выберите мемпул DAG (стр., например, в стиле Нарвал), который будет питать BFT с конвейером в связующем звене для увеличения задержки и увеличения пропускной способности без изменения логической модели.
+- Параметры DS и справедливости: параметры DS для блокировки и ограничения песо, чтобы избежать блокировки начала линии и обеспечить предсказуемую задержку для частных DS.
+- Аттестация DS (PQ): сертификаты кворума DS с использованием ML-DSA-87 (класс Dilithium5) из-за дефекта. Это пост-cuantico и больше всего, что фирмы EC вполне приемлемы с QC для слота. DS может указать подробное описание ML-DSA-65/44 (дополнительно) или фирмы EC, если они заявлены в манифесте DS; рекомендуется использовать ML-DSA-87 для общедоступных DS.
+- Подтверждающие лица DA: для общедоступных DS используются региональные подтверждающие лица для VRF, выдающие сертификаты DA. El comite Nexus valida Certificados en lugar de muestreo de shards crudos; частный DS mantienen atestaciones DA internas.
+- Рекурсия и проверки в эпоху: опционально объединять различные микролоты для DS в рекурсивной проверке для слота/эпока, чтобы поддерживать тамано де-проверку и время проверки, установленное на более высоком уровне.
+- Эскаладо дорожек (если это необходимо): если вы входите в глобальную единую сеть и попадаете в бункер, введите K параллельных дорожек с объединением детерминированных. Это сохраняет единый глобальный порядок в период горизонтального роста.
+- Детерминированное ускорение: ядра проверки SIMD/CUDA с функциональными флагами для хеширования/БПФ с резервным битом ЦП для сохранения детерминизма между аппаратными средствами.
+- Зоны активации полос (propuesta): доступны 2-4 полосы, если (a) p95 завершение превышает 1,2 с для >3 минут подряд, o (b) занятость для блока превышает 85% для >5 минут, o (c) время ввода запроса на передачу >1,2x la емкость блока в нивелах состенидос. Дорожки объединяются в определённую форму транзакций по хэшу DSID и объединяются в блок Nexus.
 
-5) Retencion y pruning
-- Sin pruning para public DS: retener todos los cuerpos Kura y snapshots WSV via DA (escalado horizontal). Private DS pueden definir retencion interna, pero los compromisos exportados permanecen inmutables. La capa nexus retiene todos los bloques Nexus y los compromisos de artefactos DS.
+Тарифы и экономия (начальные значения)
+- Объединение газа: токен газа для DS с вычислениями/IO Medido; тарифы являются языческими и активизируются по газу Nativo del DS. Ответственность за преобразование в DS лежит на приложении.
+- Приоритет включения: циклический алгоритм между DS с квотами для DS для сохранения справедливости и SLO по 1 с; В этом случае плата за ставку может быть отменена.
+- Будущее: вы можете изучить глобальный рынок тарифов или политики, который минимизирует MEV, если вы не хотите атомной бомбардировки и не планируете PQ.Flujo в межпространстве данных (пример)
+1) Un usuario envia una transaction AMX que toca public DS P y Private DS S: mover activo X desde S a beneficiario B cuya cuenta esta en P.
+2) В этом слоте вы можете извлечь фрагмент из снимка слота. Проверив авторизацию и диспонибилидад, актуализировав свое внутреннее состояние, вы получите подтверждение PQ и компрометацию DA (без фильтра личных данных). P prepara la актуализация состояния корреспондента (p. ej., mint/burn/locking en P segun politica) и su prueba.
+3) El comite nexus verifica ambas pruebas DS и certificados DA; Если транзакция проверена в слоте, транзакция подтверждается атомарно в блоке Nexus из 1 с, актуализируются корни DS в векторе состояния мира.
+4) Если вы получили неверный или недействительный сертификат, транзакция будет прервана (без последствий), и клиент может повторно открыть ее для следующего слота. Ningun dato privado sale de S en ningun paso.
 
-Red y roles de nodos
-- Validadores globales: participan en el consenso nexus, validan bloques Nexus y artefactos DS, realizan checks DA para public DS.
-- Validadores de Data Space: ejecutan consenso DS, ejecutan contratos, gestionan Kura/WSV local, manejan DA para su DS.
-- Nodos DA (opcional): almacenan/publican blobs publicos, facilitan muestreo. Para private DS, los nodos DA se co-ubican con validadores o custodios confiables.
+- Соображения безопасности
+- Определенное удаление: системные вызовы IVM постоянные определенные; результаты перекрестного соединения DS определяют фиксацию и завершение AMX, без переключения или красного времени.
+- Контроль доступа: разрешения ISI в частном DS ограничены, и они могут передавать транзакции и операции, которые разрешены. Кодированные токены емкости для использования между DS.
+- Конфиденциальность: сквозное шифрование для частных данных, фрагменты кодифицированы с закрытым доступом только между авторизованными пользователями, дополнительные проверки ZK для внешнего подтверждения.
+- Сопротивление DoS: Исламское соглашение в пуле памяти/согласии/альмаценамине может привести к тому, что перегрузка общества повлияет на прогресс частного DS.
 
-Mejoras y consideraciones a nivel de sistema
-- Desacoplar secuenciacion/mempool: adoptar un mempool DAG (p. ej., estilo Narwhal) que alimente un BFT con pipeline en la capa nexus para bajar latencia y mejorar throughput sin cambiar el modelo logico.
-- Cuotas DS y fairness: cuotas por DS por bloque y caps de peso para evitar head-of-line blocking y asegurar latencia predecible para private DS.
-- Atestacion DS (PQ): los certificados de quorum DS usan ML-DSA-87 (clase Dilithium5) por defecto. Es post-cuantico y mas grande que firmas EC pero aceptable con un QC por slot. DS pueden optar explicitamente por ML-DSA-65/44 (mas pequeno) o firmas EC si se declara en el DS Manifest; se recomienda mantener ML-DSA-87 para public DS.
-- DA attesters: para public DS, usar attesters regionales muestreados por VRF que emiten certificados DA. El comite nexus valida certificados en lugar de muestreo de shards crudos; private DS mantienen atestaciones DA internas.
-- Recursion y pruebas por epoca: opcionalmente agregar varios micro-lotes dentro de un DS en una prueba recursiva por slot/epoca para mantener tamano de prueba y tiempo de verificacion estables bajo alta carga.
-- Escalado de lanes (si se necesita): si un comite global unico se vuelve un cuello de botella, introducir K lanes de secuenciacion paralelas con un merge determinista. Esto preserva un orden global unico mientras escala horizontalmente.
-- Aceleracion determinista: proveer kernels SIMD/CUDA con feature flags para hashing/FFT con fallback CPU bit-exacto para preservar determinismo cross-hardware.
-- Umbrales de activacion de lanes (propuesta): habilitar 2-4 lanes si (a) p95 de finalizacion excede 1.2 s por >3 minutos consecutivos, o (b) la ocupacion por bloque excede 85% por >5 minutos, o (c) la tasa entrante de tx requeriria >1.2x la capacidad de bloque en niveles sostenidos. Las lanes agrupan transacciones de forma determinista por hash de DSID y se mergean en el bloque nexus.
-
-Tarifas y economia (valores iniciales)
-- Unidad de gas: token de gas por DS con compute/IO medido; las tarifas se pagan en el activo de gas nativo del DS. La conversion entre DS es responsabilidad de la aplicacion.
-- Prioridad de inclusion: round-robin entre DS con cuotas por DS para preservar fairness y SLOs de 1s; dentro de un DS, el fee bidding puede desempatar.
-- Futuro: se puede explorar un mercado global de tarifas o politicas que minimicen MEV sin cambiar la atomicidad ni el diseno de pruebas PQ.
-
-Flujo cross-Data-Space (ejemplo)
-1) Un usuario envia una transaccion AMX que toca public DS P y private DS S: mover activo X desde S a beneficiario B cuya cuenta esta en P.
-2) Dentro del slot, P y S ejecutan su fragmento contra el snapshot del slot. S verifica autorizacion y disponibilidad, actualiza su estado interno y produce una prueba de validez PQ y compromiso DA (sin filtrar datos privados). P prepara la actualizacion de estado correspondiente (p. ej., mint/burn/locking en P segun politica) y su prueba.
-3) El comite nexus verifica ambas pruebas DS y certificados DA; si ambas verifican dentro del slot, la transaccion se confirma atomicamente en el bloque Nexus de 1s, actualizando ambos roots DS en el vector de world state global.
-4) Si alguna prueba o certificado DA falta o es invalido, la transaccion se aborta (sin efectos) y el cliente puede reenviar para el siguiente slot. Ningun dato privado sale de S en ningun paso.
-
-- Consideraciones de seguridad
-- Ejecucion determinista: las syscalls IVM permanecen deterministas; los resultados cross-DS los dictan AMX commit y finalizacion, no el reloj o el timing de red.
-- Control de acceso: los permisos ISI en private DS restringen quien puede enviar transacciones y que operaciones se permiten. Los tokens de capacidad codifican derechos de grano fino para uso cross-DS.
-- Confidencialidad: cifrado end-to-end para datos private-DS, shards codificados con borrado almacenados solo entre miembros autorizados, pruebas ZK opcionales para atestaciones externas.
-- Resistencia a DoS: el aislamiento en mempool/consenso/almacenamiento evita que la congestion publica impacte el progreso de private DS.
-
-Cambios en componentes de Iroha
-- iroha_data_model: introducir `DataSpaceId`, IDs calificados por DS, descriptores AMX (conjuntos de lectura/escritura), tipos de prueba/compromisos DA. Serializacion solo Norito.
-- ivm: agregar syscalls y tipos pointer-ABI para AMX (`amx_begin`, `amx_commit`, `amx_touch`) y pruebas DA; actualizar tests/docs de ABI segun la politica v1.
+Камбии и компоненты Iroha
+- iroha_data_model: введение `DataSpaceId`, идентификаторы, сертифицированные для DS, дескрипторы AMX (сопровождение лекций/писаний), типы проверок/компромиссов DA. Сериализация соло Norito.
+- ivm: агрегировать системные вызовы и тип указателя-ABI для AMX (`amx_begin`, `amx_commit`, `amx_touch`) и pruebas DA; актуализировать тесты/документацию ABI segun la politica v1.

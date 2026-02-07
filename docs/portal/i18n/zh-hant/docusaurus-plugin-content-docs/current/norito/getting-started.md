@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Getting Started
+# Norito 入門
 
-This quick guide shows the minimal workflow for compiling a Kotodama contract,
-inspecting the generated Norito bytecode, running it locally, and deploying it
-to an Iroha node.
+本快速指南展示了編譯 Kotodama 合約的最小工作流程，
+檢查生成的 Norito 字節碼，在本地運行並部署它
+到 Iroha 節點。
 
-## Prerequisites
+## 先決條件
 
-1. Install the Rust toolchain (1.76 or newer) and check out this repository.
-2. Build or download the supporting binaries:
-   - `koto_compile` – Kotodama compiler that emits IVM/Norito bytecode
-   - `ivm_run` and `ivm_tool` – local execution and inspection utilities
-   - `iroha_cli` – used for contract deployment via Torii
+1. 安裝 Rust 工具鏈（1.76 或更高版本）並查看此存儲庫。
+2. 構建或下載支持的二進製文件：
+   - `koto_compile` – 發出 IVM/Norito 字節碼的 Kotodama 編譯器
+   - `ivm_run` 和 `ivm_tool` – 本地執行和檢查實用程序
+   - `iroha_cli` – 用於通過 Torii 進行合約部署
 
-   The repository Makefile expects these binaries on `PATH`. You can either
-   download prebuilt artifacts or build them from source. If you compile the
-   toolchain locally, point the Makefile helpers at the binaries:
+   存儲庫 Makefile 需要 `PATH` 上的這些二進製文件。你可以
+   下載預構建的工件或從源代碼構建它們。如果你編譯
+   本地工具鏈，將 Makefile 助手指向二進製文件：
 
    ```sh
    KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
    ```
 
-3. Ensure an Iroha node is running when you reach the deployment step. The
-   examples below assume Torii is reachable at the URL configured in your
-   `iroha_cli` profile (`~/.config/iroha/cli.toml`).
+3. 確保到達部署步驟時 Iroha 節點正在運行。的
+   下面的示例假設 Torii 可通過您中配置的 URL 訪問
+   `iroha_cli` 配置文件 (`~/.config/iroha/cli.toml`)。
 
-## 1. Compile a Kotodama contract
+## 1.編譯Kotodama合約
 
-The repository ships a minimal “hello world” contract in
-`examples/hello/hello.ko`. Compile it to Norito/IVM bytecode (`.to`):
+該存儲庫提供了一個最小的“hello world”合約
+`examples/hello/hello.ko`。將其編譯為 Norito/IVM 字節碼（`.to`）：
 
 ```sh
 mkdir -p target/examples
@@ -45,42 +47,42 @@ koto_compile examples/hello/hello.ko \
   -o target/examples/hello.to
 ```
 
-Key flags:
+關鍵標誌：
 
-- `--abi 1` locks the contract to ABI version 1 (the only supported version at
-  the time of writing).
-- `--max-cycles 0` requests unbounded execution; set a positive number to bound
-  cycle padding for zero-knowledge proofs.
+- `--abi 1` 將合約鎖定為 ABI 版本 1（唯一受支持的版本）
+  寫作時）。
+- `--max-cycles 0` 請求無限執行；設置一個正數來綁定
+  零知識證明的循環填充。
 
-## 2. Inspect the Norito artifact (optional)
+## 2. 檢查 Norito 工件（可選）
 
-Use `ivm_tool` to verify the header and embedded metadata:
+使用 `ivm_tool` 驗證標頭和嵌入元數據：
 
 ```sh
 ivm_tool inspect target/examples/hello.to
 ```
 
-You should see the ABI version, enabled feature flags, and the exported entry
-points. This is a quick sanity check before deployment.
+您應該看到 ABI 版本、啟用的功能標誌和導出的條目
+點。這是部署前的快速健全性檢查。
 
-## 3. Run the contract locally
+## 3.本地運行合約
 
-Execute the bytecode with `ivm_run` to confirm behaviour without touching a
-node:
+使用 `ivm_run` 執行字節碼以確認行為，而無需觸摸
+節點：
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-The `hello` example logs a greeting and issues a `SET_ACCOUNT_DETAIL` syscall.
-Running locally is useful while iterating on contract logic before publishing
-it on-chain.
+`hello` 示例記錄問候語並發出 `SET_ACCOUNT_DETAIL` 系統調用。
+在發布之前迭代合約邏輯時，在本地運行非常有用
+它在鏈上。
 
-## 4. Deploy via `iroha_cli`
+## 4. 通過 `iroha_cli` 部署
 
-When you are satisfied with the contract, deploy it to a node using the CLI.
-Provide an authority account, its signing key, and either a `.to` file or
-Base64 payload:
+當您對合同感到滿意時，請使用 CLI 將其部署到節點。
+提供授權帳戶、其簽名密鑰以及 `.to` 文件或
+Base64 有效負載：
 
 ```sh
 iroha_cli app contracts deploy \
@@ -89,37 +91,37 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-The command submits a Norito manifest + bytecode bundle over Torii and prints
-the resulting transaction status. Once the transaction is committed, the code
-hash shown in the response can be used to retrieve manifests or list instances:
+該命令通過 Torii 提交 Norito 清單 + 字節碼包並打印
+由此產生的交易狀態。事務提交後，代碼
+響應中顯示的哈希可用於檢索清單或列出實例：
 
 ```sh
 iroha_cli app contracts manifest get --code-hash 0x<hash>
 iroha_cli app contracts instances --namespace apps --table
 ```
 
-## 5. Run against Torii
+## 5. 運行 Torii
 
-With the bytecode registered, you can invoke it by submitting an instruction
-that references the stored code (e.g., through `iroha_cli ledger transaction submit`
-or your application client). Ensure the account permissions allow the desired
-syscalls (`set_account_detail`, `transfer_asset`, etc.).
+註冊字節碼後，您可以通過提交指令來調用它
+引用存儲的代碼（例如，通過 `iroha_cli ledger transaction submit`
+或您的應用程序客戶端）。確保帳戶權限允許所需的
+系統調用（`set_account_detail`、`transfer_asset` 等）。
 
-## Tips & troubleshooting
+## 提示和故障排除
 
-- Use `make examples-run` to compile and execute the provided examples in one
-  shot. Override `KOTO`/`IVM` environment variables if the binaries are not on
-  `PATH`.
-- If `koto_compile` rejects the ABI version, verify that the compiler and node
-  both target ABI v1 (run `koto_compile --abi` without arguments to list
-  support).
-- The CLI accepts either hex or Base64 signing keys. For testing, you can use
-  keys emitted by `iroha_cli tools crypto keypair`.
-- When debugging Norito payloads, the `ivm_tool disassemble` subcommand helps
-  correlate instructions with Kotodama source.
+- 使用 `make examples-run` 編譯並執行所提供的示例
+  射擊。如果二進製文件未打開，則覆蓋 `KOTO`/`IVM` 環境變量
+  `PATH`。
+- 如果 `koto_compile` 拒絕 ABI 版本，請驗證編譯器和節點
+  兩者都以 ABI v1 為目標（運行 `koto_compile --abi`，不帶參數列出
+  支持）。
+- CLI 接受十六進製或 Base64 簽名密鑰。為了進行測試，您可以使用
+  由 `iroha_cli tools crypto keypair` 發出的密鑰。
+- 調試 Norito 有效負載時，`ivm_tool disassemble` 子命令有幫助
+  將指令與 Kotodama 源關聯起來。
 
-This flow mirrors the steps used in CI and the integration tests. For a deeper
-dive into Kotodama grammar, syscall mappings, and Norito internals, see:
+此流程反映了 CI 和集成測試中使用的步驟。為了更深入
+深入了解 Kotodama 語法、系統調用映射和 Norito 內部結構，請參閱：
 
 - `docs/source/kotodama_grammar.md`
 - `docs/source/kotodama_examples.md`

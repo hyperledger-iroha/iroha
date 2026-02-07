@@ -4,13 +4,15 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Рецепты CI для SoraFS
-sidebar_label: Рецепты CI
-description: Запускайте CLI SoraFS в пайплайнах GitHub и GitLab с бесключевой подписью.
+ID: 開発者-ci
+タイトル: Рецепты CI для SoraFS
+サイドバーラベル: CI
+説明: CLI SoraFS と GitHub および GitLab が接続されています。
 ---
 
 :::note Канонический источник
@@ -18,11 +20,11 @@ description: Запускайте CLI SoraFS в пайплайнах GitHub и G
 
 # Рецепты CI
 
-Пайплайны SoraFS выигрывают от детерминированного chunking, подписи manifest и проверки proofs.
-Поверхность команд `sorafs_cli` делает эти шаги переносимыми между CI провайдерами. Эта страница
-подчеркивает канонические рецепты и указывает на готовые к использованию шаблоны.
+Пайплайны SoraFS выигрывают от детерминированного チャンク、マニフェスト、プルーフ。
+Поверхность команд `sorafs_cli` делает эти саги переносимыми между CI провайдерами. Эта страница
+подчеркивает канонические рецепты и указывает на готовые к использованию саблоны.
 
-## GitHub Actions (keyless)
+## GitHub アクション (キーレス)
 
 ```yaml
 name: sorafs-artifacts
@@ -97,9 +99,9 @@ jobs:
 
 Ключевые моменты:
 
-- Статические ключи подписи не хранятся; токены OIDC запрашиваются по требованию.
-- Артефакты (CAR, manifest, bundle, сводки proofs) загружаются для ревью.
-- Job повторно использует те же схемы Norito, что и в продакшен-роллаутах.
+- Статические ключи подписи не хранятся; токены OIDC запраливаются по требованию.
+- Артефакты (CAR、マニフェスト、バンドル、プルーフ) を参照してください。
+- ジョブは、Norito、что и в продаклен-роллаутах です。
 
 ## GitLab CI
 
@@ -135,12 +137,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Подготовьте `SIGSTORE_ID_TOKEN` через workload identity federation GitLab или sealed secret до запуска стадии publish.
-- Сбой любого шага CLI останавливает pipeline, сохраняя согласованные артефакты.
+- `SIGSTORE_ID_TOKEN` は、Workload Identity フェデレーション GitLab とシールドされたシークレットを公開します。
+- Сбой любого гага CLI останавливает パイプライン、сохраняя согласованные артефакты。
 
 ## Дополнительные ресурсы
 
-- End-to-end шаблоны (включают Bash helpers, конфигурацию федеративной идентичности и шаги очистки): `docs/examples/sorafs_ci.md`
-- Справочник CLI, покрывающий все опции: `docs/source/sorafs_cli.md`
-- Требования governance/alias перед отправкой:
+- エンドツーエンドの øаблоны (включают Bash ヘルパー、конфигурацию федеративной идентичности и заги очистки): `docs/examples/sorafs_ci.md`
+- CLI、バージョン: `docs/source/sorafs_cli.md`
+- ガバナンス/エイリアスの定義:
   `docs/source/sorafs/provider_admission_policy.md`

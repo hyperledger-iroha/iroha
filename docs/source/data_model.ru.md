@@ -6,189 +6,180 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 3c110536e456d6582c2dd2bd72a71fef25e3f43f7f369b3f1c0ce802564f0dbd
 source_last_modified: "2026-01-28T18:33:51.649272+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v2 Data Model – Deep Dive
+# Iroha Модель данных v2 – глубокое погружение
 
-This document explains the structures, identifiers, traits, and protocols that form the Iroha v2 data model, as implemented in the `iroha_data_model` crate and used across the workspace. It is meant to be a precise reference you can review and propose updates to.
+В этом документе описываются структуры, идентификаторы, характеристики и протоколы, которые формируют модель данных Iroha v2, реализованную в крейте `iroha_data_model` и используемую в рабочей области. Он предназначен для точного справочника, который вы можете просмотреть и предложить обновления.
 
-## Scope and Foundations
+## Область применения и основы
 
-- Purpose: Provide canonical types for domain objects (domains, accounts, assets, NFTs, roles, permissions, peers), state-changing instructions (ISI), queries, triggers, transactions, blocks, and parameters.
-- Serialization: All public types derive Norito codecs (`norito::codec::{Encode, Decode}`) and schema (`iroha_schema::IntoSchema`). JSON is used selectively (e.g., for HTTP and `Json` payloads) behind feature flags.
-- IVM note: Certain deserialization-time validations are disabled when targeting the Iroha Virtual Machine (IVM), since the host performs validation before invoking contracts (see crate docs in `src/lib.rs`).
-- FFI gates: Some types are conditionally annotated for FFI via `iroha_ffi` behind `ffi_export`/`ffi_import` to avoid overhead when FFI is not needed.
+- Цель: предоставить канонические типы для объектов домена (домены, учетные записи, активы, NFT, роли, разрешения, одноранговые узлы), инструкции по изменению состояния (ISI), запросы, триггеры, транзакции, блоки и параметры.
+- Сериализация: все общедоступные типы наследуют кодеки Norito (`norito::codec::{Encode, Decode}`) и схему (`iroha_schema::IntoSchema`). JSON используется выборочно (например, для полезных данных HTTP и `Json`) за флагами функций.
+- Примечание IVM: некоторые проверки во время десериализации отключены при настройке виртуальной машины Iroha (IVM), поскольку хост выполняет проверку перед вызовом контрактов (см. документацию по ящикам в `src/lib.rs`).
+- Ворота FFI: некоторые типы условно аннотированы для FFI через `iroha_ffi` после `ffi_export`/`ffi_import`, чтобы избежать накладных расходов, когда FFI не требуется.
 
-## Core Traits and Helpers
+## Основные черты и помощники
 
-- `Identifiable`: Entities have a stable `Id` and `fn id(&self) -> &Self::Id`. Should be derived with `IdEqOrdHash` for map/set friendliness.
-- `Registrable`/`Registered`: Many entities (e.g., `Domain`, `AssetDefinition`, `Role`) use a builder pattern. `Registered` ties the runtime type to a lightweight builder type (`With`) suitable for registration transactions.
-- `HasMetadata`: Unified access to a key/value `Metadata` map.
-- `IntoKeyValue`: Storage split helper to store `Key` (ID) and `Value` (data) separately to reduce duplication.
-- `Owned<T>`/`Ref<'world, K, V>`: Lightweight wrappers used in storages and query filters to avoid unnecessary copies.
+- `Identifiable`: объекты имеют стабильные `Id` и `fn id(&self) -> &Self::Id`. Должен быть получен с помощью `IdEqOrdHash` для удобства отображения/набора.
+- `Registrable`/`Registered`: многие объекты (например, `Domain`, `AssetDefinition`, `Role`) используют шаблон построителя. `Registered` связывает тип среды выполнения с упрощенным типом компоновщика (`With`), подходящим для регистрационных транзакций.
+- `HasMetadata`: унифицированный доступ к карте ключ/значение `Metadata`.
+- `IntoKeyValue`: помощник разделения хранилища для хранения `Key` (ID) и `Value` (данные) отдельно для уменьшения дублирования.
+- `Owned<T>`/`Ref<'world, K, V>`: облегченные оболочки, используемые в хранилищах и фильтрах запросов, чтобы избежать ненужных копий.
 
-## Names and Identifiers
+## Имена и идентификаторы
 
-- `Name`: Valid textual identifier. Disallows whitespace and reserved characters `@`, `#`, `$` (used in composite IDs). Constructible via `FromStr` with validation. Names are normalized to Unicode NFC on parse (canonically equivalent spellings are treated as identical and stored composed). The special name `genesis` is reserved (checked case-insensitively).
-- `IdBox`: A sum-type envelope for any supported ID (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Useful for generic flows and Norito encoding as a single type.
-- `ChainId`: Opaque chain identifier used for replay protection in transactions.
+- `Name`: действительный текстовый идентификатор. Запрещает пробелы и зарезервированные символы `@`, `#`, `$` (используются в составных идентификаторах). Можно построить через `FromStr` с проверкой. При анализе имена нормализуются до Unicode NFC (канонически эквивалентные варианты написания считаются идентичными и сохраняются в составе). Специальное имя `genesis` зарезервировано (проверяется без учета регистра).
+- `IdBox`: конверт типа суммы для любого поддерживаемого идентификатора (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Полезно для общих потоков и кодирования Norito как одного типа.
+- `ChainId`: непрозрачный идентификатор цепочки, используемый для защиты от повтора в транзакциях.Строковые формы идентификаторов (возможны двусторонние действия с `Display`/`FromStr`):
+- `DomainId`: `name` (например, `wonderland`).
+- `AccountId`: канонический идентификатор, закодированный с помощью `AccountAddress`, который предоставляет IH58, сжатие Sora (`sora…`) и канонические шестнадцатеричные кодеки (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_any`). IH58 — предпочтительный формат учетной записи; Форма `sora…` является второй лучшей для UX только для Sora. Удобный для пользователя псевдоним маршрутизации `alias@domain` сохраняется для пользовательского интерфейса, но больше не рассматривается как авторитетный идентификатор. Torii нормализует входящие строки через `AccountAddress::parse_any`. Идентификаторы учетных записей поддерживают контроллеры как с одним ключом, так и с несколькими подписями.
+- `AssetDefinitionId`: `asset#domain` (например, `xor#soramitsu`).
+- `AssetId`: `asset#domain#account` или сокращение `asset##account`, если домен определения равен домену учетной записи, где `account` — это каноническая строка `AccountId` (предпочтительно IH58).
+- `NftId`: `nft$domain` (например, `rose$garden`).
+- `PeerId`: `public_key` (равенство одноранговых узлов осуществляется по открытому ключу).
 
-String forms of IDs (round-trippable with `Display`/`FromStr`):
-- `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical identifier encoded via `AccountAddress`, which exposes IH58, Sora compressed (`sora…`), and canonical hex codecs (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_any`). IH58 is the preferred account format; the `sora…` form is second-best for Sora-only UX. The human-friendly routing alias `alias@domain` is preserved for UX but is no longer treated as the authoritative identifier. Torii normalises incoming strings through `AccountAddress::parse_any`. Account IDs support both single-key and multisig controllers.
-- `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`).
-- `AssetId`: `asset#domain#account` or shorthand `asset##account` if the definition domain equals the account domain, where `account` is the canonical `AccountId` string (IH58 preferred).
-- `NftId`: `nft$domain` (e.g., `rose$garden`).
-- `PeerId`: `public_key` (peer equality is by public key).
+## Сущности
 
-## Entities
-
-### Domain
-- `DomainId { name: Name }` – unique name.
+### Домен
+- `DomainId { name: Name }` – уникальное имя.
 - `Domain { id, logo: Option<IpfsPath>, metadata: Metadata, owned_by: AccountId }`.
-- Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
+- Строитель: `NewDomain` с `with_logo`, `with_metadata`, затем `Registrable::build(authority)` устанавливает `owned_by`.
 
-### Account
-- `AccountId { domain: DomainId, controller: AccountController }` (controller = single key or multisig policy).
-- `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
-- Builder: `NewAccount` via `Account::new(id)`; `HasMetadata` for both builder and entity.
+### Аккаунт
+- `AccountId { domain: DomainId, controller: AccountController }` (контроллер = политика одного ключа или мультиподписи).
+- `Account { id, metadata, label?, uaid? }` — `label` — это необязательный стабильный псевдоним, используемый записями смены ключей, `uaid` содержит необязательный общий идентификатор учетной записи Nexus (./universal_accounts_guide.md).
+- Строитель: `NewAccount` через `Account::new(id)`; `HasMetadata` как для застройщика, так и для объекта.
 
-### Asset Definitions and Assets
+### Определения и активы активов
 - `AssetDefinitionId { domain: DomainId, name: Name }`.
 - `AssetDefinition { id, spec: NumericSpec, mintable: Mintable, logo: Option<IpfsPath>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
-  - Builders: `AssetDefinition::new(id, spec)` or convenience `numeric(id)`; setters for `metadata`, `mintable`, `owned_by`.
+  - Строители: `AssetDefinition::new(id, spec)` или удобство `numeric(id)`; сеттеры для `metadata`, `mintable`, `owned_by`.
 - `AssetId { account: AccountId, definition: AssetDefinitionId }`.
-- `Asset { id, value: Numeric }` with storage-friendly `AssetEntry`/`AssetValue`.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` exposed for summary APIs.
+- `Asset { id, value: Numeric }` с удобным для хранения `AssetEntry`/`AssetValue`.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` доступен для сводных API.
 
-### NFTs
+### NFT
 - `NftId { domain: DomainId, name: Name }`.
-- `Nft { id, content: Metadata, owned_by: AccountId }` (content is arbitrary key/value metadata).
-- Builder: `NewNft` via `Nft::new(id, content)`.
+- `Nft { id, content: Metadata, owned_by: AccountId }` (содержимое представляет собой произвольные метаданные «ключ/значение»).
+- Строитель: `NewNft` через `Nft::new(id, content)`.
 
-### Roles and Permissions
+### Роли и разрешения
 - `RoleId { name: Name }`.
-- `Role { id, permissions: BTreeSet<Permission> }` with builder `NewRole { inner: Role, grant_to: AccountId }`.
-- `Permission { name: Ident, payload: Json }` – the `name` and payload schema must align with the active `ExecutorDataModel` (see below).
+- `Role { id, permissions: BTreeSet<Permission> }` со сборщиком `NewRole { inner: Role, grant_to: AccountId }`.
+- `Permission { name: Ident, payload: Json }` – `name` и схема полезной нагрузки должны совпадать с активным `ExecutorDataModel` (см. ниже).
 
-### Peers
+### Коллеги
 - `PeerId { public_key: PublicKey }`.
-- `Peer { address: SocketAddr, id: PeerId }` and parsable `public_key@address` string form.
+- `Peer { address: SocketAddr, id: PeerId }` и анализируемая строковая форма `public_key@address`.### Криптографические примитивы (функция `sm`)
+- `Sm2PublicKey` и `Sm2Signature`: точки, соответствующие SEC1, и подписи `r∥s` фиксированной ширины для SM2. Конструкторы проверяют принадлежность кривых и различают идентификаторы; Кодировка Norito отражает каноническое представление, используемое `iroha_crypto`.
+- `Sm3Hash`: новый тип `[u8; 32]`, представляющий дайджест GM/T 0004, используемый в манифестах, телеметрии и ответах на системные вызовы.
+- `Sm4Key`: 128-битная оболочка симметричного ключа, используемая совместно системными вызовами хоста и устройствами модели данных.
+Эти типы располагаются рядом с существующими примитивами Ed25519/BLS/ML-DSA и становятся частью общедоступной схемы после создания рабочей области с помощью `--features sm`.
 
-### Cryptographic primitives (feature `sm`)
-- `Sm2PublicKey` and `Sm2Signature`: SEC1-compliant points and fixed-width `r∥s` signatures for SM2. Constructors validate curve membership and distinguishing IDs; Norito encoding mirrors the canonical representation used by `iroha_crypto`.
-- `Sm3Hash`: `[u8; 32]` newtype representing the GM/T 0004 digest, used in manifests, telemetry, and syscall responses.
-- `Sm4Key`: 128-bit symmetric key wrapper shared between host syscalls and data-model fixtures.
-These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become part of the public schema once the workspace is built with `--features sm`.
-
-### Triggers and Events
-- `TriggerId { name: Name }` and `Trigger { id, action: action::Action }`.
+### Триггеры и события
+- `TriggerId { name: Name }` и `Trigger { id, action: action::Action }`.
 - `action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, metadata }`.
-  - `Repeats`: `Indefinitely` or `Exactly(u32)`; ordering and depletion utilities included.
-  - Safety: `TriggerCompleted` cannot be used as an action’s filter (validated during (de)serialization).
-- `EventBox`: sum type for pipeline, pipeline-batch, data, time, execute-trigger, and trigger-completed events; `EventFilterBox` mirrors that for subscriptions and trigger filters.
+  - `Repeats`: `Indefinitely` или `Exactly(u32)`; Утилиты заказа и истощения включены.
+  - Безопасность: `TriggerCompleted` нельзя использовать в качестве фильтра действия (проверено во время (де)сериализации).
+- `EventBox`: тип суммы для конвейера, конвейерного пакета, данных, времени, событий запуска и завершения триггера; `EventFilterBox` отражает это для подписок и фильтров запуска.
 
-## Parameters and Configuration
+## Параметры и конфигурация
 
-- System parameter families (all `Default`ed, carry getters, and convert to individual enums):
+- Семейства системных параметров (все `Default`ed, переносы геттеров и преобразование в отдельные перечисления):
 - `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`.
   - `BlockParameters { max_transactions: NonZeroU64 }`.
   - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`.
   - `SmartContractParameters { fuel, memory, execution_depth }`.
-- `Parameters` groups all families and a `custom: BTreeMap<CustomParameterId, CustomParameter>`.
-- Single-parameter enums: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter` for diff-like updates and iteration.
-- Custom parameters: executor-defined, carried as `Json`, identified by `CustomParameterId` (a `Name`).
+- `Parameters` группирует все семейства, а `custom: BTreeMap<CustomParameterId, CustomParameter>`.
+— Перечисления с одним параметром: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter` для обновлений и итераций, подобных различиям.
+- Пользовательские параметры: определяются исполнителем, обозначаются как `Json`, идентифицируются как `CustomParameterId` (`Name`).
 
-## ISI (Iroha Special Instructions)
+## ISI (Iroha Специальные инструкции)
 
-- Core trait: `Instruction` with `dyn_encode`, `as_any`, and a stable per-type identifier `id()` (defaults to the concrete type name). All instructions are `Send + Sync + 'static`.
-- `InstructionBox`: owned `Box<dyn Instruction>` wrapper with clone/eq/ord implemented via type ID + encoded bytes.
-- Built-in instruction families are organized under:
-  - `mint_burn`, `transfer`, `register`, and a `transparent` bundle of helpers.
-  - Type enums for meta flows: `InstructionType`, boxed sums like `SetKeyValueBox` (domain/account/asset_def/nft/trigger).
-- Errors: rich error model under `isi::error` (evaluation type errors, find errors, mintability, math, invalid parameters, repetition, invariants).
-- Instruction registry: the `instruction_registry!{ ... }` macro builds a runtime decode registry keyed by type name. Used by `InstructionBox` clone and Norito serde to achieve dynamic (de)serialization. If no registry has been explicitly set via `set_instruction_registry(...)`, a built-in default registry with all core ISI is lazily installed on first use to keep binaries robust.
+- Основная черта: `Instruction` с `dyn_encode`, `as_any` и стабильным идентификатором каждого типа `id()` (по умолчанию используется имя конкретного типа). Все инструкции `Send + Sync + 'static`.
+- `InstructionBox`: принадлежащая `Box<dyn Instruction>` оболочка с клоном/eq/ord, реализованная через идентификатор типа + закодированные байты.
+- Семейства встроенных инструкций организованы по следующим категориям:
+  - `mint_burn`, `transfer`, `register` и пакет помощников `transparent`.
+  — Введите перечисления для метапотоков: `InstructionType`, упакованные суммы, например `SetKeyValueBox` (домен/аккаунт/asset_def/nft/trigger).
+- Ошибки: расширенная модель ошибок в соответствии с `isi::error` (ошибки типа оценки, ошибки поиска, возможность чеканки, математика, недопустимые параметры, повторение, инварианты).
+- Реестр инструкций: макрос `instruction_registry!{ ... }` создает реестр декодирования во время выполнения с ключом по имени типа. Используется клоном `InstructionBox` и сердом Norito для достижения динамической (де)сериализации. Если реестр не был явно настроен через `set_instruction_registry(...)`, встроенный реестр по умолчанию со всеми основными ISI лениво устанавливается при первом использовании, чтобы обеспечить надежность двоичных файлов.
 
-## Transactions
-
-- `Executable`: either `Instructions(ConstVec<InstructionBox>)` or `Ivm(IvmBytecode)`. `IvmBytecode` serializes as base64 (transparent newtype over `Vec<u8>`).
-- `TransactionBuilder`: constructs a transaction payload with `chain`, `authority`, `creation_time_ms`, optional `time_to_live_ms` and `nonce`, `metadata`, and an `Executable`.
-  - Helpers: `with_instructions`, `with_bytecode`, `with_executable`, `with_metadata`, `set_nonce`, `set_ttl`, `set_creation_time`, `sign`.
-- `SignedTransaction` (versioned with `iroha_version`): carries `TransactionSignature` and payload; provides hashing and signature verification.
-- Entrypoints and results:
+## Транзакции- `Executable`: либо `Instructions(ConstVec<InstructionBox>)`, либо `Ivm(IvmBytecode)`. `IvmBytecode` сериализуется как base64 (прозрачный новый тип вместо `Vec<u8>`).
+- `TransactionBuilder`: создает полезную нагрузку транзакции с `chain`, `authority`, `creation_time_ms`, дополнительными `time_to_live_ms` и `nonce`, `metadata` и `Executable`.
+  - Помощники: `with_instructions`, `with_bytecode`, `with_executable`, `with_metadata`, `set_nonce`, `set_ttl`, `set_creation_time`, `sign`.
+- `SignedTransaction` (версия `iroha_version`): несет `TransactionSignature` и полезную нагрузку; обеспечивает хеширование и проверку подписи.
+- Точки входа и результаты:
   - `TransactionEntrypoint`: `External(SignedTransaction)` | `Time(TimeTriggerEntrypoint)`.
-  - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` with hashing helpers.
-  - `ExecutionStep(ConstVec<InstructionBox>)`: a single ordered batch of instructions in a transaction.
+  - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` с помощниками хеширования.
+  - `ExecutionStep(ConstVec<InstructionBox>)`: один упорядоченный пакет инструкций в транзакции.
 
-## Blocks
+## Блоки
 
-- `SignedBlock` (versioned) encapsulates:
-  - `signatures: BTreeSet<BlockSignature>` (from validators),
+- `SignedBlock` (версия) инкапсулирует:
+  - `signatures: BTreeSet<BlockSignature>` (от валидаторов),
   - `payload: BlockPayload { header: BlockHeader, transactions: Vec<SignedTransaction> }`,
-  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, and `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
-- Utilities: `presigned`, `set_transaction_results(...)`, `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
-- Merkle roots: transaction entrypoints and results are committed via Merkle trees; result Merkle root is placed into the block header.
-- Block inclusion proofs (`BlockProofs`) expose both entry/result Merkle proofs and the `fastpq_transcripts` map so off-chain provers can fetch the transfer deltas associated with a transaction hash.
-- `ExecWitness` messages (streamed via Torii and piggy-backed on consensus gossip) now include both `fastpq_transcripts` and prover-ready `fastpq_batches: Vec<FastpqTransitionBatch>` with embedded `public_inputs` (dsid, slot, roots, perm_root, tx_set_hash), so external provers can ingest canonical FASTPQ rows without re-encoding transcripts.
+  - `result: BlockResult` (вторичное состояние выполнения), содержащее `time_triggers`, деревья Меркла записи/результата, `transaction_results` и `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
+- Утилиты: `presigned`, `set_transaction_results(...)`, `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
+- Корни Меркла: точки входа и результаты транзакций фиксируются через деревья Меркла; результат Корень Меркла помещается в заголовок блока.
+- Доказательства включения блоков (`BlockProofs`) предоставляют как входные/результатные доказательства Меркла, так и карту `fastpq_transcripts`, поэтому проверяющие вне цепочки могут получить дельты передачи, связанные с хэшем транзакции.
+- Сообщения `ExecWitness` (передаваемые через Torii и связанные с консенсусными сплетнями) теперь включают как `fastpq_transcripts`, так и готовый к проверке `fastpq_batches: Vec<FastpqTransitionBatch>` со встроенным `public_inputs` (dsid, slot, roots, perm_root, tx_set_hash), поэтому внешние средства проверки могут принимать канонические строки FASTPQ без перекодирования транскриптов.
 
-## Queries
+## Запросы
 
-- Two flavors:
-  - Singular: implement `SingularQuery<Output>` (e.g., `FindParameters`, `FindExecutorDataModel`).
-  - Iterable: implement `Query<Item>` (e.g., `FindAccounts`, `FindAssets`, `FindDomains`, etc.).
-- Type-erased forms:
-  - `QueryBox<T>` is a boxed, erased `Query<Item = T>` with Norito serde backed by a global registry.
-  - `QueryWithFilter<T> { query, predicate, selector }` pairs a query with a DSL predicate/selector; converts into an erased iterable query via `From`.
-- Registry and codecs:
-  - `query_registry!{ ... }` builds a global registry mapping concrete query types to constructors by type name for dynamic decode.
-  - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` and `QueryResponse = Singular(..) | Iterable(QueryOutput)`.
-  - `QueryOutputBatchBox` is a sum-type over homogeneous vectors (e.g., `Vec<Account>`, `Vec<Name>`, `Vec<AssetDefinition>`, `Vec<BlockHeader>`), plus tuple and extension helpers for efficient pagination.
-- DSL: Implemented in `query::dsl` with projection traits (`HasProjection<PredicateMarker>` / `SelectorMarker`) for compile-time-checked predicates and selectors. A `fast_dsl` feature exposes a lighter variant if needed.
+- Два вкуса:
+  - Единственное число: реализовать `SingularQuery<Output>` (например, `FindParameters`, `FindExecutorDataModel`).
+  - Итерируемый: реализовать `Query<Item>` (например, `FindAccounts`, `FindAssets`, `FindDomains` и т. д.).
+- Тип-стертые формы:
+  - `QueryBox<T>` — это упакованный, стертый `Query<Item = T>` с сердом Norito, поддерживаемый глобальным реестром.
+  - `QueryWithFilter<T> { query, predicate, selector }` связывает запрос с предикатом/селектором DSL; преобразуется в стертый итерируемый запрос через `From`.
+- Реестр и кодеки:
+  - `query_registry!{ ... }` создает глобальный реестр, сопоставляющий конкретные типы запросов с конструкторами по имени типа для динамического декодирования.
+  - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` и `QueryResponse = Singular(..) | Iterable(QueryOutput)`.
+  - `QueryOutputBatchBox` — это тип суммы по однородным векторам (например, `Vec<Account>`, `Vec<Name>`, `Vec<AssetDefinition>`, `Vec<BlockHeader>`), а также кортежи и помощники расширения для эффективной нумерации страниц.
+- DSL: реализован в `query::dsl` с признаками проекции (`HasProjection<PredicateMarker>` / `SelectorMarker`) для предикатов и селекторов, проверяемых во время компиляции. Функция `fast_dsl` при необходимости предоставляет более легкий вариант.
 
-## Executor and Extensibility
+## Исполнитель и расширяемость- `Executor { bytecode: IvmBytecode }`: пакет кода, исполняемый валидатором.
+- `ExecutorDataModel { parameters: CustomParameters, instructions: BTreeSet<Ident>, permissions: BTreeSet<Ident>, schema: Json }` объявляет домен, определенный исполнителем:
+  - Пользовательские параметры конфигурации,
+  - Пользовательские идентификаторы инструкций,
+  - Идентификаторы токенов разрешений,
+  — Схема JSON, описывающая пользовательские типы для клиентских инструментов.
+- Под номером `data_model/samples/executor_custom_data_model` существуют образцы настройки, демонстрирующие:
+  - Пользовательский токен разрешения через получение `iroha_executor_data_model::permission::Permission`,
+  - Пользовательский параметр, определенный как тип, конвертируемый в `CustomParameter`,
+  - Пользовательские инструкции сериализуются в `CustomInstruction` для выполнения.
 
-- `Executor { bytecode: IvmBytecode }`: the validator-executed code bundle.
-- `ExecutorDataModel { parameters: CustomParameters, instructions: BTreeSet<Ident>, permissions: BTreeSet<Ident>, schema: Json }` declares the executor-defined domain:
-  - Custom configuration parameters,
-  - Custom instruction identifiers,
-  - Permission token identifiers,
-  - A JSON schema describing custom types for client tooling.
-- Customization samples exist under `data_model/samples/executor_custom_data_model` demonstrating:
-  - Custom permission token via `iroha_executor_data_model::permission::Permission` derive,
-  - Custom parameter defined as a type convertible into `CustomParameter`,
-  - Custom instructions serialized into `CustomInstruction` for execution.
+### CustomInstruction (ISI, определяемый исполнителем)
 
-### CustomInstruction (executor-defined ISI)
+- Тип: `isi::CustomInstruction { payload: Json }` со стабильным идентификатором провода `"iroha.custom"`.
+- Назначение: конверт для инструкций, специфичных для исполнителя, в частных сетях/сетях консорциума или для прототипирования без разветвления общедоступной модели данных.
+- Поведение исполнителя по умолчанию: встроенный исполнитель в `iroha_core` не выполняет `CustomInstruction` и в случае его обнаружения вызовет панику. Пользовательский исполнитель должен преобразовать `InstructionBox` в `CustomInstruction` и детерминированно интерпретировать полезную нагрузку на всех валидаторах.
+- Norito: кодирует/декодирует через `norito::codec::{Encode, Decode}` с включенной схемой; Полезная нагрузка `Json` сериализуется детерминированно. Обмены туда и обратно стабильны, пока реестр инструкций включает `CustomInstruction` (он является частью реестра по умолчанию).
+- IVM: Kotodama компилируется в байт-код IVM (`.to`) и является рекомендуемым путем для логики приложения. Используйте `CustomInstruction` только для расширений уровня исполнителя, которые еще не могут быть выражены в Kotodama. Обеспечьте детерминизм и идентичные двоичные файлы исполнителя на всех узлах.
+- Не для публичных сетей: не используйте для публичных цепочек, где разнородные исполнители рискуют создать консенсусные разветвления. Если вам нужны функции платформы, предпочтительнее предлагать новый встроенный восходящий ISI.
 
-- Type: `isi::CustomInstruction { payload: Json }` with stable wire id `"iroha.custom"`.
-- Purpose: envelope for executor-specific instructions in private/consortium networks or for prototyping, without forking the public data model.
-- Default executor behavior: the built-in executor in `iroha_core` does not execute `CustomInstruction` and will panic if encountered. A custom executor must downcast `InstructionBox` to `CustomInstruction` and deterministically interpret the payload on all validators.
-- Norito: encodes/decodes via `norito::codec::{Encode, Decode}` with schema included; the `Json` payload is serialized deterministically. Round-trips are stable so long as the instruction registry includes `CustomInstruction` (it is part of the default registry).
-- IVM: Kotodama compiles to IVM bytecode (`.to`) and is the recommended path for application logic. Only use `CustomInstruction` for executor-level extensions that cannot yet be expressed in Kotodama. Ensure determinism and identical executor binaries across peers.
-- Not for public networks: do not use for public chains where heterogeneous executors risk consensus forks. Prefer proposing new built-in ISI upstream when you need platform features.
+## Метаданные
 
-## Metadata
+- `Metadata(BTreeMap<Name, Json>)`: хранилище ключей/значений, прикрепленное к нескольким объектам (`Domain`, `Account`, `AssetDefinition`, `Nft`, триггеры и транзакции).
+- API: `contains`, `iter`, `get`, `insert` и (с `transparent_api`) `remove`.
 
-- `Metadata(BTreeMap<Name, Json>)`: key/value store attached to multiple entities (`Domain`, `Account`, `AssetDefinition`, `Nft`, triggers, and transactions).
-- API: `contains`, `iter`, `get`, `insert`, and (with `transparent_api`) `remove`.
+## Особенности и детерминизм
 
-## Features and Determinism
+- Функции управления дополнительными API (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `fast_dsl`, `http`, `fault_injection`).
+- Детерминизм: при любой сериализации используется кодировка Norito для переносимости между оборудованием. Байт-код IVM представляет собой непрозрачный байтовый объект; исполнение не должно приводить к недетерминированным сокращениям. Хост проверяет транзакции и детерминированно подает входные данные в IVM.
 
-- Features control optional APIs (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `fast_dsl`, `http`, `fault_injection`).
-- Determinism: All serialization uses Norito encoding to be portable across hardware. IVM bytecode is an opaque byte blob; execution must not introduce non-deterministic reductions. The host validates transactions and supplies inputs to IVM deterministically.
+### Прозрачный API (`transparent_api`)- Цель: предоставляет полный изменяемый доступ к структурам/перечислениям `#[model]` для внутренних компонентов, таких как Torii, исполнителей и интеграционных тестов. Без него эти элементы намеренно непрозрачны, поэтому внешние SDK видят только безопасные конструкторы и закодированные полезные данные.
+- Механика: макрос `iroha_data_model_derive::model` перезаписывает каждое общедоступное поле с помощью `#[cfg(feature = "transparent_api")] pub` и сохраняет частную копию для сборки по умолчанию. Включение этой функции переворачивает эти cfgs, поэтому деструктуризация `Account`, `Domain`, `Asset` и т. д. становится законной за пределами их определяющих модулей.
+- Обнаружение поверхности: контейнер экспортирует константу `TRANSPARENT_API: bool` (сгенерированную в `transparent_api.rs` или `non_transparent_api.rs`). Нижестоящий код может проверять этот флаг и выполнять разветвление, когда ему необходимо вернуться к непрозрачным помощникам.
+- Включение: добавьте `features = ["transparent_api"]` в зависимость в `Cargo.toml`. Ячейки рабочей области, которым требуется проекция JSON (например, `iroha_torii`), автоматически пересылают флаг, но сторонние потребители должны отключать его, если только они не контролируют развертывание и не принимают более широкую поверхность API.
 
-### Transparent API (`transparent_api`)
+## Быстрые примеры
 
-- Purpose: exposes full, mutable access to the `#[model]` structs/enums for internal components such as Torii, executors, and integration tests. Without it, those items are intentionally opaque so external SDKs only see safe constructors and encoded payloads.
-- Mechanics: the `iroha_data_model_derive::model` macro rewrites each public field with `#[cfg(feature = "transparent_api")] pub` and keeps a private copy for the default build. Enabling the feature flips those cfgs, so destructuring `Account`, `Domain`, `Asset`, etc. becomes legal outside their defining modules.
-- Surface detection: the crate exports a `TRANSPARENT_API: bool` constant (generated into either `transparent_api.rs` or `non_transparent_api.rs`). Downstream code can check this flag and branch when it needs to fall back to opaque helpers.
-- Enabling: add `features = ["transparent_api"]` to the dependency in `Cargo.toml`. Workspace crates that need the JSON projection (e.g., `iroha_torii`) forward the flag automatically, but third-party consumers should keep it off unless they control the deployment and accept the broader API surface.
-
-## Quick Examples
-
-Create a domain and account, define an asset, and build a transaction with instructions:
+Создайте домен и учетную запись, определите актив и создайте транзакцию с инструкциями:
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -218,7 +209,7 @@ let tx = TransactionBuilder::new(chain_id, account_id.clone())
     .sign(kp.private_key());
 ```
 
-Query accounts and assets with the DSL:
+Запрос учетных записей и активов с помощью DSL:
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -237,7 +228,7 @@ let q: QueryBox<QueryOutputBatchBox> =
 // Encode and send via Torii; decode on server using the query registry
 ```
 
-Use IVM smart contract bytecode:
+Используйте байт-код смарт-контракта IVM:
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -248,14 +239,14 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-## Versioning
+## Управление версиями
 
-- `SignedTransaction`, `SignedBlock`, and `SignedQuery` are canonical Norito-encoded structs. Each implements `iroha_version::Version` to prefix their payload with the current ABI version (currently `1`) when encoded via `EncodeVersioned`.
+- `SignedTransaction`, `SignedBlock` и `SignedQuery` являются каноническими структурами, закодированными в Norito. Каждый из них реализует `iroha_version::Version` для префикса своей полезной нагрузки текущей версией ABI (в настоящее время `1`) при кодировании через `EncodeVersioned`.
 
-## Review Notes / Potential Updates
+## Примечания к обзору/потенциальные обновления
 
-- Query DSL: consider documenting a stable user-facing subset and examples for common filters/selectors.
-- Instruction families: expand public docs listing the built-in ISI variants exposed by `mint_burn`, `register`, `transfer`.
+- Query DSL: рассмотрите возможность документирования стабильного подмножества, ориентированного на пользователя, и примеров для общих фильтров/селекторов.
+- Семейства инструкций: разверните общедоступные документы со списком встроенных вариантов ISI, представленных `mint_burn`, `register`, `transfer`.
 
 ---
-If any part needs more depth (e.g., full ISI catalog, complete query registry list, or block header fields), let me know and I’ll extend those sections accordingly.
+Если какая-либо часть требует большей глубины (например, полный каталог ISI, полный список реестра запросов или поля заголовков блоков), дайте мне знать, и я соответствующим образом расширим эти разделы.

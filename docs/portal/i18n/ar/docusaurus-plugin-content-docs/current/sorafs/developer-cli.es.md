@@ -4,24 +4,26 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-cli.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-cli
-title: Recetario de CLI de SoraFS
-sidebar_label: Recetario de CLI
-description: Recorrido orientado a tareas de la superficie consolidada de `sorafs_cli`.
+المعرف: المطور cli
+العنوان: Recetario de CLI de SoraFS
+Sidebar_label: Recetario de CLI
+الوصف: يتم إعادة توجيهه إلى السطح الموحد `sorafs_cli`.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/developer/cli.md`. Mantén ambas copias sincronizadas.
+:::ملاحظة فوينتي كانونيكا
+هذه الصفحة تعكس `docs/source/sorafs/developer/cli.md`. احتفظ بنسخ متزامنة.
 :::
 
-La superficie consolidada de `sorafs_cli` (proporcionada por el crate `sorafs_car` con la feature `cli` habilitada) expone cada paso necesario para preparar artefactos de SoraFS. Usa este recetario para saltar directamente a flujos comunes; combínalo con el pipeline de manifest y los runbooks del orquestador para contexto operativo.
+يوضح السطح الموحد لـ `sorafs_cli` (المتناسب مع الصندوق `sorafs_car` مع الميزة `cli`) كل خطوة ضرورية لإعداد العناصر SoraFS. الولايات المتحدة الأمريكية هذه الوصفة للملح مباشرة إلى التدفقات المجتمعية; ادمج مع خط البيانات وسجلات التشغيل الخاصة بالمنسق لسياق التشغيل.
 
-## Empaquetar payloads
+## حمولات إمباكويتار
 
-Usa `car pack` para producir archivos CAR deterministas y planes de chunk. El comando selecciona automáticamente el chunker SF-1 salvo que se proporcione un handle.
+الولايات المتحدة الأمريكية `car pack` لإنتاج أرشيفات محددات السيارات ومستويات القطع. يقوم الأمر تلقائيًا باختيار مطلق النار SF-1 الذي يوفر مقبضًا.
 
 ```bash
 sorafs_cli car pack \
@@ -31,11 +33,11 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Handle de chunker predeterminado: `sorafs.sf1@1.0.0`.
-- Las entradas de directorio se recorren en orden lexicográfico para que los checksums se mantengan estables entre plataformas.
-- El resumen JSON incluye digests de payload, metadatos por chunk y el CID raíz reconocido por el registro y el orquestador.
+- مقبض القطع المحدد مسبقًا: `sorafs.sf1@1.0.0`.
+- يتم إعادة إدخالات الدليل في ترتيب معجمي بحيث يتم الحفاظ على المجاميع الاختبارية بين المنصات.
+- تتضمن السيرة الذاتية لـ JSON ملخصات الحمولة والبيانات الوصفية للقطعة وCID الذي تم التعرف عليه من خلال السجل والمنسق.
 
-## Construir manifests
+## بيانات البناء
 
 ```bash
 sorafs_cli manifest build \
@@ -45,13 +47,11 @@ sorafs_cli manifest build \
   --pin-retention-epoch 96 \
   --manifest-out artifacts/video.manifest.to \
   --manifest-json-out artifacts/video.manifest.json
-```
+```- يتم تعيين الخيارات `--pin-*` مباشرة إلى المجالات `PinPolicy` و`sorafs_manifest::ManifestBuilder`.
+- استخدم `--chunk-plan` عندما تريد أن يقوم CLI بإعادة حساب ملخص SHA3 قبل الشحن؛ على النقيض من ذلك، يتم إعادة استخدام الملخص المغطى في السيرة الذاتية.
+- تم إخراج JSON من الحمولة Norito للاختلافات البسيطة خلال المراجعات.
 
-- Las opciones `--pin-*` se asignan directamente a los campos `PinPolicy` en `sorafs_manifest::ManifestBuilder`.
-- Usa `--chunk-plan` cuando quieras que el CLI recalcule el digest SHA3 de chunk antes del envío; de lo contrario reutiliza el digest incrustado en el resumen.
-- La salida JSON refleja el payload Norito para diffs simples durante las revisiones.
-
-## Firmar manifests sin claves de larga duración
+## يظهر Firmar بدون مفاتيح طويلة الأمد
 
 ```bash
 sorafs_cli manifest sign \
@@ -61,11 +61,11 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Acepta tokens inline, variables de entorno o fuentes basadas en archivos.
-- Añade metadatos de procedencia (`token_source`, `token_hash_hex`, digest de chunk) sin persistir el JWT en bruto salvo que `--include-token=true`.
-- Funciona bien en CI: combínalo con OIDC de GitHub Actions configurando `--identity-token-provider=github-actions`.
+- قبول الرموز المميزة المضمنة، ومتغيرات الإدخال أو التدفقات المستندة إلى الأرشيف.
+- إضافة بيانات وصفية (`token_source`، `token_hash_hex`، ملخص القطعة) بدون الاستمرار في JWT في الدفعة الأولى `--include-token=true`.
+- تعمل بشكل جيد في CI: يتم الدمج مع OIDC من GitHub Actions الذي تم تكوينه `--identity-token-provider=github-actions`.
 
-## Enviar manifests a Torii
+## يُظهر Enviar Torii
 
 ```bash
 sorafs_cli manifest submit \
@@ -80,11 +80,11 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Realiza decodificación Norito para alias proofs y verifica que coincidan con el digest del manifest antes de POSTear a Torii.
-- Recalcula el digest SHA3 de chunk desde el plan para prevenir ataques de desajuste.
-- Los resúmenes de respuesta capturan estado HTTP, headers y payloads del registro para auditorías posteriores.
+- تحقيق فك التشفير Norito للأسماء المستعارة والتحقق من تطابقه مع ملخص البيان السابق لـ POSTear إلى Torii.
+- إعادة حساب ملخص SHA3 من الجزء من الخطة لمنع هجمات التدمير.
+- تلتقط خلاصات الاستجابة حالة HTTP والرؤوس وحمولات السجل للاستماعات اللاحقة.
 
-## Verificar contenidos de CAR y proofs
+## التحقق من محتوى السيارة والأدلة
 
 ```bash
 sorafs_cli proof verify \
@@ -93,10 +93,8 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Reconstruye el árbol PoR y compara los digests del payload con el resumen del manifest.
-- Captura conteos e identificadores requeridos al enviar proofs de replicación a gobernanza.
-
-## Transmitir telemetría de proofs
+- إعادة بناء جدول البيانات ومقارنة ملخصات الحمولة مع السيرة الذاتية للبيان.
+- التقاط الحسابات والمعرفات المطلوبة من خلال إرسال أدلة النسخ إلى الإدارة.## إرسال الأدلة عن بعد
 
 ```bash
 sorafs_cli proof stream \
@@ -109,14 +107,14 @@ sorafs_cli proof stream \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
 ```
 
-- Emite elementos NDJSON por cada proof transmitido (desactiva el replay con `--emit-events=false`).
-- Agrega conteos de éxito/fallo, histogramas de latencia y fallos muestreados en el resumen JSON para que los dashboards puedan graficar resultados sin leer logs.
-- Sale con código distinto de cero cuando el gateway reporta fallos o la verificación PoR local (vía `--por-root-hex`) rechaza proofs. Ajusta los umbrales con `--max-failures` y `--max-verification-failures` para ejecuciones de ensayo.
-- Soporta PoR hoy; PDP y PoTR reutilizan el mismo envoltorio cuando lleguen SF-13/SF-14.
-- `--governance-evidence-dir` escribe el resumen renderizado, metadatos (timestamp, versión de CLI, URL del gateway, digest del manifest) y una copia del manifest en el directorio suministrado para que los paquetes de gobernanza archiven la evidencia del proof-stream sin repetir la ejecución.
+- قم بإصدار عناصر NDJSON من خلال كل دليل إرسال (قم بإلغاء تنشيط إعادة التشغيل باستخدام `--emit-events=false`).
+- تجميع بيانات النجاح/النجاح ورسوم بيانية لوقت الاستجابة والبيانات المسجلة في السيرة الذاتية JSON حتى تتمكن لوحات المعلومات من رسم النتائج دون قراءة السجلات.
+- البيع باستخدام رمز مميز من النحاس عندما تفشل البوابة في الإبلاغ عن إثباتات التحقق من PoR المحلية (عبر `--por-root-hex`). اضبط المظلات باستخدام `--max-failures` و`--max-verification-failures` لتنفيذ التمرين.
+- سوبورتا بور هوي؛ يقوم PDP وPoTR بإعادة استخدام نفس الشيء عند استخدام SF-13/SF-14.
+- `--governance-evidence-dir` يسرد السيرة الذاتية المقدمة، والبيانات التعريفية (الطابع الزمني، وإصدار CLI، وعنوان URL للبوابة، وملخص البيان) ونسخة من البيان في الدليل الموجز لكي تقوم حزم الإدارة بأرشفة دليل إثبات التدفق دون تكرار التنفيذ.
 
-## Referencias adicionales
+## المراجع الإضافية
 
-- `docs/source/sorafs_cli.md` — documentación exhaustiva de flags.
-- `docs/source/sorafs_proof_streaming.md` — esquema de telemetría de proofs y plantilla de dashboard Grafana.
-- `docs/source/sorafs/manifest_pipeline.md` — profundización en chunking, composición de manifest y manejo de CAR.
+- `docs/source/sorafs_cli.md` — توثيق شامل للأعلام.
+- `docs/source/sorafs_proof_streaming.md` — مقياس القياس عن بعد ولوحة القيادة Grafana.
+- `docs/source/sorafs/manifest_pipeline.md` - التعميق والتقطيع وتكوين البيان وإدارة السيارة.

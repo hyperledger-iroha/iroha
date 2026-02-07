@@ -7,138 +7,133 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 73f5ca7a7484a26e901102dd6950b7110a18e7fa215a46540c7189c919e0958f
 source_last_modified: "2025-12-29T18:16:35.942266+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SM2/SM3/SM4 Compliance & Export Brief
+# SM2/SM3/SM4 လိုက်နာမှုနှင့် ထုတ်ယူမှုအကျဉ်း
 
-This brief supplements the architecture notes in `docs/source/crypto/sm_program.md`
-and provides actionable guidance for engineering, Ops, and legal teams as the
-GM/T algorithm family moves from verify-only preview to broader enablement.
+ဤအကျဉ်းချုပ်သည် `docs/source/crypto/sm_program.md` ရှိ ဗိသုကာမှတ်စုများကို ဖြည့်စွက်ပေးသည်။
+အင်ဂျင်နီယာ၊ Ops နှင့် ဥပဒေရေးရာအဖွဲ့များအတွက် အရေးယူနိုင်သော လမ်းညွှန်ချက်ပေးပါသည်။
+GM/T အယ်လဂိုရီသမ် မိသားစုသည် အတည်ပြု-သပ်သပ် အစမ်းကြည့်ရှုခြင်းမှ ပိုမိုကျယ်ပြန့်သော လုပ်ဆောင်မှုသို့ ရွှေ့သည်။
 
-## Summary
-- **Regulatory basis:** China’s *Cryptography Law* (2019), *Cybersecurity Law*, and
-  *Data Security Law* classify SM2/SM3/SM4 as “commercial cryptography” when deployed
-  onshore. Operators must file usage reports, and certain sectors require accredited
-  testing prior to production use.
-- **International controls:** Outside China the algorithms fall under US EAR Category
-  5 Part 2, EU 2021/821 Annex 1 (5D002), and similar national regimes. Open-source
-  publication typically qualifies for license exceptions (ENC/TSU), but binaries
-  shipped to embargoed regions remain controlled exports.
-- **Project policy:** SM features remain disabled by default. Signing functionality
-  will only be enabled after external audit closure, deterministic perf/telemetry
-  gating, and operator documentation (this brief) land.
+## အကျဉ်းချုပ်
+- ** စည်းမျဥ်းစည်းကမ်းအခြေခံ-** တရုတ်၏ *စာရေးနည်းဥပဒေ* (2019)၊ *ဆိုက်ဘာလုံခြုံရေးဥပဒေ* နှင့်
+  *ဒေတာလုံခြုံရေးဥပဒေ* သည် SM2/SM3/SM4 အား အသုံးပြုသောအခါတွင် "စီးပွားဖြစ် ကုဒ်ဝှက်ခြင်း" အဖြစ် အမျိုးအစားခွဲခြားသည်
+  ကုန်းတွင်း။ အော်ပရေတာများသည် အသုံးပြုမှုအစီရင်ခံစာများကို တင်သွင်းရမည်ဖြစ်ပြီး အချို့သောကဏ္ဍများတွင် အသိအမှတ်ပြုခံရရန် လိုအပ်သည်။
+  မထုတ်လုပ်မီ စမ်းသပ်အသုံးပြုခြင်း။
+- **နိုင်ငံတကာထိန်းချုပ်မှုများ-** တရုတ်နိုင်ငံပြင်ပတွင် အယ်လဂိုရီသမ်များသည် US EAR အမျိုးအစားအောက်တွင် ရှိသည်။
+  5 အပိုင်း 2၊ EU 2021/821 နောက်ဆက်တွဲ 1 (5D002) နှင့် အလားတူသော အမျိုးသားအစိုးရများ။ Open-source
+  ထုတ်ဝေမှုသည် ပုံမှန်အားဖြင့် လိုင်စင်ခြွင်းချက် (ENC/TSU) အတွက် အရည်အချင်းပြည့်မီသော်လည်း binaries များဖြစ်သည်။
+  ပိတ်ဆို့ထားသော ဒေသများသို့ တင်ပို့ရောင်းချမှုကို ထိန်းချုပ်ထားဆဲဖြစ်သည်။
+- **ပရောဂျက်မူဝါဒ-** SM အင်္ဂါရပ်များကို မူရင်းအတိုင်း ပိတ်ထားသည်။ လက်မှတ်ထိုးခြင်း လုပ်ဆောင်ချက်
+  ပြင်ပစာရင်းစစ်ပိတ်ပြီးနောက်တွင်သာ၊ အဆုံးအဖြတ်ပေးသော perf/telemetry ကို ဖွင့်ပေးပါမည်။
+  ဂိတ်ပေါက်နှင့် အော်ပရေတာစာရွက်စာတမ်းများ (ဤအကျဉ်း) မြေ။
 
-## Required Actions by Function
-| Team | Responsibilities | Artifacts | Owners |
-|------|------------------|-----------|--------|
-| Crypto WG | Track GM/T spec updates, coordinate third-party audits, maintain deterministic policy (nonce derivation, canonical r∥s). | `sm_program.md`, audit reports, fixture bundles. | Crypto WG lead |
-| Release Engineering | Gate SM features behind explicit config, maintain verify-only default, manage feature rollout checklist. | `release_dual_track_runbook.md`, release manifests, rollout ticket. | Release TL |
-| Ops / SRE | Provide SM enablement checklist, telemetry dashboards (usage, error rates), incident response plan. | Runbooks, Grafana dashboards, onboarding tickets. | Ops/SRE |
-| Legal Liaison | File PRC development/usage reports when nodes run in mainland China; review export posture for each bundle. | Filing templates, export statements. | Legal contact |
-| SDK Program | Surface SM algorithm support consistently, enforce deterministic behaviour, propagate compliance notes to SDK docs. | SDK release notes, docs, CI gating. | SDK leads |
+## Function အလိုက် လိုအပ်သော လုပ်ဆောင်ချက်များ
+| အသင်း | တာဝန်များ | အရေးပေး | ပိုင်ရှင်များ |
+|--------|------------------|-----------------|--------|
+| Crypto WG | GM/T spec အပ်ဒိတ်များကို ခြေရာခံပါ၊ ပြင်ပမှ စာရင်းစစ်များကို ညှိနှိုင်းပါ၊ အဆုံးအဖြတ်ပေးသော မူဝါဒကို ထိန်းသိမ်းပါ (နောက်မှ ဆင်းသက်လာခြင်း၊ canonical r∥s) ကို ထိန်းသိမ်းပါ။ | `sm_program.md`၊ စာရင်းစစ်အစီရင်ခံစာများ၊ ပြင်ဆင်မှုအစုအဝေးများ။ | Crypto WG ခဲ |
+| အင်ဂျင်နီယာဌာန | Gate SM ၏ ရှင်းလင်းပြတ်သားသော config နောက်ကွယ်ရှိ အင်္ဂါရပ်များ ၊ အတည်ပြု-သပ်သပ် ပုံသေကို ထိန်းသိမ်းထား ၊ လုပ်ဆောင်ချက် ထုတ်ပေးမှု စစ်ဆေးစာရင်းကို စီမံပါ။ | `release_dual_track_runbook.md`၊ မန်နီးဖက်စ်များ ထုတ်လွှတ်ခြင်း၊ စတင်ရောင်းချခြင်း လက်မှတ်။ | TL | ဖြန့်ချိသည်။
+| Ops/SRE | SM enablement checklist၊ telemetry dashboards (အသုံးပြုမှု၊ အမှားအယွင်းနှုန်းများ)၊ အဖြစ်အပျက်တုံ့ပြန်မှုအစီအစဉ်ကို ပေးပါ။ | Runbooks၊ Grafana ဒက်ရှ်ဘုတ်များ၊ စတင်ပြေးဆွဲသည့် လက်မှတ်များ။ | Ops/SRE |
+| တရားဝင်ဆက်ဆံရေး | တရုတ်ပြည်မကြီးတွင် node များလည်ပတ်သောအခါ PRC ဖွံ့ဖြိုးတိုးတက်မှု/အသုံးပြုမှုအစီရင်ခံစာများကို ဖိုင်၊ အစုအစည်းတစ်ခုစီအတွက် တင်ပို့မှုပုံစံကို ပြန်လည်သုံးသပ်ပါ။ | တမ်းပလိတ်များ တင်သွင်းခြင်း၊ ကြေညာချက်များ တင်ပို့ခြင်း။ | တရားဝင်ဆက်သွယ်ရန် |
+| SDK အစီအစဉ် | Surface SM algorithm သည် တသမတ်တည်း ပံ့ပိုးပေးသည်၊ အဆုံးအဖြတ်ပေးသော အပြုအမူကို တွန်းအားပေးသည်၊၊ လိုက်နာမှုမှတ်စုများကို SDK docs သို့ ဖြန့်ဝေပါ။ | SDK ထုတ်လွှတ်သော မှတ်စုများ၊ စာရွက်စာတမ်းများ၊ CI ဂိတ်များ။ | SDK ဦးဆောင် |## စာရွက်စာတမ်းနှင့် စာရွက်စာတမ်းလိုအပ်ချက်များ (တရုတ်)
+1. ** ကုန်ပစ္စည်းတင်သွင်းခြင်း (开发备案):** ကုန်းတွင်းပိုင်းဖွံ့ဖြိုးတိုးတက်မှုအတွက်၊ ထုတ်ကုန်ဖော်ပြချက်ကို တင်ပြပါ၊
+   အရင်းအမြစ်ရရှိနိုင်မှုထုတ်ပြန်ချက်၊ မှီခိုမှုစာရင်းနှင့် အဆုံးအဖြတ်ပေးသော တည်ဆောက်မှုအဆင့်များဆီသို့
+   မထုတ်ပြန်မီ ခရိုင်လျှို့ဝှက်ရေးစနစ် စီမံခန့်ခွဲရေး။
+2. ** အရောင်း/အသုံးပြုမှု ဖိုင် (销售/使用备案):** SM-enabled node များကို လုပ်ဆောင်နေသော အော်ပရေတာများသည် လိုအပ်သည်
+   အသုံးပြုမှုနယ်ပယ်၊ သော့စီမံခန့်ခွဲမှုနှင့် တယ်လီမီတာ စုဆောင်းမှုတို့ကို အလားတူ မှတ်ပုံတင်ပါ။
+   အာဏာပိုင် ဆက်သွယ်ရန်အချက်အလက်နှင့် အဖြစ်အပျက်တုံ့ပြန်မှု SLA များကို ပေးပါ။
+3. ** အသိအမှတ်ပြုလက်မှတ် (检测/认证):** အရေးကြီးသော အခြေခံအဆောက်အဦ အော်ပရေတာများ လိုအပ်နိုင်သည်
+   အသိအမှတ်ပြုစမ်းသပ်မှု။ ပြန်လည်ထုတ်လုပ်နိုင်သော ဇာတ်ညွှန်းများ၊ SBOM နှင့် စမ်းသပ်မှုအစီရင်ခံစာများကို ပေးဆောင်ပါ။
+   ထို့ကြောင့် downstream integrators များသည် code ကိုပြောင်းလဲခြင်းမရှိဘဲ certification ပြီးမြောက်နိုင်ပါသည်။
+4. ** မှတ်တမ်းထိန်းသိမ်းခြင်း-** လိုက်နာမှုခြေရာခံစနစ်တွင် စာရွက်စာတမ်းများနှင့် အတည်ပြုချက်များကို သိမ်းဆည်းပါ။
+   ဒေသအသစ်များ သို့မဟုတ် အော်ပရေတာများသည် လုပ်ငန်းစဉ်ပြီးဆုံးသောအခါ `status.md` ကို အပ်ဒိတ်လုပ်ပါ။
 
-## Documentation & Filing Requirements (China)
-1. **Product filing (开发备案):** For onshore development, submit product description,
-   source availability statement, dependency list, and deterministic build steps to
-   the provincial cryptography administration before release.
-2. **Sales/Usage filing (销售/使用备案):** Operators running SM-enabled nodes must
-   register usage scope, key management, and telemetry collection with the same
-   authority. Provide contact info and incident response SLAs.
-3. **Certification (检测/认证):** Critical infrastructure operators may require
-   accredited testing. Provide reproducible build scripts, SBOM, and test reports
-   so downstream integrators can complete certification without altering code.
-4. **Record-keeping:** Archive filings and approvals in the compliance tracker.
-   Update `status.md` when new regions or operators complete the process.
+## လိုက်နာမှုစစ်ဆေးခြင်းစာရင်း
 
-## Compliance Checklist
+### SM ဝန်ဆောင်မှုများကို မဖွင့်မီ
+- [ ] တရားရေးအကြံပေးမှ ပစ်မှတ်ဖြန့်ကျက်ထားသော ဒေသများကို ပြန်လည်သုံးသပ်ပြီး အတည်ပြုပါ။
+- [ ] အဆုံးအဖြတ်ပေးသော တည်ဆောက်မှုလမ်းညွှန်ချက်များ၊ မှီခိုမှုဖော်ပြချက်များနှင့် SBOM တို့ကို ရိုက်ကူးပါ။
+      ဖိုင်တွဲများပါ၀င်သော ပို့ကုန်များ။
+- [ ] `crypto.allowed_signing`၊ `crypto.default_hash` နှင့် ဝင်ခွင့်
+      ဖြန့်ချိရေး လက်မှတ်ဖြင့် မူဝါဒသည် ထင်ရှားသည်။
+- [ ] SM အင်္ဂါရပ်နယ်ပယ်ကို ဖော်ပြသည့် အော်ပရေတာဆက်သွယ်ရေးများ ထုတ်လုပ်ခြင်း၊
+      enablement ကြိုတင်လိုအပ်ချက်များနှင့် disablement အတွက် နောက်ပြန်ဆုတ်မည့် အစီအစဉ်များ။
+- [ ] SM စိစစ်ခြင်း/ လက်မှတ်ကောင်တာများ အကျုံးဝင်သော တယ်လီမီတာ ဒက်ရှ်ဘုတ်များ တင်ပို့ခြင်း၊
+      အမှားအယွင်းနှုန်းများနှင့် perf မက်ထရစ်များ (`sm3`၊ `sm4`၊ syscall timing)။
+- [ ] ကုန်းတွင်းပိုင်းအတွက် အဖြစ်အပျက်တုံ့ပြန်မှု အဆက်အသွယ်များနှင့် တိုးမြင့်လာမည့်လမ်းကြောင်းများကို ပြင်ဆင်ပါ။
+      အော်ပရေတာများနှင့် Crypto WG ။
 
-### Before enabling SM features
-- [ ] Confirm legal counsel reviewed the target deployment regions.
-- [ ] Capture deterministic build instructions, dependency manifests, and SBOM
-      exports for inclusion with filings.
-- [ ] Align `crypto.allowed_signing`, `crypto.default_hash`, and admission
-      policy manifests with the rollout ticket.
-- [ ] Produce operator communications describing SM feature scope,
-      enablement prerequisites, and fallback plans for disablement.
-- [ ] Export telemetry dashboards covering SM verification/signature counters,
-      error rates, and perf metrics (`sm3`, `sm4`, syscall timing).
-- [ ] Prepare incident response contacts and escalation paths for onshore
-      operators and the Crypto WG.
+### တင်ပြခြင်းနှင့် စာရင်းစစ်ခြင်း အဆင်သင့်
+- [ ] သင့်လျော်သော စာရွက်စာတမ်းပုံစံ (ထုတ်ကုန်နှင့် အရောင်း/အသုံးပြုမှု) ကို ရွေးချယ်ပြီး ဖြည့်စွက်ပါ။
+      တင်သွင်းခြင်းမပြုမီ ထွက်ရှိသည့် မက်တာဒေတာတွင်။
+- [ ] SBOM မော်ကွန်းတိုက်များ ပူးတွဲပါ ၊ အဆုံးအဖြတ်ပေးသော စမ်းသပ်မှတ်တမ်းများ နှင့် hash များကို ဖော်ပြပါ။
+- [ ] ပို့ကုန်ထိန်းချုပ်ရေးထုတ်ပြန်ချက်သည် တိကျသောပစ္စည်းများဖြစ်ခြင်းကို ရောင်ပြန်ဟပ်ကြောင်း သေချာပါစေ။
+      ပေးပို့ပြီး (ENC/TSU) ကို မှီခိုထားသော လိုင်စင်ခြွင်းချက်များအား ကိုးကားဖော်ပြပါသည်။
+- [ ] စာရင်းစစ်အစီရင်ခံစာများ၊ ပြန်လည်ပြင်ဆင်ခြင်းခြေရာခံခြင်းနှင့် အော်ပရေတာ runbooks ကိုစစ်ဆေးပါ။
+      ဖိုင်တွဲမှ ချိတ်ဆက်ထားသည်။
+- [ ] လိုက်နာမှုတွင် လက်မှတ်ရေးထိုးထားသော စာရွက်စာတမ်းများ၊ အတည်ပြုချက်များနှင့် စာပေးစာယူများကို သိမ်းဆည်းပါ။
+      ဗားရှင်းအကိုးအကားများဖြင့် ခြေရာခံကိရိယာ။
 
-### Filing & audit readiness
-- [ ] Select the appropriate filing template (product vs. sales/usage) and fill
-      in the release metadata before submission.
-- [ ] Attach SBOM archives, deterministic test transcripts, and manifest hashes.
-- [ ] Ensure the export-control statement reflects the exact artefacts being
-      delivered and cites license exceptions relied upon (ENC/TSU).
-- [ ] Verify that audit reports, remediation tracking, and operator runbooks
-      are linked from the filing packet.
-- [ ] Store signed filings, approvals, and correspondence in the compliance
-      tracker with versioned references.
+### ခွင့်ပြုချက်ရပြီးသောလုပ်ငန်းများ
+- [ ] ဖိုင်ကိုလက်ခံပြီးသည်နှင့် `status.md` နှင့် ဖြန့်ချိရေးလက်မှတ်ကို အပ်ဒိတ်လုပ်ပါ။
+- [ ] ကြည့်ရှုနိုင်မှု လွှမ်းခြုံမှု တိုက်ဆိုင်မှုများကို အတည်ပြုရန် တယ်လီမီတာ အထောက်အထားကို ပြန်လည်လုပ်ဆောင်ပါ။
+      သွင်းအားစုများ။
+- [ ] စာရွက်စာတမ်းများ၊ စာရင်းစစ်အစီရင်ခံစာများ၊
+      နှင့် spec/regulatory updates များကိုဖမ်းယူရန် ထုတ်ပြန်ချက်များအား ထုတ်ယူပါ။
+- [ ] ဖွဲ့စည်းမှုပုံစံ၊ အင်္ဂါရပ်နယ်ပယ် သို့မဟုတ် လက်ခံဆောင်ရွက်ပေးသည့်အခါတိုင်းတွင် ဖိုင်တွဲထည့်သွင်းမှုများကို အစပျိုးပါ။
+      ခြေရာသည် ရုပ်ဝတ္ထုပစ္စည်း ပြောင်းလဲလာသည်။## Export & Distribution လမ်းညွှန်
+- မှီခိုအားထားမှုကို ရည်ညွှန်းသည့် ထုတ်ဝေမှုမှတ်စုများ/ဖော်ပြချက်များတွင် အတိုချုံးဖော်ပြချက်တစ်ခု ထည့်သွင်းပါ။
+  ENC/TSU တွင် ဥပမာ-
+  > “ဤထုတ်ဝေမှုတွင် SM2/SM3/SM4 အကောင်အထည်ဖော်မှုများပါရှိသည်။ ဖြန့်ဝေမှုသည် ENC ကို လိုက်နာသည်။
+  > (15 CFR အပိုင်း 742) / EU 2021/821 နောက်ဆက်တွဲ 1 5D002။ အော်ပရေတာများ လိုက်နာမှု ရှိစေရမည်။
+  > ပြည်တွင်း ပို့ကုန်/သွင်းကုန် ဥပဒေများဖြင့်
+- တရုတ်နိုင်ငံအတွင်း လက်ခံတည်ဆောက်မှုများအတွက်၊ ရှေးဟောင်းပစ္စည်းများကို ထုတ်ဝေရန် Ops နှင့် ညှိနှိုင်းပါ။
+  ကုန်းတွင်းအခြေခံအဆောက်အအုံ၊ SM-enabled binaries များကို နယ်စပ်ဖြတ်ကျော် လွှဲပြောင်းခြင်းမှ ရှောင်ကြဉ်ပါ။
+  သင့်လျော်သောလိုင်စင်များရှိသည်။
+- package repositories သို့ mirroring လုပ်သောအခါ၊ မည်သည့် artefacts များတွင် SM အင်္ဂါရပ်များပါဝင်သည်ကို မှတ်တမ်းတင်ပါ။
+  လိုက်နာမှုအစီရင်ခံမှုကို ရိုးရှင်းစေရန်။
 
-### Post-approval operations
-- [ ] Update `status.md` and the rollout ticket once the filing is accepted.
-- [ ] Re-run telemetry validation to confirm observability coverage matches
-      the filing inputs.
-- [ ] Schedule periodic review (at least annually) of filings, audit reports,
-      and export statements to capture spec/regulatory updates.
-- [ ] Trigger filing addendums whenever configuration, feature scope, or hosting
-      footprint changes materially.
+## အော်ပရေတာစစ်ဆေးစာရင်း
+- [ ] ထုတ်ဝေမှုပရိုဖိုင်ကို အတည်ပြုပါ (`scripts/select_release_profile.py`) + SM အင်္ဂါရပ်အလံ။
+- [ ] သုံးသပ်ချက် `sm_program.md` နှင့် ဤအကျဉ်းချုပ်။ ဥပဒေကြောင်းအရ မှတ်တမ်းတင်ထားကြောင်း သေချာပါစေ။
+- [ ] `sm` နှင့် ပေါင်းပြီး `crypto.allowed_signing` ကို `sm2` ပါ၀င်စေရန် နှင့် `sm2` တို့ကို ထည့်သွင်းရန်နှင့် `crypto.default_hash` သို့ `sm3-256` ကို အပ်ဒိတ်လုပ်ခြင်းဖြင့် SM အင်္ဂါရပ်များကို ဖွင့်ပေးလိုက်ပါ။
+- [ ] SM ကောင်တာများ ပါဝင်ရန်အတွက် တယ်လီမီတာ ဒက်ရှ်ဘုတ်များ/သတိပေးချက်များကို အပ်ဒိတ်လုပ်ပါ (အတည်ပြုခြင်း မအောင်မြင်မှုများ၊
+      လက်မှတ်ထိုးတောင်းဆိုမှုများ၊ perf မက်ထရစ်များ)။
+- [ ] မန်နီးဖက်စ်များ၊ hash/လက်မှတ်အထောက်အထားများနှင့် ပူးတွဲတင်ပြထားသော အတည်ပြုချက်များကို သိမ်းဆည်းထားပါ။
+      ဖြန့်ချိရေးလက်မှတ်။
 
-## Export & Distribution Guidance
-- Include a short export statement in release notes/manifests referencing reliance
-  on ENC/TSU. Example:
-  > “This release contains SM2/SM3/SM4 implementations. Distribution follows ENC
-  > (15 CFR Part 742) / EU 2021/821 Annex 1 5D002. Operators must ensure compliance
-  > with local export/import laws.”
-- For builds hosted inside China, coordinate with Ops to publish artifacts from
-  onshore infrastructure; avoid cross-border transfer of SM-enabled binaries unless
-  the appropriate licenses are in place.
-- When mirroring to package repositories, record which artefacts include SM features
-  to simplify compliance reporting.
+## နမူနာ တင်သွင်းသည့် ပုံစံများ
 
-## Operator Checklist
-- [ ] Confirm release profile (`scripts/select_release_profile.py`) + SM feature flag.
-- [ ] Review `sm_program.md` and this brief; ensure legal filings are recorded.
-- [ ] Enable SM features by compiling with `sm`, updating `crypto.allowed_signing` to include `sm2`, and switching `crypto.default_hash` to `sm3-256` only after determinism safeguards are in place and audit status is green.
-- [ ] Update telemetry dashboards/alerts to include SM counters (verification failures,
-      signing requests, perf metrics).
-- [ ] Keep manifests, hash/signature proofs, and filing confirmations attached to
-      the rollout ticket.
-
-## Sample Filing Templates
-
-Templates live under `docs/source/crypto/attachments/` for easy inclusion in
-filing packets. Copy the relevant Markdown template into the operator’s change
-log or export it to PDF as required by local authorities.
+အလွယ်တကူထည့်သွင်းနိုင်စေရန်အတွက် နမူနာပုံစံများသည် `docs/source/crypto/attachments/` အောက်တွင် နေထိုင်ပါသည်။
+ဖိုင်တွဲများ။ သက်ဆိုင်ရာ Markdown နမူနာပုံစံကို အော်ပရေတာ၏ပြောင်းလဲမှုသို့ ကူးယူပါ။
+ဒေသဆိုင်ရာ အာဏာပိုင်များ၏ လိုအပ်ချက်အရ မှတ်တမ်း သို့မဟုတ် PDF သို့ တင်ပို့ပါ။
 
 - [`sm_product_filing_template.md`](attachments/sm_product_filing_template.md) —
-  provincial product filing (开发备案) form capturing release metadata, algorithms,
-  SBOM references, and support contacts.
+  စီရင်စု ကုန်ပစ္စည်း တင်သွင်းခြင်း (开发备案) ထုတ်ဝေမှု မက်တာဒေတာ၊ အယ်လဂိုရီသမ်များ၊
+  SBOM ရည်ညွှန်းချက်များနှင့် ပံ့ပိုးကူညီမှုအဆက်အသွယ်များ။
 - [`sm_sales_usage_filing_template.md`](attachments/sm_sales_usage_filing_template.md) —
-  operator sales/usage filing (销售/使用备案) outlining deployment footprint,
-  key management, telemetry, and incident response procedures.
+  အော်ပရေတာ အရောင်း/အသုံးပြုမှု စာရွက်စာတမ်း (销售/使用备案) ဖြန့်ကျက်မှု ခြေရာကို အကြမ်းဖျင်း၊
+  အဓိကကျသော စီမံခန့်ခွဲမှု၊ တယ်လီမီတာနှင့် အဖြစ်အပျက်တုံ့ပြန်မှုဆိုင်ရာ လုပ်ထုံးလုပ်နည်းများ။
 - [`sm_export_statement_template.md`](attachments/sm_export_statement_template.md) —
-  export-control declaration suitable for release notes, manifests, or legal
-  correspondence relying on ENC/TSU license exceptions.
+  ထုတ်ဝေမှုမှတ်စုများ၊ ဖော်ပြချက်များ သို့မဟုတ် တရားဝင်များအတွက် သင့်လျော်သော တင်ပို့မှုထိန်းချုပ်ရေး ကြေငြာချက်
+  ENC/TSU လိုင်စင်ခြွင်းချက်အပေါ်မှီခိုသောစာပေးစာယူ။## စံနှုန်းများနှင့် ကိုးကားချက်များ
+- **GM/T 0002-2012 / GB/T 32907-2016** — SM4 block cipher နှင့် AEAD ဘောင်များ (ECB/GCM/CCM)။ `docs/source/crypto/sm_vectors.md` တွင် ရိုက်ကူးထားသော vector များနှင့် ကိုက်ညီပါသည်။
+- **GM/T 0003-2012 / GB/T 32918.x-2016** — SM2 public-key cryptography၊ curve parameters၊ signature/verification process နှင့် Annex D လူသိများသော အဖြေစမ်းသပ်မှုများ။
+- **GM/T 0004-2012 / GB/T 32905-2016** — SM3 hash လုပ်ဆောင်ချက် သတ်မှတ်ချက်များနှင့် လိုက်လျောညီထွေရှိသော vector များ။
+- **RFC 8998** — TLS တွင် SM2 သော့လဲလှယ်မှုနှင့် လက်မှတ်အသုံးပြုမှု။ OpenSSL/Tongsuo နှင့် အပြန်အလှန်ဆက်စပ်မှုကို မှတ်တမ်းတင်သည့်အခါ ကိုးကားပါ။
+- **တရုတ်ပြည်သူ့သမ္မတနိုင်ငံ၏ ကူးယူဖော်ပြခြင်းဥပဒေ (2019)**၊ **ဆိုက်ဘာလုံခြုံရေးဥပဒေ (2017)**၊ **ဒေတာလုံခြုံရေးဥပဒေ (2021)** — အထက်ဖော်ပြပါ စာရွက်စာတမ်းလုပ်ငန်းစဉ်အတွက် တရားဝင်အခြေခံ။
+- **US EAR အမျိုးအစား 5 အပိုင်း 2** နှင့် **EU စည်းမျဉ်း 2021/821 နောက်ဆက်တွဲ 1 (5D002)** — SM-enabled binaries များကို အုပ်ချုပ်သည့် ပို့ကုန်ထိန်းချုပ်မှုစနစ်များ။
+- **Iroha လက်ရာများ-** `scripts/sm_interop_matrix.sh` နှင့် `scripts/sm_openssl_smoke.sh` တို့သည် လိုက်နာမှု အစီရင်ခံစာများကို လက်မှတ်ရေးထိုးခြင်းမပြုမီ စာရင်းစစ်များက ပြန်လည်ပြသနိုင်သည့် အဆုံးအဖြတ်ပေးသော အပြန်အလှန်မှတ်တမ်းများကို ပေးဆောင်ပါသည်။
 
-## Standards & Citations
-- **GM/T 0002-2012 / GB/T 32907-2016** — SM4 block cipher and AEAD parameters (ECB/GCM/CCM). Matches the vectors captured in `docs/source/crypto/sm_vectors.md`.
-- **GM/T 0003-2012 / GB/T 32918.x-2016** — SM2 public-key cryptography, curve parameters, signature/verification process, and Annex D known-answer tests.
-- **GM/T 0004-2012 / GB/T 32905-2016** — SM3 hash function specification and conformance vectors.
-- **RFC 8998** — SM2 key exchange and signature use in TLS; cite when documenting interop with OpenSSL/Tongsuo.
-- **Cryptography Law of the People’s Republic of China (2019)**, **Cybersecurity Law (2017)**, **Data Security Law (2021)** — Legal basis for the filing workflow noted above.
-- **US EAR Category 5 Part 2** and **EU Regulation 2021/821 Annex 1 (5D002)** — Export-control regimes governing SM-enabled binaries.
-- **Iroha artefacts:** `scripts/sm_interop_matrix.sh` and `scripts/sm_openssl_smoke.sh` provide deterministic interop transcripts that auditors can replay before signing compliance reports.
+## ကိုးကား
+- `docs/source/crypto/sm_program.md` — နည်းပညာပိုင်းဆိုင်ရာ ဗိသုကာနှင့်မူဝါဒ။
+- `docs/source/release_dual_track_runbook.md` — တံခါးဖွင့်ခြင်းနှင့် စတင်ခြင်းလုပ်ငန်းစဉ်။
+- `docs/source/sora_nexus_operator_onboarding.md` — နမူနာ အော်ပရေတာ စတင်လည်ပတ်ခြင်း စီးဆင်းမှု။
+- GM/T 0002-2012၊ GM/T 0003-2012၊ GM/T 0004-2012၊ GB/T 32918 စီးရီး၊ RFC 8998။
 
-## References
-- `docs/source/crypto/sm_program.md` — technical architecture and policy.
-- `docs/source/release_dual_track_runbook.md` — release gating and rollout process.
-- `docs/source/sora_nexus_operator_onboarding.md` — sample operator onboarding flow.
-- GM/T 0002-2012, GM/T 0003-2012, GM/T 0004-2012, GB/T 32918 series, RFC 8998.
-
-Questions? Contact the Crypto WG or Legal liaison via the SM rollout tracker.
+မေးခွန်းများ? Crypto WG သို့မဟုတ် တရားဝင်ဆက်ဆံရေးရုံးကို SM ဖြန့်ချိသည့်ခြေရာခံကိရိယာမှတစ်ဆင့် ဆက်သွယ်ပါ။

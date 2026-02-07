@@ -7,60 +7,62 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus lane model
 description: Logical lane taxonomy, configuration geometry, and world-state merge rules for Sora Nexus.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Nexus Lane Model & WSV Partitioning
+# Nexus 通道模型和 WSV 分区
 
-> **Status:** NX-1 deliverable — lane taxonomy, configuration geometry, and storage layout are ready for implementation.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Roadmap reference:** NX-1 in `roadmap.md`
+> **状态：** NX-1 可交付成果 — 通道分类、配置几何结构和存储布局已准备好实施。  
+> **所有者：** Nexus 核心工作组、治理工作组  
+> **路线图参考：** `roadmap.md` 中的 NX-1
 
-This portal page mirrors the canonical `docs/source/nexus_lanes.md` brief so Sora
-Nexus operators, SDK owners, and reviewers can read the lane guidance without
-diving into the mono-repo tree. The target architecture keeps the world state
-deterministic while allowing individual data spaces (lanes) to run public or
-private validator sets with isolated workloads.
+此门户页面反映了规范的 `docs/source/nexus_lanes.md` 简介，因此 Sora
+Nexus 操作员、SDK 所有者和审阅者无需阅读车道指南即可
+深入研究 mono-repo 树。目标架构保持世界状态
+确定性，同时允许单独的数据空间（通道）公共运行或
+具有隔离工作负载的私有验证器集。
 
-## Concepts
+## 概念
 
-- **Lane:** Logical shard of the Nexus ledger with its own validator set and
-  execution backlog. Identified by a stable `LaneId`.
-- **Data Space:** Governance bucket grouping one or more lanes that share
-  compliance, routing, and settlement policies.
-- **Lane Manifest:** Governance-controlled metadata describing validators, DA
-  policy, gas token, settlement rules, and routing permissions.
-- **Global Commitment:** Proof emitted by a lane summarising new state roots,
-  settlement data, and optional cross-lane transfers. The global NPoS ring
-  orders commitments.
+- **Lane:** Nexus 账本的逻辑分片，具有自己的验证器集和
+  执行积压。由稳定的 `LaneId` 标识。
+- **数据空间：** 治理桶分组一个或多个共享通道
+  合规性、路由和结算政策。
+- **车道清单：** 描述验证器、DA 的治理控制元数据
+  策略、gas 代币、结算规则和路由权限。
+- **全球承诺：** 由车道发出的总结新状态根的证明，
+  结算数据和可选的跨车道传输。全球 NPoS 环
+  订单承诺。
 
-## Lane taxonomy
+## 泳道分类
 
-Lane types canonically describe their visibility, governance surface, and
-settlement hooks. The configuration geometry (`LaneConfig`) captures these
-attributes so nodes, SDKs, and tooling can reason about the layout without
-bespoke logic.
+车道类型规范地描述了它们的可见性、治理面和
+结算挂钩。配置几何 (`LaneConfig`) 捕获这些
+属性，以便节点、SDK 和工具可以推断布局，而无需
+定制逻辑。
 
-| Lane type | Visibility | Validator membership | WSV exposure | Default governance | Settlement policy | Typical use |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
-| `private_permissioned` | restricted | Fixed validator set (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
-| `hybrid_confidential` | restricted | Mixed membership; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+|车道类型|能见度|验证者会员资格 | WSV 暴露 |违约治理|落户政策 |典型用途|
+|------------|------------|----------------------|------------------------|--------------------|--------------------|-------------|
+| `default_public` |公共|无需许可（全球股权）|完整状态副本 | SORA 议会 | `xor_global` |基线公共分类账 |
+| `public_custom` |公共|无需许可或股权门禁 |完整状态副本 |股权加权模块 | `xor_lane_weighted` |高通量公共应用|
+| `private_permissioned` |限制 |固定验证器集（政府批准）|承诺及证明|联邦理事会| `xor_hosted_custody` | CBDC、联盟工作负载 |
+| `hybrid_confidential` |限制 |混合会员资格；包装 ZK 样张 |承诺+选择性披露|可编程货币模块| `xor_dual_fund` |保护隐私的可编程货币|
 
-All lane types must declare:
+所有车道类型必须声明：
 
-- Dataspace alias — human-readable grouping that binds compliance policies.
-- Governance handle — identifier resolved through `Nexus.governance.modules`.
-- Settlement handle — identifier consumed by the settlement router to debit XOR
-  buffers.
-- Optional telemetry metadata (description, contact, business domain) surfaced
-  through `/status` and dashboards.
+- 数据空间别名 — 绑定合规策略的人类可读分组。
+- 治理句柄 — 通过 `Nexus.governance.modules` 解析的标识符。
+- 结算句柄 — 结算路由器用于借方 XOR 的标识符
+  缓冲区。
+- 可选的遥测元数据（描述、联系人、业务领域）浮出水面
+  通过 `/status` 和仪表板。
 
-## Lane configuration geometry (`LaneConfig`)
+## 车道配置几何形状 (`LaneConfig`)
 
-`LaneConfig` is the runtime geometry derived from the validated lane catalog. It
-does **not** replace governance manifests; instead it provides deterministic
-storage identifiers and telemetry hints for every configured lane.
+`LaneConfig` 是从经过验证的通道目录派生的运行时几何图形。它
+**不**取代治理清单；相反，它提供了确定性
+每个配置通道的存储标识符和遥测提示。
 
 ```text
 LaneConfigEntry {
@@ -77,112 +79,112 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` recomputes the geometry whenever configuration is
-  loaded (`State::set_nexus`).
-- Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric
-  characters collapse into `_`. If the alias yields an empty slug we fall back
-  to `lane{id}`.
-- `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting
-  to `lane_id`) and drives the persisted shard cursor journal to keep DA replay
-  deterministic across restarts/resharding.
-- Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the
-  same backend is shared.
-- Kura segment names are deterministic across hosts; auditors can cross-check
-  segment directories and manifests without bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and
-  global state commitments for that lane.
+- 无论何时配置，`LaneConfig::from_catalog` 都会重新计算几何形状
+  已加载（`State::set_nexus`）。
+- 别名被清理为小写字母；连续的非字母数字
+  字符折叠成 `_`。如果别名产生一个空的 slug，我们就会回退
+  至 `lane{id}`。
+- `shard_id` 源自目录元数据密钥 `da_shard_id`（默认
+  到 `lane_id`）并驱动持久分片游标日志以保持 DA 重播
+  重新启动/重新分片时具有确定性。
+- 密钥前缀确保 WSV 保持每通道密钥范围不相交，即使
+  共享相同的后端。
+- Kura 段名称在主机之间具有确定性；审核员可以交叉检查
+  无需定制工具即可对目录和清单进行分段。
+- 合并段（`lane_{id:03}_merge`）保存最新的合并提示根和
+  全球国家对该车道的承诺。
 
-## World-state partitioning
+## 世界状态划分
 
-- The logical Nexus world state is the union of per-lane state spaces. Public
-  lanes persist full state; private/confidential lanes export Merkle/commitment
-  roots to the merge ledger.
-- MV storage prefixes every key with the 4-byte lane prefix from
-  `LaneConfigEntry::key_prefix`, yielding keys such as `[00 00 00 01] ++
-  PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) therefore store
-  entries grouped by lane prefix, keeping range scans deterministic.
-- Merge-ledger metadata mirrors the same layout: each lane writes merge-hint
-  roots and reduced global state roots to `lane_{id:03}_merge`, allowing
-  targeted retention or eviction when a lane retires.
-- Cross-lane indexes (account aliases, asset registries, governance manifests)
-  store explicit lane prefixes so operators can reconcile entries quickly.
-- **Retention policy** — public lanes retain full block bodies; commitment-only
-  lanes may compact older bodies after checkpoints because commitments are
-  authoritative. Confidential lanes keep ciphertext journals in dedicated
-  segments to avoid blocking other workloads.
-- **Tooling** — maintenance utilities (`kagami`, CLI admin commands) should
-  reference the slugged namespace when exposing metrics, Prometheus labels, or
-  archiving Kura segments.
+- 逻辑 Nexus 世界状态是每通道状态空间的并集。公共
+  车道保持满状态；私人/机密通道导出默克尔/承诺
+  根到合并分类账。
+- MV 存储为每个键添加 4 字节通道前缀
+  `LaneConfigEntry::key_prefix`，产生诸如`[00 00 00 01] ++之类的键
+  打包密钥`。
+- 共享表（账户、资产、触发器、治理记录）因此存储
+  条目按通道前缀分组，保持范围扫描的确定性。
+- 合并账本元数据镜像相同的布局：每个通道写入合并提示
+  根并将全局状态根减少为 `lane_{id:03}_merge`，从而允许
+  当车道退役时有针对性的保留或驱逐。
+- 跨通道索引（账户别名、资产注册表、治理清单）
+  存储明确的车道前缀，以便操作员可以快速协调条目。
+- **保留政策** — 公共车道保留完整的街区主体；仅限承诺
+  检查站后车道可能会挤满较旧的尸体，因为承诺是
+  权威的。机密通道将密文日志保存在专用的通道中
+  段以避免阻塞其他工作负载。
+- **工具** — 维护实用程序（`kagami`、CLI 管理命令）应该
+  在公开指标、Prometheus 标签时引用 slugged 命名空间，或者
+  归档 Kura 片段。
 
-## Routing & APIs
+## 路由和 API
 
-- Torii REST/gRPC endpoints accept an optional `lane_id`; absence implies
-  `lane_default`.
-- SDKs surface lane selectors and map user-friendly aliases to `LaneId` using
-  the lane catalog.
-- Routing rules operate on the validated catalog and may pick both lane and
-  dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and
-  logs.
+- Torii REST/gRPC 端点接受可选的 `lane_id`；缺席意味着
+  `lane_default`。
+- SDK 使用通道选择器将用户友好的别名映射到 `LaneId`
+  车道目录。
+- 路由规则在经过验证的目录上运行，并且可以选择车道和
+  数据空间。 `LaneConfig` 为仪表板和
+  日志。
 
-## Settlement & fees
+## 结算及费用
 
-- Every lane pays XOR fees to the global validator set. Lanes may collect native
-  gas tokens but must escrow XOR equivalents alongside commitments.
-- Settlement proofs include amount, conversion metadata, and proof of escrow
-  (for example, transfer to the global fee vault).
-- The unified settlement router (NX-3) debits buffers using the same lane
-  prefixes, so settlement telemetry lines up with storage geometry.
+- 每个通道向全局验证器集支付异或费用。车道可能会收集原生
+  天然气代币，但必须与承诺一起托管异或等价物。
+- 结算证明包括金额、转换元数据和托管证明
+  （例如，转账至全球费用库）。
+- 统一结算路由器（NX-3）使用同一通道借记缓冲区
+  前缀，因此沉降遥测与存储几何结构一致。
 
-## Governance
+## 治理
 
-- Lanes declare their governance module via the catalog. `LaneConfigEntry`
-  carries the original alias and slug to keep telemetry and audit trails
-  readable.
-- The Nexus registry distributes signed lane manifests that include the
-  `LaneId`, dataspace binding, governance handle, settlement handle, and
-  metadata.
-- Runtime-upgrade hooks continue to enforce governance policies
-  (`gov_upgrade_id` by default) and log diffs via the telemetry bridge
-  (`nexus.config.diff` events).
+- 通道通过目录声明其治理模块。 `LaneConfigEntry`
+  携带原始别名和 slug 以保留遥测和审计跟踪
+  可读。
+- Nexus 注册表分发签名的通道清单，其中包括
+  `LaneId`，数据空间绑定，治理句柄，结算句柄，以及
+  元数据。
+- 运行时升级挂钩继续执行治理策略
+  （默认情况下为 `gov_upgrade_id`）并通过遥测桥记录差异
+  （`nexus.config.diff` 事件）。
 
-## Telemetry & status
+## 遥测和状态
 
-- `/status` exposes lane aliases, dataspace bindings, governance handles, and
-  settlement profiles, derived from the catalog and `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) render lane aliases/slugs so
-  operators can map backlog and TEU pressure quickly.
-- `nexus_lane_configured_total` counts the number of derived lane entries and is
-  recomputed when configuration changes. Telemetry emits signed diffs whenever
-  lane geometry changes.
-- Dataspace backlog gauges include the alias/description metadata to help
-  operators associate queue pressure with business domains.
+- `/status` 公开通道别名、数据空间绑定、治理句柄和
+  沉降概况，源自目录和 `LaneConfig`。
+- 调度程序指标 (`nexus_scheduler_lane_teu_*`) 渲染通道别名/slugs
+  运营商可以快速绘制积压订单和 TEU 压力图。
+- `nexus_lane_configured_total` 计算派生车道条目的数量，并且
+  配置更改时重新计算。每当以下情况时，遥测都会发出签名差异
+  车道几何形状发生变化。
+- 数据空间积压量表包括别名/描述元数据以提供帮助
+  运营商将队列压力与业务领域联系起来。
 
-## Configuration & Norito types
+## 配置和 Norito 类型
 
-- `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in
-  `iroha_data_model::nexus` and provide Norito-format structures for
-  manifests and SDKs.
-- `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived
-  automatically from the catalog; it does not require Norito encoding because it
-  is an internal runtime helper.
-- The user-facing configuration (`iroha_config::parameters::user::Nexus`)
-  continues to accept declarative lane and dataspace descriptors; parsing now
-  derives the geometry and rejects invalid aliases or duplicate lane IDs.
+- `LaneCatalog`、`LaneConfig` 和 `DataSpaceCatalog` 实时存在
+  `iroha_data_model::nexus` 并提供 Norito 格式结构
+  清单和 SDK。
+- `LaneConfig` 存在于 `iroha_config::parameters::actual::Nexus` 中并派生
+  自动从目录中；它不需要 Norito 编码，因为它
+  是一个内部运行时助手。
+- 面向用户的配置 (`iroha_config::parameters::user::Nexus`)
+  继续接受声明性通道和数据空间描述符；现在解析
+  导出几何图形并拒绝无效别名或重复的车道 ID。
 
-## Outstanding work
+## 出色的工作
 
-- Integrate settlement router updates (NX-3) with the new geometry so XOR buffer
-  debits and receipts are tagged by lane slug.
-- Extend admin tooling to list column families, compact retired lanes, and
-  inspect per-lane block logs using the slugged namespace.
-- Finalise the merge algorithm (ordering, pruning, conflict detection) and
-  attach regression fixtures for cross-lane replay.
-- Add compliance hooks for whitelists/blacklists and programmable-money
-  policies (tracked under NX-12).
+- 将结算路由器更新 (NX-3) 与新几何图形集成，以便 XOR 缓冲区
+  借方和收据均由通道标记标记。
+- 扩展管理工具以列出列族、紧凑退役通道以及
+  使用 slugged 命名空间检查每个通道的块日志。
+- 最终确定合并算法（排序、修剪、冲突检测）并
+  附加回归装置以进行跨车道重播。
+- 添加白名单/黑名单和可编程货币的合规挂钩
+  政策（在 NX-12 下跟踪）。
 
 ---
 
-*This page will continue to track NX-1 follow-ups as NX-2 through NX-18 land.
-Please surface open questions in `roadmap.md` or the governance tracker so the
-portal stays aligned with the canonical docs.*
+*本页面将继续跟踪 NX-1 的后续行动，如 NX-2 至 NX-18 着陆。
+请在 `roadmap.md` 或治理跟踪器中提出未解决的问题，以便
+门户与规范文档保持一致。*

@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a947c289c13c15b09dfbbf28c23ae1539fd3e29ca3943fa8522c3eca32c28bf5
 source_last_modified: "2025-12-29T18:16:35.091070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Telemetry Requirements
+# 遥测要求
 
-## Prometheus Targets
+## Prometheus 目标
 
-Scrape the relay and orchestrator with the following labels:
+使用以下标签抓取中继和协调器：
 
 ```yaml
 - job_name: "soranet-relay"
@@ -30,36 +31,36 @@ Scrape the relay and orchestrator with the following labels:
         role: "orchestrator"
 ```
 
-## Required Dashboards
+## 所需的仪表板
 
-1. `dashboards/grafana/soranet_testnet_overview.json` *(to be published)* — load the JSON, import variables `region` and `relay_id`.
-2. `dashboards/grafana/soranet_privacy_metrics.json` *(existing SNNet-8 asset)* — ensure the privacy bucket panels render without gaps.
+1. `dashboards/grafana/soranet_testnet_overview.json` *（待发布）* — 加载 JSON，导入变量 `region` 和 `relay_id`。
+2. `dashboards/grafana/soranet_privacy_metrics.json` *（现有 SNNet-8 资产）* — 确保隐私桶面板渲染无间隙。
 
-## Alert Rules
+## 警报规则
 
-Thresholds must match the playbook expectation:
+阈值必须符合剧本期望：
 
-- `soranet_privacy_circuit_events_total{kind="downgrade"}` increase > 0 over 10 minutes triggers `critical`.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 per 30 minutes triggers `warning`.
-- `up{job="soranet-relay"}` == 0 for 2 minutes triggers `critical`.
+- `soranet_privacy_circuit_events_total{kind="downgrade"}` 在 10 分钟内增加 > 0 会触发 `critical`。
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 每 30 分钟 5 次触发 `warning`。
+- `up{job="soranet-relay"}` == 0 持续 2 分钟会触发 `critical`。
 
-Load your rules into Alertmanager with the `testnet-t0` receiver; validate with `amtool check-config`.
+使用 `testnet-t0` 接收器将您的规则加载到 Alertmanager 中；使用 `amtool check-config` 进行验证。
 
-## Metrics Evaluation
+## 指标评估
 
-Aggregate a 14-day snapshot and feed it to the SNNet-10 validator:
+聚合 14 天的快照并将其提供给 SNNet-10 验证器：
 
 ```
 cargo xtask soranet-testnet-metrics --input 07-metrics-sample.json --out metrics-report.json
 ```
 
-- Replace the sample file with your exported snapshot when running against live data.
-- A `status = fail` result blocks promotion; resolve the highlighted check(s) before retrying.
+- 针对实时数据运行时，将示例文件替换为导出的快照。
+- `status = fail` 结果阻止升级；在重试之前解决突出显示的检查。
 
-## Reporting
+## 报告
 
-Every week upload:
+每周上传：
 
-- Query snapshots (`.png` or `.pdf`) showing PQ ratio, circuit success rate, and PoW solve histogram.
-- Prometheus recording rule output for `soranet_privacy_throttles_per_minute`.
-- A brief narrative describing any alerts that fired and mitigation steps (include timestamps).
+- 查询快照（`.png` 或 `.pdf`）显示 PQ 比率、电路成功率和 PoW 求解直方图。
+- Prometheus `soranet_privacy_throttles_per_minute` 的记录规则输出。
+- 描述任何触发的警报和缓解步骤的简短叙述（包括时间戳）。

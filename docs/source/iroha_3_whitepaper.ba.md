@@ -7,110 +7,107 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 07e149429887b0dfc38cf0619552cbefcbae4dd1ec9fe9e9d47a05371ed08f29
 source_last_modified: "2025-12-29T18:16:35.968351+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v3.0 (Nexus Preview)
+# Iroha v3.0 (Nexus алдан ҡарау)
 
-This document captures the forward-looking Hyperledger Iroha v3 architecture, focusing on the multi-lane
-pipeline, Nexus data spaces, and the Asset Exchange Toolkit (AXT). It complements the Iroha v2 whitepaper by
-describing upcoming capabilities that are actively under development.
+Был документта алға ҡарап Iroha v3 архитектураһы төшөрөлгән, унда күп һыҙатлы йүнәлеш бирелгән.
+торба, Nexus мәғлүмәт урындары, һәм активтар биржаһы ҡоралдары комплекты (AXT). Ул Iroha v2 аҡ ҡағыҙҙы тулыландыра.
+әүҙем үҫешкән буласаҡ мөмкинлектәрҙе һүрәтләү.
 
 ---
 
-## 1. Overview
+## 1. Обзор
 
-Iroha v3 extends the deterministic foundation of v2 with horizontal scalability and richer cross-domain
-workflows. The release, codenamed **Nexus**, introduces:
+Iroha v3 v2 детерминистик нигеҙен оҙайта горизонталь масштаблы һәм байыраҡ кросс-домен
+эш ағымы. **Nexus** код исемен индергән релиз:
 
-- A single, globally shared network called **SORA Nexus**. All Iroha v3 peers participate in this universal
-  ledger rather than operating isolated deployments. Organisations join by registering their own data spaces,
-  which remain isolated for policy and privacy while anchoring into the common ledger.
-- A shared codebase: the same repository builds both Iroha v2 (self-hosted networks) and Iroha v3 (SORA Nexus).
-  Configuration selects the target mode so operators can adopt Nexus features without switching software
-  stacks. The Iroha Virtual Machine (IVM) is identical across both releases, so Kotodama contracts and bytecode
-  artefacts run seamlessly on self-hosted networks and the global Nexus ledger.
-- Multi-lane block production to process independent workloads in parallel.
-- Data spaces (DS) that isolate execution environments while remaining composable through on-chain anchors.
-- The Asset Exchange Toolkit (AXT) for atomic, cross-space value transfers and contract-controlled swaps.
-- Enhanced reliability through Reliable Broadcast Commit (RBC) lanes, deterministic deadlines, and proof
-  sampling budgets.
+- Бер генә, глобаль уртаҡ селтәр тип аталған **SORA Nexus***. Бөтә Iroha v3 тиҫтерҙәре был универсаль ҡатнаша
+  баш кейеме изоляцияланған таратыуҙарҙы эшләткәнсе. Ойошмалар ҡушыла, үҙ мәғлүмәт киңлектәрен теркәү,
+  улар сәйәсәт һәм шәхси тормош өсөн изоляцияла ҡала, шул уҡ ваҡытта дөйөм лидерлыҡҡа якорь.
+- Дөйөм код базаһы: шул уҡ һаҡлағыс Iroha v2 (үҙ-үҙен хостинг селтәрҙәре) һәм Iroha v3 (SORA Nexus) төҙөй.
+  Конфигурация маҡсатлы режимды һайлай, шуға күрә операторҙар Nexus функцияларын ҡабул итә ала, уларҙы коммутациялау программа тәьминәте .
+  өйөмдәр. Iroha виртуаль машина (IVM) ике релиздар буйынса бер үк, шуға күрә Kotodama контракттары һәм байтекод .
+  артефакттар үҙ-үҙен хостинг селтәрҙәрендә һәм глобаль Nexus лидерлыҡта шыма эшләй.
+- Күп һыҙатлы блок етештереү бойондороҡһоҙ эш йөкләмәләрен параллель эшкәртергә.
+- Мәғлүмәт арауыҡтары (DS), был башҡарыу мөхиттәрен айырып, шул уҡ ваҡытта сылбырлы якорь аша композитлы булып ҡала.
+- Актив биржа ҡоралы (AXT) атом өсөн, кросс-киңлек ҡиммәтен күсерә һәм контракт менән контролдә тотолған своптар.
+- Ышаныслы тапшырыу аша ышаныслылыҡты көсәйткән (РБК) һыҙаттары, детерминистик сроктар һәм иҫбатлау
+  үлсәү бюджеттары.
 
-These features remain under active development; APIs and layouts may evolve before the v3 general
-availability milestone. Refer to `nexus.md`, `nexus_transition_notes.md`, and `new_pipeline.md` for
-engineering-level detail.
+Был үҙенсәлектәр әүҙем үҫеш аҫтында ҡала; API-лар һәм макеттар v3 генерал алдынан үҫешергә мөмкин .
+доступный осҡон. `nexus.md`, `nexus_transition_notes.md`, һәм `new_pipeline.md` өсөн ҡарағыҙ.
+инженерлыҡ кимәлендәге деталь.
 
-## 2. Multi-lane architecture
+## 2. Күп һыҙатлы архитектура
 
-- **Scheduler:** The Nexus scheduler partitions work into lanes based on data space identifiers and
-  composability groups. Lanes execute in parallel while preserving deterministic ordering guarantees within
-  each lane.
-- **Lane groups:** Related data spaces share a `LaneGroupId`, enabling coordinated execution for workflows that
-  span multiple components (e.g., a CBDC DS and its payment dApp DS).
-- **Deadlines:** Each lane tracks deterministic deadlines (block, proof, data-availability) to guarantee
-  progress and bounded resource usage.
-- **Telemetry:** Lane-level metrics expose throughput, queue depth, deadline violations, and bandwidth usage.
-  CI scripts assert the presence of these counters to keep dashboards aligned with the scheduler.
+- **График:** Nexus планлаштырыусы бүлектәре мәғлүмәттәр киңлеге идентификаторҙары нигеҙендә һыҙаттарға эшләй һәм
+  композалылыҡ төркөмдәре. Лейнс параллель рәүештә башҡарыла, шул уҡ ваҡытта детерминистик заказ гарантияларын һаҡлау сиктәрендә .
+  һәр һыҙат.
+- **Лейн төркөмдәре:** Мәғлүмәттәр киңлектәрендә `LaneGroupId` X, эш ағымдары өсөн координацияланған башҡарыу мөмкинлеген бирә.
+  бер нисә компонентты ҡаплай (мәҫәлән, CBDC DS һәм уның түләү dApp DS).
+- **Дидлиналар:** Һәр һыҙат детерминистик сроктарҙы күҙәтә (блок, иҫбатлау, мәғлүмәттәр-доступность) гарантиялау өсөн .
+  прогресс һәм сикләнгән ресурстарҙы ҡулланыу.
+- **Телеметрия:** Лейн кимәлендәге метрикалар үткәреүсәнлеген, сират тәрәнлеге, срок боҙоуҙар һәм үткәреүсәнлекте ҡулланыуҙы фашлай.
+  CI скрипттары был иҫәп-хисаптың булыуын раҫлай, приборҙар таҡталарын планлаштырыусы менән тура килтереп тотоу өсөн.
 
-## 3. Data spaces (Nexus)
+## 3. Мәғлүмәт урындары (Nexus)- **Изоляция:** Һәр мәғлүмәт киңлеге үҙ консенсус һыҙатын, донъя дәүләт сегментын һәм Кура һаҡлауын һаҡлай. Ошо
+  хосуси домендарҙы хуплай, шул уҡ ваҡытта глобаль SORA Nexus леджер когерент аша якорь һаҡлау.
+- **Якорь:** Даими коммиттар DS хәлен дөйөмләштергән якорь артефакттары етештерә (Меркл тамырҙары, дәлилдәр, дәлилдәр,
+  йөкләмәләр) һәм уларҙы глобаль һыҙатҡа баҫтырып сығарыу өсөн аудит.
+- **Лейн төркөмдәре һәм композиторлыҡ:** Мәғлүмәттәр киңлектәре атом AXT рөхсәт иткән композалылыҡ төркөмдәрен иғлан итә ала.
+  раҫланған ҡатнашыусылар буйынса операциялар. Идара итеү ағзалыҡ үҙгәрештәрен һәм активация эпохаларын контролдә тота.
+- **Һыу-кодлы һаҡлау:** Кура һәм WSV снимоктарын юйыу кодлау параметрҙарын ҡабул итә `(k, m)` масштаблау өсөн мәғлүмәттәр
+  детерминизмды ҡорбан итмәйенсә, доступность. Һауығыу рутиналары юғалған фрагменттарҙы детерминистик яҡтан тергеҙә.
 
-- **Isolation:** Each data space maintains its own consensus lane, world state segment, and Kura storage. This
-  supports privacy domains while keeping the global SORA Nexus ledger coherent through anchors.
-- **Anchors:** Regular commits produce anchor artifacts that summarise the DS state (Merkle roots, proofs,
-  commitments) and publish them to the global lane for auditability.
-- **Lane groups and composability:** Data spaces may declare composability groups that permit atomic AXT
-  transactions across approved participants. Governance controls membership changes and activation epochs.
-- **Erasure-coded storage:** Kura and WSV snapshots adopt erasure coding parameters `(k, m)` to scale data
-  availability without sacrificing determinism. Recovery routines restore missing fragments deterministically.
+## 4. Активтар алмашыу ҡоралы комплекты (AXT)
 
-## 4. Asset Exchange Toolkit (AXT)
+- ** Тасуирлаусы һәм бәйләү:** Клиенттар детерминистик AXT дескрипторҙары төҙөй. `axt_binding` хеш якорь
+  айырым конверттарға тасуирлаусылар, реплейҙы иҫкәртергә һәм консенсус ҡатнашыусыларын тәьмин итеү байт-форт-файл
+  байт Norito файҙалы йөктәр.
+- *Сискаллдар:** IVM `AXT_BEGIN`, `AXT_TOUCH`, һәм `AXT_COMMIT` сискалдары фашлай. Килешеп үҙҙәренең иғлан итә
+  уҡыу/яҙыу йыйылмаһы бер мәғлүмәт киңлеге, хост рөхсәт итеү өсөн атомлылыҡты үтәргә һыҙаттар буйынса.
+- **Ҡушымталар һәм эпохалар:** Батырҙар `(dataspace_id, epoch_id, sub_nonce)`-ға бәйләнгән мөмкинлектәр тотҡаларын ала.
+  Бер үк ваҡытта конфликттарҙы детерминистик яҡтан ҡуллана, канонлы `AxtTrap` кодтарын ҡайтарыу, ҡасан сикләүҙәр .
+  боҙолған.
+- **Сәйәсәтте үтәү:** Ядро хужалары хәҙер AXT сәйәсәте снимоктарын ала, йыһан каталогынан WSV-ла күренә,
+  асыҡ тамыр, маҡсатлы һыҙат, активация-эра, суб-нем, һәм тикшерелгән ваҡыты үткән (`current_slot >= expiry_slot`
+  аборт) хатта минималь һынау хужаларында ла. Сәйәсәт cased dataspace id һәм төҙөлгән һыҙат каталогы шулай
+  тотҡалары үҙҙәренең эмитенты һыҙатынан ҡотола алмай йәки иҫке манифесттар ҡуллана.
+  - Кире кире ҡағыу сәбәптәре детерминистик: билдәһеҙ мәғлүмәттәр киңлеге, асыҡ тамыр тап килмәү, маҡсатлы һыҙат тап килмәүе,
+    to_era түбәндә манифестив активация, суб_түк аҫтында сәйәсәт иҙәне, срогы үткән ручка, юғалған ҡағылыш өсөн
+    ручка мәғлүмәттәр киңлеге, йәки кәрәк саҡта иҫбатлау юҡ.
+- **Дәлилдәр һәм сроктар:** Әүҙем тәҙрә Δ ваҡытында валидаторҙар иҫбатлауҙар, мәғлүмәттәрҙең булыуы өлгөләрен йыя,
+  һәм күренә. Сроктарҙы ҡәнәғәтләндерә алмау AXT детерминистик клиенттар өсөн етәкселек менән детерминистик.
+- **Идара итеү интеграцияһы:** Сәйәсәт модулдәре ниндәй мәғлүмәт киңлектәре AXT, ставка-сик
+  ручкалар, һәм баҫтырып сығарыу аудитор-дуҫ күрһәтә, йөкләмәләрҙе тотоу, нуллификаторҙар, һәм ваҡиғалар журналдары.
 
-- **Descriptor and binding:** Clients construct deterministic AXT descriptors. The `axt_binding` hash anchors
-  descriptors to individual envelopes, preventing replay and ensuring consensus participants validate byte-for-
-  byte Norito payloads.
-- **Syscalls:** The IVM exposes `AXT_BEGIN`, `AXT_TOUCH`, and `AXT_COMMIT` syscalls. Contracts declare their
-  read/write sets per data space, allowing the host to enforce atomicity across lanes.
-- **Handles and epochs:** Wallets obtain capability handles bound to `(dataspace_id, epoch_id, sub_nonce)`.
-  Concurrent uses conflict deterministically, returning canonical `AxtTrap` codes when constraints are
-  violated.
-- **Policy enforcement:** Core hosts now derive AXT policy snapshots from Space Directory manifests in WSV,
-  enforcing manifest root, target lane, activation-era, sub-nonce, and expiry checks (`current_slot >= expiry_slot`
-  aborts) even in minimal test hosts. Policies are keyed by dataspace id and built from the lane catalog so
-  handles cannot escape their issuing lane or use stale manifests.
-  - Rejection reasons are deterministic: unknown dataspace, manifest root mismatch, target lane mismatch,
-    handle_era below manifest activation, sub_nonce below the policy floor, expired handle, missing touch for
-    the handle dataspace, or missing proof when required.
-- **Proofs and deadlines:** During an active window Δ, validators collect proofs, data availability samples,
-  and manifests. Failure to meet deadlines aborts the AXT deterministically with guidance for client retries.
-- **Governance integration:** Policy modules define which data spaces can participate in AXT, rate-limit
-  handles, and publish auditor-friendly manifests capturing commitments, nullifiers, and event logs.
+## 5. Ышаныслы тапшырыу (РБК) һыҙаттары- **Лан-специфик DA:** РБК һыҙат көҙгө һыҙат төркөмдәре, һәр күп һыҙатлы торба үткәргес бағышланған мәғлүмәттәргә эйә булыуын тәьмин итеү
+  доступность гарантиялары.
+- **Бюджеттар өлгөләре:** Валидаторҙар детерминистик үлсәү ҡағиҙәләрен үтәй (`q_in_slot_per_ds`) иҫбатлау өсөн раҫлау өсөн
+  һәм үҙәк координацияһыҙ шаһит материалы.
+- **Редочнены аңлау:** Sumeragi кардиостимулятор ваҡиғалары эритроциттар менән корреляциялау өсөн диагностикалау өсөн туҡталыш һыҙаттары .
+  (ҡара: `scripts/sumeragi_backpressure_log_scraper.py`).
 
-## 5. Reliable Broadcast Commit (RBC) lanes
+## 6. Операциялар һәм миграция
 
-- **Lane-specific DA:** RBC lanes mirror lane groups, ensuring each multi-lane pipeline has dedicated data
-  availability guarantees.
-- **Sampling budgets:** Validators follow deterministic sampling rules (`q_in_slot_per_ds`) to validate proofs
-  and witness material without central coordination.
-- **Backpressure insights:** Sumeragi pacemaker events correlate with RBC statistics to diagnose stalled lanes
-  (see `scripts/sumeragi_backpressure_log_scraper.py`).
+- **Күсереш планы:** `nexus_transition_notes.md` контурҙары бер һыҙаттан миграцияны фазала (Iroha v2) тиклем.
+  күп һыҙатлы (Iroha v3), шул иҫәптән телеметрия стадияһы, конфигурациялау ҡапҡаһы һәм генезды яңыртыу.
+- **Универсаль селтәр:** SORA Nexus тиҫтерҙәре дөйөм генез һәм идара итеү стекаһы эшләй. Яңы операторҙар бортында 2019 йылға тиклем.
+  мәғлүмәт киңлеген булдырыу (DS) һәм ҡәнәғәтләндерә Nexus ҡабул итеү сәйәсәте урынына айырым селтәрҙәрҙе эшләтеп ебәрергә.
+- **Конфигурация:** Яңы конфигурациялы ручкалар һыҙат бюджеттарын, иҫбатлау сроктарын, AXT квоталарын һәм мәғлүмәттәр-киңлек метамағлүмәттәрен ҡаплай.
+  Ғәҙәттәгесә, операторҙар Nexus режимына ингәнсе консерватив ҡала.
+- **Һынау:** Алтын һынауҙар AXT дескрипторҙарын, һыҙаттарҙы күрһәтә, һәм syscall исемлектәрен тота. Интеграция һынауҙары
+  (`integration_tests/tests/repo.rs`, `crates/ivm/tests/axt_host_flow.rs`) күнекмәләрҙең ос-ос ағымы.
+- **Толлинг:** `kagami` Iroha-се генезия генерацияһын ала, ә приборҙар таҡтаһы скрипттары һыҙат үткәреүсәнлеген раҫлай,
+  иҫбатлау бюджеттары, һәм РБК һаулыҡ.
 
-## 6. Operations and migration
+## 7. Юл картаһы
 
-- **Transition plan:** `nexus_transition_notes.md` outlines phased migration from single-lane (Iroha v2) to
-  multi-lane (Iroha v3), including telemetry staging, config gating, and genesis updates.
-- **Universal network:** SORA Nexus peers run a common genesis and governance stack. New operators onboard by
-  creating a data space (DS) and satisfying Nexus admission policies instead of launching standalone networks.
-- **Configuration:** New config knobs cover lane budgets, proof deadlines, AXT quotas, and data-space metadata.
-  Defaults remain conservative until operators opt into Nexus mode.
-- **Testing:** Golden tests capture AXT descriptors, lane manifests, and syscall lists. Integration tests
-  (`integration_tests/tests/repo.rs`, `crates/ivm/tests/axt_host_flow.rs`) exercise end-to-end flows.
-- **Tooling:** `kagami` gains Nexus-aware genesis generation, and dashboard scripts validate lane throughput,
-  proof budgets, and RBC health.
+- **1-се фаза:** Урындағы AXT ярҙамы һәм аудит менән бер доменлы күп һыҙатлы башҡарыу мөмкинлеген бирергә.
+- ** 2-се фаза:** Рөхсәт ителгән домен аша AXT һәм телеметрияны ҡаплауҙы киңәйтеү өсөн композалылыҡ төркөмдәрен әүҙемләштереү.
+- **3-сө этап:** Тулы тулы Nexus мәғлүмәт-киңлек федерацияһы, юйыу-кодлы һаҡлау, һәм алдынғы дәлилдәр бүлешергә.
 
-## 7. Roadmap
-
-- **Phase 1:** Enable single-domain multi-lane execution with local AXT support and auditing.
-- **Phase 2:** Activate composability groups for permissioned cross-domain AXT and expand telemetry coverage.
-- **Phase 3:** Roll out full Nexus data-space federation, erasure-coded storage, and advanced proof sharing.
-
-Status updates live in `roadmap.md` and `status.md`. Contributions aligning with the Nexus design should follow
-the deterministic execution and governance policies established for v3.
+Статус яңыртыуҙар тура эфирҙа `roadmap.md` һәм `status.md`. Nexus дизайн менән тура килтереп иғәнә тейеш.
+детерминистик башҡарыу һәм идара итеү сәйәсәте өсөн булдырылған v3.

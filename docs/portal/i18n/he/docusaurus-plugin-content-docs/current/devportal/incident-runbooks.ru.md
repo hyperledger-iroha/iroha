@@ -4,9 +4,11 @@ direction: rtl
 source: docs/portal/docs/devportal/incident-runbooks.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Ранбуки инцидентов и тренировки rollback
+# Ранбуки инцидентов и тренировки חזרה לאחור
 
 ## Назначение
 
@@ -14,53 +16,53 @@ generator: docs/portal/scripts/sync-i18n.mjs
 операторы портала могли восстанавливаться после сбоев доставки без догадок. Эта заметка
 охватывает три высокосигнальных инцидента - неудачные деплои, деградацию репликации и
 сбои аналитики - и документирует квартальные тренировки, доказывающие, что rollback alias
-и синтетическая валидация продолжают работать end to end.
+и синтетическая валидация продолжают работать מקצה לקצה.
 
 ### Связанные материалы
 
-- [`devportal/deploy-guide`](./deploy-guide) — workflow упаковки, подписи и promotion alias.
-- [`devportal/observability`](./observability) — release tags, analytics и probes, упомянутые ниже.
+- [`devportal/deploy-guide`](./deploy-guide) - זרימת עבודה упаковки, подписи וכינוי קידום.
+- [`devportal/observability`](./observability) - תגי שחרור, ניתוחים ובדיקות, פעולות לא.
 - `docs/source/sorafs_node_client_protocol.md`
-  и [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
+  ו [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
   — телеметрия реестра и пороги эскалации.
-- `docs/portal/scripts/sorafs-pin-release.sh` и helpers `npm run probe:*`
+- `docs/portal/scripts/sorafs-pin-release.sh` ועזרים `npm run probe:*`
   упомянуты в чеклистах.
 
 ### Общая телеметрия и инструменты
 
 | Сигнал / Инструмент | Назначение |
 | ------------- | ------- |
-| `torii_sorafs_replication_sla_total` (met/missed/pending) | Выявляет остановки репликации и нарушения SLA. |
-| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Измеряет глубину backlog и задержку завершения для triage. |
-| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Показывает сбои со стороны gateway, часто следующие за плохим deploy. |
-| `npm run probe:portal` / `npm run probe:tryit-proxy` | Синтетические probes, которые gate релизы и проверяют rollbacks. |
-| `npm run check:links` | Gate битых ссылок; используется после каждой mitigation. |
-| `sorafs_cli manifest submit ... --alias-*` (через `scripts/sorafs-pin-release.sh`) | Механизм promotion/revert alias. |
-| `Docs Portal Publishing` Grafana board (`dashboards/grafana/docs_portal.json`) | Агрегирует refusals/alias/TLS/replication телеметрию. Алерты PagerDuty ссылаются на эти панели как на доказательства. |
+| `torii_sorafs_replication_sla_total` (נפגש/הוחמצה/בהמתנה) | Выявляет остановки репликации и нарушения SLA. |
+| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Измеряет глубину backlog и задержку завершения לטריאג'. |
+| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Показывает сбои со стороны gateway, часто следующие за плохим. |
+| `npm run probe:portal` / `npm run probe:tryit-proxy` | בדיקות סינתטיות, בדיקות שערים וחידושים. |
+| `npm run check:links` | שער битых ссылок; используется после каждой הפחתה. |
+| `sorafs_cli manifest submit ... --alias-*` (через `scripts/sorafs-pin-release.sh`) | קידום/כינוי החזרה של Механизм. |
+| לוח `Docs Portal Publishing` Grafana (`dashboards/grafana/docs_portal.json`) | Агрегирует סרבנות/כינוי/TLS/רפליקציה телеметрию. Алерты PagerDuty ссылаются на эти панели как на доказательства. |
 
-## Ранбук - Неудачный деплой или плохой артефакт
+## ראנבוק - Неудачный деплой или плохой артефакт
 
 ### Условия срабатывания
 
-- Пробы preview/production падают (`npm run probe:portal -- --expect-release=...`).
-- Grafana alerts на `torii_sorafs_gateway_refusals_total` или
-  `torii_sorafs_manifest_submit_total{status="error"}` после rollout.
-- QA вручную замечает сломанные маршруты или сбои proxy Try it сразу после
-  promotion alias.
+- תוכנית תצוגה מקדימה/הפקה של Пробы (`npm run probe:portal -- --expect-release=...`).
+- התראות Grafana עבור `torii_sorafs_gateway_refusals_total` או
+  השקה של `torii_sorafs_manifest_submit_total{status="error"}`.
+- QA вручную замечает сломанные маршруты или сбои proxy נסה זאת сразу после
+  כינוי קידום.
 
 ### Немедленное сдерживание
 
-1. **Заморозить деплой:** отметить CI pipeline `DEPLOY_FREEZE=1` (input GitHub workflow)
-   или приостановить Jenkins job, чтобы новые артефакты не выходили.
+1. **Заморозить деплой:** отметить CI pipeline `DEPLOY_FREEZE=1` (זרימת עבודה של GitHub קלט)
+   или приостановить ג'נקינס עבודה, чтобы новые артефакты не выходили.
 2. **Зафиксировать артефакты:** скачать `build/checksums.sha256`,
-   `portal.manifest*.{json,to,bundle,sig}`, и вывод probes из failing build,
+   `portal.manifest*.{json,to,bundle,sig}`, ובדיקות בדיקה שנכשלו בבנייה,
    чтобы rollback ссылался на точные digests.
-3. **Уведомить стейкхолдеров:** storage SRE, lead Docs/DevRel и governance duty officer
+3. **Уведомить стейкхолдеров:** SRE אחסון, Docs/DevRel מוביל וקצין ניהול ממשל
    (особенно если затронут `docs.sora`).
 
-### Процедура rollback
+### החזרה לאחור של Процедура
 
-1. Определить last-known-good (LKG) manifest. Production workflow хранит их в
+1. Определить המניפסט האחרון הידוע-טוב (LKG). זרימת עבודה של ייצור хранит их в
    `artifacts/devportal/<release>/sorafs/portal.manifest.to`.
 2. Перепривязать alias к этому manifest с помощью shipping helper:
 
@@ -99,118 +101,114 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --summary-out artifacts/.../sorafs/rollback.submit.json
 ```
 
-3. Записать summary rollback в incident ticket вместе с digest LKG и неудачного manifest.
+3. החזרת תקציר לכרטיס אירוע вместе с digest LKG и неудачного מניפסט.
 
 ### Валидация
 
 1. `npm run probe:portal -- --expect-release=${LKG_TAG}`.
 2. `npm run check:links`.
-3. `sorafs_cli manifest verify-signature ...` и `sorafs_cli proof verify ...`
-   (см. deploy guide), чтобы убедиться, что repromoted manifest совпадает с архивным CAR.
+3. `sorafs_cli manifest verify-signature ...` ו-`sorafs_cli proof verify ...`
+   (מדריך לפריסה), чтобы убедиться, что מניפסט מקודם מחדש совпадает с архивным CAR.
 4. `npm run probe:tryit-proxy` чтобы убедиться, что Try-It staging proxy вернулся.
 
-### После инцидента
-
-1. Включить pipeline деплоя только после понимания root cause.
-2. Дополнить раздел "Lessons learned" в [`devportal/deploy-guide`](./deploy-guide)
+### После инцидента1. Включить צינור деплоя только после понимания שורש הסיבה.
+2. Дополнить раздел "לקחים שנלמדו" ב-[`devportal/deploy-guide`](./deploy-guide)
    новыми выводами, если есть.
-3. Завести defects для провалившихся тестов (probe, link checker, и т.д.).
+3. פגמים Завести для провалившихся тестов (בדיקה, בודק קישורים, וכן т.д.).
 
-## Ранбук - Деградация репликации
+## ראנבוק - Деградация репликации
 
 ### Условия срабатывания
 
-- Алерт: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
+- אלטרט: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
   clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) <
-  0.95` в течение 10 минут.
-- `torii_sorafs_replication_backlog_total > 10` в течение 10 минут (см.
+  0.95` в течение 10 דקות.
+- `torii_sorafs_replication_backlog_total > 10` в течение 10 דקות (см.
   `pin-registry-ops.md`).
-- Governance сообщает о медленной доступности alias после release.
+- ממשל сообщает о медленной доступности כינוי после שחרור.
 
-### Triage
+### טריאז'
 
-1. Проверить dashboards [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops), чтобы
-   понять, локализован ли backlog в storage class или в fleet провайдеров.
-2. Перепроверить логи Torii на `sorafs_registry::submit_manifest`, чтобы определить,
-   не падают ли submissions.
+1. Проверить לוחות מחוונים [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops), чтобы
+   понять, локализован ли צבר אחסון במחלקת אחסון или в flet провайдеров.
+2. Перепроверить логи Torii על `sorafs_registry::submit_manifest`, чтобы определить,
+   не падают ли הגשות.
 3. Выборочно проверить здоровье реплик через `sorafs_cli manifest status --manifest ...`
    (показывает исходы репликации по провайдерам).
 
-### Mitigation
+### הקלה
 
 1. Перевыпустить manifest с более высоким числом реплик (`--pin-min-replicas 7`) через
-   `scripts/sorafs-pin-release.sh`, чтобы scheduler распределил нагрузку на больший набор
-   провайдеров. Зафиксировать новый digest в incident log.
-2. Если backlog привязан к одному провайдеру, временно отключить его через replication scheduler
-   (описано в `pin-registry-ops.md`) и отправить новый manifest, принуждающий остальных
-   провайдеров обновить alias.
-3. Когда свежесть alias важнее parity репликации, rebind alias на warm manifest уже в staging
-   (`docs-preview`), затем опубликовать follow-up manifest после очистки backlog SRE.
+   `scripts/sorafs-pin-release.sh`, מתזמן чтобы распределил нагрузку на больший набор
+   провайдеров. Зафиксировать новый digest в יומן אירועים.
+2. Если backlog привязан к одному провайдеру, временно отключить его через מתזמן השכפול
+   (описано в `pin-registry-ops.md`) и отправить новый מניפסט, принуждающий остальных
+   провайдеров обновить כינוי.
+3. Когда свежесть alias важнее parity репликации, התחבר מחדש כינוי на warm manifest уже в staging
+   (`docs-preview`), затем опубликовать המשך מניפסט после очистки backlog SRE.
 
-### Recovery & closure
+### שחזור וסגירה
 
 1. Мониторить `torii_sorafs_replication_sla_total{outcome="missed"}` и убедиться, что
    счетчик стабилизировался.
-2. Сохранить вывод `sorafs_cli manifest status` как evidence, что каждая реплика снова в норме.
-3. Создать или обновить replication backlog post-mortem с дальнейшими шагами
-   (масштабирование провайдеров, tuning chunker, и т.д.).
+2. Сохранить вывод `sorafs_cli manifest status` как הוכחות, что каждая реплика снова в норме.
+3. צור או בטל צבר שכפול שלאחר המוות с дальнейшими шагами
+   (масштабирование провайдеров, chunker כוונון, и т.д.).
 
-## Ранбук - Отключение аналитики или телеметрии
+## ראנבוק - Отключение аналитики или телеметрии
 
 ### Условия срабатывания
 
-- `npm run probe:portal` проходит, но dashboards перестают принимать события
-  `AnalyticsTracker` более чем на 15 минут.
-- Privacy review фиксирует неожиданный рост dropped events.
-- `npm run probe:tryit-proxy` падает на путях `/probe/analytics`.
+- `npm run probe:portal` מוצר, אין לוחות מחוונים перестают принимать события
+  `AnalyticsTracker` עוד זמן של 15 דקות.
+- סקירת פרטיות фиксирует неожиданный рост הורידו אירועים.
+- `npm run probe:tryit-proxy` רכיב על מכשיר `/probe/analytics`.
 
-### Response
+### תגובה
 
-1. Проверить build-time inputs: `DOCS_ANALYTICS_ENDPOINT` и
-   `DOCS_ANALYTICS_SAMPLE_RATE` в release artifact (`build/release.json`).
+1. צור כניסות בזמן בנייה: `DOCS_ANALYTICS_ENDPOINT` и
+   `DOCS_ANALYTICS_SAMPLE_RATE` עם חפץ שחרור (`build/release.json`).
 2. Перезапустить `npm run probe:portal` с `DOCS_ANALYTICS_ENDPOINT`, направленным
-   на staging collector, чтобы подтвердить, что tracker продолжает слать payloads.
-3. Если collectors недоступны, установить `DOCS_ANALYTICS_ENDPOINT=""` и rebuild,
-   чтобы tracker short-circuit; зафиксировать окно outage в incident timeline.
-4. Проверить, что `scripts/check-links.mjs` продолжает fingerprint `checksums.sha256`
-   (аналитические сбои *не* должны блокировать проверку sitemap).
+   על אספן בימוי, чтобы подтвердить, что tracker продолжает слать מטענים.
+3. אוספים אספנות חדשים, התקן את `DOCS_ANALYTICS_ENDPOINT=""` ובניה מחדש,
+   чтобы גשש קצר חשמלי; зафиксировать окно הפסקה בציר הזמן של תקרית.
+4. Проверить, что `scripts/check-links.mjs` продолжает טביעת אצבע `checksums.sha256`
+   (аналитические сбои *не* должны блокировать проверку מפת האתר).
 5. После восстановления collector запустить `npm run test:widgets`, чтобы прогнать
-   unit tests analytics helper перед republish.
+   העוזר לניתוח בדיקות יחידה перед לפרסם מחדש.
 
-### После инцидента
-
-1. Обновить [`devportal/observability`](./observability) с новыми ограничениями
-   collector или требованиями sampling.
-2. Выпустить governance notice, если данные analytics были потеряны или отредактированы
+### После инцидента1. Обновить [`devportal/observability`](./observability) с новыми ограничениями
+   אספן или требованиями דגימה.
+2. Выпустить הודעת ממשל, если данные analytics были потеряны или отредактированы
    вне политики.
 
 ## Квартальные учения по устойчивости
 
-Запускайте оба drill в **первый вторник каждого квартала** (Jan/Apr/Jul/Oct)
+מקדחה Запускайте оба в **первый вторник каждого квартала** (ינואר/אפריל/יולי/אוקטובר)
 или сразу после любого крупного изменения инфраструктуры. Храните артефакты в
 `artifacts/devportal/drills/<YYYYMMDD>/`.
 
 | Учение | Шаги | Доказательства |
 | ----- | ----- | -------- |
-| Репетиция alias rollback | 1. Повторить rollback "Failed deployment" с самым свежим production manifest.<br/>2. Re-bind на production после успешных probes.<br/>3. Сохранить `portal.manifest.submit.summary.json` и логи probes в папке drill. | `rollback.submit.json`, вывод probes и release tag репетиции. |
-| Аудит синтетической валидации | 1. Запустить `npm run probe:portal` и `npm run probe:tryit-proxy` против production и staging.<br/>2. Запустить `npm run check:links` и архивировать `build/link-report.json`.<br/>3. Приложить screenshots/exports панелей Grafana, подтверждающих успех probes. | Логи probes + `link-report.json` со ссылкой на fingerprint manifest. |
+| Репетиция כינוי rollback | 1. פנה להחזרה של "פריסה נכשלה" עם מניפסט ייצור של самым свежим.<br/>2. חיבור מחדש בבדיקות ייצור после успешных.<br/>3. Сохранить `portal.manifest.submit.summary.json` и логи בדיקות в папке מקדחה. | `rollback.submit.json`, вывод בדיקות и שחרור תג репетиции. |
+| Аудит синтетической валидации | 1. Запустить `npm run probe:portal` ו-`npm run probe:tryit-proxy` ייצור ובמה.<br/>2. Запустить `npm run check:links` ו архивировать `build/link-report.json`.<br/>3. Приложить צילומי מסך/ייצוא панелей Grafana, подтверждающих успех בדיקות. | Логи probes + `link-report.json` со ссылкой на מניפסט טביעת אצבע. |
 
 Эскалируйте пропущенные drills менеджеру Docs/DevRel и на review governance SRE,
-так как roadmap требует детерминированных квартальных доказательств, что alias rollback
-и portal probes остаются здоровыми.
+так как מפת הדרכים требует детерминированных квартальных доказательств, что alias rollback
+и בדיקות פורטל остаются здоровыми.
 
-## PagerDuty и on-call координация
+## PagerDuty и כוננות координация
 
-- Сервис PagerDuty **Docs Portal Publishing** владеет алертами из
+- סרוויס PagerDuty **Docs Portal Publishing** владеет алертами из
   `dashboards/grafana/docs_portal.json`. Правила `DocsPortal/GatewayRefusals`,
-  `DocsPortal/AliasCache` и `DocsPortal/TLSExpiry` пейджат primary Docs/DevRel
-  с Storage SRE как secondary.
-- При пейджинге укажите `DOCS_RELEASE_TAG`, приложите screenshots затронутых
-  панелей Grafana и добавьте вывод probe/link-check в заметки инцидента до
-  начала mitigation.
-- После mitigation (rollback или redeploy) повторно запустите `npm run probe:portal`,
-  `npm run check:links` и сохраните свежие Grafana snapshots, показывающие возврат метрик
-  в пороги. Приложите все evidence к инциденту PagerDuty до закрытия.
-- Если два алерта срабатывают одновременно (например TLS expiry и backlog), сначала
-  triage refusals (остановить publishing), выполнить rollback, затем закрыть TLS/backlog
-  с Storage SRE на bridge.
+  `DocsPortal/AliasCache` ו-`DocsPortal/TLSExpiry` מציגים Docs/DevRel הראשיים
+  с Storage SRE как משני.
+- При пейджинге укажите `DOCS_RELEASE_TAG`, приложите צילומי מסך затронутых
+  панелей Grafana ואפשר לבצע בדיקה/בדיקת קישור לבדיקה.
+  начала הקלה.
+- הפחתת אמצעים (החזרה או פריסה מחדש) повторно запустите `npm run probe:portal`,
+  `npm run check:links` וצילום תמונות Grafana, צילום מדדים
+  в пороги. Приложите все הוכחות к инциденту PagerDuty до закрытия.
+- Если два алерта срабатывают одновременно (לדוגמה, תפוגה של TLS או צבר הזמנות), сначала
+  סירובי טריאז' (остановить פרסום), выполнить rollback, затем закрыть TLS/backlog
+  с Storage SRE על גשר.

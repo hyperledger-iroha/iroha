@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+::: Eslatma Kanonik manba
+Nometall `docs/source/sorafs_repair_plan.md`. Sphinx to'plami tugagunga qadar ikkala versiyani ham sinxronlashtiring.
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## Boshqaruv qarorlarining hayot aylanishi
+1. Ko'tarilgan ta'mirlash slash taklif loyihasini yaratadi va bahs oynasini ochadi.
+2. Boshqaruv saylovchilari nizolar oynasida ma'qullash/rad etish ovozlarini beradilar.
+3. `escalated_at_unix + dispute_window_secs` da qaror deterministik tarzda hisoblanadi: minimal saylovchilar, ma'qullashlar rad etishlardan oshib ketadi va ma'qullash nisbati kvorum chegarasiga javob beradi.
+4. Tasdiqlangan qarorlar apellyatsiya oynasini ochadi; `approved_at_unix + appeal_window_secs` dan oldin qayd etilgan shikoyatlar qarorni shikoyat qilingan deb belgilaydi.
+5. Barcha takliflar uchun jarima miqdori qo'llaniladi; chegaradan yuqori bo'lgan arizalar rad etiladi.
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## Boshqaruvni kuchaytirish siyosati
+Eskalatsiya siyosati `iroha_config` da `governance.sorafs_repair_escalation` dan olingan va har bir tuzatish taklifi uchun qo'llaniladi.
 
-| Setting | Default | Meaning |
+| Sozlama | Standart | Ma'nosi |
 |---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `quorum_bps` | 6667 | Hisoblangan ovozlar orasida minimal ma'qullash nisbati (asosiy ball). |
+| `minimum_voters` | 3 | Qarorni hal qilish uchun zarur bo'lgan alohida saylovchilarning minimal soni. |
+| `dispute_window_secs` | 86400 | Ovoz berish yakunlangunga qadar kuchaygan vaqt (sekundlar). |
+| `appeal_window_secs` | 604800 | Tasdiqlangandan keyin murojaatlar qabul qilinadigan vaqt (sekundlar). |
+| `max_penalty_nano` | 1 000 000 000 | Ta'mirlash eskalatsiyasi uchun ruxsat etilgan maksimal slash jazosi (nano-XOR). |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- Rejalashtiruvchi tomonidan yaratilgan takliflar `max_penalty_nano` bilan cheklangan; chegaradan yuqori auditorlik takliflari rad etiladi.
+- Ovoz berish yozuvlari `repair_state.to` da deterministik tartib bilan (`voter_id` saralash) saqlanadi, shuning uchun barcha tugunlar bir xil qaror vaqt tamg'asi va natijasini oladi.

@@ -4,33 +4,33 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-default-lane-quickstart.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-default-lane-quickstart
-title: default lane کوئیک اسٹارٹ (NX-5)
-sidebar_label: default lane کوئیک اسٹارٹ
-description: Nexus کے default lane fallback کو configure اور verify کریں تاکہ Torii اور SDKs public lanes میں lane_id omit کر سکیں۔
+id: nexus-carril-predeterminado-inicio rápido
+título: carril predeterminado کوئیک اسٹارٹ (NX-5)
+sidebar_label: carril predeterminado کوئیک اسٹارٹ
+descripción: Nexus Retorno de carril predeterminado Configurar Verificar Torii SDK carriles públicos Lane_id Omitir Carril público
 ---
 
-:::note Canonical Source
-یہ صفحہ `docs/source/quickstart/default_lane.md` کی عکاسی کرتا ہے۔ جب تک localization sweep پورٹل تک نہیں پہنچتی، دونوں کاپیوں کو aligned رکھیں۔
+:::nota Fuente canónica
+یہ صفحہ `docs/source/quickstart/default_lane.md` کی عکاسی کرتا ہے۔ جب تک barrido de localización پورٹل تک نہیں پہنچتی، دونوں کاپیوں کو alineado رکھیں۔
 :::
 
-# default lane کوئیک اسٹارٹ (NX-5)
+# carril predeterminado کوئیک اسٹارٹ (NX-5)
 
-> **Roadmap context:** NX-5 - default public lane integration۔ runtime اب `nexus.routing_policy.default_lane` fallback ظاہر کرتا ہے تاکہ Torii REST/gRPC endpoints اور ہر SDK اس وقت `lane_id` محفوظ طریقے سے omit کر سکیں جب ٹریفک canonical public lane سے تعلق رکھتا ہو۔ یہ گائیڈ operators کو catalog configure کرنے، `/status` میں fallback verify کرنے، اور end-to-end client behavior exercise کرنے میں رہنمائی کرتی ہے۔
+> **Contexto de la hoja de ruta:** NX-5: integración de carril público predeterminado۔ tiempo de ejecución con `nexus.routing_policy.default_lane` respaldo, configuración de puntos finales Torii REST/gRPC y SDK y `lane_id` طریقے سے omitir کر سکیں جب ٹریفک carril público canónico سے تعلق رکھتا ہو۔ یہ گائیڈ operadores کو configuración del catálogo کرنے، `/status` میں respaldo verificar کرنے، اور ejercicio de comportamiento del cliente de extremo a extremo کرنے میں رہنمائی کرتی ہے۔
 
-## Prerequisites
+## Requisitos previos
 
-- `irohad` کا Sora/Nexus build ( `irohad --sora --config ...` چلائیں ).
-- configuration repository تک رسائی تاکہ `nexus.*` sections edit کیے جا سکیں۔
-- `iroha_cli` جو target cluster سے بات کرنے کے لئے configured ہو۔
-- Torii `/status` payload inspect کرنے کے لئے `curl`/`jq` (یا equivalent).
+- `irohad` کا Sora/Nexus build (`irohad --sora --config ...` چلائیں).
+- repositorio de configuración تک رسائی تاکہ `nexus.*` secciones editar کیے جا سکیں۔
+- `iroha_cli` جو cluster de destino سے بات کرنے کے لئے configurado ہو۔
+- Torii `/status` carga útil inspeccionar کرنے کے لئے `curl`/`jq` (equivalente a یا).
 
-## 1. lane اور dataspace catalog بیان کریں
-
-network پر موجود ہونے والے lanes اور dataspaces کو declare کریں۔ نیچے والا snippet (`defaults/nexus/config.toml` سے) تین public lanes اور matching dataspace aliases register کرتا ہے:
+## 1. carril اور catálogo de espacio de datos بیان کریںred پر موجود ہونے والے carriles اور espacios de datos کو declarar کریں۔ Un fragmento de código (`defaults/nexus/config.toml` سے) de carriles públicos y un registro de alias de espacio de datos coincidente:
 
 ```toml
 [nexus]
@@ -73,11 +73,11 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-ہر `index` منفرد اور contiguous ہونا چاہیے۔ Dataspace ids 64-bit values ہیں؛ اوپر والے مثالیں وضاحت کے لئے lane indexes کے برابر numeric values استعمال کرتی ہیں۔
+ہر `index` منفرد اور ہونا چاہیے۔ Identificadores de espacio de datos con valores de 64 bits ہیں؛ اوپر والے مثالیں وضاحت کے لئے carril índices کے برابر valores numéricos استعمال کرتی ہیں۔
 
-## 2. routing defaults اور optional overrides سیٹ کریں
+## 2. valores predeterminados de enrutamiento y anulaciones opcionales سیٹ کریں
 
-`nexus.routing_policy` سیکشن fallback lane کو control کرتا ہے اور مخصوص instructions یا account prefixes کے لئے routing override کرنے دیتا ہے۔ اگر کوئی rule match نہ کرے تو scheduler ٹرانزیکشن کو configured `default_lane` اور `default_dataspace` پر route کرتا ہے۔ Router logic `crates/iroha_core/src/queue/router.rs` میں ہے اور Torii REST/gRPC surfaces پر پالیسی شفاف انداز میں apply کرتا ہے۔
+`nexus.routing_policy` سیکشن carril alternativo کو control کرتا ہے اور مخصوص instrucciones یا prefijos de cuenta کے لئے anulación de enrutamiento کرنے دیتا ہے۔ اگر کوئی regla de coincidencia نہ کرے تو programador ٹرانزیکشن کو configurado `default_lane` اور `default_dataspace` پر ruta کرتا ہے۔ Lógica del enrutador `crates/iroha_core/src/queue/router.rs` میں ہے اور Torii Superficies REST/gRPC پر پالیسی شفاف انداز میں apply کرتا ہے۔
 
 ```toml
 [nexus.routing_policy]
@@ -100,43 +100,41 @@ description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
 
-## 3. پالیسی کے ساتھ node boot کریں
+## 3. پالیسی کے ساتھ arranque de nodo کریں
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-node startup کے دوران derived routing policy لاگ کرتا ہے۔ کوئی بھی validation errors (missing indexes، duplicated aliases، invalid dataspace ids) gossip شروع ہونے سے پہلے سامنے آ جاتے ہیں۔
+inicio del nodo کے دوران política de enrutamiento derivada لاگ کرتا ہے۔ کوئی بھی errores de validación (índices faltantes, alias duplicados, identificadores de espacio de datos no válidos) chismes شروع ہونے سے پہلے سامنے آ جاتے ہیں۔
 
-## 4. lane governance state کنفرم کریں
+## 4. estado de gobernanza del carril کنفرم کریں
 
-node online ہونے کے بعد، CLI helper استعمال کریں تاکہ default lane sealed (manifest loaded) اور traffic کے لئے ready ہو۔ Summary view ہر lane کے لئے ایک row پرنٹ کرتا ہے:
+nodo en línea ہونے کے بعد، CLI helper استعمال کریں تاکہ carril predeterminado sellado (manifiesto cargado) اور tráfico کے لئے listo ہو۔ Vista de resumen ہر carril کے لئے ایک fila پرنٹ کرتا ہے:
 
 ```bash
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+Salida de ejemplo:
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
    0  core             parliament       ready      05           07  manifest ok
    1  governance       parliament       ready      05           07  manifest ok
    2  zk               parliament       sealed     03           05  manifest required
-```
+```El carril predeterminado `sealed` permite el tráfico externo y el runbook de gobernanza del carril. `--fail-on-sealed` bandera CI کے لئے مفید ہے۔
 
-اگر default lane `sealed` دکھائے تو external traffic allow کرنے سے پہلے lane governance runbook فالو کریں۔ `--fail-on-sealed` flag CI کے لئے مفید ہے۔
+## 5. Las cargas útiles de estado Torii inspeccionan کریں
 
-## 5. Torii status payloads inspect کریں
-
-`/status` response routing policy اور فی-lane scheduler snapshot دونوں expose کرتا ہے۔ `curl`/`jq` استعمال کر کے configured defaults کی تصدیق کریں اور چیک کریں کہ fallback lane telemetery produce کر رہا ہے:
+`/status` Política de enrutamiento de respuesta اور فی-Lane Scheduler Instantánea دونوں exponer کرتا ہے۔ `curl`/`jq` Los valores predeterminados configurados de la telemetría de carril de respaldo producen:
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+Salida de muestra:
 
 ```json
 {
@@ -149,7 +147,7 @@ Sample output:
 }
 ```
 
-lane `0` کے لئے live scheduler counters دیکھنے کے لئے:
+carril `0` کے لئے contadores del programador en vivo دیکھنے کے لئے:
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -157,17 +155,12 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-یہ کنفرم کرتا ہے کہ TEU snapshot، alias metadata، اور manifest flags configuration کے ساتھ align ہیں۔ یہی payload Grafana panels کے lane-ingest dashboard میں استعمال ہوتا ہے۔
+یہ کنفرم کرتا ہے کہ Instantánea de TEU, alias metadatos, اور configuración de indicadores de manifiesto کے ساتھ align ہیں۔ یہی paneles Grafana de carga útil کے tablero de ingesta de carriles میں استعمال ہوتا ہے۔
 
-## 6. client defaults exercise کریں
+## 6. Ejercicio de valores predeterminados del cliente کریں- **Rust/CLI.** `iroha_cli` اور Caja de cliente de Rust `lane_id` campo کو omit کرتے ہیں جب آپ `--lane-id` / `LaneSelector` pass نہیں کرتے۔ اس لئے enrutador de cola `default_lane` پر respaldo کرتا ہے۔ Indicadores explícitos `--lane-id`/`--dataspace-id` de carril no predeterminado y de destino y de destino.
+- **JS/Swift/Android.** Versiones del SDK `laneId`/`lane_id` Opcional مانتے ہیں اور `/status` میں اعلان کردہ valor de reserva کرتے ہیں۔ Política de enrutamiento کو puesta en escena اور producción میں sincronización رکھیں تاکہ aplicaciones móviles کو reconfiguraciones de emergencia نہ کرنی پڑیں۔
+- **Pruebas de canalización/SSE.** filtros de eventos de transacción Predicados `tx_lane_id == <u32>` قبول کرتے ہیں (دیکھیں `docs/source/pipeline.md`). `/v1/pipeline/events/transactions` کو اس filtro کے ساتھ suscribirse کریں تاکہ یہ ثابت ہو کہ carril explícito کے بغیر بھیجی گئی escribe ID de carril alternativo کے تحت پہنچتی ہیں۔
 
-- **Rust/CLI.** `iroha_cli` اور Rust client crate `lane_id` field کو omit کرتے ہیں جب آپ `--lane-id` / `LaneSelector` pass نہیں کرتے۔ اس لئے queue router `default_lane` پر fallback کرتا ہے۔ Explicit `--lane-id`/`--dataspace-id` flags صرف non-default lane کو target کرتے وقت استعمال کریں۔
-- **JS/Swift/Android.** تازہ SDK releases `laneId`/`lane_id` کو optional مانتے ہیں اور `/status` میں اعلان کردہ value پر fallback کرتے ہیں۔ Routing policy کو staging اور production میں sync رکھیں تاکہ mobile apps کو emergency reconfigurations نہ کرنی پڑیں۔
-- **Pipeline/SSE tests.** transaction event filters `tx_lane_id == <u32>` predicates قبول کرتے ہیں (دیکھیں `docs/source/pipeline.md`). `/v1/pipeline/events/transactions` کو اس filter کے ساتھ subscribe کریں تاکہ یہ ثابت ہو کہ explicit lane کے بغیر بھیجی گئی writes fallback lane id کے تحت پہنچتی ہیں۔
-
-## 7. Observability اور governance hooks
-
-- `/status` `nexus_lane_governance_sealed_total` اور `nexus_lane_governance_sealed_aliases` بھی publish کرتا ہے تاکہ Alertmanager warn کر سکے جب کوئی lane اپنا manifest کھو دے۔ ان alerts کو devnets میں بھی enabled رکھیں۔
-- scheduler telemetry map اور lane governance dashboard (`dashboards/grafana/nexus_lanes.json`) catalog کے alias/slug fields expect کرتے ہیں۔ اگر آپ alias rename کریں تو متعلقہ Kura directories کو relabel کریں تاکہ auditors deterministic paths رکھ سکیں (NX-1 کے تحت track ہوتا ہے)۔
-- default lanes کے لئے parliament approvals میں rollback plan شامل ہونا چاہیے۔ manifest hash اور governance evidence کو اس quickstart کے ساتھ اپنے operator runbook میں record کریں تاکہ future rotations مطلوبہ state کا اندازہ نہ لگائیں۔
-
+## 7. Ganchos de observabilidad y gobernanza- `/status` `nexus_lane_governance_sealed_total` اور `nexus_lane_governance_sealed_aliases` بھی publicar کرتا ہے تاکہ Alertmanager warn کر سکے جب کوئی carril اپنا manifiesto کھو دے۔ ان alertas کو devnets میں بھی habilitado رکھیں۔
+- mapa de telemetría del programador اور panel de control de carril (`dashboards/grafana/nexus_lanes.json`) catálogo کے alias/campos slug esperar کرتے ہیں۔ اگر آپ alias cambiar nombre کریں تو متعلقہ Directorios Kura کو reetiqueta کریں تاکہ auditores rutas deterministas رکھ سکیں (NX-1 کے تحت pista ہوتا ہے)۔
+- carriles predeterminados کے لئے aprobaciones del parlamento میں plan de reversión شامل ہونا چاہیے۔ hash manifiesto اور evidencia de gobernanza کو اس inicio rápido کے ساتھ اپنے operador runbook میں registro کریں تاکہ rotaciones futuras مطلوبہ estado کا اندازہ نہ لگائیں۔

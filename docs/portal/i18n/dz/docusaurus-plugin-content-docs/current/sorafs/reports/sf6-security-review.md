@@ -6,71 +6,73 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SF-6 Security Review
 summary: Findings and follow-up items from the independent assessment of keyless signing, proof streaming, and manifest submission pipelines.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SF-6 Security Review
+# SF-6 ཉེན་སྲུང་བསྐྱར་ཞིབ།
 
-**Assessment window:** 2026-02-10 → 2026-02-18  
-**Review leads:** Security Engineering Guild (`@sec-eng`), Tooling Working Group (`@tooling-wg`)  
-**Scope:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, Torii manifest handling, Sigstore/OIDC integration, CI release hooks.  
-**Artifacts:**  
-- CLI source and tests (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
-- Torii manifest/proof handlers (`crates/iroha_torii/src/sorafs/api.rs`)  
-- Release automation (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
-- Deterministic parity harness (`crates/sorafs_car/tests/sorafs_cli.rs`, [SoraFS Orchestrator GA Parity Report](./orchestrator-ga-parity.md))
+**བརྟག་ཞིབ་སྒོ་སྒྲིག་:** ༢༠༢༦-༠༢-༡༠ → ༢༠༢༦-༠༢-༡༨  
+**བསྐྱར་ཞིབ་འགོ་འཁྲིད་འབདཝ་ཨིན་:** ཉེན་སྲུང་བཟོ་རིག་ཚོགས་སྡེ་ (I18NI0000019X), ལག་ཆས་ལཱ་འབད་མི་སྡེ་ཚན་ (`@tooling-wg`)  
+**ཁྱབ་ཁོངས་:** I18NT0000003X སི་ཨེལ་ཨའི་/ཨེསི་ཌི་ཀེ་ (`sorafs_cli`, I18NI000000022X, I18NI0000000023X), ནུས་འཛིན་གྱི་ རྒྱུན་ལམ་ཨེ་པི་ཨའི་ I18NT0000005X གིས་ འཛིན་སྐྱོང་གསལ་སྟོན་འབདཝ་ཨིན། Sigstore/I18NT00000011 མཉམ་བསྡོམས་།, CI གསར་བཏོན་ཧུཀསི།  
+**གནས་ཁོངས་:**  
+- སི་ཨེལ་ཨའི་འབྱུང་ཁུངས་དང་བརྟག་དཔྱད་ (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
+- Torii གསལ་སྟོན་/བདེན་དཔང་འཛིན་སྐྱོང་པ་ (`crates/iroha_torii/src/sorafs/api.rs`)  
+- རང་བཞིན་གསར་བཏོན་ (`ci/check_sorafs_cli_release.sh`, I18NI0000027X)  
+- བདེ་ཐང་ཅན་གྱི་ཆ་སྙོམས་ཀྱི་ཡོ་ཆས་ (I18NI0000028X, [SoraFS གི་སྡེ་ཚན་ GA ཆ་སྙོམས་སྙན་ཞུ།](I18NU000000014X))
 
-## Methodology
+## ཐབས་ལམ།
 
-1. **Threat modelling workshops** mapped attacker capabilities for developer workstations, CI systems, and Torii nodes.  
-2. **Code review** focused on credential surfaces (OIDC token exchange, keyless signing), Norito manifest validation, and proof streaming back-pressure.  
-3. **Dynamic testing** replayed fixture manifests and simulated failure modes (token replay, manifest tampering, truncated proof streams) using the parity harness and bespoke fuzz drives.  
-4. **Configuration inspection** validated `iroha_config` defaults, CLI flag handling, and release scripts to ensure deterministic, auditable runs.  
-5. **Process interview** confirmed remediation flow, escalation paths, and audit evidence capture with Tooling WG release owners.
+1. **དཔེ་ཚད་བཟོ་ནིའི་ལས་རིམ་** གོང་འཕེལ་གཏང་མི་ལཱ་འབད་སའི་ས་ཁོངས་དང་ CI ལམ་ལུགས་ དེ་ལས་ Torii མཛུབ་གནོན་ཚུ་གི་དོན་ལུ་ སབ་ཁྲ་བཟོ་བའི་ནུས་པ།  
+2. **Code བསྐྱར་ཞིབ་** ངོས་ལེན་ཁ་ཐོག་ལུ་གཙོ་བོར་བཏོན་ཡོདཔ་ཨིན། (I18NT0000012X ཊོ་ཀེན་བརྗེ་སོར་དང་ ལྡེ་མིག་མེད་པའི་མིང་རྟགས་བཀོད་ནི།) I18NT000000001X གསལ་སྟོན་བདེན་དཔང་དང་ བདེན་ཁུངས་ཀྱི་རྒྱུན་ལམ་རྒྱབ་བསྐྱོད་གནོན་ཤུགས་ལུ་གཙོ་བོར་བསྟེན།  
+3. **Dynamic dess** བསྐྱར་རྩེད་ཀྱི་བདེན་དཔང་དང་ བརྡ་སྟོན་གྱི་ འཐུས་ཤོར་གྱི་ཐབས་ལམ་ཚུ་ (བསྐྱར་རྩེད་དང་ གསལ་སྟོན་འབད་ནི་ གསལ་སྟོན་ བསྒྱིར་ཡོད་པའི་ བདེན་དཔྱད་རྒྱུན་ལམ་ཚུ་) ཚུ་ ཆ་སྙོམས་དང་ བེ་སི་པོཀ་ཕཱ་ཛི་འདྲེན་འཕྲུལ་ཚུ་ལག་ལེན་འཐབ་སྟེ་ཨིན།  
+4. **རིམ་སྒྲིག་ཞིབ་དཔྱད་** བདེན་དཔྱད་འབད་ཡོད་པའི་ I18NI0000029X སྔོན་སྒྲིག་དང་ སི་ཨེལ་ཨའི་ དར་ཆ་འཛིན་སྐྱོང་ དེ་ལས་ གཏན་འབེབས་བཟོ་བཏུབ་པའི་ རྒྱུག་འགྲན་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ ཡིག་གཟུགས་ཚུ་ བཏོན་གཏང་།  
+༥༽ **བྱ་རིམ་གྱི་དྲི་ལན་** ངེས་གཏན་བཟོ་སྟེ་ བཅོ་ཁ་རྐྱབ་ནིའི་རྒྱུན་ལམ་དང་ ཡར་འཕར་གྱི་ལམ་ལུགས་ དེ་ལས་ རྩིས་ཞིབ་ཀྱི་ སྒྲུབ་བྱེད་ཚུ་ ལག་ཆས་ ཌབ་ལུ་ཇི་ གསར་བཏོན་འབད་མི་ ཇོ་བདག་ཚུ་གིས་ བཟུང་ཡོདཔ་ཨིན།
 
-## Findings Summary
+## ཕནྡྷི་གནད་བསྡུས།
 
-| ID | Severity | Area | Finding | Resolution |
-|----|----------|------|---------|------------|
-| SF6-SR-01 | High | Keyless signing | OIDC token audience defaults were implicit in CI templates, risking cross-tenant replay. | Added explicit `--identity-token-audience` enforcement in release hooks and CI templates ([release process](../developer-releases.md), `docs/examples/sorafs_ci.md`). CI now fails when the audience is omitted. |
-| SF6-SR-02 | Medium | Proof streaming | Back-pressure paths accepted unbounded subscriber buffers, enabling memory exhaustion. | `sorafs_cli proof stream` enforces bounded channel sizes with deterministic truncation, logging Norito summaries and aborting the stream; Torii mirror updated to bound response chunks (`crates/iroha_torii/src/sorafs/api.rs`). |
-| SF6-SR-03 | Medium | Manifest submission | CLI accepted manifests without verifying embedded chunk plans when `--plan` was absent. | `sorafs_cli manifest submit` now recomputes and compares CAR digests unless `--expect-plan-digest` is provided, rejecting mismatches and surfacing remediation hints. Tests cover success/failure cases (`crates/sorafs_car/tests/sorafs_cli.rs`). |
-| SF6-SR-04 | Low | Audit trail | Release checklist lacked a signed approval log for the security review. | Added [release process](../developer-releases.md) section requiring attachment of review memo hashes and sign-off ticket URL before GA. |
+| ID | ཚབས་ཆེན། | ས་ཁོངས་ | འཚོལ་བ། | གྲོས་ཆོད་ |
+|--|-|-|--------------------------------------------|
+| ཨེསི་ཨེཕ་༦-ཨེསི་ཨར་-༠༡ | མཐོ་ཚད་ | ལྡེ་མིག་མེད་རྟགས་ | OIDC ཊོ་ཀེན་ལྟདམོ་ལྟ་མི་སྔོན་སྒྲིག་ཚུ་ CI ཊེམ་པེལེཊི་ཚུ་ནང་ མངོན་གསལ་ཅན་སྦེ་ཡོདཔ་ལས་ ཁང་གླར་སྡོད་མི་ བསྐྱར་རྩེད་ལུ་ ཉེན་ཁ་ཡོདཔ་ཨིན། | ཧུཀ་དང་ སི་ཨའི་ ཊེམ་པེལེཊི་ཚུ་ནང་ གསལ་སྟོན་གྱི་ གསལ་རི་རི་ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༣༠ཨེགསི་ ཁ་སྐོང་འབད་ཡོདཔ་ཨིན་ ([གསར་བཏོན་བྱ་རིམ་](I༡༨NU00000015X), `docs/examples/sorafs_ci.md`). CI ད་ལྟ་ ལྟདམོ་ལྟ་མི་ཚུ་ བཏོན་བཏང་པའི་སྐབས་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན། |
+| SF6-SR-02 | བར་མ། | བདེན་དཔང་རྒྱུན་ལམ་ | རྒྱབ་ལོག་གནོན་ཤུགས་འགྲུལ་ལམ་ཚུ་གིས་ མཐའ་མེད་ཀྱི་ མཁོ་མངགས་འབད་མི་ བཱ་ཕར་ཚུ་ ངོས་ལེན་འབད་དེ་ དྲན་ཚད་ཀྱི་ ཐང་ཆད་ཚུ་ ལྕོགས་ཅན་བཟོཝ་ཨིན། | `sorafs_cli proof stream` གིས་ མཐའ་མཚམས་ཅན་གྱི་རྒྱུ་ལམ་གྱི་ཚད་ཚུ་ གཏན་འབེབས་བཟོ་ནིའི་ བཏོག་བཏོགཔ་ཨིན་ དེ་ལས་ Norito བཅུད་བསྡུས་ཚུ་ ནང་བསྐྱོད་འབད་དེ་ རྒྱུན་ལམ་བཀག་ཆ་འབདཝ་ཨིན། Torii མཐུད་ལམ་ལན་འདེབས་ཆ་ཤས་ཚུ་ (`crates/iroha_torii/src/sorafs/api.rs`) ལུ་དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན། |
+| SF6-SR-03 | བར་མ། | མངོན་གསལ་གྱི་ཕུལ་ནི། | CLI གིས་ I18NI000000034X མེད་པའི་སྐབས་ བཙུགས་ཡོད་པའི་ཆ་ཤས་འཆར་གཞི་ཚུ་ བདེན་དཔྱད་མ་འབད་བར་ ངོས་ལེན་འབད་ཡོདཔ་ཨིན། | `sorafs_cli manifest submit` ད་ལྟ་ `--expect-plan-digest` མ་བྱིན་ཚུན་ཚོད་ CAR བཞུ་སྟེ་ ག་བསྡུར་འབདཝ་ཨིན། བརྟག་དཔྱད་ཚུ་གིས་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་གནད་དོན་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན། (`crates/sorafs_car/tests/sorafs_cli.rs`) |
+| SF6-SR-04 | དམའ་བ་ | རྩིས་ཞིབ་ལམ་ལུགས། | བཏོན་གཏང་ནི་ བརྟག་ཞིབ་ཐོ་ཡིག་ནང་ ཉེན་སྲུང་བསྐྱར་ཞིབ་ཀྱི་དོན་ལུ་ ཆ་འཇོག་གནང་བའི་དྲན་ཐོ་མེདཔ་ཨིན། | ཁ་སྐོང་ [བཏོན་ཡོད་པའི་བྱ་རིམ་](../developer-releases.md) བསྐྱར་ཞིབ་དྲན་ཐོའི་མཉམ་སྦྲགས་དང་ GA གི་ཧེ་མ་ མཚན་རྟགས་བཀོད་དགོ་པའི་དབྱེ་ཚན་ཁ་སྐོང་འབད་ཡོདཔ། |
 
-All high/medium findings were fixed during the review window and validated through the existing parity harness. No latent critical issues remain.
+བསྐྱར་ཞིབ་སྒོ་སྒྲིག་གི་སྐབས་ལུ་ མཐོ་རིམ་/བར་མའི་གྲུབ་འབྲས་ཆ་མཉམ་རང་ གཏན་འབེབས་བཟོ་སྟེ་ ད་ལྟོ་ཡོད་པའི་ འདྲ་མཉམ་གྱི་ ཧར་ནིསི་བརྒྱུད་དེ་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན། གལ་ཆེ་བའི་གནད་དོན་གཅིག་ཡང་ལྷག་མེད།
 
-## Control Validation
+## ཚད་འཛིན།
 
-- **Credential scope:** Default CI templates now mandate explicit audience and issuer assertions; the CLI and release helper both fail fast unless `--identity-token-audience` accompanies `--identity-token-provider`.  
-- **Deterministic replay:** Updated tests cover positive/negative manifest submission flows, ensuring mismatched digests remain non-deterministic failures and are surfaced before touching the network.  
-- **Proof streaming back-pressure:** Torii now streams PoR/PoTR items over bounded channels, and the CLI retains only truncated latency samples + five failure exemplars, preventing unbounded subscriber growth while keeping deterministic summaries.  
-- **Observability:** Proof streaming counters (`torii_sorafs_proof_stream_*`) and CLI summaries capture abort reasons, providing operators with audit breadcrumbs.  
-- **Documentation:** Developer guides ([developer index](../developer-index.md), [CLI reference](../developer-cli.md)) call out security-sensitive flags and escalation workflows.
+- **ངོ་རྟགས་ཁྱབ་ཁོངས་:** སྔོན་སྒྲིག་སི་ཨའི་ ཊེམ་པེལེཊི་ཚུ་གིས་ ད་ལྟོ་ ལྟདམོ་ལྟ་མི་དང་ བཏོན་མི་ བདེན་ཁུངས་ཚུ་ གསལ་ཏོག་ཏོ་སྦེ་ བཀོད་རྒྱ་བཏང་ཡོདཔ་ཨིན། I18NI000000038X གིས་ I18NI000000039X དང་ཅིག་ཁར་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་འགྱོ་མི་ CLI དང་ གྲོགས་རམ་པ་གཉིས་ཆ་ར་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་འགྱོཝ་ཨིན།  
+- ** Deterministic repplay:** དུས་མཐུན་བཟོ་ཡོད་པའི་བརྟག་དཔྱད་ཚུ་གིས་ ངེས་གཏན་/ལོག་པའི་གསལ་སྟོན་གྱི་ ཞུ་ཡིག་རྒྱུན་རིམ་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན་ དེ་ཡང་ མ་མཐུན་པའི་ བཞུ་བཅུད་ཚུ་ གཏན་འབེབས་མེད་པའི་ འཐུས་ཤོར་ལྷག་ལུས་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིནམ་དང་ ཡོངས་འབྲེལ་ལུ་ ལགཔ་མ་རྐྱབ་པའི་ཧེ་མ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།  
+- **བདེན་དཔང་རྒྱུན་ལམ་རྒྱབ་ཀྱི་གནོན་ཤུགས་:** I18NT0000009X ད་ལྟོ་ PoR/PoTR རྣམ་གྲངས་ཚུ་ མཐུད་ཡོད་པའི་རྒྱུ་ལམ་ཚུ་གུ་ལས་ རྒྱུན་སྤེལ་འབདཝ་ཨིན།  
+- **བལྟ་རྟོག་འབད་ཚུགསཔ་:** བདེན་ཁུངས་ཅན་གྱི་རྒྱུན་ལམ་གྱི་གྱངས་ཁ་ (`torii_sorafs_proof_stream_*`) དང་ CLI བཅུད་བསྡུས་ཚུ་གིས་ ཕྱིར་འཐེན་རྒྱུ་མཚན་ཚུ་ བཀོདཔ་ཨིན་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ བག་ལེབ་བཀག་ཆ་འབད་མི་ཚུ་དང་གཅིག་ཁར་ བྱིནམ་ཨིན།  
+- **ཡིག་ཆ་:** གོང་འཕེལ་གཏང་མི་ལམ་སྟོན་ ([གོང་འཕེལ་གཏང་མི་ཟུར་ཐོ་ ](I18NU0000017X), [CLI གཞི་བསྟུན་](../developer-cli.md) གིས་ ཕྱིར་ཐོན་ཉེན་སྲུང་-ཚོར་ཤུགས་ཅན་གྱི་དར་ཆ་དང་ ཡར་འཕར་གྱི་ལཱ་ཚུ་འབོཝ་ཨིན།
 
-## Release Checklist Additions
+## ཞིབ་དཔྱད་ཐོ་ཡིག་ཁ་སྐོང་ཚུ་ གསར་བཏོན་འབད།
 
-Release managers **must** attach the following evidence when promoting a GA candidate:
+འཛིན་སྐྱོང་པ་ཚུ་ **must** འདི་ GA གི་འདེམས་ངོ་ཅིག་ ཁྱབ་སྤེལ་འབད་བའི་སྐབས་ གཤམ་གསལ་གྱི་ སྒྲུབ་བྱེད་ཚུ་ མཉམ་སྦྲགས་འབད་དགོ།
 
-1. Hash of the latest security review memo (this document).  
-2. Link to the tracked remediation ticket (e.g., `governance/tickets/SF6-SR-2026.md`).  
-3. Output of `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` showing explicit audience/issuer arguments.  
-4. Captured logs from the parity harness (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
-5. Confirmation that Torii release notes include bounded proof streaming telemetry counters.
+1. བདེ་འཇགས་བསྐྱར་ཞིབ་ཀྱི་དྲན་དེབ་གསར་པ་ (ཡིག་ཆ་འདི) གི་ཧ་ཤི་།  
+༢ བརྟག་ཞིབ་ཀྱི་ བཅོས་སྒྲིག་ཤོག་བྱང་ (དཔེར་ན་ `governance/tickets/SF6-SR-2026.md`) ལུ་མཐུད་དགོ།  
+3. `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` གི་ཨའུཊ་པུཊ་ གསལ་ཏོག་ཏོ་སྦེ་ ལྟདམོ་ལྟ་མི་/སྟོན་མི་ རྩོད་བསྡུར་ཚུ་སྟོནམ་ཨིན།  
+4. ཆ་སྙོམས་འཕྲུལ་ཆས་ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) ལས་ བསྡུ་བསྒྱོམ་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ།  
+༥. Torii གསར་བཏོན་དྲན་ཐོ་ཚུ་ནང་ མཐའ་མཚམས་བདེན་དཔང་རྒྱུན་ལམ་གྱི་བརྡ་འཕྲིན་གྱངས་ཁ་ཚུ་ཚུདཔ་ཨིན།
 
-Failure to collect the artefacts above blocks GA sign-off.
+གོང་འཁོད་ཀྱི་ ཅ་རྙིང་ཚུ་ བསྡུ་ལེན་འབད་མ་ཚུགས་པ་ཅིན་ ཇི་ཨེ་ མཚན་རྟགས་བཀག་ཆ་འབདཝ་ཨིན།
 
-**Reference artefact hashes (2026-02-20 sign-off):**
+* གཞི་བསྟུན་ཅ་རྙིང་ ཧ་ཤི་ (༢༠༢༦-༠༢-༢༠ མཚན་རྟགས་བཀོད་པ):**
 
-- `sf6_security_review.md` — `66001d0b53d8e7ed5951a07453121c075dea931ca44c11f1fcd1571ed827342a`
+- I18NI0000044X — I18NI0000045X
 
-## Outstanding Follow-ups
+## ཁྱད་དུ་འཕགས་པའི་རྗེས་འདན།
 
-- **Threat model refresh:** Repeat this review quarterly or before major CLI flag additions.  
-- **Fuzzing coverage:** Proof streaming transport encodings are fuzzed via `fuzz/proof_stream_transport`, covering identity, gzip, deflate, and zstd payloads.  
-- **Incident rehearsal:** Schedule an operator exercise simulating token compromise and manifest rollback, ensuring documentation reflects practised procedures.
+- **དཔེ་ཚད་གསརཔ་གསརཔ་:** བསྐྱར་ཞིབ་འདི་ ཟླཝ་གསུམ་པའི་ནང་ ཡང་ན་ སི་ཨེལ་ཨའི་ དར་ཚིག་ཁ་སྐོང་སྦོམ་ཚུ་གི་ཧེ་མ་ བསྐྱར་ལོག་འབད།  
+- **ཕཱ་ཟིང་ཁྱབ་ཚད་:** ངོ་རྟགས་དང་ གཟིཔ་ ཌེལ་ལེ་ཊི་ དེ་ལས་ zstd pabloads ཚུ་ ཁྱབ་སྟེ་ `fuzz/proof_stream_transport` བརྒྱུད་དེ་ རྒྱུན་སྤེལ་འབདཝ་ཨིན།  
+- **རྐྱེན་ངན་སྦྱོང་བརྡར་:** བཀོལ་སྤྱོད་པའི་སྦྱོང་བརྡར་གྱི་ ཊོ་ཀེན་བདེ་སྒྲིག་དང་ གསལ་སྟོན་འབད་ནི་ གསལ་སྟོན་འབད་ཞིནམ་ལས་ ཡིག་ཆ་ཚུ་གིས་ ལག་ལེན་འཐབ་ཡོད་པའི་བྱ་རིམ་ཚུ་ གསལ་སྟོན་འབད།
 
-## Approval
+## གནང༌བ
 
-- Security Engineering Guild representative: @sec-eng (2026-02-20)  
-- Tooling Working Group representative: @tooling-wg (2026-02-20)
+- ཉེན་སྲུང་བཟོ་རིག་ཚོགས་པ་གི་ངོ་ཚབ་: @sec-eng (༢༠༢༦-༠༢-༢༠)  
+- ལག་ཆས་བཟོ་བའི་སྡེ་ཚན་གྱི་ངོ་ཚབ་: @tooling-wg (2026-02-20)
 
-Store signed approvals alongside the release artefact bundle.
+གསར་བཏོན་འབད་མི་ ཅ་རྙིང་གི་སྡེ་ཚན་དང་གཅིག་ཁར་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན།

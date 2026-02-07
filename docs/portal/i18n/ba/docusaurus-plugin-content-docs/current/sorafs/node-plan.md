@@ -8,108 +8,110 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Node Implementation Plan
 sidebar_label: Node Implementation Plan
 description: Translate the SF-3 storage roadmap into actionable engineering work with milestones, tasks, and test coverage.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii process into a SoraFS storage provider. Use this plan alongside the [node storage guide](node-storage.md), [provider admission policy](provider-admission-policy.md), and [storage capacity marketplace roadmap](storage-capacity-marketplace.md) when sequencing deliverables.
+SF-3 беренсе йүгерә I18NI000000028X йәшник тапшыра, был I18NT000000009X/I18NT000000010X процесын I18NT000000008X һаҡлау провайдерына әйләндерә. Был планды ҡулланыу менән бер рәттән [төйөн һаҡлау етәксеһе](I18NU0000022X), [провайдер ҡабул итеү сәйәсәте](provider-admission-policy.md), һәм [һаҡлау ҡәҙерле баҙар юл картаһы] (storage-capacity-marketplace.md) ҡасан профтационныйҙар.
 
-## Target Scope (Milestone M1)
+## Маҡсатлы даирәлә (Майлстоун М1)
 
-1. **Chunk store integration.** Wrap `sorafs_car::ChunkStore` with a persistent backend that stores chunk bytes, manifests, and PoR trees in the configured data directory.
-2. **Gateway endpoints.** Expose Norito HTTP endpoints for pin submission, chunk fetch, PoR sampling, and storage telemetry within the Torii process.
-3. **Configuration plumbing.** Add a `SoraFsStorage` config struct (enabled flag, capacity, directories, concurrency limits) wired through `iroha_config`, `iroha_core`, and `iroha_torii`.
-4. **Quota/scheduling.** Enforce operator-defined disk/parallelism limits and queue requests with back-pressure.
-5. **Telemetry.** Emit metrics/logs for pin success, chunk fetch latency, capacity utilisation, and PoR sampling results.
+1. **Чанк магазин интеграцияһы.** Wrap I18NI000000029X менән ныҡышмалы бэкэнд, тип һаҡлай өлөшө байт, манифест, һәм PoR ағастары конфигурацияланған мәғлүмәт каталогында.
+2. **Шлюз ос нөктәләре.** Intion Norito HTTP ос нөктәләре өсөн булавка тапшырыу, өлөшө фетч, PoR үлсәү, һәм һаҡлау телеметрияһы сиктәрендә I18NT000000011X процесы.
+**Конфигурация сантехника.** Өҫтәү I18NI0000000000300 X конфигурация структур (эфирлыҡ, ҡәҙерле, каталог, конкурентлыҡ сиктәре) аша проводной I18NI000000031X, I18NI0000000032Х, һәм I18NI00000000333.
+4. **Quota/график.** Операция-билдәләнгән диск/параллелизм сиктәре һәм сират запростары менән артҡы баҫым.
+5. **Телеметрия.** Эмит метрика/логтар өсөн булавка уңыш, өлөшө fetch латентлыҡ, ҡәҙерле утилизация, һәм PoR үлсәү һөҙөмтәләре.
 
-## Work Breakdown
+## Эш өҙөлгән
 
-### A. Crate & Module Structure
+### А. Йәшник & Модуль структураһы
 
-| Task | Owner(s) | Notes |
+| Эш | Хужа(тар) | Иҫкәрмәләр |
 |------|----------|-------|
-| Create `crates/sorafs_node` with modules: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Re-export reusable types for Torii integration. |
-| Implement `StorageConfig` mapped from `SoraFsStorage` (user → actual → defaults). | Storage Team / Config WG | Ensure the Norito/`iroha_config` layers remain deterministic. |
-| Provide a `NodeHandle` facade Torii uses to submit pins/fetches. | Storage Team | Encapsulate storage internals and async plumbing. |
+| I18NI000000034X модулдәр менән булдырыу: I18NI0000000035X, I18NI0000000036X, I18NI000000037X, I18NI000000000038X, I18NI000000039Х. | Һаҡлау командаһы | Ҡабаттан экспортҡа күп тапҡыр ҡулланыла торған типтары Torii интеграцияһы өсөн. |
+| I18NI0000040X тормошҡа ашырыу I18NI000000041X картаһы (ҡулланыусы → фактик → ғәҙәттәгесә). | Һаҡлау командаһы / Конфигурация WG | I18NT000000003X/`iroha_config` ҡатламдарын тәьмин итеү детерминистик булып ҡала. |
+| `NodeHandle` фасад I18NT0000000013X ҡулланыу өсөн штекерҙар/фетчтар тапшырырға. | Һаҡлау командаһы | Һаҡлау эске һәм асинк сантехника инкапсулировать. |
 
-### B. Persistent Chunk Store
+### Б. Ваҡытлыса өлөшө магазин
 
-| Task | Owner(s) | Notes |
+| Эш | Хужа(тар) | Иҫкәрмәләр |
 |------|----------|-------|
-| Build a disk backend wrapping `sorafs_car::ChunkStore` with an on-disk manifest index (`sled`/`sqlite`). | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Maintain PoR metadata (64 KiB/4 KiB trees) using `ChunkStore::sample_leaves`. | Storage Team | Support replay after restart; fail fast on corruption. |
-| Implement integrity replay on startup (rehash manifests, prune incomplete pins). | Storage Team | Block Torii start until replay completes. |
+| Диск бэкэнд уратып төҙөү I18NI0000000044X менән дискта манифест индексы (I18NI0000000045X/I18NI0000000046X). | Һаҡлау командаһы | Детерминистик планировка: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
+| I18NI000000048X ҡулланып PoR метамағлүмәттәрен һаҡлау (64KiB/4KiB ағастары). | Һаҡлау командаһы | Ярҙам реплей һуң перезапускать; коррупция буйынса тиҙ генә уңышһыҙлыҡҡа осрай. |
+| Стартапта тормошҡа ашырыу бөтөнлөгө реплейы (рехаш манифестар, тулы булмаған булавкалар тулы булмаған). | Һаҡлау командаһы | Блок Torii башлана тиклем реплей тамамланған. |
 
-### C. Gateway Endpoints
+### C. Ҡапҡа нөктәләре
 
-| Endpoint | Behaviour | Tasks |
-|----------|-----------|-------|
-| `POST /sorafs/pin` | Accept `PinProposalV1`, validate manifests, queue ingestion, respond with manifest CID. | Validate chunk profile, enforce quotas, stream data via chunk store. |
-| `GET /sorafs/chunks/{cid}` + range query | Serve chunk bytes with `Content-Chunker` headers; respect range capability spec. | Use scheduler + stream budgets (tie into SF-2d range capability). |
-| `POST /sorafs/por/sample` | Run PoR sampling for a manifest and return proof bundle. | Reuse chunk store sampling, respond with Norito JSON payloads. |
-| `GET /sorafs/telemetry` | Summaries: capacity, PoR success, fetch error counts. | Provide data for dashboards/operators. |
+| Аҙаҡҡы нөктә | Тәртип | Бурыстар |
+|---------|------------|-------|
+| `POST /sorafs/pin` | `PinProposalV1` ҡабул итеү, раҫлау манифесттары, сират ашау, асыҡ CID менән яуап бирергә. | Валидат өлөшө профиле, квоталарҙы үтәү, ағым мәғлүмәттәре аша өлөшө магазин. |
+| I18NI0000051X + диапазоны эҙләү | I18NI000000052X башлыҡтары менән өлөшләтә байттар хеҙмәт итә; хөрмәт диапазоны мөмкинлектәре спец. | Ҡулланыу планлаштырыусы + ағым бюджеттары (аллы SF-2d диапазоны мөмкинлектәренә). |
+| `POST /sorafs/por/sample` | Йүгереп PoR өсөн үлсәү өсөн асыҡ һәм ҡайтарыу дәлил өйөмө. | Ҡабаттан ҡулланыу өлөшө магазин үлсәү, яуап менән I18NT00000000004X JSON файҙалы йөкләмәләр. |
+| `GET /sorafs/telemetry` | Йәмғеһе: һыйҙырышлылыҡ, PoR уңыш, хаталар һанын алыу. | Приборҙар таҡталары/операторҙар өсөн мәғлүмәттәр бирергә. |
 
-Runtime plumbing threads PoR interactions through `sorafs_node::por`: the tracker records every `PorChallengeV1`, `PorProofV1`, and `AuditVerdictV1` so the `CapacityMeter` metrics reflect governance verdicts without bespoke Torii logic.【crates/sorafs_node/src/scheduler.rs#L147】
+Йүгереп йөрөү ептәре PoR үҙ-ара I18NI000000055X аша: трекер рекордтары һәр I18NI0000000056X, I18NI000000057X, һәм I18NI0000000058X шулай I18NI0000000000059Х метрикаһы идара итеү тураһында хөкөм ҡарары сығара. I18NT0000000015X логикаһы.【крат/сорафтар_төймә/срк/график.р#L147】
 
-Implementation notes:
+Ғәмәлгә ашырыу тураһында иҫкәрмәләр:
 
-- Use Torii’s Axum stack with `norito::json` payloads.
-- Add Norito schemas for responses (`PinResultV1`, `FetchErrorV1`, telemetry structs).
+- Ҡулланыу I18NT0000000016X’s Axum стека менән I18NI000000060X файҙалы йөкләмәләр.
+- Яуаптар өсөн I18NT000000005X схемалары өҫтәй (`PinResultV1`, `FetchErrorV1`, телеметрия структурҙары).
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now exposes backlog depth plus the oldest epoch/deadline and
-  the most recent success/failure timestamps for each provider, powered by
-  `sorafs_node::NodeHandle::por_ingestion_status`, and Torii records the
-  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges for dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ I18NI000000063X хәҙер артта ҡалыу тәрәнлеген фашлай плюс иң боронғо эпоха/уҡыу линияһы һәм
+  иң һуңғы уңыш/уңышһыҙлыҡ ваҡыт маркалары өсөн һәр провайдер, ҡоролмалары
+  I18NI000000064X, һәм I18NT0000000017X
+  I18NI0000000065X/I18NI00000000666X өсөн 1990 й. Приборҙар таҡталары.【крат/сорафтар_төймә/src/lib.rs:510】【крат/ироха_тории/срк/сораф/апи.18. 83 шундай
 
-### D. Scheduler & Quota Enforcement
+### Д. Расписание & Квота үтәү
 
-| Task | Details |
-|------|---------|
-| Disk quota | Track bytes on disk; reject new pins when exceeding `max_capacity_bytes`. Provide eviction hooks for future policies. |
-| Fetch concurrency | Global semaphore (`max_parallel_fetches`) plus per-provider budgets sourced from SF-2d range caps. |
-| Pin queue | Limit outstanding ingestion jobs; expose Norito status endpoints for queue depth. |
-| PoR cadence | Background worker driven by `por_sample_interval_secs`. |
+| Эш | Ентекле |
+|-----|---------|
+| Диск квота | Трек байттар диск буйынса; яңы булавкалар кире ҡағыу ҡасан артып I18NI0000000067X. Киләсәктә сәйәсәт өсөн күсерергә ҡармаҡтар бирергә. |
+| Фетч конкурентлыҡ | Глобаль семафор (I18NI000000068X) плюс SF-2d диапазоны ҡапҡастарынан алынған провайдер бюджеттары. |
+| Пин сираты | Сикләү күренекле ашау эштәре; фашлау I18NT0000000006X статус ос нөктәләре өсөн сират тәрәнлеге. |
+| PoR каденцияһы | 18-се һанлы `por_sample_interval_secs` идара иткән фон эшсеһе. |
 
-### E. Telemetry & Logging
+### E. Телеметрия & Яҡтылыҡ
 
-Metrics (Prometheus):
+Метрика (I18NT000000000X):
 
 - `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (histogram with `result` labels)
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
+- I18NI000000072X (гистограмма менән `result` маркалары)
+- `torii_sorafs_storage_bytes_used`, I18NI000000075X
 - `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
 - `torii_sorafs_storage_fetch_bytes_per_sec`
-- `torii_sorafs_storage_por_inflight`
+- I18NI000000079X
 - `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
 
-Logs / events:
+Журнал / ваҡиғалар:
 
-- Structured Norito telemetry for governance ingestion (`StorageTelemetryV1`).
-- Alerts when utilisation > 90% or PoR failure streak exceeds threshold.
+- Структуралы I18NT000000007X телеметрияһы өсөн идара итеү ашау (`StorageTelemetryV1`).
+- утилләштереү >90% йәки PoR етешһеҙлеге серияһы сигенән артып киткәндә иҫкәртмәләр.
 
-### F. Testing Strategy
+### Ф. Һынау стратегияһы
 
-1. **Unit tests.** Chunk store persistence, quota calculations, scheduler invariants (see `crates/sorafs_node/src/scheduler.rs`).  
-2. **Integration tests** (`crates/sorafs_node/tests`). Pin → fetch round trip, restart recovery, quota rejection, PoR sampling proof verification.  
-3. **Torii integration tests.** Run Torii with storage enabled, exercise HTTP endpoints via `assert_cmd`.  
-4. **Chaos roadmap.** Future drills simulate disk exhaustion, slow IO, provider removal.
+1. **Берәмек һынауҙары.** Чанк магазин ныҡышмалы, квота иҫәпләүҙәре, график инварианттары (ҡара: I18NI0000083X).  
+2. **Интеграция һынауҙары** (`crates/sorafs_node/tests`). Пен → тура юлға килтерергә, тергеҙеү һауығыу, квота кире ҡағыу, PoR үлсәү иҫбатлау раҫлау.  
+3. **I18NT0000000018X интеграция һынауҙары.** Run I18NT0000000019X һаҡлау менән мөмкинлек бирҙе, HTTP ос нөктәләре аша I18NI000000085X.  
+4. **Хаос юл картаһы.** Киләсәктә диск арыуҙы моделләштерә, яй ИО, провайдерҙы сығарыу.
 
-## Dependencies
+##
 
-- SF-2b admission policy — ensure nodes verify admission envelopes before advertising.  
-- SF-2c capacity marketplace — tie telemetry back into capacity declarations.  
-- SF-2d advert extensions — consume range capability + stream budgets once available.
+- SF-2b ҡабул итеү сәйәсәте — төйөндәр реклама алдынан ҡабул итеү конверттарын раҫлауҙы тәьмин итеү.  
+- SF-2c ҡөҙрәттәре баҙары — телеметрия бәйләүен кире ҡәҙерле декларацияларға.  
+- SF-2d реклама оҙайтыуҙары — ҡулланыу диапазоны мөмкинлектәрен ҡулланыу + ағым бюджеттары ҡасандыр бар.
 
-## Milestone Exit Criteria
+## Мильстоун сығыу критерийҙары
 
-- `cargo run -p sorafs_node --example pin_fetch` works against local fixtures.  
-- Torii builds with `--features sorafs-storage` and passes integration tests.  
-- Documentation ([node storage guide](node-storage.md)) updated with configuration defaults + CLI examples; operator runbook available.  
-- Telemetry visible in staging dashboards; alerts configured for capacity saturation and PoR failures.
+- `cargo run -p sorafs_node --example pin_fetch` урындағы ҡоролмаларға ҡаршы эшләй.  
+- Torii I18NI000000087X менән төҙөлә һәм интеграция һынауҙары үтә.  
+- Документация ([төйөн һаҡлау буйынса ҡулланма](node-storage.md)) конфигурация ғәҙәттәгесә ғәҙәттәгесә + CLI миҫалдары менән яңыртыла; оператор runbook бар.  
+- стадиялау таҡталарында күренгән телеметрия; иҫкәртмәләр ҡәҙерле туйындырыу һәм PoR етешһеҙлектәре өсөн конфигурацияланған.
 
-## Documentation & Ops Deliverables
+## Документация & Оптар
 
-- Update the [node storage reference](node-storage.md) with configuration defaults, CLI usage, and troubleshooting steps.  
-- Keep the [node operations runbook](node-operations.md) aligned with the implementation as SF-3 evolves.  
-- Publish API references for `/sorafs/*` endpoints inside the developer portal and wire them into the OpenAPI manifest once Torii handlers land.
+- Яңыртыу [төйөн һаҡлау һылтанмаһы](node-storage.md) конфигурация ғәҙәттәгесә, CLI ҡулланыу, һәм проблемаларҙы хәл итеү аҙымдары.  
+- [төйөн операциялары runbook] (I18NU000000027X) һаҡлау менән тура килтерелгән тормошҡа ашырыу SF-3 үҫеш.  
+- `/sorafs/*` өсөн нәшер итеү API һылтанмалар эсендә эшләүсе портал һәм уларҙы I18NT0000000001X манифестына бер тапҡыр I18NT00000000021X ручкалар еренә сыға.

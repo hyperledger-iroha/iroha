@@ -4,40 +4,40 @@ direction: rtl
 source: docs/portal/docs/soranet/pq-rollout-plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-rollout-plan
-title: Плейбук постквантового rollout SNNet-16G
-sidebar_label: План rollout PQ
-description: Операционный гид по продвижению гибридного X25519+ML-KEM handshake SoraNet от canary до default на relays, clients и SDKs.
+المعرف: خطة الطرح PQ
+العنوان: نشر لعبة SNNet-16G
+Sidebar_label: خطة طرح PQ
+الوصف: عملية إنتاج هجين X25519+مصافحة ML-KEM SoraNet من الكناري إلى الوضع الافتراضي للمرحلات والعملاء ومجموعات SDK.
 ---
 
 :::note Канонический источник
 :::
 
-SNNet-16G завершает post-quantum rollout для транспорта SoraNet. Knobs `rollout_phase` позволяют операторам координировать детерминированный promotion от текущего Stage A guard requirement до Stage B majority coverage и Stage C strict PQ posture без редактирования сырого JSON/TOML для каждой поверхности.
+SNNet-16G يكمل طرح ما بعد الكم للنقل SoraNet. تتيح المقابض `rollout_phase` للمشغل تنسيق تحديد الترقية من المنطقة إلى المرحلة A ومتطلبات الحراسة لتغطية الأغلبية للمرحلة B والمرحلة C ووضعية PQ الصارمة بدون تعديل يستخدم JSON/TOML لكل شيء.
 
-Этот playbook покрывает:
+تم إنشاء كتاب اللعب هذا:
 
-- Определения phase и новые configuration knobs (`sorafs.gateway.rollout_phase`, `sorafs.rollout_phase`) в codebase (`crates/iroha_config/src/parameters/actual.rs:2230`, `crates/iroha/src/config/user.rs:251`).
-- Маппинг SDK и CLI flags, чтобы каждый client мог отслеживать rollout.
-- Ожидания canary scheduling для relay/client и governance dashboards, которые gate-ят promotion (`dashboards/grafana/soranet_pq_ratchet.json`).
-- Rollback hooks и ссылки на fire-drill runbook ([PQ ratchet runbook](./pq-ratchet-runbook.md)).
+- المرحلة المقترحة ومقابض التكوين الجديدة (`sorafs.gateway.rollout_phase`، `sorafs.rollout_phase`) في قاعدة التعليمات البرمجية (`crates/iroha_config/src/parameters/actual.rs:2230`، `crates/iroha/src/config/user.rs:251`).
+- تعيين إشارات SDK وCLI التي يمكن لأي عميل متابعة الطرح.
+- مراقبة جدولة الكناري للترحيل/العميل ولوحات التحكم الخاصة بالحوكمة، والتي تتضمن ترويج البوابة (`dashboards/grafana/soranet_pq_ratchet.json`).
+- خطافات التراجع وملحقات دليل التدريب على الحرائق ([دليل تشغيل السقاطة PQ](./pq-ratchet-runbook.md)).
 
-## Карта фаз
+## بطاقة فاز| `rollout_phase` | مرحلة عدم الكشف عن هويته الفعالة | تأثير الترطيب | الاستخدام النموذجي |
+|-----------------|-------------------------------------------|----------------|---------------|
+| `canary` | `anon-guard-pq` (المرحلة أ) | تحتاج إلى الحد الأدنى من حماية PQ للدائرة، أثناء ترقية السطح. | خط الأساس وذرات الكناري. |
+| `ramp` | `anon-majority-pq` (المرحلة ب) | قم بتغيير الاختيار في مرحلات PQ الأساسية لـ >= التغطية الثلاث؛ المرحلات الكلاسيكية تتميز بالاحتياط. | جزر الكناري التتابع الإقليمي. تبديل معاينة SDK. |
+| `default` | `anon-strict-pq` (المرحلة ج) | استخدم دوائر PQ فقط واستخدم إنذارات الرجوع إلى إصدار أقدم. | تم الترويج النهائي بعد تحسين القياس عن بعد وحوكمة تسجيل الخروج. |
 
-| `rollout_phase` | Эффективная anonymity stage | Эффект по умолчанию | Типичное использование |
-|-----------------|---------------------------|----------------|---------------|
-| `canary`        | `anon-guard-pq` (Stage A) | Требовать как минимум один PQ guard на circuit, пока флот прогревается. | Baseline и ранние недели canary. |
-| `ramp`          | `anon-majority-pq` (Stage B) | Смещать выбор в сторону PQ relays для >= двух третей coverage; классические relays остаются fallback. | Региональные relay canaries; SDK preview toggles. |
-| `default`       | `anon-strict-pq` (Stage C) | Принудить PQ-only circuits и усилить downgrade alarms. | Финальный promotion после завершения telemetry и sign-off governance. |
+إذا تم الانتهاء أيضًا من إضافة `anonymity_policy` إلى المرحلة المسبقة لهذا المكون. النتيجة: مرحلة التأجيل الجديدة - تبدأ من `rollout_phase` بحيث يمكن للمشغلين إيقاف مرحلة واحدة من وقت لآخر وتاريخ العملاء تخلص من نفسك.
 
-Если поверхность также задает явный `anonymity_policy`, он переопределяет phase для этого компонента. Отсутствие явного stage теперь defer-ится к значению `rollout_phase`, чтобы операторы могли переключить phase один раз на среду и дать clients унаследовать его.
+## التكوينات المرجعية
 
-## Reference конфигурации
-
-### Orchestrator (`sorafs_gateway`)
+### المنسق (`sorafs_gateway`)
 
 ```toml
 [sorafs.gateway]
@@ -47,24 +47,22 @@ rollout_phase = "ramp"
 # anonymity_policy = "anon-majority-pq"
 ```
 
-Loader orchestrator решает fallback stage во время выполнения (`crates/sorafs_orchestrator/src/lib.rs:2229`) и отображает его через `sorafs_orchestrator_policy_events_total` и `sorafs_orchestrator_pq_ratio_*`. См. `docs/examples/sorafs_rollout_stage_b.toml` и `docs/examples/sorafs_rollout_stage_c.toml` для готовых snippets.
+يقوم مُنسق المُحمل بتغيير المرحلة الاحتياطية خلال فترة التشغيل (`crates/sorafs_orchestrator/src/lib.rs:2229`) ويعلن عنها من خلال `sorafs_orchestrator_policy_events_total` و`sorafs_orchestrator_pq_ratio_*`. سم. `docs/examples/sorafs_rollout_stage_b.toml` و`docs/examples/sorafs_rollout_stage_c.toml` للمقتطفات التالية.
 
-### Rust client / `iroha_cli`
+### عميل الصدأ / `iroha_cli`
 
 ```toml
 [sorafs]
 # Keep clients aligned with orchestrator promotion cadence
 rollout_phase = "default"
 # anonymity_policy = "anon-strict-pq"  # optional explicit override
-```
+````iroha::Client` المرحلة الثانية من المرحلة المصاحبة (`crates/iroha/src/client.rs:2315`)، للأوامر المساعدة (على سبيل المثال `iroha_cli app sorafs fetch`) يمكن أن تقوم بالتوصيل المرحلة تتجاوز سياسة عدم الكشف عن هويته الافتراضية.
 
-`iroha::Client` теперь сохраняет разобранную phase (`crates/iroha/src/client.rs:2315`), чтобы helper команды (например `iroha_cli app sorafs fetch`) могли сообщать текущую phase вместе с default anonymity policy.
+## الأتمتة
 
-## Automation
+يعمل هذا المساعد `cargo xtask` تلقائيًا على إنشاء الصور والتقاط القطع الأثرية.
 
-Два `cargo xtask` helper автоматизируют генерацию расписания и capture artefacts.
-
-1. **Сгенерировать региональный schedule**
+1. **تعديل الجدول الزمني الإقليمي**
 
    ```bash
    cargo xtask soranet-rollout-plan \
@@ -77,9 +75,9 @@ rollout_phase = "default"
      --environment production
    ```
 
-   Durations принимают суффиксы `s`, `m`, `h` или `d`. Команда выпускает `artifacts/soranet_pq_rollout_plan.json` и Markdown summary (`artifacts/soranet_pq_rollout_plan.md`), который можно приложить к change request.
+   تحدد المدة الملحقات `s` أو `m` أو `h` أو `d`. أمر الشراء `artifacts/soranet_pq_rollout_plan.json` وملخص تخفيض السعر (`artifacts/soranet_pq_rollout_plan.md`)، الذي يمكن تطبيقه عند تغيير الطلب.
 
-2. **Capture drill artefacts с подписями**
+2. **التقاط قطع أثرية من الحفر شاركها**
 
    ```bash
    cargo xtask soranet-rollout-capture \
@@ -92,79 +90,69 @@ rollout_phase = "default"
      --note "Relay canary - APAC first"
    ```
 
-   Команда копирует указанные файлы в `artifacts/soranet_pq_rollout/<timestamp>_<label>/`, вычисляет BLAKE3 digests для каждого artefact и пишет `rollout_capture.json` с metadata и Ed25519 подписью поверх payload. Используйте тот же private key, которым подписаны fire-drill minutes, чтобы governance могла быстро валидировать capture.
+   قم بنسخ الملفات المحذوفة في `artifacts/soranet_pq_rollout/<timestamp>_<label>/`، واحصل على هضم BLAKE3 لكل قطعة أثرية واكتب `rollout_capture.json` باستخدام بيانات التعريف وEd25519 قم بنشر الحمولة القصوى. استخدم هذا المفتاح الخاص الذي يتضمن دقائق التدريب على الحرائق التي يمكن من خلالها التحقق من صحة الالتقاط.
 
-## Матрица флагов SDK & CLI
-
-| Surface | Canary (Stage A) | Ramp (Stage B) | Default (Stage C) |
+## ماتريشا فلاغوف SDK & CLI| السطح | الكناري (المرحلة أ) | المنحدر (المرحلة ب) | الافتراضي (المرحلة ج) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` fetch | `--anonymity-policy stage-a` или опираться на phase | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Orchestrator config JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
-| Rust client config (`iroha.toml`) | `rollout_phase = "canary"` (default) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` signed commands | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, optional `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, optional `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, optional `.ANON_STRICT_PQ` |
-| JavaScript orchestrator helpers | `rolloutPhase: "canary"` или `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
-| Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
-| Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
+| جلب `sorafs_cli` | `--anonymity-policy stage-a` أو تشغيل المرحلة | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| التكوين المنسق JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
+| تكوين عميل الصدأ (`iroha.toml`) | `rollout_phase = "canary"` (افتراضي) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
+| `iroha_cli` الأوامر الموقعة | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| جافا/أندرويد `GatewayFetchOptions` | `setRolloutPhase("canary")`، اختياري `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`، اختياري `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`، اختياري `.ANON_STRICT_PQ` |
+| مساعدين منسق جافا سكريبت | `rolloutPhase: "canary"` أو `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
+| بايثون `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
+| سويفت `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
 
-Все SDK toggles маппятся на тот же stage parser, что и orchestrator (`crates/sorafs_orchestrator/src/lib.rs:365`), поэтому multi-language deployments остаются в lock-step с настроенной phase.
+تقوم جميع أدوات SDK بتبديل الخرائط إلى محلل المسرح والمنسق (`crates/sorafs_orchestrator/src/lib.rs:365`)، ويتم إجراء عمليات النشر متعددة اللغات في خطوة القفل مع المرحلة الأساسية.
 
-## Canary scheduling checklist
+## قائمة مراجعة جدولة الكناري
 
-1. **Preflight (T minus 2 weeks)**
+1. **التجربة المبدئية (T ناقص أسبوعين)**- تأكد من أن معدل انقطاع التيار الكهربائي للمرحلة A =70% للمنطقة (`sorafs_orchestrator_pq_candidate_ratio`).
+   - قم بتخطيط فتحة مراجعة الإدارة التي يتم فتحها بواسطة الكناري.
+   - قم بتثبيت `sorafs.gateway.rollout_phase = "ramp"` في التدريج (إزالة المنسق JSON وإعادة النشر) واستخدام خط أنابيب الترويج للتشغيل الجاف.
 
-- Убедитесь, что Stage A brownout rate <1% за предыдущие две недели и PQ coverage >=70% на регион (`sorafs_orchestrator_pq_candidate_ratio`).
-   - Запланируйте governance review slot, который утверждает окно canary.
-   - Обновите `sorafs.gateway.rollout_phase = "ramp"` в staging (отредактируйте orchestrator JSON и redeploy) и выполните dry-run promotion pipeline.
+2. **تتابع الكناري (يوم T)**
 
-2. **Relay canary (T day)**
+   - التطوير في منطقة معينة، من خلال `rollout_phase = "ramp"` للمنسق وإظهار المرحلات السعيدة.
+   - راجع "أحداث السياسة لكل نتيجة" و"معدل انقطاع التيار الكهربائي" في لوحة معلومات PQ Ratchet (مع لوحة الطرح) في ذاكرة التخزين المؤقت TTL للحماية المتطورة.
+   - قم بتصوير اللقطات `sorafs_cli guard-directory fetch` إلى مخزن التدقيق وبعده.
 
-   - Продвигайте по одному региону, задавая `rollout_phase = "ramp"` на orchestrator и manifests участвующих relays.
-   - Наблюдайте "Policy Events per Outcome" и "Brownout Rate" на PQ Ratchet dashboard (с rollout panel) в течение удвоенного TTL guard cache.
-   - Снимайте snapshots `sorafs_cli guard-directory fetch` до и после для audit storage.
+3. ** كناري العميل/SDK (T بالإضافة إلى أسبوع واحد)**
 
-3. **Client/SDK canary (T plus 1 week)**
+   - قم بإلغاء تحديد `rollout_phase = "ramp"` في تكوينات العميل أو قم بإلغاء تجاوز `stage-b` لجميع مجموعات SDK.
+   - قم بتسجيل فروق القياس عن بعد (`sorafs_orchestrator_policy_events_total`، المجمعة على `client_id` و`region`) واستخدمها في سجل حوادث التشغيل.
 
-   - Переключите `rollout_phase = "ramp"` в client configs или передайте `stage-b` overrides для целевых SDK cohorts.
-   - Захватите telemetry diffs (`sorafs_orchestrator_policy_events_total`, сгруппированные по `client_id` и `region`) и приложите их к rollout incident log.
+4. **العرض الترويجي الافتراضي (T بالإضافة إلى 3 أسابيع)**
 
-4. **Default promotion (T plus 3 weeks)**
+   - بعد حوكمة تسجيل الخروج، قم بإلغاء تكوينات المنسق والعميل لـ `rollout_phase = "default"` وقم بإعداد قائمة التحقق من جاهزية النشر في عناصر الإصدار.
 
-   - После sign-off governance переключите orchestrator и client configs на `rollout_phase = "default"` и ротуйте подписанный readiness checklist в release artefacts.
+## قائمة مراجعة الحوكمة والأدلة| تغير المرحلة | بوابة الترويج | حزمة الأدلة | لوحات المعلومات والتنبيهات |
+|--------------|----------------|---------------------------------|-----|
+| كناري -> المنحدر *(معاينة المرحلة ب)* | معدل انقطاع المرحلة A = 0.7 عند الترويج للمنطقة، التحقق من تذكرة Argon2 p95  الافتراضي *(فرض المرحلة C)* | 30 يومًا SN16 احتراق القياس عن بعد، `sn16_handshake_downgrade_total` مسطح على خط الأساس، `sorafs_orchestrator_brownouts_total` فقط في وقت العميل الكناري، ويتم مسح بروفة الوكيل. | نسخة `sorafs_cli proxy set-mode --mode gateway|direct`، вывод `promtool test rules dashboards/alerts/soranet_handshake_rules.yml`، سجل `sorafs_cli guard-directory verify`، حزمة مدمجة `cargo xtask soranet-rollout-capture --label default`. | بالإضافة إلى لوحة PQ Ratchet بالإضافة إلى لوحات الرجوع إلى إصدار أقدم SN16، المتوفرة في `docs/source/sorafs_orchestrator_rollout.md` و`dashboards/grafana/soranet_privacy_metrics.json`. || خفض رتبة الطوارئ / الاستعداد للتراجع | يتم تشغيله عند استكمال عدادات الرجوع إلى إصدار أقدم، أو التحقق من التحقق من دليل الحماية أو أحداث الرجوع إلى إصدار أقدم في المخزن المؤقت `/policy/proxy-toggle`. | قائمة التحقق من `docs/source/ops/soranet_transport_rollback.md` والسجل `sorafs_cli guard-directory import` / `guard-cache prune` و`cargo xtask soranet-rollout-capture --label rollback` وتذاكر الحوادث وقوالب الإشعارات. | `dashboards/grafana/soranet_pq_ratchet.json`، `dashboards/grafana/soranet_privacy_metrics.json` وحزم التنبيه (`dashboards/alerts/soranet_handshake_rules.yml`، `dashboards/alerts/soranet_privacy_rules.yml`). |
 
-## Governance & evidence checklist
+- تم العثور على قطعة أثرية في `artifacts/soranet_pq_rollout/<timestamp>_<label>/` مع `rollout_capture.json` التي تتضمن حزم الإدارة لوحة النتائج وتتبعات promtool والهضم.
+- استخدم ملخص SHA256 للتوثيق المحمي (دقائق PDF، حزمة الالتقاط، لقطات الحراسة) إلى محاضر الترويج، بحيث يمكن الحصول على موافقات البرلمان دون الوصول إلى مجموعة التدريج.
+- قم بالاشتراك في خطة القياس عن بعد في تذكرة الترويج للتأكد من أن `docs/source/soranet/snnet16_telemetry_plan.md` يتمتع بميزة أساسية لتخفيض المفردات وعتبات التنبيه.
 
-| Phase change | Promotion gate | Evidence bundle | Dashboards & alerts |
-|--------------|----------------|-----------------|---------------------|
-| Canary -> Ramp *(Stage B preview)* | Stage-A brownout rate <1% за последние 14 дней, `sorafs_orchestrator_pq_candidate_ratio` >= 0.7 по регионам promotion, Argon2 ticket verify p95 < 50 ms и слот governance под promotion забронирован. | Пара JSON/Markdown от `cargo xtask soranet-rollout-plan`, парные snapshots `sorafs_cli guard-directory fetch` (до/после), подписанный bundle `cargo xtask soranet-rollout-capture --label canary`, и canary minutes с ссылкой на [PQ ratchet runbook](./pq-ratchet-runbook.md). | `dashboards/grafana/soranet_pq_ratchet.json` (Policy Events + Brownout Rate), `dashboards/grafana/soranet_privacy_metrics.json` (SN16 downgrade ratio), telemetry references в `docs/source/soranet/snnet16_telemetry_plan.md`. |
-| Ramp -> Default *(Stage C enforcement)* | 30-дневный SN16 telemetry burn-in выполнен, `sn16_handshake_downgrade_total` плоский на baseline, `sorafs_orchestrator_brownouts_total` ноль во время client canary, и proxy toggle rehearsal записан. | Транскрипт `sorafs_cli proxy set-mode --mode gateway|direct`, вывод `promtool test rules dashboards/alerts/soranet_handshake_rules.yml`, лог `sorafs_cli guard-directory verify`, подписанный bundle `cargo xtask soranet-rollout-capture --label default`. | Тот же PQ Ratchet board плюс SN16 downgrade panels, описанные в `docs/source/sorafs_orchestrator_rollout.md` и `dashboards/grafana/soranet_privacy_metrics.json`. |
-| Emergency demotion / rollback readiness | Триггерится при всплесках downgrade counters, провале guard-directory verification или устойчивых downgrade events в буфере `/policy/proxy-toggle`. | Checklist из `docs/source/ops/soranet_transport_rollback.md`, логи `sorafs_cli guard-directory import` / `guard-cache prune`, `cargo xtask soranet-rollout-capture --label rollback`, incident tickets и notification templates. | `dashboards/grafana/soranet_pq_ratchet.json`, `dashboards/grafana/soranet_privacy_metrics.json` и оба alert packs (`dashboards/alerts/soranet_handshake_rules.yml`, `dashboards/alerts/soranet_privacy_rules.yml`). |
+## تحديثات لوحة المعلومات والقياس عن بعد
 
-- Храните каждый artefact в `artifacts/soranet_pq_rollout/<timestamp>_<label>/` вместе с сгенерированным `rollout_capture.json`, чтобы governance packets включали scoreboard, promtool traces и digests.
-- Приложите SHA256 digests загруженных доказательств (minutes PDF, capture bundle, guard snapshots) к promotion minutes, чтобы Parliament approvals можно было воспроизвести без доступа к staging cluster.
-- Ссылайтесь на telemetry plan в promotion ticket, чтобы подтвердить, что `docs/source/soranet/snnet16_telemetry_plan.md` остается каноническим источником для downgrade vocabularies и alert thresholds.
+`dashboards/grafana/soranet_pq_ratchet.json` قم الآن بمراجعة لوحة التعليقات التوضيحية "خطة الطرح"، والتي تنضم إلى دليل التشغيل هذا وتستعرض المرحلة التالية التي يمكن من خلالها مراجعة مراجعات الإدارة المرحلة النشطة. اتبع لوحة الوصف المتزامنة مع مقابض التحسين.
 
-## Dashboard & telemetry updates
+لتنبيه المستخدمين إلى أن القواعد الفعلية تستخدم التصنيف `stage`، لأن المراحل الافتراضية والكناري تؤدي إلى تفعيل عتبات السياسة المتجاوزة (`dashboards/alerts/soranet_handshake_rules.yml`).## خطافات التراجع
 
-`dashboards/grafana/soranet_pq_ratchet.json` теперь содержит annotation panel "Rollout Plan", который ссылается на этот playbook и отображает текущую phase, чтобы governance reviews могли подтвердить активную stage. Держите описание panel синхронным с будущими изменениями knobs.
+### الافتراضي -> المنحدر (المرحلة ج -> المرحلة ب)
 
-Для alerting убедитесь, что существующие rules используют label `stage`, чтобы canary и default phases триггерили отдельные policy thresholds (`dashboards/alerts/soranet_handshake_rules.yml`).
+1. قم بتخفيض ترتيب المنسق من خلال `sorafs_cli config set --config orchestrator.json sorafs.gateway.rollout_phase ramp` (وتابعه في تكوينات SDK)، لتتم إعادة المرحلة B إلى جميع الأسطول.
+2. قم بإدخال العملاء في ملف تعريف النقل الآمن من خلال `sorafs_cli proxy set-mode --mode direct --note "sn16 rollback"`، مع الاحتفاظ بنص لسير عمل إمكانية التدقيق `/policy/proxy-toggle`.
+3. قم بتثبيت `cargo xtask soranet-rollout-capture --label rollback-default` من خلال اختلافات دليل الحماية ومخرجات promtool ولقطات شاشة لوحة المعلومات تحت `artifacts/soranet_pq_rollout/`.
 
-## Rollback hooks
+### المنحدر -> الكناري (المرحلة ب -> المرحلة أ)
 
-### Default -> Ramp (Stage C -> Stage B)
+1. قم باستيراد لقطة دليل الحراسة، قبل الترقية، من خلال `sorafs_cli guard-directory import --guard-directory guards.json` وقم بإعادة التثبيت مرة أخرى إلى `sorafs_cli guard-directory verify`، لتتضمن حزمة التخفيض التجزئة.
+2. تثبيت `rollout_phase = "canary"` (أو تجاوز `anonymity_policy stage-a`) في إعدادات المنسق والعميل، ثم قم بإظهار مثقاب السقاطة PQ من [PQratchet runbook](./pq-ratchet-runbook.md)، لذلك доказать خط أنابيب الرجوع إلى إصدار أقدم.
+3. قم بتنزيل لقطات شاشة القياس عن بعد PQ Ratchet وSN16 بالإضافة إلى نتائج التنبيه لسجل الحوادث قبل إدارة الحكم.
 
-1. Demote orchestrator через `sorafs_cli config set --config orchestrator.json sorafs.gateway.rollout_phase ramp` (и отзеркалить ту же phase в SDK configs), чтобы Stage B восстановился по всему флоту.
-2. Принудить clients в безопасный transport profile через `sorafs_cli proxy set-mode --mode direct --note "sn16 rollback"`, сохранив transcript для auditability workflow `/policy/proxy-toggle`.
-3. Запустить `cargo xtask soranet-rollout-capture --label rollback-default` для архивации guard-directory diffs, promtool output и dashboard screenshots под `artifacts/soranet_pq_rollout/`.
+### تذكير الدرابزين
 
-### Ramp -> Canary (Stage B -> Stage A)
-
-1. Импортировать guard-directory snapshot, захваченный перед promotion, через `sorafs_cli guard-directory import --guard-directory guards.json` и повторно запустить `sorafs_cli guard-directory verify`, чтобы demotion packet включал hashes.
-2. Установить `rollout_phase = "canary"` (или override `anonymity_policy stage-a`) в orchestrator и client configs, затем повторить PQ ratchet drill из [PQ ratchet runbook](./pq-ratchet-runbook.md), чтобы доказать downgrade pipeline.
-3. Приложить обновленные PQ Ratchet и SN16 telemetry screenshots плюс результаты alert outcomes к incident log перед уведомлением governance.
-
-### Guardrail reminders
-
-- Ссылайтесь на `docs/source/ops/soranet_transport_rollback.md` при каждом demotion и фиксируйте временные mitigation как `TODO:` в rollout tracker для последующей работы.
-- Держите `dashboards/alerts/soranet_handshake_rules.yml` и `dashboards/alerts/soranet_privacy_rules.yml` под покрытием `promtool test rules` до и после rollback, чтобы alert drift был задокументирован вместе с capture bundle.
+- قم بالرجوع إلى `docs/source/ops/soranet_transport_rollback.md` عند خفض الرتبة وإصلاح وقت التخفيف مثل `TODO:` في أداة تعقب الطرح للأعمال التالية.
+- قم بالرجوع إلى `dashboards/alerts/soranet_handshake_rules.yml` و`dashboards/alerts/soranet_privacy_rules.yml` من خلال إعادة إنشاء `promtool test rules` وما بعده، حيث سيتم دعم تنبيه الانجراف من خلال حزمة الالتقاط.

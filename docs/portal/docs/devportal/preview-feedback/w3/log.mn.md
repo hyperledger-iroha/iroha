@@ -11,30 +11,31 @@ id: preview-feedback-w3-log
 title: W3 beta invite log
 sidebar_label: W3 log
 description: Timeline for the 2026-02-18 preview invite wave.
+translator: machine-google-reviewed
 ---
 
-Events recorded below are mirrored in `artifacts/docs_portal_preview/feedback_log.json`
-and summarised in `preview-20260218-summary.json` / `preview-20260218-digest.md`.
+Доор бичигдсэн үйл явдлуудыг `artifacts/docs_portal_preview/feedback_log.json`-д тусгав
+мөн `preview-20260218-summary.json` / `preview-20260218-digest.md`-д хураангуйлсан.
 
-| Timestamp (UTC) | Event | Recipient | Notes |
+| Цагийн тэмдэг (UTC) | Үйл явдал | Хүлээн авагч | Тэмдэглэл |
 | --- | --- | --- | --- |
-| 2026‑02‑18 14:00 | invite-sent | finance-beta-01 | Finance pilot cohort |
-| 2026‑02‑18 14:08 | acknowledged | finance-beta-01 |  |
-| 2026‑02‑21 10:22 | feedback-submitted | finance-beta-01 | docs-preview/20260218#1 |
-| 2026‑02‑28 17:00 | access-revoked | finance-beta-01 |  |
-| 2026‑02‑18 14:05 | invite-sent | observability-ops-02 | Observability readiness |
-| 2026‑02‑18 14:20 | acknowledged | observability-ops-02 |  |
-| 2026‑02‑23 09:45 | feedback-submitted | observability-ops-02 | docs-preview/20260218#2 |
-| 2026‑02‑23 11:15 | issue-opened | observability-ops-02 | DOCS-SORA-Preview-20260218 |
-| 2026‑02‑28 17:05 | access-revoked | observability-ops-02 |  |
-| 2026‑02‑18 14:10 | invite-sent | partner-sdk-03 | SDK partner wave |
-| 2026‑02‑19 08:30 | acknowledged | partner-sdk-03 |  |
-| 2026‑02‑24 16:10 | feedback-submitted | partner-sdk-03 | docs-preview/20260218#3 |
-| 2026‑02‑28 17:10 | access-revoked | partner-sdk-03 |  |
-| 2026‑02‑18 14:15 | invite-sent | ecosystem-advocate-04 | Ecosystem advocate |
-| 2026‑02‑18 14:50 | acknowledged | ecosystem-advocate-04 |  |
-| 2026‑02‑26 12:35 | feedback-submitted | ecosystem-advocate-04 | docs-preview/20260218#4 |
-| 2026‑02‑28 17:15 | access-revoked | ecosystem-advocate-04 |  |
+| 2026-02-18 14:00 | урилга илгээсэн | санхүүгийн-бета-01 | Санхүүгийн туршилтын когорт |
+| 2026-02-18 14:08 | хүлээн зөвшөөрсөн | санхүүгийн-бета-01 |  |
+| 2026-02-21 10:22 | санал хүсэлт илгээсэн | санхүүгийн-бета-01 | docs-preview/20260218#1 |
+| 2026-02-28 17:00 | хандалтыг цуцалсан | санхүүгийн-бета-01 |  |
+| 2026-02-18 14:05 | урилга илгээсэн | ажиглалт-опс-02 | Ажиглалтын бэлэн байдал |
+| 2026-02-18 14:20 | хүлээн зөвшөөрсөн | ажиглалт-опс-02 |  |
+| 2026-02-23 09:45 | санал хүсэлт илгээсэн | ажиглалт-опс-02 | docs-preview/20260218#2 |
+| 2026-02-23 11:15 | асуудал нээсэн | ажиглалт-опс-02 | DOCS-SORA-Урьдчилан харах-20260218 |
+| 2026-02-28 17:05 | хандалтыг цуцалсан | ажиглалт-опс-02 |  |
+| 2026-02-18 14:10 | урилга илгээсэн | partner-sdk-03 | SDK түншийн долгион |
+| 2026-02-19 08:30 | хүлээн зөвшөөрсөн | partner-sdk-03 |  |
+| 2026-02-24 16:10 | санал хүсэлт илгээсэн | partner-sdk-03 | docs-preview/20260218#3 |
+| 2026-02-28 17:10 | хандалтыг цуцалсан | partner-sdk-03 |  |
+| 2026-02-18 14:15 | урилга илгээсэн | экосистемийн өмгөөлөгч-04 | Экосистемийн өмгөөлөгч |
+| 2026-02-18 14:50 | хүлээн зөвшөөрсөн | экосистемийн өмгөөлөгч-04 |  |
+| 2026-02-26 12:35 | санал хүсэлт илгээсэн | экосистемийн өмгөөлөгч-04 | docs-preview/20260218#4 |
+| 2026-02-28 17:15 | хандалтыг цуцалсан | экосистемийн өмгөөлөгч-04 |  |
 
-Use `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01`
-to regenerate the digest and portal data when updating this log.
+`npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01` ашиглана уу
+энэ бүртгэлийг шинэчлэх үед хураангуй болон портал өгөгдлийг сэргээх.

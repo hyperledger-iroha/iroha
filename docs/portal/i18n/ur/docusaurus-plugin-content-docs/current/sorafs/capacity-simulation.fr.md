@@ -4,49 +4,51 @@ direction: rtl
 source: docs/portal/docs/sorafs/capacity-simulation.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: capacity-simulation
-title: Runbook de simulation de capacité SoraFS
-sidebar_label: Runbook de simulation de capacité
-description: Exercer le kit de simulation du marketplace de capacité SF-2c avec des fixtures reproductibles, des exports Prometheus et des tableaux de bord Grafana.
+ID: صلاحیت کی نقل
+عنوان: صلاحیت تخروپن رن بک SoraFS
+سائڈبار_لیبل: صلاحیت تخروپن رن بک
+تفصیل: تولیدی فکسچر ، Prometheus برآمدات اور Grafana ڈیش بورڈز کے ساتھ SF-2C صلاحیت مارکیٹ پلیس تخروپن کٹ ورزش کریں۔
 ---
 
-:::note Source canonique
-Cette page reflète `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Gardez les deux copies synchronisées jusqu'à ce que l'ensemble de documentation Sphinx hérité soit entièrement migré.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` کی عکاسی کرتا ہے۔ دونوں کاپیاں مطابقت پذیری میں رکھیں جب تک کہ میراثی اسفنکس دستاویزات کا سیٹ مکمل طور پر ہجرت نہ ہوجائے۔
 :::
 
-Ce runbook explique comment exécuter le kit de simulation du marketplace de capacité SF-2c et visualiser les métriques résultantes. Il valide la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des fixtures déterministes dans `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_stub capacity`; utilisez `iroha app sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
+اس رن بک میں بتایا گیا ہے کہ SF-2C صلاحیت مارکیٹ پلیس تخروپن کٹ کو کیسے چلائیں اور اس کے نتیجے میں میٹرکس کا تصور کیا جائے۔ یہ کوٹہ مذاکرات ، فیل اوور مینجمنٹ اور `docs/examples/sorafs_capacity_simulation/` میں ڈٹرمینسٹک فکسچر کا استعمال کرتے ہوئے اختتام سے آخر تک ختم کرنے کی توثیق کرتا ہے۔ صلاحیت کے پے لوڈ ہمیشہ `sorafs_manifest_stub capacity` استعمال کرتے ہیں۔ ظاہر/کار پیکیجنگ اسٹریمز کے لئے `iroha app sorafs toolkit pack` استعمال کریں۔
 
-## 1. Générer les artefacts CLI
+## 1. CLI نمونے تیار کریں
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` encapsule `sorafs_manifest_stub capacity` pour émettre des payloads Norito, des blobs base64, des corps de requête Torii et des résumés JSON pour :
+`run_cli.sh` `sorafs_manifest_stub capacity` کو Norito پے لوڈز ، بیس 64 بلبس ، Torii درخواست باڈیوں ، اور JSON ڈائجسٹس کے لئے۔
 
-- Trois déclarations de fournisseurs participant au scénario de négociation de quotas.
-- Un ordre de réplication allouant le manifeste en staging entre ces fournisseurs.
-- Des snapshots de télémétrie pour la ligne de base pré‑panne, l'intervalle de panne et la récupération de failover.
-- Un payload de litige demandant un slashing après la panne simulée.
+- کوٹہ مذاکرات کے منظر نامے میں حصہ لینے والے سپلائرز کے تین اعلامیہ۔
+- ان فراہم کنندگان کے مابین اسٹیجنگ کو مختص کرنے کا ایک نقل آرڈر۔
+- پری ناکامی بیس لائن ، ناکامی کا وقفہ اور فیل اوور بازیافت کے لئے ٹیلی میٹری اسنیپ شاٹس۔
+- ایک تنازعہ پے لوڈ جو مصنوعی بندش کے بعد گرنے کی درخواست کرتا ہے۔
 
-Tous les artefacts sont déposés sous `./artifacts` (remplacez en passant un autre répertoire en premier argument). Inspectez les fichiers `_summary.json` pour un contexte lisible.
+تمام نمونے `./artifacts` کے تحت دائر کیے جاتے ہیں (پہلی دلیل کے طور پر کسی اور ڈائرکٹری کو پاس کرکے تبدیل کریں)۔ پڑھنے کے قابل سیاق و سباق کے لئے `_summary.json` فائلوں کا معائنہ کریں۔
 
-## 2. Agréger les résultats et émettre les métriques
+## 2۔ مجموعی نتائج اور آؤٹ پٹ میٹرکس
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-L'analyseur produit :
+تجزیہ کار تیار کرتا ہے:
 
-- `capacity_simulation_report.json` - allocations agrégées, deltas de failover et métadonnées de litige.
-- `capacity_simulation.prom` - métriques textfile Prometheus (`sorafs_simulation_*`) adaptées au textfile collector de node-exporter ou à un scrape job indépendant.
+- `capacity_simulation_report.json` - مجموعی مختص ، فیل اوور ڈیلٹا اور قانونی چارہ جوئی میٹا ڈیٹا۔
+- `capacity_simulation.prom` - ٹیکسٹ فائل میٹرکس Prometheus (`sorafs_simulation_*`) نوڈ ایکسپورٹر ٹیکسٹ فائل کلیکٹر یا آزاد کھرچنے والی نوکری کے مطابق ڈھال لیا گیا۔
 
-Exemple de configuration de scrape Prometheus :
+کھرچنے والی ترتیب Prometheus کی مثال:
 
 ```yaml
 scrape_configs:
@@ -61,22 +63,20 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Dirigez le textfile collector vers `capacity_simulation.prom` (si vous utilisez node-exporter, copiez-le dans le répertoire passé via `--collector.textfile.directory`).
+ٹیکسٹ فائل کلیکٹر کو `capacity_simulation.prom` پر ہدایت کریں (اگر نوڈ ایکسپورٹر استعمال کررہے ہیں تو ، اسے `--collector.textfile.directory` کے ذریعے منظور شدہ ڈائریکٹری میں کاپی کریں)۔
 
-## 3. Importer le dashboard Grafana
+## 3. درآمد ڈیش بورڈ Grafana
 
-1. Dans Grafana, importez `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Associez la variable de datasource `Prometheus` à la cible de scrape configurée ci-dessus.
-3. Vérifiez les panneaux :
-   - **Quota Allocation (GiB)** affiche les soldes engagés/assignés pour chaque fournisseur.
-   - **Failover Trigger** bascule sur *Failover Active* lorsque les métriques de panne arrivent.
-   - **Uptime Drop During Outage** trace la perte en pourcentage pour le fournisseur `alpha`.
-   - **Requested Slash Percentage** visualise le ratio de remédiation extrait du fixture de litige.
+1. Grafana میں ، `dashboards/grafana/sorafs_capacity_simulation.json` درآمد کریں۔
+2. ڈیٹا سورس متغیر `Prometheus` کو اوپر کی تشکیل شدہ کھرچنا ہدف کے ساتھ منسلک کریں۔
+3. نشانیاں چیک کریں:
+   - ** کوٹہ مختص (GIB) ** ہر سپلائر کے لئے پرعزم/تفویض بیلنس دکھاتا ہے۔
+   - ** فیل اوور ٹرگر ** جب ناکامی کی پیمائش آتی ہے تو*فیل اوور ایکٹو*میں تبدیل ہوجاتی ہے۔
+   - ** آؤٹ ٹائم کے دوران اپ ٹائم ڈراپ ** فراہم کنندہ `alpha` کے لئے فیصد کے نقصان کو پلاٹ کرتا ہے۔
+   - ** درخواست کردہ سلیش فیصد ** تنازعہ کی حقیقت سے نکلے ہوئے تدارک کے تناسب کو تصور کرتا ہے۔
 
-## 4. Vérifications attendues
+## 4. متوقع تصدیق- `sorafs_simulation_quota_total_gib{scope="assigned"}` جب تک کل پرعزم ہے> = 600 تک `600` کے برابر ہے۔
+- `sorafs_simulation_failover_triggered` `1` اور متبادل فراہم کنندہ میٹرک ہائی لائٹس `beta` کو ظاہر کرتا ہے۔
+- `sorafs_simulation_slash_requested` وینڈر ID `alpha` کے لئے `0.15` (15 ٪ SLASH) کی وضاحت کرتا ہے۔
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` est égal à `600` tant que le total engagé reste >=600.
-- `sorafs_simulation_failover_triggered` indique `1` et la métrique du fournisseur de remplacement met en avant `beta`.
-- `sorafs_simulation_slash_requested` indique `0.15` (15 % de slash) pour l'identifiant de fournisseur `alpha`.
-
-Exécutez `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` pour confirmer que les fixtures sont toujours acceptées par le schéma CLI.
+`cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` چلائیں اس بات کی تصدیق کے لئے کہ فکسچر ابھی بھی CLI اسکیما کے ذریعہ قبول کیے گئے ہیں۔

@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
 source_last_modified: "2026-01-28T17:11:30.632934+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IH58 Rollout Note for SDK & Codec Owners
+SDK və Codec Sahibləri üçün # IH58 Yayım Qeydi
 
-Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
+Komandalar: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec alətləri
 
-Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
-implementation. Please align SDK behaviour and tests with the canonical spec.
+Kontekst: `docs/account_structure.md` indi göndərmə IH58 hesab ID-sini əks etdirir
+həyata keçirilməsi. Lütfən, SDK davranışını və testlərini kanonik spesifikasiya ilə uyğunlaşdırın.
 
-Key references:
-- Address codec + header layout — `docs/account_structure.md` §2
-- Curve registry — `docs/source/references/address_curve_registry.md`
-- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
-- Fixture vectors — `fixtures/account/address_vectors.json`
+Əsas istinadlar:
+- Ünvan kodek + başlıq tərtibatı — `docs/account_structure.md` §2
+- Əyri reyestri — `docs/source/references/address_curve_registry.md`
+- Norm v1 domen idarəsi — `docs/source/references/address_norm_v1.md`
+- Armatur vektorları — `fixtures/account/address_vectors.json`
 
-Action items:
-1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
-   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
-2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
-   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
-   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
-   resolver unless the selector is implicit default (use the configured default
-   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
-   resolvers.
-4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
-   the first 2 bytes. Compressed alphabet base is **105**.
-5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
-   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
-   not assume secp256k1 is enabled by default outside Rust.
-6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
-   depend on CAIP‑10 conversions.
+Fəaliyyət elementləri:
+1. **Kanonik çıxış:** `AccountId::to_string()`/Ekran yalnız IH58 yaymalıdır
+   (`@domain` şəkilçisi yoxdur). Kanonik hex sazlama üçündir (`0x...`).
+2. **Qəbul edilmiş daxiletmələr:** təhlilçilər IH58 (üstünlük verilir), `sora` sıxılmış,
+   və kanonik hex (yalnız `0x...`; çılpaq hex rədd edilir). Girişlər daşıya bilər
+   marşrutlaşdırma göstərişləri üçün `@<domain>` şəkilçisi; `<label>@<domain>` ləqəbləri a tələb edir
+   həlledici. Raw `public_key@domain` (multihash hex) dəstəklənir.
+3. **Həlledicilər:** domensiz IH58/sora təhlili üçün domen seçicisi tələb olunur
+   seçici gizli defolt olmadıqda həlledici (konfiqurasiya edilmiş standartdan istifadə edin
+   domen etiketi). UAID (`uaid:...`) və qeyri-şəffaf (`opaque:...`) hərfləri tələb edir
+   həlledicilər.
+4. **IH58 yoxlama məbləği:** `IH58PRE || prefix || payload` üzərində Blake2b-512 istifadə edin, götürün
+   ilk 2 bayt. Sıxılmış əlifba bazası **105**-dir.
+5. **Əyri keçid:** SDK-lar defolt olaraq yalnız Ed25519-dur. üçün açıq seçim təmin edin
+   ML‑DSA/GOST/SM (Swift qurma bayraqları; JS/Android `configureCurveSupport`). Et
+   Secp256k1-in Rust xaricində defolt olaraq aktiv olduğunu düşünməyin.
+6. **CAIP-10 yoxdur:** göndərilmiş CAIP‑10 xəritəsi hələ yoxdur; ifşa etməyin və ya
+   CAIP‑10 çevrilmələrindən asılıdır.
 
-Please confirm once the codecs/tests are updated; open questions can be tracked
-in the account-addressing RFC thread.
+Kodeklər/testlər yeniləndikdən sonra təsdiq edin; açıq suallar izlənilə bilər
+hesab ünvanlayan RFC mövzusunda.

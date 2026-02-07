@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/intro.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# SORA Nexus བཟོ་མཁན་གྱི་དྲ་རྒྱ་ལུ་ཕེབས་བསུ་ཞུ།
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository. The landing page now carries
-themed Norito/SoraFS entry points, signed OpenAPI snapshots, and a dedicated
-Norito Streaming reference so contributors can find the streaming control-plane
-contract without digging through the root spec.
+SORA I18NT0000015X གོང་འཕེལ་གཏོང་མཁན་གྱི་དྲྭ་ཚིགས་ འབྲེལ་མཐུད་ཡིག་ཆ་ ཨེསི་ཌི་ཀེ།
+སློབ་སྟོན་ཚུ་, དང་ API གཞི་བསྟུན་ཚུ་ Nexus བཀོལ་སྤྱོད་པ་དང་ I18NT000000000X Iroha གི་དོན་ལུ་ཨིན།
+ཕན་འདེབས་པ། འདི་གིས་ ལགཔ་གུ་ལམ་སྟོན་པ་ཚུ་ བརྒལ་ཏེ་ ཡིག་ཆ་ངོ་མ་གི་ས་ཁོངས་འདི་ ལྷན་ཐབས་འབདཝ་ཨིན།
+དེ་ལས་ མཛོད་ཁང་འདི་ལས་ ཐད་ཀར་དུ་ ཁྱད་ཚད་ཚུ་ བཏོན་ཡོདཔ་ཨིན། ད་ལྟ་ ཆགས་ཀྱི་ཤོག་ངོས་འདི་འབགཔ་ཨིན།
+theed Norito/I18NT0000010X འཛུལ་ཞུགས་ས་ཚིགས་དང་མཚན་རྟགས་བཀོད་པའི་OpenAPI པར་ལེན་དང་།
+Norito རིམ་སྒྲིག་གཞི་བསྟུན་འབདཝ་ལས་ ཕན་འདེབས་འབད་མི་ཚུ་གིས་ རྒྱུན་ལམ་ཚད་འཛིན་-གནམ་གྲུ་འདི་ འཚོལ་ཚུགས།
+གན་ཡིག་འདི་ རྩ་བའི་ཚད་གཞི་བརྒྱུད་དེ་ མ་འཕར།
 
-## What you can do here
+## འདི་ན་ཅི་ཞིག་བྱ།
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- ** I18NT0000000007X** – བསམ་ཞིབ་འདི་ལས་འགོ་བཙུགས་ཏེ་ མགྱོགས་འགོ་བཙུགས་ནི་དང་ མགྱོགས་དྲགས་སྦེ་འགོ་བཙུགས་ནི།
+  རིམ་སྒྲིག་དཔེ་ཚད་དང་ བཱའིཊི་ཀོཌི་ལག་ཆས་ཚུ།
+- **Bootstrap SDKs** – ད་རིས་ ཇ་བ་ཨིསི་ཀིརིཔཊི་དང་ རསཊ་གི་དོན་ལུ་ མགྱོགས་དྲགས་འགོ་བཙུགས་དགོ། པའི་ཐོན་,
+  སུའིཕཊ་དང་ ཨེན་ཌོའིཌ་ལམ་སྟོན་པ་ཚུ་ བཀོད་སྒྲིག་ཚུ་ གནས་སྤོ་འགྱོ་བའི་བསྒང་ལས་ དེ་ཚུ་ནང་ འཛུལ་འོང་།
+- **བརྡ་འཚོལ་ཨེ་པི་ཨའི་ གཞི་བསྟུན་ཚུ་** – I18NT000000018X OpenAPI ཤོག་ལེབ་འདི་གིས་ གསརཔ་ REST སྟོནམ་ཨིན།
+  གསལ་བཀོད་དང་ རིམ་སྒྲིག་ཐིག་ཁྲམ་ཚུ་ ཀེ་ནོ་ནིག་ཀ་ནི་ཀཱལ་ རྟགས་བཀལ་ལུ་ལོག་འབྲེལ་མཐུད་འབདཝ་ཨིན།
+  འབྱུང་ཁུངས།
+- **སྔོན་སྒྲིག་བཀྲམ་སྤེལ་ཚུ་** – བཀོལ་སྤྱོད་རན་དེབ་ (བརྒྱུད་འཕྲིན་ གཞིས་ཆགས་, Nexus
+  བརྡ་རྟགས་ཚུ་ `docs/source/` ལས་ འབག་འོང་སྟེ་ ས་ཁོངས་འདི་ནང་ ལྷོད་ནི་ཨིན།
+  གནས་སྤོ་འགྱོ་མི་འདི་ ཡར་རྒྱས་འགྱོཝ་ཨིན།
 
-## Current status
+## ད་ལྟའི་གནས་སྟངས།
 
-- ✅ Themed Docusaurus v3 landing with refreshed typography, gradient-driven
-  hero/cards, and resource tiles that include the Norito Streaming summary.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`, with signed snapshot
-  checks and CSP guards enforced by `buildSecurityHeaders`.
-- ✅ Preview and probe coverage run in CI (`docs-portal-preview.yml` +
-  `scripts/portal-probe.mjs`), now gating the streaming doc, SoraFS quickstarts,
-  and the reference checklists before artifacts are published.
-- ✅ Norito, SoraFS, and SDK quickstarts plus reference sections are live in the
-  sidebar; new imports from `docs/source/` (streaming, orchestration, runbooks)
-  land here as they are authored.
+- ✅ བརྗོད་དོན་ Docusaurus v3 གསར་བསྐྲུན་དཔེ་བསྐྲུན་དང་ གྱེན་ལོག་འདྲུད་བཅོས།
+  དཔའ་བོ་/ཤོག་བྱང་དང་ ཐོན་ཁུངས་ཊ་ཡིལ་ཚུ་ Norito རིམ་སྒྲིག་བཅུད་བསྡུས་ཚུ་ཚུདཔ་ཨིན།
+- ✅ Torii I18NT0000004X གིས་ I18NI0000000023X, མཚན་རྟགས་བཀོད་ཡོད་པའི་ པར་ལེན་དང་གཅིག་ཁར་ གློག་ཐག་བཏང་ཡོདཔ་ཨིན།
+  བརྟག་དཔྱད་དང་ CSP ཉེན་རྟོག་ཚུ་ I18NI000000024X གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ།
+- ✅
+  I18NI0000000026X), ད་ལྟ་ རྒྱུན་སྤེལ་གྱི་ཡིག་ཆ་ SoraFS མགྱོགས་འགོ་བཙུགས་པ།
+  དང་ ཅ་རྙིང་ཚུ་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ གཞི་བསྟུན་ཞིབ་དཔྱད་ཐོ་ཡིག་ཚུ་ཨིན།
+- ✅ I18NT0000009X, I18NT000000012X, དང་ SDK མགྱོགས་འགོ་བཙུགས་པ་ དེ་ལས་ གཞི་བསྟུན་དབྱེ་ཚན་ཚུ་ ནང་སྡོད་ཡོདཔ་ཨིན།
+  ཟུར་ཐིག་; ནང་འདྲེན་གསརཔ་ I18NI000000027X (རྒྱུན་སྤེལ་, རོལ་དབྱངས་ རྔོན་དེབ་ཚུ།)
+  ས་ཆ་འདི་ན་བྲིས་ཡོད་དོ་བཟུམ་སྦེ་ཨིན།
 
-## Getting involved
+## གྲལ་གཏོགས་འབད་ནི།
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
+- ས་གནས་གོང་འཕེལ་བརྡ་བཀོད་ཚུ་གི་དོན་ལུ་ `docs/portal/README.md` ལུ་བལྟ།
   `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- ནང་དོན་གནས་སྤོ་འབད་ནིའི་ལས་འགན་ཚུ་ `DOCS-*` ལམ་གྱི་ས་ཁྲ་རྣམ་གྲངས་ཚུ་དང་གཅིག་ཁར་ བརྟག་ཞིབ་འབད་ཡོདཔ་ཨིན།
+  ཕན་འདེབས་ཚུ་ ཕེབས་བསུ་ཨིན་—`docs/source/` ལས་ འདྲེན་ལམ་དབྱེ་ཚན་ཚུ་དང་ ཤོག་ལེབ་ཁ་སྐོང་བརྐྱབ།
+  ཟུར་ཐིག་ལུ།
+- ཁྱོད་ཀྱིས་བཟོ་བཏོན་འབད་ཡོད་པའི་ཅ་རྙིང་ (spec, རིམ་སྒྲིག་ཐིག་ཁྲམ་ཚུ་) ཁ་སྐོང་བརྐྱབ་པ་ཅིན་ བཟོ་བསྐྲུན་འདི་ཡིག་ཆ་བཟོ།
+  བརྡ་བཀོད་ དེ་འབདཝ་ལས་ མ་འོངས་པའི་ ཕན་འདེབས་འབད་མི་ཚུ་གིས་ འཇམ་ཏོང་ཏོ་སྦེ་ གསར་བསྐྲུན་འབད་ཚུགས།

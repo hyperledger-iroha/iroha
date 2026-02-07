@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/sorafs/pin-registry-validation-plan.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pin-registry-validation-plan
-title: Pin Registry کے manifests کی توثیقی منصوبہ بندی
-sidebar_label: Pin Registry توثیق
-description: SF-4 Pin Registry rollout سے پہلے ManifestV1 gating کے لیے توثیقی منصوبہ۔
+identifiant : plan-de-validation-registre-pin
+titre : Pin Registry کے manifeste کی توثیقی منصوبہ بندی
+sidebar_label : Registre des broches en cours
+description : Déploiement du registre SF-4 Pin pour le portail ManifestV1.
 ---
 
 :::note مستند ماخذ
 یہ صفحہ `docs/source/sorafs/pin_registry_validation_plan.md` کی عکاسی کرتا ہے۔ جب تک پرانی دستاویزات فعال ہیں دونوں مقامات کو ہم آہنگ رکھیں۔
 :::
 
-# Pin Registry Manifest Validation Plan (SF-4 Prep)
+# Plan de validation du manifeste du registre des broches (préparation SF-4)
 
 یہ منصوبہ وہ اقدامات بیان کرتا ہے جو `sorafs_manifest::ManifestV1` کی توثیق کو
-آنے والے Pin Registry کنٹریکٹ میں جوڑنے کے لیے درکار ہیں تاکہ SF-4 کا کام
-موجودہ tooling پر استوار ہو اور encode/decode منطق کی نقل نہ بنے۔
+Le registre des broches est également disponible pour le SF-4.
+Outils pour l'encodage/décodage des outils
 
 ## مقاصد
 
-1. Host-side submission راستے manifest کی ساخت، chunking profile، اور governance
-   envelopes کو proposals قبول کرنے سے پہلے verify کرتے ہیں۔
-2. Torii اور gateway سروسز وہی validation routines دوبارہ استعمال کرتی ہیں تاکہ
-   hosts کے درمیان deterministic behavior برقرار رہے۔
-3. Integration tests مثبت/منفی کیسز کو کور کرتے ہیں، جن میں manifest acceptance،
-   policy enforcement، اور error telemetry شامل ہیں۔
+1. Soumission côté hôte du manifeste et du profil de segmentation et de la gouvernance
+   enveloppes et propositions قبول کرنے سے پہلے vérifier کرتے ہیں۔
+2. Torii pour les routines de validation de la passerelle et des routines de validation de la passerelle Torii
+   hôtes کے درمیان comportement déterministe برقرار رہے۔
+3. Tests d'intégration مثبت/منفی کیسز کو کور کرتے ہیں، جن میں manifeste d'acceptation،
+   application des politiques, et télémétrie des erreurs
 
-## Architecture
+##Architecture
 
 ```mermaid
 flowchart LR
@@ -44,45 +46,43 @@ flowchart LR
     registry --> torii
 ```
 
-### Components
+### Composants
 
-- `ManifestValidator` (`sorafs_manifest` یا `sorafs_pin` crate میں نیا ماڈیول)
-  ساختی چیکس اور policy gates کو encapsulate کرتا ہے۔
-- Torii ایک gRPC endpoint `SubmitManifest` expose کرتا ہے جو کنٹریکٹ کو forward
+- `ManifestValidator` (`sorafs_manifest` ou `sorafs_pin` caisse de stockage)
+  Il s'agit de portes politiques qui encapsulent les portes politiques
+- Torii et le point de terminaison gRPC `SubmitManifest` exposent les utilisateurs en avant
   کرنے سے پہلے `ManifestValidator` کو کال کرتا ہے۔
-- Gateway fetch path optionally وہی validator استعمال کرتا ہے جب registry سے
-  نئے manifests cache کیے جائیں۔
+- Chemin de récupération de la passerelle en option et validateur pour le registre et le registre
+  نئے manifeste le cache کیے جائیں۔
 
-## Task Breakdown
+## Répartition des tâches
 
-| Task | Description | Owner | Status |
+| Tâche | Descriptif | Propriétaire | Statut |
 |------|-------------|-------|--------|
-| V1 API skeleton | `sorafs_manifest` میں `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` شامل کریں۔ BLAKE3 digest verification اور chunker registry lookup شامل کریں۔ | Core Infra | ✅ Done | مشترکہ helpers (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) اب `sorafs_manifest::validation` میں ہیں۔ |
-| Policy wiring | registry policy config (`min_replicas`, expiry windows, allowed chunker handles) کو validation inputs سے map کریں۔ | Governance / Core Infra | Pending — SORAFS-215 میں ٹریکڈ |
-| Torii integration | Torii submission path کے اندر validator کال کریں؛ failure پر structured Norito errors واپس کریں۔ | Torii Team | Planned — SORAFS-216 میں ٹریکڈ |
-| Host contract stub | یقینی بنائیں کہ contract entrypoint وہ manifests reject کرے جو validation hash میں fail ہوں؛ metrics counters ظاہر کریں۔ | Smart Contract Team | ✅ Done | `RegisterPinManifest` اب state mutate کرنے سے پہلے shared validator (`ensure_chunker_handle`/`ensure_pin_policy`) چلاتا ہے اور unit tests failure cases کور کرتے ہیں۔ |
-| Tests | validator کے لیے unit tests + invalid manifests کے لیے trybuild cases شامل کریں؛ `crates/iroha_core/tests/pin_registry.rs` میں integration tests شامل کریں۔ | QA Guild | 🟠 In progress | validator unit tests on-chain rejection tests کے ساتھ آ گئے ہیں؛ مکمل integration suite ابھی باقی ہے۔ |
-| Docs | validator آنے کے بعد `docs/source/sorafs_architecture_rfc.md` اور `migration_roadmap.md` اپڈیٹ کریں؛ CLI استعمال `docs/source/sorafs/manifest_pipeline.md` میں لکھیں۔ | Docs Team | Pending — DOCS-489 میں ٹریکڈ |
+| Squelette de l'API V1 | `sorafs_manifest` et `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` شامل کریں۔ Vérification du résumé BLAKE3 et recherche dans le registre des chunkers | Infrastructure de base | ✅ Terminé | Aides (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) et `sorafs_manifest::validation` میں ہیں۔ |
+| Câblage de politique | configuration de la politique de registre (`min_replicas`, fenêtres d'expiration, poignées de chunker autorisées) et entrées de validation et carte | Gouvernance / Infrastructure de base | En attente — SORAFS-215 en attente |
+| Intégration Torii | Chemin de soumission Torii pour le validateur échec des erreurs structurées Norito et des erreurs | Équipe Torii | Prévu — SORAFS-216 en cours |
+| Talon du contrat d'accueil | Il y a un point d'entrée du contrat et un rejet du manifeste ou un hachage de validation ou un échec compteurs de métriques | Équipe de contrats intelligents | ✅ Terminé | `RegisterPinManifest` pour la mutation d'état et les cas d'échec des tests unitaires (`ensure_chunker_handle`/`ensure_pin_policy`) pour les cas d'échec des tests unitaires |
+| Essais | validateur pour les tests unitaires + manifestes invalides pour les cas trybuild `crates/iroha_core/tests/pin_registry.rs` pour les tests d'intégration | Guilde d'assurance qualité | 🟠 En cours | tests unitaires du validateur tests de rejet en chaîne Suite d'intégration complète en anglais |
+| Documents | validateur est en cours de `docs/source/sorafs_architecture_rfc.md` et `migration_roadmap.md` est en cours de réalisation CLI `docs/source/sorafs/manifest_pipeline.md` میں لکھیں۔ | Équipe Documents | En attente — DOCS-489 Lire la suite |
 
-## Dependencies
+## Dépendances- Schéma Pin Registry Norito ici (réf: feuille de route comme SF-4)۔
+- Enveloppes de registre de chunker signées par le Conseil (cartographie du validateur et cartes déterministes)۔
+- Soumission du manifeste et authentification Torii
 
-- Pin Registry Norito schema کی تکمیل (ref: roadmap میں SF-4 آئٹم)۔
-- Council-signed chunker registry envelopes (validator mapping کو deterministic بناتے ہیں)۔
-- Manifest submission کے لیے Torii authentication فیصلے۔
+## Risques et atténuations
 
-## Risks & Mitigations
-
-| Risk | Impact | Mitigation |
+| Risque | Impact | Atténuation |
 |------|--------|------------|
-| Torii اور کنٹریکٹ کے درمیان policy interpretation میں فرق | Non-deterministic acceptance۔ | validation crate شیئر کریں + host vs on-chain فیصلوں کا موازنہ کرنے والی integration tests شامل کریں۔ |
-| بڑے manifests کے لیے performance regression | Submission سست | cargo criterion سے benchmark کریں؛ manifest digest results cache کرنے پر غور کریں۔ |
-| Error messaging drift | Operators میں کنفیوژن | Norito error codes define کریں؛ `manifest_pipeline.md` میں document کریں۔ |
+| Torii اور کنٹریکٹ کے درمیان interprétation politique میں فرق | Acceptation non déterministe۔ | caisse de validation + hôte vs chaîne en chaîne pour les tests d'intégration et les tests d'intégration |
+| بڑے manifeste une régression des performances کے لیے | Soumission | critère de fret et référence cache des résultats du résumé du manifeste |
+| Dérive des messages d'erreur | Opérateurs میں کنفیوژن | Les codes d'erreur Norito définissent les erreurs `manifest_pipeline.md` Document de référence |
 
-## Timeline Targets
+## Objectifs de la chronologie
 
-- Week 1: `ManifestValidator` skeleton + unit tests لینڈ کریں۔
-- Week 2: Torii submission path wire کریں اور CLI کو validation errors دکھانے کے لیے اپڈیٹ کریں۔
-- Week 3: contract hooks implement کریں، integration tests شامل کریں، docs اپڈیٹ کریں۔
-- Week 4: migration ledger entry کے ساتھ end-to-end rehearsal چلائیں اور council sign-off حاصل کریں۔
+- Semaine 1 : squelette `ManifestValidator` + tests unitaires
+- Semaine 2 : Fil du chemin de soumission Torii et erreurs de validation CLI et erreurs de validation
+- Semaine 3 : les hooks de contrat implémentent les tests d'intégration et les documents اپڈیٹ کریں۔
+- Semaine 4 : saisie du grand livre de migration et répétition de bout en bout avant l'approbation du conseil.
 
-یہ منصوبہ validator کام شروع ہونے کے بعد roadmap میں حوالہ دیا جائے گا۔
+Il s'agit d'un validateur en ligne et d'une feuille de route en cours de route.

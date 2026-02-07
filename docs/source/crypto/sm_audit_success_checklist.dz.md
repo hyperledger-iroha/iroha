@@ -7,66 +7,67 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2025-12-29T18:16:35.940844+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
-% 2026-01-30
+% SM2/SM3/SM4 རྩིས་ཞིབ་མཐར་ཐུག་ཁྱད་ཚད་ཚད་གཞི།
+% Iroha ཀིརིཔ་ཊོ་ལས་བྱེད་སྡེ་ཚན།
+% ༢༠༢༦-༠༡-༣༠
 
-# Purpose
+# དགོས༌དོན
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+བརྟག་ཞིབ་ཐོ་ཡིག་འདི་གིས་ མཐར་འཁྱོལ་ཅན་ཅིག་གི་དོན་ལུ་ དགོ་པའི་ བརྟན་བརྟན་གྱི་ཚད་གཞི་ཚུ་ བསྡུ་ལེན་འབདཝ་ཨིན།
+མཇུག་བསྡུ་ SM2/SM3/SM4 ཕྱིའི་རྩིས་ཞིབ་ཀྱི་མཇུག་བསྡུ། དེ་སྐབས་བསྐྱར་ཞིབ་འབད་དགོ།
+ཀིརིཀ་ཨོཕ་ གནས་རིམ་ཞིབ་དཔྱད་ས་ཚིགས་རེ་རེ་ནང་ ལོག་བལྟ་ཞིནམ་ལས་ ཕྱིར་ཐོན་ངེས་གཏན་བཟོ་ནི་ལུ་ ལག་ལེན་འཐབ་ཨིན།
+བཟོ་བསྐྲུན་བདེན་དཔྱད་འབད་མི་ཚུ་ལུ་ ཨེསི་ཨེམ་མཚན་རྟགས་བཀོད་ནི་མ་འབད་བའི་ཧེ་མ་ གནས་སྟངས།
 
-# Pre-Engagement Readiness
+# སྔོན་འགྲོའི་སྒྲིག་འཛུགས།
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] གན་རྒྱ་མཚན་རྟགས་བཀོད་པའི་ཁྱབ་ཁོངས།
+      བཅོ་ཐབས་རྒྱབ་སྐྱོར་སྐད་ཡིག།
+- [ ] རྩིས་ཞིབ་སྡེ་ཚན་གྱིས་ མཛོད་ཁང་གི་མེ་ལོང་ སི་ཨའི་ ཨར་ཊི་ཕེག་ཊི་བཱ་ཀེཊ་ དང་།
+      ཡིག་ཆའི་བང་རིམ་ `docs/source/crypto/sm_audit_brief.md` ནང་ཐོ་བཀོད་བྱས།
+- [ ] འགན་ཁུར་རེ་རེ་གི་དོན་ལུ་ རྒྱབ་ཐག་ཚུ་དང་གཅིག་ཁར་ འབྲེལ་བ་འཐབ་སའི་ས་ཚིགས་ཚུ་ ངེས་གཏན་བཟོ་ཡོདཔ་ཨིན།
+      (ཀིརིཔ་ཊོ་, IVM, སྟེགས་བུ། ཉེན་སྲུང་། ཡིག་ཆ་ཚུ།)
+- [ ] ནང་ཁུལ་གྱི་འབྲེལ་ཡོད་ཚུ་ དམིགས་གཏད་བཏོན་པའི་ཚེས་གྲངས་དང་ གྱང་ཤུགས་སྒོ་སྒྲིག་ཚུ་གུ་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+- [ ] SBOM ཕྱིར་འདྲེན་ (`cargo auditable` + CycloneDX) བཟོ་སྐྲུན་དང་བརྗེ་སོར་འབད་ཡོདཔ།
+- [ ] OpenSSL/Tongsoo གིས་ འབྱུང་ཁུངས་ཐུམ་སྒྲིལ་གྲ་སྒྲིག་འབད་ཡོདཔ།
+      (འབྱུང་ཁུངས་ཊར་བཱོལ་ཧེ་ཤི་, བཟོ་བསྐྲུན་ཡིག་གཟུགས་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་དྲན་ཐོ་)།
+- [ ] མཐའ་མའི་གཏན་འབེབས་བརྟག་དཔྱད་ཐོན་འབྲས་འཛིན་ཡོད།
+      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, དང་།
+      Norito སྒོར་རིམ་སྒྲིག་བཀོད་ཚུ།
+- [ ] [ ] Torii `/v1/node/capabilities` ཁྱབ་བསྒྲགས་ (via `iroha runtime capabilities`) ཐོ་བཀོད་འབད་དེ་ `crypto.sm` གསལ་སྟོན་ས་སྒོ་དང་ མགྱོགས་དྲགས་སྲིད་བྱུས་ཀྱི་ པར་རིས་ཚུ་ བདེན་དཔྱད་འབད་ཡོདཔ།
 
-# Engagement Execution
+# གྲལ་གཉེར་ལག་ལེན།
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] Kick-off ལས་རིམ། དམིགས་ཡུལ་མཉམ་སྤྱོད་བྱས་ཏེ་མཇུག་བསྡུ་ཡོད།
+      དུས་ཚོད་དང་ བརྒྱུད་འབྲེལ་གྱི་ གདམ་ཁ།
+- [ ] བདུན་ཕྲག་གི་གནས་རིམ་སྙན་ཞུ། ཉེན་ཁའི་ཐོ་བཀོད་དུས་མཐུན་བཟོ་ཡོདཔ།
+- [ ] ཚབས་ཆེ་ཆུང་སྐབས་ གསར་ཐོབ་ཀྱི་ཉིན་གཅིག་ནང་ བརྡ་སྤྲོད་འབད་ཡོདཔ།
+      is མཐོ་པོ་ཡང་ན་གལ་ཆེ།
+- [ ] རྩིས་ཞིབ་སྡེ་ཚན་གྱིས་ ≥2 སི་པི་ཡུ་བཟོ་བཀོད་ (x86_64, ནང་ གཏན་འབེབས་འགྲུལ་ལམ་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+      aarch64) མཐུན་སྒྲིག་ཨའུཊི་པུཊི་ཚུ་དང་གཅིག་ཁར།
+- [ ] ཟུར་ལམ་གྱི་བསྐྱར་ཞིབ་ནང་ དུས་རྒྱུན་གྱི་བདེན་ཁུངས་ཡང་ན་ རྒྱལ་རིང་བརྟག་དཔྱད་ཚུ་ཚུདཔ་ཨིན།
+      Rust དང་ FFI གི་ལམ་གཉིས་ཆ་རའི་བདེན་ཁུངས།
+- [ ] མཐུན་སྒྲིག་དང་ཡིག་ཆ་བསྐྱར་ཞིབ་ཀྱིས་ བཀོལ་སྤྱོད་ལམ་སྟོན་མཐུན་སྒྲིག་ཚུ་ངེས་གཏན་བཟོཝ་ཨིན།
+      ཁྲིམས་ལུགས་འགན་འཁྲི།
+- [ ] གཞི་བསྟུན་ལག་ལེན་གྱི་ཁྱད་པར་བརྟག་དཔྱད་ (RustCrypto,
+      OpenSSL/Tongsuo) རྩིས་ཞིབ་པའི་ལྟ་རྟོག་དང་གཅིག་ཁར་ ལག་ལེན་འཐབ་ཡོདཔ།
+- [ ] ཕུ་ཟ་ཧར་ནེས་ཀྱིས་དབྱེ་ཞིབ་འབད་ཡོདཔ། གསརཔ་སོན་གྱི་ ཀོར་པོ་ར་ བར་སྟོང་ཡོད་སར་བྱིན་ཡོདཔ།
 
-# Remediation & Exit
+# བཅོ་ཐབས་དང་ཕྱིར་ཐོན་པ།
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [ ] ཚབས་ཆེ་ཆུང་དང་གནོད་སྐྱོན་ བཀོལ་སྤྱོད་བྱེད་ཐུབ་པའི་ཞིབ་འཇུག་ཚང་མ།
+      གྲོས་འཆར་གྱི་གོ་རིམ་ཚུ་ གྲོས་འཆར་བཀོད་ཡོདཔ།
+- [ ] མཐོ་རིམ་/གལ་ཆེན་གྱི་གནད་དོན་ཚུ་ རྩིས་ཞིབ་པ་གིས་ ཆ་འཇོག་འབད་མི་ ཐབས་འཕྲུལ་ཡང་ན་ ཉམས་བཅོས་འབད་ནི།
+      བདེན་དཔྱད་འབད་ནི། ལྷག་ལུས་ཉེན་ཁ་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་ཡོདཔ།
+- [ ] རྩིས་ཞིབ་པ་གིས་ གཏན་འཇགས་ཀྱི་གནད་དོན་ཚུ་ བདེན་དཔྱད་འབད་དགོ་པའི་ བདེན་དཔྱད་ཚུ་ བཀྲམ་སྤེལ་འབདཝ་ཨིན། (ཁྱད་པར་, བརྟག་དཔྱད།
+      གཡོག་བཀོལ་ནི་ ཡང་ན་ མཚན་རྟགས་བཀོད་ཡོདཔ།
+- [ ] མཐའ་མའི་སྙན་ཞུ། བཀོད་སྒྲིག་བཅུད་བསྡུས་ ཁ་གསལ་གྱི་ཤེས་རྟོགས་ ཐབས་ལམ།
+      གཏན་འབེབས་རིང་ལུགས་ཀྱི་ཐག་གཅོད་དང་ བསྟར་སྤྱོད་ཀྱི་ཐག་གཅོད།
+- [ ནང་འཁོད་མིང་རྟགས་བཀོད་པའི་ཞལ་འཛོམས་ཀྱིས་ ཤུལ་མའི་རིམ་པ་ གསར་བཏོན་བདེ་སྒྲིག་ཚུ་ མཇུག་བསྡུ་ཡོདཔ་ཨིན།
+      དང་ཡིག་ཆའི་དུས་མཐུན་ཚུ།
+- [ ] `status.md` རྩིས་ཞིབ་གྲུབ་འབྲས་དང་ཁྱད་དུ་འཕགས་པའི་བཅོས་ཐབས་དང་མཉམ་དུ་དུས་མཐུན་བཟོས་པ།
+      རྗེས་འཇུག་ཚུ།
+- [ ] `docs/source/crypto/sm_program.md` ནང་བཟུང་ཡོད།
+      ལྷབ་སྦྱང་, མ་འོངས་པའི་ རྩུབ་སྤྱོད་ཀྱི་ལཱ་ཚུ་)།

@@ -4345,9 +4345,7 @@ pub mod message {
             sync::atomic::{AtomicU64, Ordering},
         };
 
-        use iroha_crypto::{
-            Algorithm, Hash, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf,
-        };
+        use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature, SignatureOf};
         use iroha_data_model::{
             block::BlockSignature,
             consensus::{

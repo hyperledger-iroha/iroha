@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8691a94d23e589f46d8e8cf2359d6d9a31f7c38c5b7bf0def69c88d2dd081765
 source_last_modified: "2026-01-22T14:35:37.510319+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Confidential assets audit & operations playbook referenced by `roadmap.md:M4`.
+//! `roadmap.md:M4` tərəfindən istinad edilən məxfi aktivlərin auditi və əməliyyat kitabçası.
 
-# Confidential Assets Audit & Operations Runbook
+# Məxfi Aktivlərin Auditi və Əməliyyatlar Runbook
 
-This guide consolidates the evidence surfaces auditors and operators rely on
-when validating confidential-asset flows. It complements the rotation playbook
-(`docs/source/confidential_assets_rotation.md`) and the calibration ledger
+Bu təlimat auditorların və operatorların etibar etdiyi sübut səthlərini birləşdirir
+məxfi aktivlərin hərəkətini təsdiq edərkən. O, fırlanma oyun kitabını tamamlayır
+(`docs/source/confidential_assets_rotation.md`) və kalibrləmə kitabçası
 (`docs/source/confidential_assets_calibration.md`).
 
-## 1. Selective Disclosure & Event Feeds
+## 1. Seçilmiş Açıqlama və Hadisə Lentləri
 
-- Every confidential instruction emits a structured `ConfidentialEvent` payload
-  (`Shielded`, `Transferred`, `Unshielded`) captured in
-  `crates/iroha_data_model/src/events/data/events.rs:198` and serialized by the
-  executors (`crates/iroha_core/src/smartcontracts/isi/world.rs:3699`–`4021`).
-  The regression suite exercises the concrete payloads so auditors can rely on
-  deterministic JSON layouts (`crates/iroha_core/tests/zk_confidential_events.rs:19`–`299`).
-- Torii exposes these events via the standard SSE/WebSocket pipeline; auditors
-  subscribe using `ConfidentialEventFilter` (`crates/iroha_data_model/src/events/data/filters.rs:82`),
-  optionally scoping to a single asset definition. CLI example:
+- Hər bir məxfi təlimat strukturlaşdırılmış `ConfidentialEvent` faydalı yük yayır
+  (`Shielded`, `Transferred`, `Unshielded`) çəkilib
+  `crates/iroha_data_model/src/events/data/events.rs:198` və seriyalı
+  icraçılar (`crates/iroha_core/src/smartcontracts/isi/world.rs:3699`–`4021`).
+  Reqressiya dəsti auditorların etibar edə bilməsi üçün konkret yükləri həyata keçirir
+  deterministik JSON tərtibatları (`crates/iroha_core/tests/zk_confidential_events.rs:19`–`299`).
+- Torii bu hadisələri standart SSE/WebSocket boru kəməri vasitəsilə ifşa edir; auditorlar
+  `ConfidentialEventFilter` (`crates/iroha_data_model/src/events/data/filters.rs:82`) istifadə edərək abunə olun
+  isteğe bağlı olaraq vahid aktiv tərifinə qədər əhatə dairəsi. CLI nümunəsi:
 
   ```bash
   iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
   ```
 
-- Policy metadata and pending transitions are available through
+- Siyasət metadatası və gözlənilən keçidlər vasitəsilə mövcuddur
   `GET /v1/confidential/assets/{definition_id}/transitions`
-  (`crates/iroha_torii/src/routing.rs:15205`), mirrored by the Swift SDK
-  (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) and documented in
-  both the confidential-assets design and SDK guides
+  (`crates/iroha_torii/src/routing.rs:15205`), Swift SDK tərəfindən əks olunur
+  (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) və sənədləşdirilib
+  həm məxfi aktivlərin dizaynı, həm də SDK təlimatları
   (`docs/source/confidential_assets.md:70`, `docs/source/sdk/swift/index.md:334`).
 
-## 2. Telemetry, Dashboards, and Calibration Evidence
+## 2. Telemetriya, Tablolar və Kalibrləmə Sübutları
 
-- Runtime metrics surface tree depth, commitment/frontier history, root eviction
-  counters, and verifier-cache hit ratios
-  (`crates/iroha_telemetry/src/metrics.rs:5760`–`5815`). Grafana dashboards in
-  `dashboards/grafana/confidential_assets.json` ship the associated panels and
-  alerts, with the workflow documented in `docs/source/confidential_assets.md:401`.
-- Calibration runs (NS/op, gas/op, ns/gas) with signed logs live in
-  `docs/source/confidential_assets_calibration.md`. The latest Apple Silicon
-  NEON run is archived at
-  `docs/source/confidential_assets_calibration_neon_20260428.log`, and the same
-  ledger records the temporary waivers for SIMD-neutral and AVX2 profiles until
-  the x86 hosts come online.
+- Runtime ölçüləri səth ağacı dərinliyi, öhdəlik/sərhəd tarixi, kök çıxarılması
+  sayğaclar və yoxlayıcı-keş vurma nisbətləri
+  (`crates/iroha_telemetry/src/metrics.rs:5760`–`5815`). Grafana idarə panelləri
+  `dashboards/grafana/confidential_assets.json` əlaqəli panelləri göndərir və
+  `docs/source/confidential_assets.md:401`-də sənədləşdirilmiş iş axını ilə xəbərdarlıqlar.
+- Kalibrləmə işləri (NS/op, qaz/op, ns/qaz) imzalanmış loglarla canlıdır
+  `docs/source/confidential_assets_calibration.md`. Ən son Apple Silicon
+  NEON qaçışı arxivdə saxlanılır
+  `docs/source/confidential_assets_calibration_neon_20260428.log` və eyni
+  mühasibat kitabçası SIMD-neytral və AVX2 profilləri üçün müvəqqəti imtinaları qeyd edir
+  x86 hostları onlayn olur.
 
-## 3. Incident Response & Operator Tasks
+## 3. Hadisəyə Cavab & Operator Tapşırıqları
 
-- Rotation/upgrade procedures reside in
-  `docs/source/confidential_assets_rotation.md`, covering how to stage new
-  parameter bundles, schedule policy upgrades, and notify wallets/auditors. The
-  tracker (`docs/source/project_tracker/confidential_assets_phase_c.md`) lists
-  runbook owners and rehearsal expectations.
-- For production rehearsals or emergency windows, operators attach evidence to
-  `status.md` entries (e.g., the multi-lane rehearsal log) and include:
-  `curl` proof of policy transitions, Grafana snapshots, and the relevant event
-  digests so auditors can reconstruct mint→transfer→reveal timelines.
+- Rotasiya/təkmilləşdirmə prosedurları mövcuddur
+  `docs/source/confidential_assets_rotation.md`, yeni səhnəni necə əhatə edir
+  parametr paketləri, siyasət yeniləmələrini planlaşdırın və pul kisələrini/auditorları xəbərdar edin. The
+  izləyici (`docs/source/project_tracker/confidential_assets_phase_c.md`) siyahıları
+  runbook sahibləri və məşq gözləntiləri.
+- İstehsal məşqləri və ya təcili yardım pəncərələri üçün operatorlar sübut əlavə edirlər
+  `status.md` qeydləri (məsələn, çox zolaqlı məşq jurnalı) və bunlara daxildir:
+  `curl` siyasət keçidlərinin sübutu, Grafana anlıq görüntülər və müvafiq hadisə
+  həzm edir ki, auditorlar nanə → köçürmə → vaxt qrafiklərini yenidən qura bilsinlər.
 
-## 4. External Review Cadence
+## 4. Xarici baxış tempi
 
-- Security review scope: confidential circuits, parameter registries, policy
-  transitions, and telemetry. This document plus the calibration ledger forms
-  the evidence packet sent to vendors; review scheduling is tracked via
-  M4 in `docs/source/project_tracker/confidential_assets_phase_c.md`.
-- Operators must keep `status.md` updated with any vendor findings or follow-up
-  action items. Until the external review completes, this runbook serves as the
-  operational baseline auditors can test against.
+- Təhlükəsizlik araşdırmasının əhatə dairəsi: məxfi sxemlər, parametr registrləri, siyasət
+  keçidlər və telemetriya. Bu sənəd və kalibrləmə kitabçası formaları
+  satıcılara göndərilən sübut paketi; baxış planı vasitəsilə izlənilir
+  `docs/source/project_tracker/confidential_assets_phase_c.md`-də M4.
+- Operatorlar `status.md`-i hər hansı satıcı tapıntıları və ya təqibi ilə yeniləməlidirlər
+  fəaliyyət maddələri. Xarici baxış tamamlanana qədər bu runbook kimi xidmət edir
+  əməliyyat bazası auditorları sınaqdan keçirə bilərlər.

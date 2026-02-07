@@ -7,137 +7,132 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9cda4648f0af7f89022e9d9f4ea243bc22685d9356927bbf1417c77b2057d872
 source_last_modified: "2025-12-29T18:16:35.940439+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 External Audit Brief
-% Iroha Crypto Working Group
-% 2026-01-30
+% SM2/SM3/SM4 ཕྱི་ཕྱོགས་རྩིས་ཞིབ་མདོར་བསྡུས།
+% Iroha ཀིརིཔ་ཊོ་ལས་བྱེད་སྡེ་ཚན།
+% ༢༠༢༦-༠༡-༣༠
 
-# Overview
+# ལྟ་ཚུལ།
 
-This brief packages the engineering and compliance context required for an
-independent review of Iroha’s SM2/SM3/SM4 enablement. It targets audit teams
-with Rust cryptography experience and familiarity with Chinese National
-Cryptography standards. The expected outcome is a written report covering
-implementation risks, conformance gaps, and prioritised remediation guidance
-ahead of the SM rollout moving from preview to production.
+འ་ནི་ཐུང་ཀུ་འདི་གིས་ བཟོ་རིག་དང་ བསྟར་སྤྱོད་ཀྱི་སྐབས་དོན་འདི་ གཅིག་གི་དོན་ལུ་ ཐུམ་སྒྲིལ་འབདཝ་ཨིན།
+རང་དབང་ཅན་གྱི་བསྐྱར་ཞིབ་ Iroha’s SM2/SM3/SM4 ལྕོགས་ཅན་བཟོ་ཡོདཔ། དེ་གིས་ རྩིས་ཞིབ་སྡེ་ཚན་ལུ་དམིགས་གཏད་བསྐྱེདཔ་ཨིན།
+དང་བཅས་ རསཊ་ཀིརིཔ་ཊོ་གཱ་ར་ཕི་ཉམས་མྱོང་དང་ རྒྱ་ནག་རྒྱལ་ཡོངས་དང་གོམས་འདྲིས་ཡོད་པའི་
+Cryprography ཚད་གཞི། རེ་བ་བསྐྱེད་པའི་གྲུབ་འབྲས་འདི་ ཡིག་ཐོག་གི་སྙན་ཞུ་ཁྱབ་ཁོངས་ཨིན།
+ལག་ལེན་འཐབ་པའི་ཉེན་ཁ་དང་ མཐུན་སྒྲིག་བར་སྟོང་ དེ་ལས་ གཙོ་རིམ་བཟུང་བའི་ བཅོ་ཐབས་ལམ་སྟོན།
+སྔོན་ལྟ་ལས་ཐོན་སྐྱེད་ལུ་འགྱོ་མི་ SM བཤུད་སྒྲིལ་གྱི་གོང་།
 
-# Program Snapshot
+# ལས་རིམ་པར་ལེན་པ།
 
-- **Release scope:** Iroha 2/3 shared codebase, deterministic verification
-  paths across nodes and SDKs, signing available behind configuration guard.
-- **Current phase:** SM-P3.2 (OpenSSL/Tongsuo backend integration) with Rust
-  implementations already shipping for verification and symmetric use-cases.
-- **Target decision date:** 2026-04-30 (audit findings inform go/no-go for
-  enabling SM signing in validator builds).
-- **Key risks tracked:** third-party dependency pedigree, deterministic
-  behaviour under mixed hardware, operator compliance readiness.
+- **གསར་བཏོན་འབད་སའི་གོ་སྐབས་:** Iroha གིས་ བརྗེ་སོར་འབད་ཡོད་པའི་གསང་ཡིག་གཞི་རྟེན་, གཏན་འབེབས་བདེན་པ།
+  མཐུད་མཚམས་དང་ཨེསི་ཌི་ཀེ་ཚུ་བརྒྱུད་དེ་ རིམ་སྒྲིག་སྲུང་སྐྱོབ་ཀྱི་རྒྱབ་ཁར་ མཚན་རྟགས་བཀོད་ནི།
+- **ད་ལྟོའི་དུས་རིམ་:** SM-P3.2 (OpenSSL/Tongsoo backend མཉམ་བསྡོམས་) དང་མཉམ་དུ།
+  བདེན་བཤད་དང་ འདྲ་མཉམ་ལག་ལེན་གྱི་གནད་དོན་ཚུ་ ཧེ་མ་ལས་རང་ སྐྱེལ་འདྲེན་འབད་ནི།
+- **དམིགས་གཏད་ཐག་གཅོད་ཚེས་གྲངས་:** ༢༠༢༦-༠༤-༣༠ (རྩིས་ཞིབ་ཤེས་རྟོགས་ཀྱི་བརྡ་དོན་སྤྲོད་ནི་/མ་ཆོག
+  བདེན་དཔྱད་འབད་མི་ནང་ ཨེསི་ཨེམ་མིང་རྟགས་བཀོད་ནི་ཨིན་)།
+- **ལྡེ་མིག་ཉེན་ཁ་འཚོལ་ཞིབ་འབད་ཡོདཔ།:** ཕྱོགས་གསུམ་པའི་བརྟེན་པའི་རིགས་བརྒྱུད་ གཏན་འབེབས་བཟོ་ནི།
+  མཉེན་ཆས་སླ་བསྲེ་བའི་འོག་ལུ་ སྤྱོད་འཇུག་གི་ བསྟར་སྤྱོད་ཀྱི་ གྲ་སྒྲིག་ཡོད་པའི་ སྤྱོད་ལམ།
 
-# Code & Fixture References
+# གསང་ཨང་ དང་ བདེ་འཇགས་གཞི་བསྟུན།
 
-- `crates/iroha_crypto/src/sm.rs` — Rust implementations and optional OpenSSL
-  bindings (`sm-ffi-openssl` feature).
-- `crates/ivm/tests/sm_syscalls.rs` — IVM syscall coverage for hashing,
-  verification, and symmetric modes.
-- `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` — Norito payload
-  round-trips for SM artefacts.
-- `docs/source/crypto/sm_program.md` — programme history, dependency audit, and
-  rollout guardrails.
-- `docs/source/crypto/sm_operator_rollout.md` — operator-facing enablement and
-  rollback procedures.
-- `docs/source/crypto/sm_compliance_brief.md` — regulatory summary and export
-  considerations.
+- `crates/iroha_crypto/src/sm.rs` — རསཊ་ལག་ལེན་འཐབ་ཐངས་དང་ གདམ་ཁ་ཅན་གྱི་ ཨོ་པཱན་ཨེསི་ཨེསི་ཨེལ།
+  བཱའིན་ཌིང་ཚུ་ (`sm-ffi-openssl` ཁྱད་ཆོས་)།
+- `crates/ivm/tests/sm_syscalls.rs` — ཧེ་ཤིང་གི་དོན་ལུ་ སི་སི་ཀཱལ་ཁྱབ་ཁོངས།
+  བདེན་དཔྱད་དང་ མཉམ་མཐུན་ཐབས་ལམ།
+- `crates/iroha_data_model/tests/sm_norito_roundtrip.rs` — Norito དངུལ་སྤྲོད་པ།
+  SM ཅ་ཆས་ཚུ་གི་དོན་ལུ་ round-trips.
+- `docs/source/crypto/sm_program.md` — ལས་རིམ་གྱི་ལོ་རྒྱུས་ བརྟེན་པའི་རྩིས་ཞིབ་དང་།
+  བསྐོར་བའི་སྲུང་སྐྱོབ།
+- `docs/source/crypto/sm_operator_rollout.md` — བཀོལ་སྤྱོད་པའི་གདོང་ལྕོགས་ཅན་ལྕོགས་ཅན་བཟོ་ནི་དང་།
+  ལོག་བྱ་རིམ་ཚུ།
+- `docs/source/crypto/sm_compliance_brief.md` — ཁྲིམས་ལུགས་བཅུད་བསྡུས་དང་ཕྱིར་གཏོང་།
+  བརྩི་འཇོག་ཚུ།
 - `scripts/sm_openssl_smoke.sh` / `crates/iroha_crypto/tests/sm_openssl_smoke.rs`
-  — deterministic smoke harness for OpenSSL-backed flows.
-- `fuzz/sm_*` corpora — RustCrypto-based fuzz seeds covering SM3/SM4 primitives.
+  — OpenSSL-backed flows གི་དོན་ལུ་ ཐག་གཅོད་ཀྱི་ ཐུག་རྐྱེན་གྱི་ ཐག་བཅད།
+- `fuzz/sm_*` ཀོར་པོ་ར་ — SM3/SM4 གི་ དང་ཕུའི་ ཁྱབ་ཚད་ཚུ་ རུསཊ་ཀིརིཔ་ཊོ་ལུ་གཞི་བཞག་པའི་ ཕཱ་ཟི་སོན་ཚུ།
 
-# Requested Audit Scope
+# ཞུ་བ་འབད་མི་ ཞིབ་བཤེར་ཁྱབ་ཁོངས།1. **གསལ་བྱེད་ཀྱི་བསམ་འཆར།**།
+   - ཨེསི་ཨེམ་༢ མཚན་རྟགས་བདེན་དཔྱད་, ZA རྩིས་སྟོན་, དང་ ཀེ་ནོ་ནིཀ་ བདེན་དཔྱད་འབད།
+     ཨིན་ཀོ་ཌིང་སྤྱོད་ལམ་ཚུ།
+   - ཨེསི་ཨེམ་༣/ཨེསི་ཨེམ་༤ དང་པ་ ཇི་ཨེམ་/ཊི་ ༠༠༠༢-༢༠༡༢ དང་ ཇི་ཨེམ་/ཊི་ ༠༠༠༧-༢༠༡༢ ལུ་ ངེས་གཏན་བཟོ།
+     འགྱུར་ལྡོག་མེད་པའི་འགྱུར་བ་དང་ IV འཛིན་སྐྱོང་ཚུ་ཚུདཔ་ཨིན།
+2. ** Determinism དང་ དུས་རྒྱུན་གྱི་ངེས་གཏན་**
+   - བསྐྱར་ཞིབ་ཡན་ལག་དང་ ཐིག་ཁྲམ་བལྟ་ནི་ དེ་ལས་ སྲ་ཆས་གཏང་ནི་ཚུ་ཨིནམ་ལས་ མཐུད་མཚམས་ལག་ལེན་འཐབ་ནི།
+     ལྷག་ལུས་ཚུ་ CPU བཟའ་ཚང་ཚུ་ནང་ གཏན་འབེབས་བཟོཝ་ཨིན།
+   - སྒེར་གྱི་-ལྡེ་མིག་བཀོལ་སྤྱོད་ཚུ་གི་དོན་ལུ་ དུས་རྒྱུན་དུས་ཚོད་ཀྱི་ཐོབ་བརྗོད་ཚུ་ དབྱེ་ཞིབ་འབད་ཞིནམ་ལས་ འདི་ངེས་དཔྱད་འབད།
+     OpenSSL/Tongsoo འགྲུལ་ལམ་ཚུ་གིས་ དུས་རྒྱུན་གྱི་དུས་ཚོད་ཀྱི་ཡིག་བརྡ་ཚུ་ བདག་འཛིན་འཐབ་ཨིན།
+3. **ཕྱོགས་ཀྱི་རྒྱུན་ལམ་དང་ནོར་འཁྲུལ་དབྱེ་ཞིབ།**
+   - དུས་ཚོད་དང་ འདྲ་མཛོད་ དེ་ལས་ ནུས་ཤུགས་ཟུར་ཁའི་ཉེན་ཁ་ཚུ་ རཱསིཊ་དང་ གཉིས་གཉིས་ཆ་རའི་ནང་ ཞིབ་དཔྱད་འབད།
+     FFI-རྒྱབ་ལོག་འབད་ཡོད་པའི་ཨང་རྟགས་འགྲུལ་ལམ་ཚུ།
+   - མིང་རྟགས་བདེན་དཔྱད་ཀྱི་དོན་ལུ་ འཛོལ་བ་འཛིན་སྐྱོང་དང་ འཛོལ་བ་ཁྱབ་སྤེལ་འབད་ནི་ དང་།
+     བདེན་བཤད་འབད་ཡོད་པའི་གསང་བཟོའི་འཐུས་ཤོར་ཚུ།
+༤. **བཟོ་བསྐྲུན་དང་ བརྟེན་པ་དང་ བཀྲམ་སྤེལ་གྱི་རིམ་པ་བསྐྱར་ཞིབ་**
+   - བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ ངེས་གཏན་བཟོ་ནི།
+   - བསྐྱར་ཞིབ་བརྟེན་པའི་ཤིང་གི་ཆོག་ཐམ་དང་རྩིས་ཞིབ་ཁྱབ་ཁོངས།
+5. **བརྟག་དཔྱད་དང་བདེན་དཔྱད་སྒྲིག་ཆས་སྐྱོན་བརྗོད་**།
+   - ཐག་གཅོད་ཀྱི་ ཐ་མག་བརྟག་དཔྱད་དང་ ཕཱ་ཟི་ ཧར་ནིསི་ དེ་ལས་ Norito ཚུ་ དབྱེ་ཞིབ་འབད་ནི།
+   - ཁ་སྐོང་ཁྱབ་ཚད་ (དཔེར་ན་ ཁྱད་པར་བརྟག་དཔྱད་, རྒྱུ་དངོས་གཞི་བཞག་མི།
+     བདེན་དཔང་ཚུ་ གལ་སྲིད་ བར་སྟོང་བཞག་པ་ཅིན།
+6. **ཁ་ཐུག་ལས་ དང་བཀོལ་སྤྱོད་ལམ་སྟོན་བདེན་དཔྱད་**
+   - ཁྲིམས་དོན་གྱི་དགོས་མཁོ་དང་འཁྲིལ་ ཡིག་ཆ་ཚུ་ བརྟག་དཔྱད་འབད་དེ་ རེ་བ་བསྐྱེད་མི།
+     བཀོལ་སྤྱོད་པའི་ཚད་འཛིན་ཚུ།
 
-1. **Specification conformance**
-   - Validate SM2 signature verification, ZA calculation, and canonical
-     encoding behaviour.
-   - Confirm SM3/SM4 primitives follow GM/T 0002-2012 and GM/T 0007-2012,
-     including counter mode invariants and IV handling.
-2. **Determinism & constant-time guarantees**
-   - Review branching, table lookups, and hardware dispatch so node execution
-     remains deterministic across CPU families.
-   - Evaluate constant-time claims for private-key operations and confirm the
-     OpenSSL/Tongsuo paths retain constant-time semantics.
-3. **Side-channel and fault analysis**
-   - Inspect for timing, cache, and power side-channel risks in both Rust and
-     FFI-backed code paths.
-   - Assess fault-handling and error propagation for signature verification and
-     authenticated encryption failures.
-4. **Build, dependency, and supply-chain review**
-   - Confirm reproducible builds and provenance of OpenSSL/Tongsuo artefacts.
-   - Review dependency tree licensing and audit coverage.
-5. **Testing & verification harness critique**
-   - Evaluate deterministic smoke tests, fuzz harnesses, and Norito fixtures.
-   - Recommend additional coverage (e.g., differential testing, property-based
-     proofs) if gaps remain.
-6. **Compliance & operator guidance validation**
-   - Cross-check shipped documentation against legal requirements and expected
-     operator controls.
+# བཀྲམ་སྤེལ་དང་ བཅའ་སྒྲིག་ཚུ།
 
-# Deliverables & Logistics
+- **ཀིག་-ཨོཕ་:** ༢༠༢༦-༠༢-༢༤ (བར་ཅུ་ཡལ་ སྐར་མ་༩༠)།
+- **དྲི་བ་དྲིས་ལན་:** ཀིརིཔ་ཊོ་ཌབ་ལུ་ཇི་ IVM རྒྱུན་སྐྱོང་པ་, སྟེགས་བུ་ཨོཔ་ཚུ་ (དགོཔ་བཞིན་དུ་)།
+- **Ardation འཛུལ་སྤྱོད་:** ལྷག་རྐྱང་པའི་མཛོད་ཁང་གི་མེ་ལོང་, CI པའིཔ་ལའིན་དྲན་ཐོ་, བདེ་སྒྲིག་འབད་ཐངས།
+  ཐོན་འབྲས་དང་ བརྟེན་པའི་ SBOMs (CycloneDX) ཚུ།
+- **Interim དུས་མཐུན་བཟོ་ནི་:** བདུན་ཕྲག་རེའི་ཡིག་ཐོག་གནས་ཚད། + ཉེན་ཁའི་འབོད་བརྡ་ཚུ།
+- **མཐའ་མཇུག་ལས་ བཀྲམ་སྤེལ་འབད་ཚུགསཔ་ (དཔར་ ༢༠༢༦-༠༤-༡༥):**
+  - ཉེན་ཁ་གནས་རིམ་དང་གཅིག་ཁར་ འཛིན་སྐྱོང་གི་བཅུད་བསྡུས།
+  - ཁ་གསལ་གྱི་ཤེས་རྟོགས་ (གནད་དོན་རེ་ལུ་: ཕན་གནོད་, འབྱུང་འགྱུར་ ཨང་རྟགས་གཞི་བསྟུན་ཚུ།
+    བཅོས་ཐབས་ལམ་སྟོན།).
+  - བསྐྱར་དུ་བརྟག་དཔྱད་/བདེན་དཔྱད་འཆར་གཞི།
+  - གཏན་འབེབས་བཟོ་ནི་དང་ དུས་རྒྱུན་གྱི་གནས་སྟངས་ དེ་ལས་ བསྟར་སྤྱོད་ཀྱི་ཕྲང་སྒྲིག་ཚུ་གི་སྐོར་ལས་ གསལ་བསྒྲགས།
 
-- **Kick-off:** 2026-02-24 (virtual, 90 minutes).
-- **Interviews:** Crypto WG, IVM maintainers, platform ops (as needed).
-- **Artefact access:** read-only repository mirror, CI pipeline logs, fixture
-  outputs, and dependency SBOMs (CycloneDX).
-- **Interim updates:** weekly written status + risk callouts.
-- **Final deliverables (due 2026-04-15):**
-  - Executive summary with risk rating.
-  - Detailed findings (per issue: impact, likelihood, code references,
-    remediation guidance).
-  - Re-test/verification plan.
-  - Statement on determinism, constant-time posture, and compliance alignment.
+## བརྩོན་འགྲུས་གནས་ཚད།
 
-## Engagement Status
+| ཚོང་པ་ | གནས་ཚད་ | ཀིག་-ཨོཕ་ | ཕིལ་ཝིན་ཌོ་ | དྲན་ཐོ། |
+|------------------------------------------------------------------------ --|
+| བིཊི་གི་ལམ་ལུགས། (CN ལག་ལེན་) | ལཱ་གི་གསལ་བཤད་ ༢༠༢༦-༠༢-༢༡ | ༢༠༢༦-༠༢-༢༤ | ༢༠༢༦-༠༢-༢༤–༢༠༢༦-༠༣-༢༢ | བཀྲམ་སྤེལ་གྱི་དུས་ཚོད་ ༢༠༢༦-༠༤-༡༥; Hui Zhang བཟོ་རིག་ལས་ཁུངས་སྦེ་ Alexey M. དང་ཅིག་ཁར་ འབྲེལ་གཏོགས་འབད་ནུག བདུན་ཕྲག་གི་གནས་རིམ་ལུ་ གཟའ་ལྷགཔ་ ༠༩:༠༠UTC ལུ་ ཁ་པར་གཏོང་། |
+| NCC སྡེ་ཚན་ (APAC) | གློ་བུར་གྱི་ས་ཁོངས་བཀག་བཞག་ཡོདཔ། | N/A (བཀག་ཆ) | གནས་སྐབས་ ༢༠༢༦-༠༥-༠༦–༢༠༢༦-༠༥-༣༡ | ཉེན་ཁ་ཆེ་བའི་ཤེས་རྟོགས་ཀྱི་ཤེས་རྟོགས་གཉིས་པ་འདི་ ཆ་མེད་གཏང་དགོ་པ་ཅིན་རྐྱངམ་ཅིག་ ཤུགས་བཏོན་ནི། གྲ་སྒྲིག་འདི་ Priya N. (Security) དང་ NCC Group གི་འབྲེལ་གཏོགས་ཡིག་ཆ་ ༢༠༢༦-༠༢-༢༢ གིས་ ངེས་གཏན་བཟོ་ཡོདཔ་ཨིན། |
 
-| Vendor | Status | Kick-off | Field Window | Notes |
-|--------|--------|----------|--------------|-------|
-| Trail of Bits (CN practice) | Statement of work executed 2026-02-21 | 2026-02-24 | 2026-02-24 – 2026-03-22 | Delivery due 2026-04-15; Hui Zhang leading engagement with Alexey M. as engineering counterpart. Weekly status call Wednesdays 09:00 UTC. |
-| NCC Group (APAC) | Contingency slot reserved | N/A (on hold) | Provisional 2026-05-06 – 2026-05-31 | Activation only if high-risk findings require second pass; readiness confirmed by Priya N. (Security) and NCC Group engagement desk 2026-02-22. |
-
-# Attachments Included in Outreach Package
-
-- `docs/source/crypto/sm_program.md`
+# མཐུད་མཚམས་ཕྱི་རོལ་གྱི་ཐུམ་སྒྲིལ་ནང་ཚུད་ཡོད།- `docs/source/crypto/sm_program.md`
 - `docs/source/crypto/sm_operator_rollout.md`
 - `docs/source/crypto/sm_compliance_brief.md`
 - `docs/source/crypto/sm_lock_refresh_plan.md`
 - `docs/source/crypto/sm_rust_vector_check.md`
-- `docs/source/crypto/attachments/sm_iroha_crypto_tree.txt` — `cargo tree -p iroha_crypto --no-default-features --features "sm sm-ffi-openssl"` snapshot.
-- `docs/source/crypto/attachments/sm_iroha_crypto_metadata.json` — `cargo metadata` export for the `iroha_crypto` crate (locked dependency graph).
-- `docs/source/crypto/attachments/sm_openssl_smoke.log` — latest `scripts/sm_openssl_smoke.sh` run (skips SM2/SM4 paths when provider support is missing).
-- `docs/source/crypto/attachments/sm_openssl_provenance.md` — local toolkit provenance (pkg-config/OpenSSL version notes).
-- Fuzz corpus manifest (`fuzz/sm_corpus_manifest.json`).
+- `docs/source/crypto/attachments/sm_iroha_crypto_tree.txt` — `cargo tree -p iroha_crypto --no-default-features --features "sm sm-ffi-openssl"` པར་ལེན་།
+- `docs/source/crypto/attachments/sm_iroha_crypto_metadata.json` — `cargo metadata` `iroha_crypto` ཀེརེཊ་ (བསྡམ་བཞག་པའི་བརྟེན་པའི་ཚད་རི)
+- `docs/source/crypto/attachments/sm_openssl_smoke.log` — གསརཔ་ `scripts/sm_openssl_smoke.sh` གཡོག་བཀོལ་ (བྱིན་མི་རྒྱབ་སྐྱོར་མེད་པའི་སྐབས་ SM2/SM4 འགྲུལ་ལམ་ཚུ།)
+- `docs/source/crypto/attachments/sm_openssl_provenance.md` — ཉེ་གནས་ལག་ཆས་ཆས་ཆས་ཀྱི་འབྱུང་ཁུངས། (pkg-config/OpenSSL ཐོན་རིམ་དྲན་ཐོ།)
+- ཕུ་ཟི་ཀོར་པ་སི་ གསལ་སྟོན་ (`fuzz/sm_corpus_manifest.json`).
 
-> **Environment caveat:** The current development snapshot uses the vendored OpenSSL 3.x toolchain (`openssl` crate `vendored` feature) but macOS lacks SM3/SM4 CPU intrinsics and the default provider does not expose SM4-GCM, so the OpenSSL smoke harness still skips SM4 coverage and Annex Example SM2 parsing. A workspace dependency cycle (`sorafs_manifest ↔ sorafs_car`) also forces the helper script to skip the run after emitting the `cargo check` failure. Re-run the bundle inside the Linux release build environment (OpenSSL/Tongsuo with SM4 enabled and without the cycle) to capture full parity before the external audit.
+> **མཐའ་འཁོར་གནས་སྟངས་:** ད་ལྟོའི་གོང་འཕེལ་གྱི་པར་ལེན་འདི་གིས་ བཙོང་མི་ OpenSSL 3.x ལག་ཆས་རྒྱུན་རིམ་ (`openssl` crate Iroha ཁྱད་རྣམ་) འདི་ལག་ལེན་འཐབ་ཨིན། ཧར་ནེས་ད་དུང་SM4 ཁྱབ་ཁོངས་བཀག་སྡོམ་དང་ཟུར་ཆགས་དཔེ་ SM2 དཔྱད་ཞིབ་འབད་ནི། ལཱ་གི་ས་སྒོ་བརྟེན་པའི་འཁོར་རིམ་ (`sorafs_manifest ↔ sorafs_car`) གིས་ཡང་ `cargo check` འཐུས་ཤོར་འདི་ བཏོན་པའི་ཤུལ་ལས་ གྲོགས་རམ་གྱི་ཡིག་ཚུགས་འདི་གིས་ རྒྱུག་ནི་འདི་ གོམ་འགྱོ་བཅུགཔ་ཨིན། ལི་ནགསི་གསར་བཏོན་འབད་མི་ བཟོ་བསྐྲུན་མཐའ་འཁོར་ནང་ བཱན་ཌལ་འདི་ ལོག་སྟེ་གཡོག་བཀོལ་ནི་ (SM4 ལྕོགས་ཅན་བཟོ་སྟེ་ འཁོར་རིམ་མེད་པར་ OpenSSL/Tongsuo དང་ འཁོར་རིམ་མེད་པར་) ཕྱིའི་རྩིས་ཞིབ་ཀྱི་ཧེ་མ་ ཆ་སྙོམས་ཆ་ཚང་བཟུང་ནི་གི་དོན་ལུ་ཨིན།
 
-# Candidate audit partners & scope
+# རྩིས་ཞིབ་མཉམ་འབྲེལ་པ་ & ཁྱབ་ཁོངས།
 
-| Firm | Relevant experience | Typical scope & deliverables | Notes |
-|------|---------------------|------------------------------|-------|
-| Trail of Bits (CN cryptography practice) | Rust code reviews (`ring`, zkVMs), prior GM/T assessments for mobile payment stacks. | Spec conformance diff (GM/T 0002/3/4), constant-time review of Rust + OpenSSL paths, differential fuzzing, supply-chain review, remediation roadmap. | Already engaged; table retained for completeness when planning future refresh cycles. |
-| NCC Group APAC | Hardware/SOC + Rust cryptography red teams, published reviews of RustCrypto primitives and payment HSM bridges. | Holistic assessment of Rust + JNI/FFI bindings, deterministic policy validation, perf/telemetry gate review, operator playbook walkthrough. | Reserved as contingency; can also provide bilingual reporting for Chinese regulators. |
-| Kudelski Security (Blockchain & crypto team) | Audits of Halo2, Mina, zkSync, custom signature schemes implemented in Rust. | Focus on elliptic-curve correctness, transcript integrity, threat modelling for hardware acceleration, and CI/rollout evidence. | Useful for second opinions on hardware acceleration (SM-5a) and FASTPQ-to-SM interactions. |
-| Least Authority | Cryptographic protocol audits for Rust-based blockchains (Filecoin, Polkadot), reproducible builds consulting. | Deterministic build verification, Norito codec verification, compliance evidence cross-check, operator communication review. | Well-suited for transparency/audit-report deliverables when regulators request independent verification beyond code review. |
+| Firm | འབྲེལ་ཡོད་ཉམས་མྱོང་ | སྤྱིར་བཏང་གི་ཁྱབ་ཁོངས་དང་ སྐྱེལ་འདྲེན་འབད་བཏུབ་མི། | དྲན་ཐོ། |
+|--|-|-|-|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- ----------------------
+| བིཊི་གི་ལམ་ལུགས། (CN གསང་ཡིག་ལག་ལེན་) | རཱསི་ཨང་རྟགས་བསྐྱར་ཞིབ་ (`ring`, zkVMs), འགྲུལ་འཕྲིན་གླ་ཆ་སྤྲོད་ནིའི་དོན་ལུ་ GM/T གི་བརྟག་ཞིབ་སྔོན་འགྲོ། | Spey commoformance diff (GM/T 0002/3/4), རཱསི་ + ཨོ་པཱན་ཨེསི་ཨེསི་ཨེལ་འགྲུལ་ལམ་ཚུ་གི་ དུས་ཚོད་གཏན་འཇགས་བསྐྱར་ཞིབ་ ཁྱད་པར་ཅན་གྱི་ ཕཱ་ཛི་ བཀྲམ་སྤེལ་གྱི་ བསྐྱར་ཞིབ་ བཅོ་ཐབས་ལམ་སྟོན་ བཅོ་ཁ་རྐྱབ་ནི། | ཧེ་མ་ལས་ འབྲེལ་གཏོགས་འབད་ཡོདཔ། མ་འོངས་པའི་བསྐྱར་བཟོའི་འཁོར་རིམ་འཆར་གཞི་བཟོ་བའི་སྐབས་ ཆ་ཚང་སྦེ་ ཐབ་ཤིང་བཞག་ཡོདཔ། |
+| NCC སྡེ་ཚན་ཨེ་པི་ཨེ་སི་ | Hardware/SOC + Rust cryptography regram དམརཔོ་སྡེ་ཚན་དང་ RustCrypto དང་ཕུག་གི་ དང་ཕུ་གི་བསྐྱར་ཞིབ་ཚུ་ དཔར་བསྐྲུན་འབད་ཡོདཔ་ཨིན། | Rust + JNI/FFI བཅིངས་པ་ གཏན་འབེབས་སྲིད་བྱུས་བདེན་དཔྱད། | གློ་བུར་གྱི་གནས་སྟངས་སྦེ་བཞག་ཡོདཔ། དེ་མ་ཚད་ རྒྱ་ནག་གི་ཁྲིམས་ལུགས་འགོ་དཔོན་ཚུ་ལུ་ སྐད་ཡིག་གཉིས་ལྡན་གྱི་སྙན་ཞུ་ཡང་ བྱིན་ཚུགས། |
+| ཀུ་ཌེལ་སི་ཀི་ཉེན་སྲུང་ (བཀག་ཆ་དང་ ཀིརིཔ་ཊོ་སྡེ་ཚན།) | Halo2, Mina, zkSync, རསཊ་ནང་ལག་ལེན་འཐབ་མི་ སྲོལ་སྒྲིག་མིང་རྟགས་འཆར་གཞི་ཚུ། | ཨིལ་ལིཔ་ཊིག་གུག་གུགཔ་བདེན་པ་དང་ ཡིག་བསྒྱུར་གྱི་ཆིག་སྒྲིལ་ མཐུན་རྐྱེན་མགྱོགས་ཚད་ཀྱི་ཉེན་ཁ་དཔེ་སྟོན་ དེ་ལས་ སི་ཨའི་/རོལ་ཕྱོགས། | མཐུན་རྐྱེན་མགྱོགས་ཚད་ (SM-5a) དང་ FASTTPQ-to-SM གི་འབྲེལ་བ་ཚུ་གི་སྐོར་ལས་ བསམ་འཆར་གཉིས་པ་ལུ་ཕན་ཐོགས་ཡོདཔ་ཨིན། |
+| ས་གཞིའི་དབང་ཚད། | Rust-based blockchains (Filecoin, Polkaldot) གི་དོན་ལུ་ ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་མཐུན་གྲོས་རྩིས་ཞིབ་འདི་གིས་ བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ གྲོས་བསྟུན་འབདཝ་ཨིན། | གཏན་འབེབས་བཟོ་བའི་བདེན་དཔྱད་ Norito གསང་ཡིག་བདེན་དཔྱད་ བསྟར་སྤྱོད་ཀྱི་སྒྲུབ་བྱེད་བརྟག་དཔྱད་དང་ བཀོལ་སྤྱོད་བརྒྱུད་འབྲེལ་བསྐྱར་ཞིབ། | ཁྲིམས་ལུགས་ཚུ་གིས་ རང་དབང་ཅན་གྱི་བདེན་དཔྱད་འབད་དགོ་པའི་ ཞུ་བ་འབད་བའི་སྐབས་ དྭངས་གསལ་དང་ རྩིས་ཞིབ་ཀྱི་སྙན་ཞུ་ཚུ་ བཀྲམ་སྤེལ་འབད་ནི་གི་དོན་ལུ་ ལེགས་ཤོམ་སྦེ་ར་འོས་འབབ་ཡོདཔ་ཨིན། |
 
-All engagements request the same artefact bundle enumerated above plus the following optional add-ons depending on the firm:
+འབྲེལ་གཏོགས་ཆ་མཉམ་གྱིས་ ལས་སྡེ་དང་འཁྲིལ་ཏེ་ གོང་ལས་ རྩིས་རྐྱབ་ཡོད་པའི་ བརྡ་མཚོན་གཅིག་མཚུངས་ཚུ་ ཞུ་བ་འབདཝ་ཨིན།- **གསལ་བཀོད་དང་ གཏན་འབེབས་ཀྱི་སྤྱོད་ལམ་:** SM2 ZA གི་ གྱལ་རིམ་བདེན་དཔྱད་དང་ SM3 padding, SM4 སྒོར་རིམ་ལས་འགན་ དེ་ལས་ `sm_accel` རན་ཊའིཊ་ བཀོལ་སྤྱོད་སྒོ་སྒྲིག་ཚུ་གིས་ མགྱོགས་ཚད་ཀྱི་ བརྡ་རྟགས་ཚུ་ ནམ་ཡང་ བསྒྱུར་བཅོས་འབད་དགོ།
+- **ཕྱོགས་མཚམས་དང་ FFI བསྐྱར་ཞིབ་:** དུས་རྒྱུན་དུས་ཚོད་ཀྱི་ཐོབ་བརྗོད་དང་ ཉེན་སྲུང་མེད་པའི་ཨང་རྟགས་བཀག་ཆ་ དེ་ལས་ OpenSSL/Tongsoo bridging བང་རིམ་ཚུ་ རཱསི་ཊི་འགྲུལ་ལམ་ལུ་འགོག་པའི་ཁྱད་པར་བརྟག་དཔྱད་འབད་ནི་ཚུ་རྩིས་ཏེ་ བརྟག་དཔྱད་འབད།
+- **CI / བཀྲམ་སྤེལ་-རྒྱུན་རིམ་བདེན་དཔྱད་:** `sm_interop_matrix`, `sm_openssl_smoke`, དང་ `sm_perf` གི་ སྐྱེ་འཕེལ་འདི་ SBOM/SLSA གི་བདེན་ཁུངས་ཚུ་དང་གཅིག་ཁར་ སྒྲུབ་བྱེད་བཏོན་ནིའི་དོན་ལུ་ ཐད་ཀར་དུ་ རྩིས་ཞིབ་གྲུབ་འབྲས་ཚུ་ ཐད་ཀར་དུ་ འབྲེལ་མཐུད་འབད་ཚུགས།
+- **Operator-facing colartay:** `sm_operator_rollout.md` གི་བརྟག་དཔྱད་དང་ ཡིག་ཆ་ནང་ཁས་བླངས་འབད་ཡོད་པའི་ ཉམས་སྲུང་ཚུ་ འཕྲུལ་རིག་ཐོག་ལས་ བསྟར་སྤྱོད་འབད་ཚུགསཔ་ཨིནམ་ ངེས་གཏན་བཟོ་ནི་ལུ་ བརྡ་བཀོད་བཀོད་ཁྲམ་ཚུ་ བརྟག་དཔྱད་འབད་ནི།
 
-- **Spec conformance & deterministic behaviour:** Line-by-line verification of SM2 ZA derivation, SM3 padding, SM4 round functions, and the `sm_accel` runtime dispatch gate to ensure acceleration never alters semantics.
-- **Side-channel and FFI review:** Inspection of constant-time claims, unsafe code blocks, and OpenSSL/Tongsuo bridging layers, including diff testing against the Rust path.
-- **CI / supply-chain validation:** Reproduction of the `sm_interop_matrix`, `sm_openssl_smoke`, and `sm_perf` harnesses together with SBOM/SLSA attestations so audit findings can be tied directly to release evidence.
-- **Operator-facing collateral:** Cross-check of `sm_operator_rollout.md`, compliance filing templates, and telemetry dashboards to confirm that mitigations promised in documentation are technically enforceable.
+མ་འོངས་པའི་རྩིས་ཞིབ་ཚུ་ ཁ་ཕྱེ་ཞིནམ་ལས་ ཚོང་པ་ཚུ་གི་སྟོབས་ཤུགས་ཚུ་ དམིགས་བསལ་གྱི་ ལམ་སྟོན་གྱི་ མཐོ་ཚད་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་ནི་གི་དོན་ལུ་ ཐིག་ཁྲམ་འདི་ ལོག་སྟེ་ལག་ལེན་འཐབ།
 
-When scoping future audits, reuse this table to align vendor strengths with the specific roadmap milestone (e.g., favour Kudelski for hardware/perf heavy releases, Trail of Bits for language/runtime correctness, and Least Authority for reproducible build assurances).
+# འབྲེལ་གཏུག་ས་ཚིགས་ཚུ།
 
-# Points of Contact
-
-- **Technical owner:** Crypto WG lead (Alexey M., `alexey@iroha.tech`)
-- **Program manager:** Platform Operations coordinator (Sarah K.,
-  `sarah@iroha.tech`)
-- **Security liaison:** Security Engineering (Priya N., `security@iroha.tech`)
-- **Documentation liaison:** Docs/DevRel lead (Jamila R.,
+- **འཕྲུལ་རིག་བདག་པོ།:** ཀིརིཔ་ཊོ་ཌབ་ལུ་ཇི་ལིཌ་ (ཨེ་ལེག་སི་ཨེམ་, `alexey@iroha.tech`)
+- **ལས་རིམ་འཛིན་སྐྱོང་པ་:** སྟེགས་བུ་བཀོལ་སྤྱོད་མཉམ་འབྲེལ་པ་ (Sarah K.,
+  `sarah@iroha.tech`).
+- **བདེ་འཇགས་མཐུན་འབྲེལ་:** ཉེན་སྲུང་བཟོ་རིག་ (Priya N., `security@iroha.tech`)
+- **ཡིག་ཆའི་འབྲེལ་འཐུད་:** ཡིག་ཆ་/ཌི་ཝི་རེལ་ ལིཌ་ (ཇེ་མི་ལ་ཨར་,,,** ཡིག་ཆ་།
   `docs@iroha.tech`)

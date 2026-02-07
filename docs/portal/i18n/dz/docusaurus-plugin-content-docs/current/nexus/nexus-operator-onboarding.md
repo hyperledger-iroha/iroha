@@ -7,86 +7,88 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Nexus data-space operator onboarding
 description: Mirror of `docs/source/sora_nexus_operator_onboarding.md`, tracking the end-to-end release checklist for Nexus operators.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sora_nexus_operator_onboarding.md`. Keep both copies aligned until the localized editions arrive in the portal.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ངོས་འདིའི་ནང་ `docs/source/sora_nexus_operator_onboarding.md` ལ་སྤྲོ་སྣང་། འདྲ་བཤུས་གཉིས་ཆ་ར་ ས་གནས་ཀྱི་དཔར་བསྐྲུན་ཚུ་ ཡོངས་འབྲེལ་ནང་མ་ལྷོད་ཚུན་ཚོད་ ཕྲང་སྒྲིག་འབད་བཞག།
 :::
 
-# Sora Nexus Data-Space Operator Onboarding
+# Sora I18NT0000001X གནད་སྡུད་བར་སྟོང་བཀོལ་སྤྱོད་པ་ གཡོག་བཀོལ།
 
-This guide captures the end-to-end flow Sora Nexus data-space operators must follow once a release is announced. It complements the dual-track runbook (`docs/source/release_dual_track_runbook.md`) and the artefact selection note (`docs/source/release_artifact_selection.md`) by describing how to align downloaded bundles/images, manifests, and configuration templates with the global lane expectations before bringing a node online.
+ལམ་སྟོན་འདི་གིས་ བཏོན་གཏང་ནིའི་གསལ་བསྒྲགས་འབད་ཚར་བའི་ཤུལ་ལས་ མཇུག་བསྡུ་བའི་ལས་མཇུག་ཚུན་ཚོད་ ཕོལོ་སོ་ར་ I18NT0000002X གནད་སྡུད་ས་སྟོང་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ རྗེས་སུ་འཇུག་དགོཔ་ཨིན། འདི་གིས་ ཡོངས་འབྲེལ་ཐོག་ལས་ མཐུད་མཚམས་ཅིག་མ་འབག་པའི་ཧེ་མ་ ཕབ་ལེན་འབད་ཡོད་པའི་ བཱན་ཌལ་/གཟུགས་བརྙན་དང་ མངོན་གསལ་ དེ་ལས་ རིམ་སྒྲིག་ཊེམ་པེལེཊི་ཚུ་ ཕབ་ལེན་འབད་ཡོད་པའི་ བཱན་ཌལ་/གཟུགས་བརྙན་དང་ གསལ་སྟོན་ དེ་ལས་ རིམ་སྒྲིག་ཊེམ་པེལེཊི་ཚུ་ ཡོངས་འབྲེལ་ཐོག་ལས་ མཐུད་མཚམས་ཅིག་ མ་འབག་འོང་པའི་ཧེ་མ་ འཛམ་གླིང་ལམ་གྱི་རེ་བ་ཚུ་ ཕྲང་སྒྲིག་འབད་ཐངས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
 
-## Audience & prerequisites
-- You have been approved by the Nexus Program and received your data-space assignment (lane index, data-space ID/alias, and routing policy requirements).
-- You can access the signed release artefacts published by Release Engineering (tarballs, images, manifests, signatures, public keys).
-- You have generated or received production key material for your validator/observer role (Ed25519 node identity; BLS consensus key + PoP for validators; plus any confidential feature toggles).
-- You can reach the existing Sora Nexus peers that will bootstrap your node.
+## ལྟད་བསྒྲགས་དང་སྔོན་འགྲོའི་ཆ་རྐྱེན།
+- ཁྱོད་ཀྱིས་ Nexus ལས་རིམ་གྱིས་ ཆ་འཇོག་འབད་ཡོདཔ་ལས་ ཁྱོད་ཀྱི་ གནད་སྡུད་བར་སྟོང་ལས་འགན་ (ལམ་ཐིག་ཟུར་ཐོ་ གནད་སྡུད་བར་སྟོང་ ID/alias, དང་ འགྲུལ་ལམ་སྲིད་བྱུས་དགོས་མཁོ་ཚུ་) ཐོབ་ཡོདཔ་ཨིན།
+- ཁྱོད་ཀྱིས་ རི་ལི་ཡེསི་བཟོ་རིག་གིས་ དཔར་བསྐྲུན་འབད་མི་ གསར་བཏོན་འབད་ཡོད་པའི་ གསར་བཏོན་ཅ་མཛོད་ཚུ་ འཛུལ་སྤྱོད་འབད་ (ཊར་བཱོལ་དང་ གཟུགས་བརྙན་ གསལ་སྟོན་ མཚན་རྟགས་ མི་མང་ལྡེ་མིག་ཚུ་)།
+- ཁྱོད་ཀྱིས་ ཁྱོད་རའི་བདེན་བཤད་/བལྟ་བརྟོག་འབད་མི་འགན་ཁུར་གྱི་དོན་ལུ་ བཟོ་བསྐྲུན་ལྡེ་མིག་རྒྱུ་ཆ་བཟོ་བཏོན་ཡང་ན་ཐོབ་ཡོདཔ་ཨིན། (Ed25519 མཐུད་མཚམས་ངོ་རྟགས་; བདེན་དཔྱད་འབད་མི་ཚུ་གི་དོན་ལུ་ BLS མོས་མཐུན་ལྡེ་མིག་ + PoP དང་ གསང་བ་ཁྱད་རྣམ་སོར་བསྒྱུར་གང་རུང་)།
+- ཁྱོད་ཀྱིས་ ད་ལྟོ་ཡོད་པའི་ སོ་ར་ I18NT0000004X མཉམ་རོགས་ ཁྱོད་རའི་མཐུད་མཚམས་ བུཊི་འབད་ནི་ཨིན་མི་ མཉམ་རོགས་ཚུ་ལུ་ ལྷོད་ཚུགས།
 
-## Step 1 — Confirm the release profile
-1. Identify the network alias or chain ID you were given.
-2. Run `scripts/select_release_profile.py --network <alias>` (or `--chain-id <id>`) on a checkout of this repository. The helper consults `release/network_profiles.toml` and prints the profile to deploy. For Sora Nexus the response must be `iroha3`. For any other value, stop and contact Release Engineering.
-3. Note the version tag the release announcement referenced (e.g. `iroha3-v3.2.0`); you will use it to fetch artefacts and manifests.
+## གོམ་པ་ ༡ — གསར་བཏོན་གསལ་སྡུད་ངེས་དཔྱད་འབད།
+༡ ཁྱོད་ལུ་བྱིན་མི་ ཡོངས་འབྲེལ་མིང་ཚིག་ཡང་ན་ རིམ་སྒྲིག་ཨའི་ཌི་ངོས་འཛིན་འབད།
+2. མཛོད་ཁང་འདི་གི་བརྟག་ཞིབ་འབད་ནི་གི་དོན་ལུ་ I18NI000000021X (ཡང་ན་ `--chain-id <id>`) གཡོག་བཀོལ། གྲོགས་རམ་པ་འདི་གིས་ `release/network_profiles.toml` དང་ གསལ་སྡུད་འདི་ བཀྲམ་སྤེལ་འབད་ནི་ལུ་ དཔར་བསྐྲུན་འབདཝ་ཨིན། སོ་ར་ Nexus གི་དོན་ལུ་ ལན་འདི་ `iroha3` འོང་དགོ། གཞན་གྱི་གནས་གོང་གང་རུང་ཅིག་གི་དོན་ལུ་ བསྐྱར་ལོག་བཟོ་རིག་ལུ་བཀག་སྟེ་ འབྲེལ་བ་འཐབ་དགོ།
+༣ ཐོན་རིམ་གསལ་བསྒྲགས་འདི་ གསལ་སྟོན་འབད་ཡོདཔ་ཨིན་ (དཔེར་ན་ I18NI0000025X); ཁྱོད་ཀྱིས་ ཅ་རྙིང་དང་ གསལ་སྟོན་ཚུ་ ལེན་ནིའི་དོན་ལུ་ ལག་ལེན་འཐབ་འོང་།
 
-## Step 2 — Retrieve and validate artefacts
-1. Download the `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) and its companion files (`.sha256`, optional `.sig/.pub`, `<profile>-<version>-manifest.json`, and `<profile>-<version>-image.json` if you deploy containers).
-2. Validate integrity before unpacking:
+## གོམ་པ་ ༢ — ཅ་རྙིང་ཚུ་ ལོག་ཐོབ་ཞིནམ་ལས་ བདེན་དཔྱད་འབད་ནི།
+1. I18NI0000026X བཱན་ཌལ་ (`<profile>-<version>-<os>.tar.zst`) དང་དེ་གི་མཉམ་རོགས་ཡིག་སྣོད་ (`.sha256` གདམ་ཁ་ཅན་གྱི་ `.sig/.pub`, I18NI0000030X, དང་ I18NI000003X ཕབ་ལེན་འབད།)
+2. ཐུམ་སྒྲིལ་མ་བཏོན་པའི་ཧེ་མ་ ཆིག་སྒྲིལ་འདི་བདེན་དཔྱད་འབད་ནི།
    ```bash
    sha256sum -c iroha3-<version>-linux.tar.zst.sha256
    openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub \
        -signature iroha3-<version>-linux.tar.zst.sig \
        iroha3-<version>-linux.tar.zst
    ```
-   Replace `openssl` with the organisation-approved verifier if you use a hardware-backed KMS.
-3. Inspect `PROFILE.toml` inside the tarball and the JSON manifests to confirm:
+   ཁྱོད་ཀྱིས་སྲ་ཆས་རྒྱབ་བསྐྱོར་ཀེ་ཨེམ་ཨེསི་ལག་ལེན་འཐབ་པ་ཅིན་ ལས་སྡེ་གིས་ཆ་འཇོག་འབད་ཡོད་པའི་བདེན་དཔྱད་དང་གཅིག་ཁར་ `openssl` ཚབ་བཙུགས།
+༣ ཊར་བཱོལ་གྱི་ནང་ལུ་ `PROFILE.toml` བརྟག་དཔྱད་དང་ JSON གིས་ ངེས་གཏན་བཟོ་ནི་ལུ་ གསལ་སྟོན་འབདཝ་ཨིན།
    - `profile = "iroha3"`
-   - The `version`, `commit`, and `built_at` fields match the release announcement.
-   - The OS/architecture match your deployment target.
-4. If you use the container image, repeat the hash/signature verification for `<profile>-<version>-<os>-image.tar` and confirm the image ID recorded in `<profile>-<version>-image.json`.
+   - I18NI000000035X, I18NI000000036X, དང་ I18NI000000037X ས་སྒོ་ཚུ་ གསར་བཏོན་གསལ་བསྒྲགས་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+   - OS/ Archicture འདི་ ཁྱོད་རའི་བཀྲམ་སྤེལ་དམིགས་གཏད་མཐུན་སྒྲིག་འབད།
+༤ ཁྱོད་ཀྱིས་ དོས་ཆས་གཟུགས་བརྙན་འདི་ལག་ལེན་འཐབ་པ་ཅིན་ I18NI000000038X གི་དོན་ལུ་ ཧེསི་/མིང་རྟགས་བདེན་དཔྱད་འདི་ བསྐྱར་ལོག་འབད་ཞིནམ་ལས་ I18NI000000039X ནང་སྒྲ་བཟུང་འབད་ཡོད་པའི་གཟུགས་བརྙན་ཨའི་ཌི་འདི་ ངེས་དཔྱད་འབད།
 
-## Step 3 — Stage configuration from templates
-1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
-2. Treat the files under `config/` as templates:
-   - Replace `public_key`/`private_key` with your production Ed25519 keys. Remove private keys from disk if the node will source them from an HSM; update the config to point at the HSM connector instead.
-   - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned.
-   - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
-3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.
-4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent.
+## གོམ་པ་ ༣ — ཊེམ་པེལེཊི་ཚུ་ལས་ རིམ་སྒྲིག་།
+1. བུནཌལ་འདི་བཏོན་ཞིནམ་ལས་ I18NI000000040X འདི་ མཐུད་མཚམས་དེ་གིས་ དེ་གི་རིམ་སྒྲིག་ལྷག་སའི་གནས་ཁོངས་ལུ་འདྲ་བཤུས་རྐྱབས།
+༢ ཡིག་སྣོད་ཚུ་ `config/` གི་འོག་ལུ་ ཊེམ་པེལེཊི་སྦེ་ བརྩི་འཇོག་འབད།
+   - ཁྱོད་རའི་ཐོན་སྐྱེད་ Ed25519 ལྡེ་མིག་དང་གཅིག་ཁར་ `public_key`/`private_key` ཚབ་བཙུགས། མཐུད་མཚམས་དེ་གིས་ ཨེཆ་ཨེསི་ཨེམ་ལས་ འབྱུང་ཁུངས་བཟོ་བ་ཅིན་ ཌིཀསི་ནང་ལས་ སྒེར་གྱི་ལྡེ་མིག་ཚུ་ རྩ་བསྐྲད་གཏང་། དེ་གི་ཚབ་ལུ་ ཨེཆ་ཨེསི་ཨེམ་མཐུད་བྱེད་ལུ་ ས་ཚིགས་ དུས་མཐུན་བཟོ་ནི།
+   - `trusted_peers`, `network.address`, དང་ I18NI000000046X ཚུ་ ཁྱོད་ཀྱི་ ལྷོད་ཚུགས་པའི་ ངོས་འདྲ་བ་དང་ བུཊི་སི་ཊརཔ་མཉམ་རོགས་ཚུ་ བཀོད་སྒྲིག་འབད་དེ་ ཁྱོད་ལུ་འགན་སྤྲོད་འབད་ཡོད་པའི་ བུཊི་སི་ཊརཔ་མཉམ་རོགས་ཚུ་ བཀྲམ་སྟོན་འབད།
+   - བཀོལ་སྤྱོད་པ་ Torii མཐའ་མཚམས་དང་གཅིག་ཁར་ I18NI000000047X དུས་མཐུན་བཟོ། (འཇུག་སྤྱོད་འབད་བཏུབ་པ་ཅིན་ TLS རིམ་སྒྲིག་ཚུ་རྩིས་ཏེ་) དང་ བཀོལ་སྤྱོད་ལག་ཆས་ཀྱི་དོན་ལུ་ ཁྱོད་ཀྱིས་བྱིན་མི་ ཆོག་ཐམ་ཚུ་ ཆ་རྐྱེན་ཚུ།
+༣ གཞུང་སྐྱོང་གིས་ དེ་མེན་པ་ཅིན་ གཞུང་ལམ་འདི་གིས་ ཁྲིམས་ལུགས་ངོས་འཛིན་འབད་མི་གཅིག་སྦེ་ རེ་བ་བསྐྱེདཔ་ཨིན།
+༤ སོ་ར་གསལ་སྡུད་ཀྱི་དར་ཆ་དང་གཅིག་ཁར་ མཐུད་མཚམས་འགོ་བཙུགས་ནི་གི་འཆར་གཞི་: `irohad --sora --config <path>`. རིམ་སྒྲིག་མངོན་གསལ་པ་གིས་ དར་ཆ་མེད་པའི་སྐབས་ SoraFS ཡང་ན་ སྣ་མང་ལམ་ཐིག་སྒྲིག་སྟངས་ཚུ་ ངོས་ལེན་མ་འབད་བས།
 
-## Step 4 — Align data-space metadata and routing
-1. Edit `config/config.toml` so the `[nexus]` section matches the data-space catalogue the Nexus Council provided:
-   - `lane_count` must equal the total lanes enabled in the current epoch.
-   - Every entry in `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]` must contain a unique `index`/`id` and the agreed aliases. Do not delete the existing global entries; add your delegated aliases if the council assigned additional data-spaces.
-   - Ensure each dataspace entry includes `fault_tolerance (f)`; lane-relay committees are sized at `3f+1`.
-2. Update `[[nexus.routing_policy.rules]]` to capture the policy you were given. The default template routes governance instructions to lane `1` and contract deployments to lane `2`; append or modify rules so traffic destined for your data-space is forwarded to the correct lane and alias. Coordinate with Release Engineering before changing rule order.
-3. Review `[nexus.da]`, `[nexus.da.audit]`, and `[nexus.da.recovery]` thresholds. Operators are expected to keep the council-approved values; only adjust them if an updated policy was ratified.
-4. Record the final configuration in your operations tracker. The dual-track release runbook requires attaching the effective `config.toml` (with secrets redacted) to the onboarding ticket.
+## གོ་རིམ་༤ པ་ — གནད་སྡུད་བར་སྟོང་གི་མེ་ཊ་ཌེ་ཊ་དང་ འགྲུལ་ལམ་ཕྲང་སྒྲིག་འབད།
+1. I18NI000000049X ཞུན་དག་འབད་ དེ་འབདཝ་ལས་ I18NI000000050X དབྱེ་ཚན་འདི་གིས་ གནད་སྡུད་ས་སྟོང་ཐོ་གཞུང་ I18NT000000006X ཚོགས་སྡེ་གིས་ བྱིན་ཡོདཔ་ཨིན།
+   - I18NI000000051X ད་ལྟོའི་དུས་སྐབས་ནང་ ལྕོགས་ཅན་བཟོ་ཡོད་པའི་ བསྡོམས་ལམ་ཚུ་དང་འདྲ་མཉམ་དགོ།
+   - `[[nexus.lane_catalog]]` དང་ I18NI000000053X ནང་ ཐོ་བཀོད་ག་ར་ནང་ I18NI000000054X/`id` དང་ མཐུན་སྒྲིག་ཡོད་པའི་ བརྗོད་ཚིག་ཚུ་ འོང་དགོ། ད་ལྟོ་ཡོད་པའི་ཡོངས་ཁྱབ་ཐོ་བཀོད་ཚུ་ བཏོན་གཏང་མ་བཏུབ། ཚོགས་སྡེ་གིས་ གནད་སྡུད་-བར་སྟོང་ཁ་སྐོང་ཚུ་ འགན་སྤྲོད་འབད་དེ་ཡོད་པ་ཅིན་ ཁྱོད་རའི་འགན་སྤྲོད་འབད་ཡོད་པའི་མིང་རྟགས་ཚུ་ཁ་སྐོང་འབད།
+   - གནད་སྡུད་གནམ་སྟོང་ཐོ་བཀོད་རེ་རེ་ལུ་ `fault_tolerance (f)` ཚུད་ཡོདཔ་ངེས་གཏན་བཟོ། ལམ་ལེན་གྱི་ཚོགས་ཆུང་ཚུ་ I18NI000000057X ལུ་སྦོམ་ཡོདཔ་ཨིན།
+༢ ཁྱོད་ལུ་བྱིན་ཡོད་པའི་སྲིད་བྱུས་འདི་བཟུང་ནི་ལུ་ `[[nexus.routing_policy.rules]]` དུས་མཐུན་བཟོ་དགོ། སྔོན་སྒྲིག་ཊེམ་པེལེཊི་ལམ་འདི་གིས་ ལམ་ཐིག་ I18NI000000059X དང་ གན་རྒྱ་བཀྲམ་སྤེལ་ཚུ་ ལམ་ཐིག་ I18NI000000060X ལུ་ བཀོད་སྒྲིག་འབདཝ་ཨིན། ཟུར་ཐོ་ཡང་ན་ ལེགས་བཅོས་འབདཝ་ཨིན་ དེ་འབདཝ་ལས་ ཁྱོད་རའི་གནད་སྡུད་-བར་སྟོང་གི་དོན་ལུ་ དམིགས་ཡུལ་ཡོད་མི་འགྲུལ་སྐྱོད་འདི་ ལམ་གྱི་བདེན་པ་དང་ མིང་གཞན་ལུ་སྤོ་བཤུད་འབདཝ་ཨིན། ལམ་ལུགས་ཀྱི་གོ་རིམ་བསྒྱུར་བཅོས་མ་འབད་བའི་ཧེ་མ་ གསར་བཏོན་བཟོ་རིག་དང་གཅིག་ཁར་ མཉམ་འབྲེལ་འབད་ནི།
+3. བསྐྱར་ཞིབ་ `[nexus.da]`, I18NI000000062X, དང་ I18NI000000063X ཚད་གཞི་ཚུ། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཚོགས་སྡེ་གིས་ ཆ་འཇོག་འབད་ཡོད་པའི་གནས་གོང་ཚུ་ བཞག་ནི་གི་རེ་བ་ཡོདཔ་ཨིན། དུས་མཐུན་བཟོ་ཡོད་པའི་སྲིད་བྱུས་ཅིག་ཆ་འཇོག་འབད་བ་ཅིན་རྐྱངམ་ཅིག་ བདེ་སྒྲིག་འབད།
+༤ ཁྱོད་རའི་བཀོལ་སྤྱོད་རྗེས་འདེད་ནང་མཐའ་མཇུག་རིམ་སྒྲིག་འདི་ཐོ་བཀོད་འབད། གཉིས་ལྡན་གྱི་ གསར་བཏོན་འབད་མི་ རན་དེབ་ནང་ ཕན་ནུས་ཅན་གྱི་ `config.toml` ༼གསང་བའི་གནས་ཚུལ་ཚུ་ བཅོས་སྒྲིག་འབད་དེ་༽ གུ་བཙུགས་པའི་ཤོག་འཛིན་ལུ་ མཐུད་དགོཔ་ཨིན།
 
-## Step 5 — Pre-flight validation
-1. Run the built-in configuration validator before joining the network:
+## གོ་རིམ་ ༥ — འཕུར་འགྲུལ་གྱི་ཧེ་མའི་བདེན་དཔྱད།
+༡ ཡོངས་འབྲེལ་ནང་མ་འཛུལ་བའི་ཧེ་མ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ རིམ་སྒྲིག་བདེན་བཤད་འདི་གཡོག་བཀོལ།
    ```bash
    ./bin/irohad --sora --config config/config.toml --trace-config
    ```
-   This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
-2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
-3. Check logs for warnings about placeholder lane/data-space identifiers. If any appear, revisit Step 4—production deployments must not rely on the placeholder IDs that ship with the templates.
-4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm telemetry endpoints expose `nexus_lane_state_total`, and verify streaming keys are rotated or imported as required).
+   འདི་གིས་ རིམ་སྒྲིག་འདི་ དཔར་བསྐྲུན་འབདཝ་ཨིནམ་དང་ ག་དེ་ཅིག་སྦེ་ ཐོ་གཞུང་/ལམ་ལུགས་ཀྱི་ཐོ་བཀོད་ཚུ་ ཤོ་མཚུངས་མེདཔ་དང་ ཡང་ན་ རིགས་མཚན་དང་ མོས་མཐུན་མ་འབད་བ་ཅིན་ ཧེ་མ་ལས་ འཐུས་ཤོར་འགྱོཝ་ཨིན།
+2. ཁྱོད་ཀྱིས་ དོས་ཚུ་བཀྲམ་སྤེལ་འབད་བ་ཅིན་ I18NI000000065X གིས་ མངོན་གསལ་འབད་བའི་ཤུལ་ལས་ བརྡ་བཀོད་གཅིགཔོ་འདི་ གཡོག་བཀོལ་དགོ།
+༣ ས་གནས་འཛིན་མི་/གནས་སྡུད་-བར་སྟོང་ངོས་འཛིན་འབད་མི་ཚུ་གི་སྐོར་ལས་ ཉེན་བརྡ་ཚུ་གི་དོན་ལུ་ དྲན་ཐོ་ཚུ་ཞིབ་དཔྱད་འབད། གང་རུང་ཅིག་འབྱུང་པ་ཅིན་ གོ་རིམ་༤ — བཟོ་བསྐྲུན་བཀྲམ་སྤེལ་ཚུ་གིས་ ཊེམ་པེལེཊི་ཚུ་དང་གཅིག་ཁར་ གྲུ་བཏང་མི་ ས་གནས་འཛིན་མི་ཨའི་ཌི་ཚུ་ལུ་ བརྟེན་མི་དགོ།
+༤༽ ཁྱོད་རའི་ས་གནས་ཀྱི་ དུ་པའི་བྱ་རིམ་ལག་ལེན་འཐབ་ (དཔེར་ན་ I18NI0000000067X འདྲི་དཔྱད་ I18NI000000068X དང་ `iroha_cli` གིས་ I18NI0000000069X ཕྱིར་བཏོན་འབད་དེ་ བདེན་དཔྱད་ཀྱི་ རྒྱུན་སྤེལ་ལྡེ་མིག་ཚུ་ བསྒྱིར་ཡོདཔ་ ཡང་ན་ དགོས་མཁོ་དང་འཁྲིལ་ ནང་འདྲེན་འབད་ཡོདཔ་ ངེས་གཏན་བཟོ།
 
-## Step 6 — Cutover and hand-off
-1. Store the verified `manifest.json` and signature artifacts in the release ticket so auditors can reproduce your checks.
-2. Notify Nexus Operations that the node is ready to be introduced; include:
-   - Node identity (peer ID, hostnames, Torii endpoint).
-   - Effective lane/data-space catalogue and routing policy values.
-   - Hashes of the binaries/images you verified.
-3. Coordinate the final peer admission (gossip seeds and lane assignment) with `@nexus-core`. Do not join the network until you receive approval; Sora Nexus enforces deterministic lane occupancy and requires an updated admissions manifest.
-4. After the node is live, update your runbooks with any overrides you introduced and note the release tag so the next iteration can start from this baseline.
+## གོ་རིམ་ ༦ — ལགཔ་གིས་ གཤེར་ཁུ་དང་ གཤེར་རྨེན་གྱི་
+༡ རྩིས་ཞིབ་པ་ཚུ་གིས་ ཁྱོད་རའི་ཞིབ་དཔྱད་ཚུ་ བསྐྱར་བཟོ་འབད་ཚུགས།
+2. Nexus མཐུད་མཚམས་འདི་ ངོ་སྤྲོད་འབད་ནི་ལུ་ གྲ་སྒྲིག་ཡོད་པའི་ ལག་ལེན་ཚུ། རྩིས༌ཏེ:
+   - མཐུད་མཚམས་ངོ་རྟགས་ (མཉམ་རོགས་ཨའི་ཌི་, ཧོསཊི་མིང་, I18NT0000013X མཐའ་མཚམས་)།)
+   - ཕན་ནུས་ཅན་གྱི་ལམ་/གནས་སྡུད་བར་སྟོང་ཐོ་གཞུང་དང་ འགྲུལ་ལམ་སྲིད་བྱུས་གནས་གོང་ཚུ།
+   - ཁྱོད་ཀྱིས་བདེན་དཔྱད་འབད་ཡོད་པའི་ གཉིས་ལྡན་/པར་རིས་ཚུ་གི་ ཧ་ཤི།
+༣ མཐའ་མའི་མཉམ་སྦྲེལ་འཛུལ་ཞུགས་ (གོ་སིཔ་སོན་དང་ལམ་གྱི་ལས་འགན་) དང་ I18NI000000071X གཉིས་མཉམ་འབྲེལ་འབད་ནི། ཁྱོད་ཀྱིས་ ཆ་འཇོག་མ་ཐོབ་ཚུན་ཚོད་ ཡོངས་འབྲེལ་ནང་ མཐུད་མ་བཅུག། སོ་ར་ I18NT0000008X གིས་ གཏན་འབེབས་བཟོ་ཡོད་པའི་ ལམ་ཐིག་ཚུ་ གཏན་འབེབས་བཟོཝ་ཨིནམ་ལས་ དུས་མཐུན་བཟོ་ཡོད་པའི་ འཛུལ་ཞུགས་ཚུ་ གསལ་སྟོན་འབད་དགོཔ་ཨིན།
+༤ མཐུད་མཚམས་འདི་ ཐད་རི་བ་རི་གི་ཤུལ་ལས་ ཁྱོད་ཀྱིས་ འགོ་བཙུགས་མི་ གློག་རྒྱུན་ཚུ་གི་ཐོག་ལས་ ཁྱོད་རའི་ རན་བུཀ་ཚུ་ དུས་མཐུན་བཟོ་ཞིནམ་ལས་ གསར་བཏོན་ངོ་རྟགས་འདི་ དྲན་འཛིན་འབད་ཞིནམ་ལས་ ཤུལ་མམ་གྱི་བསྐྱར་ལོག་འདི་ གཞི་རྟེན་འདི་ལས་ འགོ་བཙུགས་ཚུགས།
 
-## Reference checklist
-- [ ] Release profile validated as `iroha3`.
-- [ ] Bundle/image hashes and signatures verified.
-- [ ] Keys, peer addresses, and Torii endpoints updated to production values.
-- [ ] Nexus lane/dataspace catalogue and routing policy match council assignment.
-- [ ] Configuration validator (`irohad --sora --config … --trace-config`) passes without warnings.
-- [ ] Manifests/signatures archived in the onboarding ticket and Ops notified.
+## གཞི་བསྟུན་ཞིབ་དཔྱད་ཐོ་ཡིག་།
+- [ ] གསར་བཏོན་གསལ་སྡུད་ `iroha3` སྦེ་བདེན་དཔྱད་འབད་ཡོདཔ།
+- [ ] བུནཌལ་/གཟུགས་བརྙན་ཧ་ཤེ་དང་མཚན་རྟགས་བདེན་དཔང་བྱས།
+- [ ] ལྡེ་མིག་དང་མཉམ་རོགས་ཁ་བྱང་ཚུ་ དང་ Torii ཐོན་སྐྱེད་གནས་གོང་ཚུ་དུས་མཐུན་བཟོ་ཡོདཔ།
+- [ ] I18NT0000009X ལམ་/གནས་སྡུད་ས་སྟོང་ཐོ་གཞུང་དང་ འགྲུལ་བཞུད་སྲིད་བྱུས་མཐུན་སྒྲིག་ཚོགས་སྡེའི་ལས་འགན།
+- [ ] རིམ་སྒྲིག་བདེན་དཔྱད་པ་ (`irohad --sora --config … --trace-config`) ཉེན་བརྡ་མེད་པར་བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+- [ ] མཚོན་རྟགས་/མཚན་རྟགས་ཚུ་ བརྡ་རྟགས་དང་ Ops ནང་ གཏན་མཛོད་འབད་ཡོདཔ།
 
-For broader context on Nexus migration phases and telemetry expectations, review [Nexus transition notes](./nexus-transition-notes).
+Nexus གནས་སྤོ་བའི་དུས་རིམ་དང་ ཊེ་ལི་མི་ཊི་རེ་ཊི་གི་རེ་བ་ཚུ་ བསྐྱར་ཞིབ་འབད།

@@ -4,26 +4,28 @@ direction: ltr
 source: docs/portal/docs/sorafs/staging-manifest-playbook.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: Playbook de manifest em staging
-sidebar_label: Playbook de manifest em staging
-description: Checklist para habilitar o perfil de chunker ratificado pelo Parlamento em deployments Torii de staging.
+идентификатор: промежуточный манифест-плейбук
+Название: Пособие по постановке манифеста
+Sidebar_label: Сборник манифестов при простановке
+описание: Контрольный список для проверки или выполнения блока, утвержденного парламентом при развертывании Torii на этапе подготовки.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Mantenha ambas as copias sincronizadas.
+:::примечание Fonte canonica
+Эта страница написана `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Мантенья представился как копиас синхронизадас.
 :::
 
-## Visao geral
+## Визао гераль
 
-Este playbook descreve como habilitar o perfil de chunker ratificado pelo Parlamento em um deployment Torii de staging antes de promover a mudanca para producao. Ele assume que a carta de governanca da SoraFS foi ratificada e que os fixtures canonicos estao disponiveis no repositorio.
+Эта книга действий предназначена как привычный или неэффективный блокировщик, ратифицированный парламентом в развертывании Torii для постановки перед продвижением к производству. Мы предполагаем, что хартия управления от SoraFS ратифицирована и что канонические светильники не доступны в хранилище.
 
-## 1. Prerequisitos
+## 1. Предварительные условия
 
-1. Sincronize os fixtures canonicos e as assinaturas:
+1. Синхронизируйте канонические и ассинатурные светильники:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -32,8 +34,8 @@ Este playbook descreve como habilitar o perfil de chunker ratificado pelo Parlam
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare o diretorio de admission envelopes que o Torii lera no startup (caminho exemplo): `/var/lib/iroha/admission/sorafs`.
-3. Garanta que o config do Torii habilite o discovery cache e o enforcement de admission:
+2. Подготовьте папку с входными конвертами для Torii при запуске (пример): `/var/lib/iroha/admission/sorafs`.
+3. Гарантия, что конфигурация Torii позволяет использовать кэш обнаружения и принудительное допуск:
 
    ```toml
    [torii.sorafs.discovery]
@@ -51,42 +53,42 @@ Este playbook descreve como habilitar o perfil de chunker ratificado pelo Parlam
    enforce_capabilities = true
    ```
 
-## 2. Publicar admission envelopes
+## 2. Приемные конверты Publicar
 
-1. Copie os provider admission envelopes aprovados para o diretorio referenciado por `torii.sorafs.discovery.admission.envelopes_dir`:
+1. Скопируйте конверты приема поставщика, утвержденные для справочной информации по `torii.sorafs.discovery.admission.envelopes_dir`:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Reinicie o Torii (ou envie um SIGHUP se voce embrulhou o loader com hot reload).
-3. Acompanhe os logs para mensagens de admission:
+2. Reinicie или Torii (вы завидуете SIGHUP, когда вы голосуете или загрузчик с горячей перезагрузкой).
+3. Сопровождайте журналы сообщений о входе:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validar a propagacao de discovery
+## 3. Поддержите пропаганду открытий
 
-1. Publique o payload assinado de provider advert (bytes Norito) produzido pelo pipeline do provedor:
+1. Публикация или объявление поставщика полезной нагрузки (байты Norito) для создания конвейера:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Consulte o endpoint de discovery e confirme que o advert aparece com aliases canonicos:
+2. Проконсультируйтесь с конечной точкой обнаружения и подтвердите, что объявление появляется под каноническими псевдонимами:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Garanta que `profile_aliases` inclua `"sorafs.sf1@1.0.0"` como a primeira entrada.
+   Гарантия, что `profile_aliases` включает `"sorafs.sf1@1.0.0"` в качестве первого входа.
 
-## 4. Exercitar endpoints de manifest e plan
+## 4. Выполнение конечных точек манифеста и плана
 
-1. Busque a metadata do manifest (exige stream token se admission estiver enforced):
+1. Создайте манифест метаданных (принудительный доступ к токену потока exige):
 
    ```bash
    sorafs-fetch \
@@ -97,25 +99,25 @@ Este playbook descreve como habilitar o perfil de chunker ratificado pelo Parlam
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspecione o JSON e verifique:
-   - `chunk_profile_handle` e `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` corresponde ao relatorio de determinismo.
-   - `chunk_digests_blake3` alinham com os fixtures regenerados.
+2. Проверка и проверка JSON:
+   - `chunk_profile_handle` и `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` соответствует отношению детерминизма.
+   - `chunk_digests_blake3` alinham с восстановленными светильниками.
 
-## 5. Checks de telemetria
+## 5. Проверка телеметрии
 
-- Confirme que o Prometheus expoe as novas metricas do perfil:
+- Подтвердите, что Prometheus показывает, как новые метрики выполняют фильтр:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards devem mostrar o provider de staging sob o alias esperado e manter os contadores de brownout em zero enquanto o perfil estiver ativo.
+- Панели мониторинга предназначены для провайдеров промежуточных событий или псевдонимов esperado и manter os contadores de lowout em нулевой результат или perfil estiver ativo.
 
-## 6. Rollout readiness
+## 6. Готовность к развертыванию
 
-1. Capture um relatorio curto com URLs, manifest ID e telemetry snapshot.
-2. Compartilhe o relatorio no canal de rollout do Nexus com a janela planejada de ativacao em producao.
-3. Prossiga para o checklist de producao (Section 4 em `chunker_registry_rollout_checklist.md`) quando as partes interessadas aprovarem.
+1. Запишите краткие URL-адреса, идентификатор манифеста и снимок телеметрии.
+2. Сравните канал развертывания Nexus с каналом запуска в производстве.
+3. Введите контрольный список производства (Раздел 4 в `chunker_registry_rollout_checklist.md`), когда это будет подтверждено заинтересованными сторонами.
 
-Manter este playbook atualizado garante que cada rollout de chunker/admission siga os mesmos passos deterministas entre staging e producao.
+Эта интерактивная книга действий гарантирует, что каждое развертывание фрагмента/допуска будет выполнено в соответствии с определенными проходами между постановкой и производством.

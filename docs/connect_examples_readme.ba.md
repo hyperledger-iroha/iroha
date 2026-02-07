@@ -7,57 +7,58 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a79487a5e7e8268f3a94580716a603580f17fd0d0223f10646ecda6aad2e2482
 source_last_modified: "2025-12-29T18:16:35.063907+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Examples (Rust App/Wallet)
+## I18NT000000001X Тоташтырыу миҫалдары (Рат App/Sucet)
 
-Run the two Rust examples end‑to‑end with a Torii node.
+Йүгереп ике Rust миҫалдары менән тамамлана‐ тамамлана I18NT000000002X төйөн.
 
-Prerequisites
-- Torii node with `connect` enabled at `http://127.0.0.1:8080`.
-- Rust toolchain (stable).
-- Python 3.9+ with the `iroha-python` package installed (for the CLI helper below).
+Тәүшарттар
+- `connect` X төйөнө I18NI000000010X-та мөмкинлек биргән.
+- Руст инструменттар сылбыр (стабиль).
+- 3.9+ Python `iroha-python` пакеты менән ҡуйылған (аҫта CLI ярҙамсыһы өсөн).
 
-Examples
-- App example: `crates/iroha_torii_shared/examples/connect_app.rs`
-- Wallet example: `crates/iroha_torii_shared/examples/connect_wallet.rs`
-- Python CLI helper: `python -m iroha_python.examples.connect_flow`
+Миҫалдар
+- App миҫалы: `crates/iroha_torii_shared/examples/connect_app.rs`
+- Баллет миҫалы: `crates/iroha_torii_shared/examples/connect_wallet.rs`
+- Питон CLI ярҙамсыһы: `python -m iroha_python.examples.connect_flow`
 
-Order of startup
-1) Terminal A — App (prints sid + tokens, connects WS, sends SignRequestTx):
+Стартап тәртибе
+1) Терминал А — App (баҫмалар sid + жетондар, WS тоташтыра, SignRequestTx ебәрә):
 
-    cargo run -p iroha_torii_shared --example connect_app -- --node http://127.0.0.1:8080 --role app
+    йөк йүгерә -p iroha_tori_shared --миҫал тоташтырыу_app -- төйөн http://127.0.0.1:8080 --ролле ҡушымта
 
-   Sample output:
+   Өлгө сығыш:
 
-    sid=Z4... token_app=KJ... token_wallet=K0...
-    WS connected
-    app: sent SignRequestTx
-    (waiting for reply)
+    sid=Z4... токен_ап=К.Дж.
+    WS тоташтырылған
+    ҡушымта: SignRequestTx ебәрелгән
+    (яуап көтә)
 
-2) Terminal B — Wallet (connect with token_wallet, replies with SignResultOk):
+2) Терминал В — пробег (токен_волет менән тоташтырыу, SignResultOk менән яуап бирә):
 
-    cargo run -p iroha_torii_shared --example connect_wallet -- --node http://127.0.0.1:8080 --sid Z4... --token K0...
+    йөк йүгерә -p iroha_tori_shared --миҫал тоташтырыу_монак -- төйөн http://127.0.0.1:8080 --сид Z4... --токен К0...
 
-   Sample output:
+   Өлгө сығыш:
 
-    wallet: connected WS
-    wallet: SignRequestTx len=3 at seq 1
-    wallet: sent SignResultOk
+    янсыҡ: тоташтырылған WS
+    1-се эҙҙә SignRequestTx len=3
+    янсыҡ: SignResultOk ебәрелгән
 
-3) App terminal prints the result:
+3) Ҡушымта терминал һөҙөмтәһен баҫтырып сығара:
 
-    app: got SignResultOk algo=ed25519 sig=deadbeef
+    Ҡушымта: SignResultOk algo=d25519 сиг=үлсәге алынған
 
-  Use the new `connect_norito_decode_envelope_sign_result_alg` helper (and the
-  Swift/Kotlin wrappers in this folder) to retrieve the algorithm string when
-  decoding the payload.
+  Яңы `connect_norito_decode_envelope_sign_result_alg` ярҙамсыһы ҡулланыу (һәм был
+  Свифт/Котлин был папкала урауҙар) алгоритм телмәрен алыу өсөн ҡасан
+  файҙалы йөктө расшифровкалау.
 
-Notes
-- Examples derive demo ephemerals from `sid` so app/wallet interoperate automatically. Do not use in production.
-- SDK enforces AEAD AAD binding and seq‑as‑nonce; post‑approval control frames should be encrypted.
-- For Swift clients, see `docs/connect_swift_integration.md` / `docs/connect_swift_ios.md` and validate with `make swift-ci` so dashboard telemetry stays aligned with Rust examples and Buildkite metadata (`ci/xcframework-smoke:<lane>:device_tag`) remains intact.
-- Python CLI helper usage:
+Иҫкәрмәләр
+- Миҫалдар I18NI000000016X-тан демо-эфемералдар килеп сыға, шуға күрә ҡушымта/концепт автоматик рәүештә үҙ-ара эш итә. Етештереүҙә ҡулланмағыҙ.
+- SDK AEAD AAD бәйләү һәм артабанғы түгел; пост‐раҫлау контроль кадрҙары шифрларға тейеш.
+- Свифт клиенттары өсөн ҡарағыҙ: I18NI000000017X / I18NI000000018X һәм I18NI000000019X менән раҫлау шулай приборҙар таҡтаһы телеметрияһы ҡалалары менән тура килтерелгән Rust миҫалдары һәм Buildkite метамағлүмәттәре (I18NI0000000020X) бөтөн булып ҡала.
+- Питон CLI ярҙамсы ҡулланыу:
 
     ```bash
     python -m iroha_python.examples.connect_flow \
@@ -71,4 +72,4 @@ Notes
       --status-json-output connect-status.json
     ```
 
-  The CLI prints the typed session info, dumps the Connect status snapshot, and emits the Norito-encoded `ConnectControlOpen` frame. Pass `--send-open` to post the payload back to Torii, use `--frame-output-format binary` to write raw bytes, `--frame-json-output` for a base64-friendly JSON blob, and `--status-json-output` when you need a typed snapshot for automation. You can also load application metadata from a JSON file via `--app-metadata-file metadata.json` containing `name`, `url`, and `icon_hash` fields (see `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`). Generate a fresh template with `python -m iroha_python.examples.connect_flow --write-app-metadata-template app_metadata.json`. For telemetry-only runs, you can skip session creation entirely with `--status-only` and optionally dump JSON via `--status-json-output status.json`.
+  CLI тип аталған сессия мәғлүмәтен баҫтырып сығара, тоташтыра Connect статусы снимок, һәм I18NT000000000000X-кодланған `ConnectControlOpen` кадрын сығара. Pass I18NI0000000022X файҙалы йөктө I18NT000000000004X-ға кире ҡайтарыу өсөн, сеймал байттарын яҙырға I18NI000000000023, base64-файл JSON блоб өсөн, һәм `--status-json-output` XI 1990 йылда тип яҙылған снимок кәрәк. автоматлаштырыу. Һеҙ шулай уҡ ҡушымта метамағлүмәттәрен тейәп була JSON файлы аша I18NI000000026X составында I18NI000000027X, I18NI000000028X, һәм I18NI000000029X яландары (ҡара: I18NI00000000300). I18NI000000031X менән яңы шаблон генерациялау. Телеметрия өсөн-тик йүгерә, һеҙ үткәрергә мөмкин сессия булдырыу тулыһынса I18NI000000032X һәм теләк буйынса JSON аша I18NI000000033X.

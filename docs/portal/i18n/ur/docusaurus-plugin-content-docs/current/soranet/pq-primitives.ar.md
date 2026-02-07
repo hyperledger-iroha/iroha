@@ -4,29 +4,31 @@ direction: rtl
 source: docs/portal/docs/soranet/pq-primitives.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-primitives
-title: بدائيات ما بعد الكم في SoraNet
-sidebar_label: بدائيات PQ
-description: نظرة عامة على crate `soranet_pq` وكيف يستهلك مصافحة SoraNet مساعدات ML-KEM/ML-DSA.
+ID: PQ-primitives
+عنوان: سورانیٹ میں پوسٹ کوانٹم کے قدیم
+سائڈبار_لیبل: پی کیو قدیم
+تفصیل: کریٹ `soranet_pq` کا جائزہ اور کس طرح سورانیٹ ہینڈ شیک ML-KEM/ML-DSA ایڈز کو استعمال کرتا ہے۔
 ---
 
-:::note المصدر القياسي
-تعكس هذه الصفحة `docs/source/soranet/pq_primitives.md`. حافظ على النسختين متطابقتين حتى يتم تقاعد مجموعة الوثائق القديمة.
+::: نوٹ معیاری ماخذ
+یہ صفحہ `docs/source/soranet/pq_primitives.md` کی عکاسی کرتا ہے۔ دستاویزات کا پرانا سیٹ ریٹائر ہونے تک دونوں کاپیاں ایک جیسے رکھیں۔
 :::
 
-يحتوي crate `soranet_pq` على لبنات ما بعد الكم التي تعتمد عليها كل relay وclient وtooling في SoraNet. وهو يغلف مجموعات Kyber (ML-KEM) وDilithium (ML-DSA) المدعومة من PQClean ويضيف helpers لـ HKDF وRNG hedged ملائمة للبروتوكول حتى تتشارك جميع الأسطح نفس التنفيذات.
+کریٹ `soranet_pq` میں پوسٹ کوانٹم بلڈنگ بلاکس پر مشتمل ہے جس پر ہر ریلے ، مؤکل اور سورنیٹ میں ٹولنگ کا انحصار ہوتا ہے۔ اس نے پی کیو کلین کے تعاون سے کیبر (ایم ایل-کے ای ایم) اور دلیتھیم (ایم ایل-ڈی ایس اے) ڈیکوں کو لپیٹ لیا ہے اور ایچ کے ڈی ایف اور آر این جی کے مددگاروں کو پروٹوکول میں شامل کیا ہے تاکہ تمام کھالیں ایک ہی عمل میں شریک ہوں۔
 
-## ما الذي يتضمنه `soranet_pq`
+## `soranet_pq` کے ساتھ کیا شامل ہے
 
-- **ML-KEM-512/768/1024:** توليد مفاتيح حتمي، ومساعدات encapsulation وdecapsulation مع نشر أخطاء بزمن ثابت.
-- **ML-DSA-44/65/87:** توقيع/تحقق منفصلان مربوطان بنصوص مفصولة النطاق.
-- **HKDF موسوم:** `derive_labeled_hkdf` يضيف namespace لكل اشتقاق مع مرحلة المصافحة (`DH/es`, `KEM/1`, ...) حتى تبقى النصوص الهجينة بلا تصادم.
-- **عشوائية hedged:** `hedged_chacha20_rng` يمزج بذورا حتمية مع إنتروبيا النظام ويصفر الحالة الوسيطة عند التحرير.
+۔
+-** ML-DSA-44/65/87: ** دائرہ کار سے الگ ہونے والے اسکرپٹس سے منسلک علیحدہ دستخط/توثیق۔
+۔
+۔
 
-تسكن جميع الأسرار داخل حاويات `Zeroizing` وتختبر CI روابط PQClean على جميع المنصات المدعومة.
+تمام راز `Zeroizing` کنٹینرز اور CI ٹیسٹ کے اندر تمام معاون پلیٹ فارمز پر PQCLEAN پابندیوں کے اندر رہتے ہیں۔
 
 ```rust
 use soranet_pq::{
@@ -49,19 +51,19 @@ let okm = derive_labeled_hkdf(
 ).unwrap();
 ```
 
-## كيفية الاستخدام
+## استعمال کرنے کا طریقہ
 
-1. **اضف الاعتماد** إلى crates الموجودة خارج جذر workspace:
+1. ** ورک اسپیس کی جڑ سے باہر کے کریٹوں میں اسناد شامل کریں **:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **اختر المجموعة الصحيحة** في نقاط الاستدعاء. للعمل الأولي على المصافحة الهجينة، استخدم `MlKemSuite::MlKem768` و`MlDsaSuite::MlDsa65`.
+2. ** کال پوائنٹس پر صحیح گروپ ** کا انتخاب کریں۔ ہائبرڈ ہینڈ شیک پر ابتدائی کام کے لئے ، `MlKemSuite::MlKem768` اور `MlDsaSuite::MlDsa65` استعمال کریں۔
 
-3. **اشتق المفاتيح مع وسوم.** استخدم `HkdfDomain::soranet("KEM/1")` (ونظراءه) حتى يبقى تسلسل النصوص حتميا عبر العقد.
+3. ** ٹیگز کے ساتھ چابیاں اخذ کریں۔
 
-4. **استخدم RNG hedged** عند أخذ عينات لأسرار بديلة:
+4. ** متبادل رازوں کے نمونے لینے پر RNG ہیجڈ ** استعمال کریں:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -69,11 +71,11 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-تسحب مصافحة SoraNet الأساسية ومساعدات تعمية CID (`iroha_crypto::soranet`) هذه الأدوات مباشرة، ما يعني أن crates التابعة ترث نفس التنفيذات دون ربط PQClean بنفسها.
+سورانیٹ کور ہینڈ شیک اور سی آئی ڈی انکرپشن مددگار (`iroha_crypto::soranet`) ان کو براہ راست کھینچتے ہیں ، اس کا مطلب ہے کہ بچوں کے کریٹ خود پی کیو کلین کو پابند کیے بغیر ایک ہی عمل درآمد کا وارث ہوتے ہیں۔
 
-## قائمة تحقق التحقق
+## توثیق چیک لسٹ
 
 - `cargo test -p soranet_pq --offline`
-- `cargo fmt --package soranet_pq`
-- راجع أمثلة الاستخدام في README (`crates/soranet_pq/README.md`)
-- حدث وثيقة تصميم مصافحة SoraNet عند وصول الهجائن
+-`cargo fmt --package soranet_pq`
+- README (`crates/soranet_pq/README.md`) میں استعمال کی مثالیں دیکھیں
+- جب ہائبرڈز پہنچے تو سورانیٹ ہینڈ شیک ڈیزائن دستاویز کو اپ ڈیٹ کریں

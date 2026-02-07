@@ -6,63 +6,64 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8de31f9e066b729fda8324b8847badba23de926888574d02a44fb0e6d4472f77
 source_last_modified: "2026-01-18T05:31:56+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+# Norito コーデック リファレンス
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito は、Iroha の正規シリアル化レイヤーです。すべてのネットワーク上のメッセージ、ディスク上
+ペイロード、およびクロスコンポーネント API は Norito を使用するため、ノードは同一のバイトで一致します
+異なるハードウェアで実行されている場合でも。このページには可動部分がまとめられています
+`norito.md` の完全な仕様を指します。
 
-## Core layout
+## コアレイアウト
 
-| Component | Purpose | Source |
+|コンポーネント |目的 |出典 |
 | --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| **ヘッダー** |マジック/バージョン/スキーマ ハッシュ、CRC64、長さ、圧縮タグを使用してペイロードをフレーム化します。 v1 では `VERSION_MINOR = 0x00` が必要で、サポートされているマスク (デフォルトは `0x00`) に対してヘッダー フラグを検証します。 | `norito::header` — `norito.md` (「ヘッダーとフラグ」、リポジトリ ルート) を参照してください。
+| **ベアペイロード** |ハッシュ/比較に使用される決定論的な値エンコーディング。オンワイヤートランスポートでは常にヘッダーが使用されます。ベアバイトは内部専用です。 | `norito::codec::{Encode, Decode}` |
+| **圧縮** |オプションの Zstd (および実験的な GPU アクセラレーション) は、ヘッダー圧縮バイトによって選択されます。 | `norito.md`, “圧縮ネゴシエーション” |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+レイアウト フラグ レジストリ (packed-struct、packed-seq、フィールド ビットセット、コンパクト
+長さ) は `norito::header::flags` にあります。 V1 のデフォルトのフラグは `0x00` ですが、
+サポートされているマスク内の明示的なヘッダー フラグを受け入れます。未知のビットは
+拒否されました。 `norito::header::Flags` は内部検査のために保持されており、
+将来のバージョン。
 
-## Derive support
+## サポートを引き出す
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` には、`Encode`、`Decode`、`IntoSchema`、および JSON ヘルパー派生が同梱されています。
+主な規則:
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- 派生は、AoS とパックされたコード パスの両方を生成します。 v1 のデフォルトは AoS です
+  ヘッダー フラグがパックされたバリアントを選択しない限り、レイアウト (フラグ `0x00`)。
+  実装は `crates/norito_derive/src/derive_struct.rs` にあります。
+- レイアウトに影響する機能 (`packed-struct`、`packed-seq`、`compact-len`)
+  ヘッダー フラグを介してオプトインし、ピア間で一貫してエンコード/デコードする必要があります。
+- JSON ヘルパー (`norito::json`) は、決定論的な Norito ベースの JSON を提供します。
+  オープンAPI。 `norito::json::{to_json_pretty, from_json}` を使用します。`serde_json` は使用しないでください。
 
-## Multicodec & identifier tables
+## マルチコーデックと識別子テーブル
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito は、そのマルチコーデック割り当てを `norito::multicodec` に保持します。参考資料
+テーブル (ハッシュ、キー タイプ、ペイロード記述子) は `multicodec.md` で維持されます
+リポジトリのルートにあります。新しい識別子が追加される場合:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry` を更新します。
+2. `multicodec.md` のテーブルを拡張します。
+3. ダウンストリーム バインディング (Python/Java) がマップを使用する場合は、それを再生成します。
 
-## Regenerating docs & fixtures
+## ドキュメントとフィクスチャを再生成する
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+現在散文の要約をホストしているポータルでは、上流の Markdown を使用します。
+真実の情報源としての情報源:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **仕様**: `norito.md`
+- **マルチコーデック テーブル**: `multicodec.md`
+- **ベンチマーク**: `crates/norito/benches/`
+- **ゴールデン テスト**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Docusaurus オートメーションが稼働すると、ポータルは
+これらからデータを取得する同期スクリプト (`docs/portal/scripts/` で追跡)
+ファイル。それまでは、仕様が変更されるたびにこのページを手動で調整してください。

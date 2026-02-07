@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-12-29T18:16:35.071058+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs preview feedback form (W1 partner wave)
+# የሰነዶች ቅድመ እይታ ግብረመልስ ቅጽ (W1 የአጋር ሞገድ)
 
-Use this template when collecting feedback from W1 reviewers. Duplicate it per
-partner, fill the metadata, and store the completed copy under
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
+ከW1 ገምጋሚዎች ግብረ መልስ ሲሰበስቡ ይህንን አብነት ይጠቀሙ። ያባዙት በ
+አጋር፣ ሜታዳታውን ይሙሉ እና የተጠናቀቀውን ቅጂ ከስር ያከማቹ
+I18NI0000002X.
 
-## Reviewer metadata
+## የገምጋሚ ዲበ ውሂብ
 
-- **Partner ID:** `partner-w1-XX`
-- **Request ticket:** `DOCS-SORA-Preview-REQ-PXX`
-- **Invite sent (UTC):** `YYYY-MM-DD hh:mm`
-- **Acknowledged checksum (UTC):** `YYYY-MM-DD hh:mm`
-- **Primary focus areas:** (for example _SoraFS orchestrator docs_, _Torii ISO flows_)
+- ** የአጋር መታወቂያ፡** `partner-w1-XX`
+- ** ትኬት ጠይቅ: *** `DOCS-SORA-Preview-REQ-PXX`
+- ** ግብዣ ተልኳል (UTC): *** `YYYY-MM-DD hh:mm`
+- ** እውቅና ያለው ቼክ (UTC):** `YYYY-MM-DD hh:mm`
+- ** ዋና የትኩረት ቦታዎች፡** (ለምሳሌ _SoraFS ኦርኬስትራ ዶክስ_፣ _Torii ISO flows_)
 
-## Telemetry & artefact confirmations
+## ቴሌሜትሪ እና የስነ ጥበብ ማረጋገጫዎች
 
-| Checklist item | Result | Evidence |
+| የማረጋገጫ ዝርዝር | ውጤት | ማስረጃ |
 | --- | --- | --- |
-| Checksum verification | ✅ / ⚠️ | Path to log (e.g., `build/checksums.sha256`) |
-| Try it proxy smoke test | ✅ / ⚠️ | `npm run manage:tryit-proxy …` transcript snippet |
-| Grafana dashboard review | ✅ / ⚠️ | Screenshot path(s) |
-| Portal probe report review | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
+| Checksum ማረጋገጫ | ✅ / ⚠️ | የሚገቡበት መንገድ (ለምሳሌ፡ `build/checksums.sha256`) |
+| ይሞክሩት የተኪ ጭስ ሙከራ | ✅ / ⚠️ | `npm run manage:tryit-proxy …` ግልባጭ ቅንጣቢ |
+| Grafana ዳሽቦርድ ግምገማ | ✅ / ⚠️ | ቅጽበታዊ ገጽ እይታ(ዎች) |
+| ፖርታል መፈተሻ ሪፖርት ግምገማ | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
 
-Add rows for any additional SLOs a reviewer inspects.
+ገምጋሚ ለሚመረምረው ለማንኛውም ተጨማሪ SLO ረድፎችን ያክሉ።
 
-## Feedback log
+## የግብረመልስ መዝገብ
 
-| Area | Severity (info/minor/major/blocker) | Description | Suggested fix or question | Tracker issue |
+| አካባቢ | ከባድነት (መረጃ/አነስተኛ/ዋና/አገዳ) | መግለጫ | የተጠቆመ ጥገና ወይም ጥያቄ | የመከታተያ ጉዳይ |
 | --- | --- | --- | --- | --- |
 | | | | | |
 
-Reference the GitHub issue or internal ticket in the last column so the preview
-tracker can tie remediation items back to this form.
+የ GitHub ጉዳይን ወይም የውስጥ ትኬቱን በመጨረሻው አምድ ላይ ይመልከቱ ስለዚህ ቅድመ እይታ
+መከታተያ የማሻሻያ ዕቃዎችን ከዚህ ቅጽ ጋር ማሰር ይችላል።
 
-## Survey summary
+## የዳሰሳ ጥናት ማጠቃለያ
 
-1. **How confident are you in the checksum guidance and invite process?** (1–5)
-2. **Which docs were the most/least helpful?** (short answer)
-3. **Were there any blockers accessing the Try it proxy or telemetry dashboards?**
-4. **Is additional localisation or accessibility content required?**
-5. **Any other comments before GA?**
+1. **በቼክሱም መመሪያ እና ግብዣ ሂደት ምን ያህል እርግጠኛ ነዎት?** (1-5)
+2. **የትኞቹ ሰነዶች በጣም/ዝቅተኛ አጋዥ ነበሩ?** (አጭር መልስ)
+3. **የሙከራውን ፕሮክሲ ወይም ቴሌሜትሪ ዳሽቦርድ የሚያገኙ ማገጃዎች ነበሩ?**
+4. **ተጨማሪ የትርጉም ወይም የተደራሽነት ይዘት ያስፈልጋል?**
+5. **ከ GA በፊት ሌሎች አስተያየቶች አሉ?**
 
-Capture short answers and attach raw survey exports if you use an external form.
+ውጫዊ ቅጽ ከተጠቀሙ አጫጭር መልሶችን ይቅረጹ እና ጥሬ የዳሰሳ ጥናት ወደ ውጭ መላክን ያያይዙ።
 
-## Knowledge check
+#የእውቀት ማረጋገጫ
 
-- Score: `__/10`
-- Incorrect questions (if any): `[#1, #4, …]`
-- Follow-up actions (if score < 9/10): remediation call scheduled? y/n
+ነጥብ: `__/10`
+- የተሳሳቱ ጥያቄዎች (ካለ): `[#1, #4, …]`
+- የመከታተያ እርምጃዎች (ነጥብ <9/10 ከሆነ): የማሻሻያ ጥሪ መርሐግብር ተይዞለታል? y/n
 
-## Sign-off
+## ይውጡ
 
-- Reviewer name & timestamp:
-- Docs/DevRel reviewer & timestamp:
+- የገምጋሚ ስም እና የጊዜ ማህተም፡-
+- ሰነዶች/DevRel ገምጋሚ እና የጊዜ ማህተም፡-
 
-Store the signed copy with the associated artefacts so auditors can replay the
-wave without additional context.
+ኦዲተሮች እንደገና መጫወት እንዲችሉ የተፈረመውን ቅጂ ከተያያዙ ቅርሶች ጋር ያከማቹ
+ያለ ተጨማሪ አውድ ማዕበል.

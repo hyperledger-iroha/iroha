@@ -7,43 +7,44 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2025-12-29T18:16:35.945760+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+//! SM ծրագրի ռիսկերի ռեգիստր SM2/SM3/SM4 միացման համար:
 
-# SM Program Risk Register
+# SM Ծրագրի ռիսկերի ռեգիստր
 
-Last updated: 2025-03-12.
+Վերջին թարմացումը՝ 2025-03-12:
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+Այս ռեգիստրն ընդլայնվում է `sm_program.md`-ի ամփոփագրումով՝ զուգակցելով յուրաքանչյուր ռիսկի հետ
+սեփականության իրավունքը, մոնիտորինգի գործարկիչները և ներկա մեղմացման վիճակը: Crypto WG
+և Core Platform-ի առաջատարները վերանայում են այս ռեգիստրը շաբաթական SM կադենսով. փոփոխությունները
+արտացոլված են ինչպես այստեղ, այնպես էլ հանրային ճանապարհային քարտեզում:
 
-## Risk Summary
+## Ռիսկերի ամփոփում
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
-|----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+| ID | Ռիսկ | Կարգավիճակ | Հավանականություն | Ազդեցություն | Խստություն | Սեփականատեր | Մեղմացում | Կարգավիճակը | Գործարկիչներ |
+|----|------|----------|------------|-------|---------|-------|-----------|--------|-------|
+| R1 | Արտաքին աուդիտ RustCrypto SM արկղերի համար չի իրականացվել նախքան վավերացնողի ստորագրումը GA | Մատակարարման շղթա | Միջին | Բարձր | Բարձր | Crypto WG | Պայմանագրային Trail of Bits/NCC Group, պահպանեք միայն ստուգման կեցվածքը մինչև զեկույցի ընդունումը | Մեղմացումն ընթացքի մեջ է | Audit SOW-ը չստորագրված է մինչև 2025-04-15 կամ հետաձգված աուդիտի հաշվետվությունը 2025-06-01 |
+| R2 | Դետերմինիստական ​​ոչ մի ռեգրեսիաներ SDK-ներում | Իրականացում | Միջին | Բարձր | Բարձր | SDK ծրագրի ղեկավարում | Համօգտագործեք սարքերը SDK CI-ում, կիրառեք կանոնական r∥s կոդավորում, ավելացրեք խաչաձև SDK կեղծման թեստեր | Մոնիտորինգ | Առանց SM հարմարանքների |
+| R3 | ISA-ին բնորոշ սխալներ ինտրինսիկայում (NEON/SIMD) | Կատարման | Ցածր | Միջին | Միջին | Կատարողական WG | Gate intrinsics ետևում խաղարկային դրոշակները, պահանջում են CI ծածկույթ ARM-ում, պահպանել սկալյար հետադարձ | Մեղմացումն ընթացքի մեջ է | NEON նստարանները ձախողվում են կամ ապարատային ռեգրեսիան բացահայտված է SM perf matrix |
+| R4 | Համապատասխանության երկիմաստությունը հետաձգում է SM-ի ընդունումը | Կառավարում | Միջին | Միջին | Միջին | Փաստաթղթեր և իրավական կապ | Հրապարակեք համապատասխանության համառոտագիրը, օպերատորի ստուգաթերթը, կապը իրավաբանի հետ մինչև GA | Մեղմացումն ընթացքի մեջ է | 2025-05-01-ից հետո չմարված իրավական վերանայում կամ ստուգաթերթի թարմացումների բացակայություն |
+| R5 | FFI backend դրեյֆ՝ մատակարարի թարմացումներով | Ինտեգրում | Միջին | Միջին | Միջին | Պլատֆորմի օպերացիա | Ամրացրեք մատակարարի տարբերակները, ավելացրեք հավասարության թեստեր, պահպանեք OpenSSL/Tongsuo-ի նախադիտման ընտրանքը | Մոնիտորինգ | Փաթեթի թարմացումը միավորվել է առանց համաչափ գործարկման կամ նախադիտման միացված է փորձնական շրջանակից դուրս |
 
 ## Review Cadence
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
-  artefacts.
+- Շաբաթական Crypto WG համաժամեցում (օրակարգի մշտական կետ):
+- Ամսական համատեղ վերանայում Platform Ops-ի և Docs-ի հետ՝ համապատասխանության կեցվածքը հաստատելու համար:
+- Նախաբացթողում անցակետ. ռիսկերի ռեգիստրի սառեցում և ատեստավորում՝ միավորված GA-ով
+  արտեֆակտներ.
 
-## Sign-off
+## Գրանցվել
 
-| Role | Representative | Date | Notes |
+| Դերը | Ներկայացուցիչ | Ամսաթիվ | Ծանոթագրություններ |
 |------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+| Crypto WG առաջատար | (ստորագրությունը ֆայլում) | 2025-03-12 | Հաստատված է հրապարակման համար և համօգտագործվում է WG-ի հետախուզման հետ: |
+| Հիմնական հարթակի առաջատար | (ստորագրությունը ֆայլում) | 2025-03-12 | Ընդունված մեղմացումներ և մոնիտորինգի արագություն: |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+Պատմական հաստատումների և հանդիպման արձանագրությունների համար տե՛ս `docs/source/crypto/sm_program.md`
+(`Communication Plan`) և SM օրակարգային արխիվը՝ կապված Crypto WG-ից
+աշխատանքային տարածք.

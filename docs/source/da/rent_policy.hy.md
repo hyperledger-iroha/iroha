@@ -7,37 +7,38 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c7cdc46bcd87af7924817a94900c8fad2c23570607f4065f19d8a42d259fe83f
 source_last_modified: "2026-01-22T14:35:37.691079+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Data Availability Rent & Incentive Policy (DA-7)
+# Տվյալների մատչելիության վարձավճար և խրախուսական քաղաքականություն (DA-7)
 
-_Status: Drafting — Owners: Economics WG / Treasury / Storage Team_
+_ Կարգավիճակը. Նախագծում — Սեփականատերեր՝ Էկոնոմիկայի WG / Գանձապետարան / Պահպանման թիմ_
 
-Roadmap item **DA-7** introduces an explicit XOR-denominated rent for every blob
-submitted to `/v1/da/ingest`, plus bonuses that reward PDP/PoTR execution and
-egress served to fetch clients. This document defines the initial parameters,
-their data-model representation, and the calculation workflow used by Torii,
-SDKs, and Treasury dashboards.
+Ճանապարհային քարտեզի **DA-7** կետը ներկայացնում է բացահայտ XOR-ով արտահայտված վարձավճար յուրաքանչյուր բլբի համար
+ներկայացվել է `/v1/da/ingest`-ին, գումարած բոնուսներ, որոնք պարգևատրում են PDP/PoTR կատարումը և
+egress-ը ծառայել է հաճախորդներ բերելու համար: Այս փաստաթուղթը սահմանում է նախնական պարամետրերը,
+դրանց տվյալների մոդելի ներկայացումը և Torii-ի կողմից օգտագործված հաշվարկային հոսքը,
+SDK-ներ և գանձապետական վահանակներ:
 
-## Policy structure
+## Քաղաքականության կառուցվածքը
 
-The policy is encoded as [`DaRentPolicyV1`](/crates/iroha_data_model/src/da/types.rs)
-within the data model. Torii and governance tooling persist the policy in
-Norito payloads so that rent quotes and incentive ledgers can be recomputed
-deterministically. The schema exposes five knobs:
+Քաղաքականությունը կոդավորված է որպես [`DaRentPolicyV1`](/crates/iroha_data_model/src/da/types.rs)
+տվյալների մոդելի շրջանակներում: Torii-ը և կառավարման գործիքակազմը պահպանում են քաղաքականությունը
+Norito օգտակար բեռներ, որպեսզի հնարավոր լինի վերահաշվարկել վարձակալության գնանշումները և խրախուսական մատյանները
+դետերմինիստորեն. Սխեման բացահայտում է հինգ կոճակ.
 
-| Field | Description | Default |
+| Դաշտային | Նկարագրություն | Կանխադրված |
 |-------|-------------|---------|
-| `base_rate_per_gib_month` | XOR charged per GiB per month of retention. | `250_000` micro-XOR (0.25 XOR) |
-| `protocol_reserve_bps` | Share of the rent routed to the protocol reserve (basis points). | `2_000` (20 %) |
-| `pdp_bonus_bps` | Bonus percentage per successful PDP evaluation. | `500` (5 %) |
-| `potr_bonus_bps` | Bonus percentage per successful PoTR evaluation. | `250` (2.5 %) |
-| `egress_credit_per_gib` | Credit paid when a provider serves 1 GiB of DA data. | `1_500` micro-XOR |
+| `base_rate_per_gib_month` | XOR-ը գանձվում է մեկ GiB-ի համար մեկ ամսվա պահպանման համար: | `250_000` միկրո-XOR (0.25 XOR) |
+| `protocol_reserve_bps` | Արձանագրության պահուստին ուղղվող վարձավճարի մասնաբաժինը (հիմնական կետերը): | `2_000` (20%) |
+| `pdp_bonus_bps` | Բոնուսի տոկոսը PDP-ի հաջող գնահատման համար: | `500` (5%) |
+| `potr_bonus_bps` | Բոնուսի տոկոսը հաջող PoTR գնահատման համար: | `250` (2,5%) |
+| `egress_credit_per_gib` | Վարկը վճարվում է, երբ մատակարարը սպասարկում է DA տվյալների 1 ԳԲ: | `1_500` միկրո-XOR |
 
-All basis-point values are validated against `BASIS_POINTS_PER_UNIT` (10 000).
-Policy updates must travel through governance, and every Torii node exposes the
-active policy via the `torii.da_ingest.rent_policy` configuration section
-(`iroha_config`). Operators can override the defaults in `config.toml`:
+Բոլոր բազային արժեքները վավերացված են `BASIS_POINTS_PER_UNIT`-ի (10000) համեմատ:
+Քաղաքականության թարմացումները պետք է անցնեն կառավարման միջոցով, և յուրաքանչյուր Torii հանգույց բացահայտում է
+ակտիվ քաղաքականություն `torii.da_ingest.rent_policy` կոնֆիգուրացիայի բաժնի միջոցով
+(`iroha_config`): Օպերատորները կարող են վերացնել կանխադրվածները `config.toml`-ում.
 
 ```toml
 [torii.da_ingest.rent_policy]
@@ -48,28 +49,28 @@ potr_bonus_bps = 250                          # 2.5% PoTR bonus
 egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 ```
 
-CLI tooling (`iroha app da rent-quote`) accepts the same Norito/JSON policy inputs
-and emits artefacts that mirror the active `DaRentPolicyV1` without reaching
-back into Torii state. Supply the policy snapshot used for an ingest run so the
-quote remains reproducible.
+CLI գործիքավորումը (`iroha app da rent-quote`) ընդունում է նույն Norito/JSON քաղաքականության մուտքերը
+և արտանետում է արտեֆակտներ, որոնք արտացոլում են ակտիվ `DaRentPolicyV1`-ը՝ առանց հասնելու
+վերադարձ դեպի Torii վիճակ: Տրամադրեք քաղաքականության նկարը, որն օգտագործվում է ներթափանցման համար, որպեսզի
+մեջբերումը մնում է վերարտադրելի:
 
-### Persisting rent quote artefacts
+### Մշտական վարձակալության արտեֆակտներ
 
-Run `iroha app da rent-quote --gib <size> --months <months> --quote-out <path>` to
-emit both the on-screen summary and a pretty-printed JSON artefact. The file
-records `policy_source`, the inlined `DaRentPolicyV1` snapshot, the computed
-`DaRentQuote`, and a derived `ledger_projection` (serialized via
-[`DaRentLedgerProjection`](/crates/iroha_data_model/src/da/types.rs)) making it suitable for treasury dashboards and ledger ISI
-pipelines. When `--quote-out` points at a nested directory the CLI creates any
-missing parents, so operators can standardise locations such as
-`artifacts/da/rent_quotes/<timestamp>.json` alongside other DA evidence bundles.
-Attach the artefact to rent approvals or reconciliation runs so the XOR
-breakdown (base rent, reserve, PDP/PoTR bonuses, and egress credits) is
-reproducible. Pass `--policy-label "<text>"` to override the automatically
-derived `policy_source` description (file paths, embedded default, etc.) with a
-human-readable tag such as a governance ticket or manifest hash; the CLI trims
-this value and rejects empty/whitespace-only strings so the recorded evidence
-remains auditable.
+Գործարկեք `iroha app da rent-quote --gib <size> --months <months> --quote-out <path>` դեպի
+թողարկեք և՛ էկրանի ամփոփագիրը, և՛ գեղեցիկ տպագրված JSON արտեֆակտ: Ֆայլը
+գրանցում է `policy_source`, ներգծված `DaRentPolicyV1` լուսանկար, հաշվարկված
+`DaRentQuote` և ստացված `ledger_projection` (սերիականացված միջոցով
+[`DaRentLedgerProjection`](/crates/iroha_data_model/src/da/types.rs)) այն հարմար է գանձապետական վահանակների և մատյան ISI-ի համար
+խողովակաշարեր. Երբ `--quote-out`-ը մատնանշում է ներդիր գրացուցակը, CLI-ն ստեղծում է ցանկացած
+բացակայող ծնողներ, այնպես որ օպերատորները կարող են ստանդարտացնել այնպիսի վայրեր, ինչպիսիք են
+`artifacts/da/rent_quotes/<timestamp>.json` DA ապացույցների այլ փաթեթների հետ միասին:
+Կցեք արտեֆակտը վարձակալության հաստատումներին կամ հաշտեցմանը, որպեսզի XOR-ը
+բաշխումը (բազային վարձավճար, պահուստ, PDP/PoTR բոնուսներ և արտագնա վարկեր) է
+վերարտադրելի։ Անցեք `--policy-label "<text>"`՝ ինքնաբերաբար վերացնելու համար
+ստացված `policy_source` նկարագրությունը (ֆայլի ուղիներ, ներկառուցված լռելյայն և այլն)
+մարդու կողմից ընթեռնելի պիտակ, օրինակ՝ կառավարման տոմս կամ մանիֆեստային հեշ; CLI զարդարանքները
+այս արժեքը և մերժում է միայն դատարկ/սպիտակ տողերը, որպեսզի գրանցված ապացույցները
+մնում է ստուգման ենթակա:
 
 ```json
 {
@@ -87,21 +88,19 @@ remains auditable.
     "egress_credit_per_gib": { "micro": 1500 }
   }
 }
-```
+```Գրքերի նախագծման բաժինը ուղղակիորեն սնվում է DA-ի վարձակալության մատյանների ISI-ներում
+սահմանում է XOR դելտաները, որոնք նախատեսված են արձանագրության պահուստի, մատակարարի վճարումների և
+յուրաքանչյուր ապացույց բոնուսային լողավազաններ՝ առանց պատվիրված նվագախմբի կոդ պահանջելու:
 
-The ledger projection section feeds directly into the DA rent ledger ISIs: it
-defines the XOR deltas destined for the protocol reserve, provider payouts, and
-the per-proof bonus pools without requiring bespoke orchestration code.
+### Վարձավճարների հաշվառման պլանների ստեղծում
 
-### Generating rent ledger plans
-
-Run `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
-to convert a persisted rent quote into executable ledger transfers. The command
-parses the embedded `ledger_projection`, emits Norito `Transfer` instructions
-that collect the base rent into the treasury, routes the reserve/provider
-portions, and pre-funds the PDP/PoTR bonus pools directly from the payer. The
-output JSON mirrors the quote metadata so CI and treasury tooling can reason
-about the same artefact:
+Գործարկեք `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+շարունակական վարձավճարի գնանշումը կատարվող մատյանային փոխանցումների վերածելու համար: Հրաման
+վերլուծում է ներկառուցված `ledger_projection`-ը, թողարկում Norito `Transfer` հրահանգներ
+որոնք բազային վարձավճարը գանձում են գանձարան, ուղղորդում պահուստին/մատակարարին
+մասեր և նախապես ֆինանսավորում է PDP/PoTR բոնուսային լողավազանները անմիջապես վճարողից: Այն
+JSON-ի ելքը արտացոլում է գնանշումների մետատվյալները, որպեսզի CI-ն և գանձապետական գործիքները կարողանան պատճառաբանել
+նույն արտեֆակտի մասին.
 
 ```json
 {
@@ -122,11 +121,11 @@ about the same artefact:
 }
 ```
 
-The final `egress_credit_per_gib_micro_xor` field lets dashboards and payout
-schedulers align egress reimbursements with the rent policy that produced the
-quote without recomputing the policy math in scripting glue.
+Վերջնական `egress_credit_per_gib_micro_xor` դաշտը թույլ է տալիս վահանակներ և վճարումներ
+Ժամանակացույցը հավասարեցնում է արտագնա փոխհատուցումները վարձակալության քաղաքականության հետ, որն առաջացրել է
+մեջբերում՝ առանց սկրիպտային սոսինձի քաղաքականության մաթեմատիկան վերահաշվարկելու:
 
-## Example quote
+## Օրինակ մեջբերում
 
 ```rust
 use iroha_data_model::da::types::DaRentPolicyV1;
@@ -143,64 +142,62 @@ assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
 assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 ```
 
-The quote is reproducible across Torii nodes, SDKs, and Treasury reports because
-it uses deterministic Norito structures instead of ad-hoc math. Operators can
-attach the JSON/CBOR encoded `DaRentPolicyV1` to governance proposals or rent
-audits to prove which parameters were in force for any given blob.
+Գնանշումը վերարտադրելի է Torii հանգույցներում, SDK-ներում և գանձապետական հաշվետվություններում, քանի որ
+այն օգտագործում է որոշիչ Norito կառուցվածքներ՝ ժամանակավոր մաթեմատիկայի փոխարեն: Օպերատորները կարող են
+կցել JSON/CBOR կոդավորված `DaRentPolicyV1` կառավարման առաջարկներին կամ վարձակալությանը
+աուդիտներ՝ ապացուցելու համար, թե որ պարամետրերն են ուժի մեջ եղել տվյալ բլբի համար:
 
-## Bonuses and reserves
+## Բոնուսներ և պահուստներ
 
-- **Protocol reserve:** `protocol_reserve_bps` funds the XOR reserve that backs
-  emergency re-replication and slashing refunds. Treasury tracks this bucket
-  separately to ensure ledger balances match the configured rate.
-- **PDP/PoTR bonuses:** Each successful proof evaluation receives an additional
-  payout derived from `base_rent × bonus_bps`. When the DA scheduler emits proof
-  receipts it includes the basis-point tags so incentives can be replayed.
-- **Egress credit:** Providers record GiB served per manifest, multiply by
-  `egress_credit_per_gib`, and submit the receipts via `iroha app da prove-availability`.
-  The rent policy keeps the per-GiB amount in sync with governance.
+- **Արձանագրության պահուստ.** `protocol_reserve_bps`-ը ֆինանսավորում է XOR պահուստը, որը աջակցում է
+  արտակարգ իրավիճակների կրկնօրինակում և կրճատվող փոխհատուցումներ: Գանձապետարանը հետևում է այս դույլին
+  առանձին՝ ապահովելու համար, որ մատյանների մնացորդները համապատասխանում են կազմաձևված դրույքաչափին:
+- **PDP/PoTR բոնուսներ.** Յուրաքանչյուր հաջող ապացույցի գնահատում ստանում է հավելյալ
+  `base_rent × bonus_bps`-ից ստացված վճարում: Երբ DA ժամանակացույցը թողարկում է ապացույց
+  անդորրագրերը ներառում են բազային կետերի պիտակները, որպեսզի խթանները հնարավոր լինի վերարտադրել:
+- **Egress վարկ.** Մատակարարները գրանցում են GiB-ի մատուցված յուրաքանչյուր մանիֆեստի համար, բազմապատկվում է
+  `egress_credit_per_gib`, իսկ անդորրագրերը ներկայացրեք `iroha app da prove-availability`-ի միջոցով:
+  Վարձավճարի քաղաքականությունը պահպանում է մեկ GiB-ի գումարը համաժամանակյա կառավարման հետ:
 
-## Operational flow
+## Գործառնական հոսք
 
-1. **Ingest:** `/v1/da/ingest` loads the active `DaRentPolicyV1`, quotes rent
-   based on blob size and retention, and embeds the quote into the Norito
-   manifest. The submitter signs a statement that references the rent hash and
-   the storage ticket id.
-2. **Accounting:** Treasury ingest scripts decode the manifest, call
-   `DaRentPolicyV1::quote`, and populate rent ledgers (base rent, reserve,
-   bonuses, and expected egress credits). Any discrepancy between recorded rent
-   and recomputed quotes fails CI.
-3. **Proof rewards:** When PDP/PoTR schedulers mark a success they emit a receipt
-   containing the manifest digest, proof kind, and the XOR bonus derived from
-   the policy. Governance can audit the payouts by recomputing the same quote.
-4. **Egress reimbursement:** Fetch orchestrators submit signed egress summaries.
-   Torii multiplies the GiB count by `egress_credit_per_gib` and issues payment
-   instructions against the rent escrow.
+1. **Կլանել.
+   հիմնված է բշտիկի չափի և պահպանման վրա և տեղադրում է մեջբերումը Norito-ում
+   դրսևորել. Ներկայացնողը ստորագրում է հայտարարություն, որը վկայակոչում է վարձավճարը և
+   պահեստավորման տոմսի ID.
+2. **Հաշվապահական հաշվառում.** Գանձապետական ներթափանցման սկրիպտները վերծանում են մանիֆեստը, զանգահարեք
+   `DaRentPolicyV1::quote` և լրացրեք վարձակալության մատյանները (բազային վարձավճար, պահուստ,
+   բոնուսներ և ակնկալվող արտագնա վարկեր): Ցանկացած անհամապատասխանություն գրանցված վարձավճարի միջև
+   և վերահաշվարկված մեջբերումները ձախողվում են CI-ում:
+3. **Ապացույցի պարգևներ.** Երբ PDP/PoTR պլանավորողները նշում են հաջողություն, նրանք ստացական են տալիս
+   պարունակող մանիֆեստի բովանդակությունը, ապացույցի տեսակը և դրանից ստացված XOR բոնուսը
+   քաղաքականությունը։ Կառավարումը կարող է ստուգել վճարումները՝ վերահաշվարկելով նույն մեջբերումը:
+4. **Ելքի փոխհատուցում. ** Բերել նվագարկիչները ներկայացնում են ստորագրված ելքի ամփոփագրեր:
+   Torii-ը բազմապատկում է GiB-ի քանակը `egress_credit_per_gib`-ով և թողարկում վճարում
+   ցուցումներ վարձակալության պահման դեմ:
 
-## Telemetry
-
-Torii nodes expose rent usage via the following Prometheus metrics (labels:
+## ՀեռուստաչափությունTorii հանգույցները բացահայտում են վարձավճարի օգտագործումը հետևյալ Prometheus չափումների միջոցով (պիտակներ.
 `cluster`, `storage_class`):
 
-- `torii_da_rent_gib_months_total` — GiB-months quoted by `/v1/da/ingest`.
-- `torii_da_rent_base_micro_total` — base rent (micro XOR) accrued at ingest.
-- `torii_da_protocol_reserve_micro_total` — protocol reserve contributions.
-- `torii_da_provider_reward_micro_total` — provider-side rent payouts.
-- `torii_da_pdp_bonus_micro_total` and `torii_da_potr_bonus_micro_total` —
-  PDP/PoTR bonus pools sourced from the ingest quote.
+- `torii_da_rent_gib_months_total` — GiB-ամիսներ, որոնք մեջբերում են `/v1/da/ingest`-ը:
+- `torii_da_rent_base_micro_total` — բազային վարձավճար (միկրո XOR), որը կուտակվել է մուտքի պահին:
+- `torii_da_protocol_reserve_micro_total` — արձանագրության պահուստային վճարումներ:
+- `torii_da_provider_reward_micro_total` — մատակարարի կողմից վարձավճարներ:
+- `torii_da_pdp_bonus_micro_total` և `torii_da_potr_bonus_micro_total` —
+  PDP/PoTR բոնուսային լողավազաններ՝ ստացված ներածման գնանշումից:
 
-Economics dashboards rely on these counters to ensure ledger ISIs, reserve taps,
-and PDP/PoTR bonus schedules all match the policy parameters in force for each
-cluster and storage class. The SoraFS Capacity Health Grafana board
-(`dashboards/grafana/sorafs_capacity_health.json`) now renders dedicated panels
-for rent distribution, PDP/PoTR bonus accrual, and GiB-month capture, allowing
-Treasury to filter by Torii cluster or storage class when reviewing ingest
-volume and payouts.
+Տնտեսագիտության վահանակները հիմնվում են այս հաշվիչների վրա՝ ապահովելու համար գրանցամատյանների ISI-ները, պահուստային հպումները,
+և PDP/PoTR բոնուսային գրաֆիկները բոլորը համապատասխանում են յուրաքանչյուրի համար գործող քաղաքականության պարամետրերին
+կլաստերի և պահեստավորման դաս: SoraFS Capacity Health Grafana տախտակը
+(`dashboards/grafana/sorafs_capacity_health.json`) այժմ ներկայացնում է հատուկ վահանակներ
+վարձավճարի բաշխման, PDP/PoTR բոնուսային հաշվեգրման և GiB-ամսյա գրավման համար՝ թույլ տալով
+Գանձարանը զտվելու է ըստ Torii կլաստերի կամ պահեստավորման դասի՝ ներածումը վերանայելիս
+ծավալը և վճարումները:
 
-## Next steps
+## Հաջորդ քայլերը
 
-- ✅ `/v1/da/ingest` receipts now embed `rent_quote` and the CLI/SDK surfaces display the quoted
-  base rent, reserve share, and PDP/PoTR bonuses so submitters can review the XOR obligations before
-  committing payloads.
-- Integrate the rent ledger with the forthcoming DA reputation/order-book feeds
-  to prove that high-availability providers are receiving the correct payouts.
+- ✅ `/v1/da/ingest` անդորրագրերն այժմ ներկառուցված են `rent_quote` և CLI/SDK մակերեսները ցուցադրում են նշվածը
+  բազային վարձավճար, պահուստային մասնաբաժին և PDP/PoTR բոնուսներ, որպեսզի ներկայացողները կարողանան նախկինում վերանայել XOR-ի պարտավորությունները
+  ծանրաբեռնվածության կատարում:
+- Ինտեգրել վարձակալության մատյանը առաջիկա DA հեղինակության/պատվերների գրքի հոսքերի հետ
+  ապացուցելու, որ բարձր հասանելիության մատակարարները ստանում են ճիշտ վճարումներ:

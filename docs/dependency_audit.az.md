@@ -7,56 +7,57 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cb0a770fac1086462d949dbf17dd5a05f133169e57d50b0d90ddb48ae05f2853
 source_last_modified: "2026-01-05T09:28:11.822642+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Dependency Audit Summary
+//! Asılılıq auditinin xülasəsi
 
-Date: 2025-09-01
+Tarix: 09-01-2025
 
-Scope: Workspace-wide review of all crates declared in Cargo.toml files and resolved in Cargo.lock. Performed with cargo-audit against the RustSec advisory DB plus manual review for crate legitimacy and “main crate” choices for algorithms.
+Əhatə dairəsi: Cargo.toml fayllarında elan edilmiş və Cargo.lock-da həll edilmiş bütün qutuların iş sahəsi üzrə nəzərdən keçirilməsi. RustSec məsləhət DB-yə qarşı yük auditi və sandıq qanuniliyi və alqoritmlər üçün "əsas qutu" seçimləri üçün əl ilə nəzərdən keçirildi.
 
-Tools/commands run:
-- `cargo tree -d --workspace --locked --offline` – inspected duplicate versions
-- `cargo audit` – scanned Cargo.lock for known vulnerabilities and yanked crates
+Alətlər/əmrlər işləyir:
+- `cargo tree -d --workspace --locked --offline` – yoxlanılmış dublikat versiyalar
+- `cargo audit` – məlum zəifliklər və qopan qutular üçün skan edilmiş Cargo.lock
 
-Security advisories found (now 0 vulns; 2 warnings):
-- crossbeam-channel — RUSTSEC-2025-0024
-  - Fixed: bumped to `0.5.15` in `crates/ivm/Cargo.toml`.
+Təhlükəsizliyə dair tövsiyələr tapıldı (indi 0 boşluq; 2 xəbərdarlıq):
+- çarpaz kanal - RUSTSEC-2025-0024
+  - Sabit: `crates/ivm/Cargo.toml`-də `0.5.15`-ə çarpdı.
 
-  - Fixed: flipped `pprof` to `prost-codec` in `crates/iroha_torii/Cargo.toml`.
+  - Sabit: `crates/iroha_torii/Cargo.toml`-də `pprof`-i `prost-codec`-a çevirdi.
 
-- ring — RUSTSEC-2025-0009
-  - Fixed: bumped QUIC/TLS stack (`quinn 0.11`, `rustls 0.23`, `tokio-rustls 0.26`) and updated WS stack to `tungstenite/tokio-tungstenite 0.24`. Forced lock to `ring 0.17.12` via `cargo update -p ring --precise 0.17.12`.
+- üzük — RUSTSEC-2025-0009
+  - Sabit: QUIC/TLS yığını (`quinn 0.11`, `rustls 0.23`, `tokio-rustls 0.26`) və yenilənmiş WS yığını `tungstenite/tokio-tungstenite 0.24`. `cargo update -p ring --precise 0.17.12` vasitəsilə `ring 0.17.12`-ə məcburi kilidləmə.
 
-Remaining advisories: none. Remaining warnings: `backoff` (unmaintained), `derivative` (unmaintained).
+Qalan məsləhətlər: yoxdur. Qalan xəbərdarlıqlar: `backoff` (təxmin edilmir), `derivative` (saxlanılmır).
 
-Legitimacy and “main crate” assessment (spotlight):
-- Hashing: `sha2` (RustCrypto), `blake2` (RustCrypto), `tiny-keccak` (widely used) — canonical choices.
-- AEAD/Symmetric: `aes-gcm`, `chacha20poly1305`, `aead` traits (RustCrypto) — canonical.
-- Signatures/ECC: `ed25519-dalek`, `x25519-dalek` (dalek project), `k256` (RustCrypto), `secp256k1` (libsecp bindings) — all legitimate; prefer a single secp256k1 stack (`k256` for pure Rust or `secp256k1` for libsecp) to reduce surface area.
-- BLS12-381/ZK: `blstrs`, `halo2_*` — widely used in production ZK ecosystems; legitimate.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — legit reference crates.
-- TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — canonical modern Rust TLS stack.
-- Noise: `snow` — canonical implementation.
-- Serialization: `parity-scale-codec` is canonical for SCALE. Serde has been removed from production dependencies across the workspace; Norito derives/writers cover every runtime path. Any residual Serde references live in historical documentation, guardrail scripts, or test-only allowlists.
-- FFI/libs: `libsodium-sys-stable`, `openssl` — legitimate; prefer Rustls over OpenSSL in production paths (current code already does).
+Qanunilik və "əsas qutu" qiymətləndirməsi (diqqət mərkəzində):
+- Hashing: `sha2` (RustCrypto), `blake2` (RustCrypto), `tiny-keccak` (geniş istifadə olunur) — kanonik seçimlər.
+- AEAD/Simmetrik: `aes-gcm`, `chacha20poly1305`, `aead` əlamətləri (RustCrypto) — kanonik.
+- İmzalar/ECC: `ed25519-dalek`, `x25519-dalek` (dalek layihəsi), `k256` (RustCrypto), `secp256k1` (libsecp bağlamaları) — hamısı qanunidir; səth sahəsini azaltmaq üçün tək secp256k1 yığınına (saf Rust üçün `k256` və ya libsecp üçün `secp256k1`) üstünlük verin.
+- BLS12-381/ZK: `blstrs`, `halo2_*` — istehsalatda geniş istifadə olunan ZK ekosistemləri; qanuni.
+- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — qanuni istinad qutuları.
+- TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — kanonik müasir Rust TLS yığını.
+- Səs-küy: `snow` - kanonik tətbiq.
+- Serializasiya: `parity-scale-codec` SCALE üçün kanonikdir. Serde iş sahəsində istehsal asılılıqlarından silindi; Norito hər bir iş vaxtı yolunu əhatə edir/yazarlar. İstənilən qalıq Serde istinadları tarixi sənədlərdə, qoruyucu skriptlərdə və ya yalnız sınaq icazəli siyahılarda yaşayır.
+- FFI/libs: `libsodium-sys-stable`, `openssl` — qanuni; istehsal yollarında OpenSSL üzərində Rustls üstünlük verir (cari kod artıq edir).
 
-Recommendations:
-- Address warnings:
-  - Consider replacing `backoff` with `retry`/`futures-retry` or a local exponential backoff helper.
-  - Replace `derivative` derives with manual impls or `derive_more` where applicable.
-- Medium: unify on either `k256` or `secp256k1` where possible to reduce duplicate implementations (leave both only if genuinely required).
-- Medium: review `poseidon-primitives 0.2.0` provenance for ZK usage; if feasible, consider aligning with an Arkworks/Halo2-native Poseidon implementation to minimize parallel ecosystems.
+Tövsiyələr:
+- Ünvan xəbərdarlıqları:
+  - `backoff`-i `retry`/`futures-retry` və ya yerli eksponensial geriləmə köməkçisi ilə əvəz etməyi düşünün.
+  - `derivative` törəmələrini əl ilə işarələr və ya müvafiq hallarda `derive_more` ilə əvəz edin.
+- Orta: dublikat tətbiqləri azaltmaq üçün mümkün olduqda `k256` və ya `secp256k1` üzərində birləşdirin (hər ikisini yalnız həqiqətən tələb olunduqda buraxın).
+- Orta: ZK istifadəsi üçün mənşəyi `poseidon-primitives 0.2.0` nəzərdən keçirin; mümkün olarsa, paralel ekosistemləri minimuma endirmək üçün Arkworks/Halo2-yə məxsus Poseidon tətbiqi ilə uyğunlaşmağı düşünün.
 
-Notes:
-- `cargo tree -d` shows expected duplicate major versions (`bitflags` 1/2, multiple `ring`), not by itself a security risk but increases build surface.
-- No typosquat-like crates were observed; all names and sources resolve to well-known ecosystem crates or internal workspace members.
-- Experimental: added `iroha_crypto` feature `bls-backend-blstrs` to begin migrating BLS to a blstrs‑only backend (removes dependence on arkworks when enabled). Default remains `w3f-bls` to avoid behavior/encoding changes. Alignment plan:
-  - Add round-trip fixtures in `crates/iroha_crypto/tests/bls_backend_compat.rs` that derive keys once and assert equality across both backends, covering `SecretKey`, `PublicKey`, and signature aggregation.
+Qeydlər:
+- `cargo tree -d` gözlənilən dublikat əsas versiyaları (`bitflags` 1/2, çoxsaylı `ring`) göstərir, özlüyündə təhlükəsizlik riski deyil, tikinti səthini artırır.
+- Yazı tipinə bənzər yeşiklər müşahidə edilməmişdir; bütün adlar və mənbələr tanınmış ekosistem qutularına və ya daxili iş sahəsi üzvlərinə həll edilir.
+- Eksperimental: BLS-ni yalnız blstrs-a köçürməyə başlamaq üçün `iroha_crypto` funksiyası əlavə edildi (aktiv olduqda arkworks-dən asılılığı aradan qaldırır). Davranış/kodlaşdırma dəyişikliklərinin qarşısını almaq üçün defolt olaraq `w3f-bls` qalır. Uyğunlaşma planı:
+  - `crates/iroha_crypto/tests/bls_backend_compat.rs`-də açarları bir dəfə əldə edən və `SecretKey`, `PublicKey` və imza birləşməsini əhatə edən hər iki arxa tərəfdə bərabərliyi təsdiq edən `crates/iroha_crypto/tests/bls_backend_compat.rs`-də gediş-gəliş qurğuları əlavə edin.
 
-Follow-ups (proposed work items):
-- Keep the Serde guardrails in CI (`scripts/check_no_direct_serde.sh`, `scripts/deny_serde_json.sh`) so new production usages cannot be introduced.
+Təqiblər (təklif olunan iş elementləri):
+- Serde qoruyucularını CI-də (`scripts/check_no_direct_serde.sh`, `scripts/deny_serde_json.sh`) saxlayın ki, yeni istehsal istifadələri tətbiq oluna bilməz.
 
-Testing performed for this audit:
-- Ran `cargo audit` with the latest advisory DB; verified the four advisories and their dependency trees.
-- Searched for direct dependency declarations of affected crates to pinpoint fix locations.
+Bu audit üçün sınaq aparıldı:
+- Ən son məsləhət DB ilə `cargo audit` işlətdi; dörd məsləhəti və onların asılılıq ağaclarını yoxladı.
+- Düzəltmə yerlərini müəyyən etmək üçün təsirə məruz qalan qutuların birbaşa asılılıq bəyannaməsi axtarıldı.

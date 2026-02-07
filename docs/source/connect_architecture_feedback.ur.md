@@ -6,83 +6,80 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 097ea58d49f48d059cda762cd719bc62f0b2d6f6ddecedef3f9bac030ae46aec
 source_last_modified: "2026-01-03T18:07:58.674563+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-#! Connect Architecture Feedback Checklist
+#! آرکیٹیکچر فیڈ بیک چیک لسٹ سے رابطہ کریں
 
-This checklist captures the open questions from the Connect Session Architecture
-strawman that require input from the Android and JavaScript leads before the
-Feb 2026 cross-SDK workshop. Use it to collect comments asynchronously, track
-ownership, and unblock the workshop agenda.
+اس چیک لسٹ نے کنیکٹ سیشن آرکیٹیکچر سے کھلے سوالات کو اپنی گرفت میں لے لیا ہے
+اسٹرا مین جس کو اینڈرائڈ اور جاوا اسکرپٹ سے ان پٹ کی ضرورت ہوتی ہے اس سے پہلے
+فروری 2026 کراس ایس ڈی کے ورکشاپ۔ اس کا استعمال تبصرے کو غیر سنجیدگی سے جمع کرنے کے لئے کریں ، ٹریک کریں
+ورکشاپ کے ایجنڈے کو ملکیت ، اور غیر مسدود کریں۔
 
-> Status / Notes column captured final responses from Android and JS leads as of
-> the Feb 2026 pre-workshop sync; link new follow-up issues inline if decisions
-> evolve.
+> اسٹیٹس / نوٹ کالم نے اینڈروئیڈ اور جے ایس لیڈز کے حتمی ردعمل کو حاصل کیا
+> فروری 2026 پری ورکشاپ کی ہم آہنگی ؛ اگر فیصلوں پر نئے فالو اپ ایشوز ان لائن کو لنک کریں
+> ارتقاء
 
-## Session Lifecycle & Transport
+## سیشن لائف سائیکل اور ٹرانسپورٹ
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| WebSocket reconnect back-off strategy (exponential vs. capped linear) | Android Networking TL | JS Lead | ✅ Agreed on exponential back-off with jitter, capped at 60 s; JS mirrors same constants for browser/node parity. |
-| Offline buffer capacity defaults (current strawman: 32 frames) | Android Networking TL | JS Lead | ✅ Confirmed 32-frame default with config override; Android persists via `ConnectQueueConfig`, JS respects `window.connectQueueMax`. |
-| Push-style reconnect notifications (FCM/APNS vs. polling) | Android Networking TL | JS Lead | ✅ Android will expose optional FCM hook for wallet apps; JS remains polling-based with exponential back-off, noting browser push constraints. |
-| Ping/pong cadence guardrails for mobile clients | Android Networking TL | JS Lead | ✅ Standardised 30 s ping with 3× miss tolerance; Android balances Doze impact, JS clamps to ≥15 s to avoid browser throttling. |
+| عنوان | اینڈروئیڈ مالک | جے ایس مالک | حیثیت / نوٹ |
+| ------- | --------------- | ---------- | ------------------ |
+| ویب ساکٹ بیک آف آف حکمت عملی کو دوبارہ جوڑیں (کفایت شعاری بمقابلہ کیپڈ لکیری) | Android نیٹ ورکنگ TL | جے ایس لیڈ | j 60 کی دہائی میں ڈھیر ، جٹر کے ساتھ پُرجوش بیک آف پر اتفاق کیا گیا۔ جے ایس براؤزر/نوڈ برابری کے لئے ایک ہی مستقل کو آئینہ دیتا ہے۔ |
+| آف لائن بفر کی گنجائش ڈیفالٹس (موجودہ اسٹرا مین: 32 فریم) | Android نیٹ ورکنگ TL | جے ایس لیڈ | config تشکیل اوور رائڈ کے ساتھ 32 فریم ڈیفالٹ کی تصدیق ؛ Android `ConnectQueueConfig` کے ذریعے برقرار رہتا ہے ، JS `window.connectQueueMax` کا احترام کرتا ہے۔ |
+| پش طرز کی اطلاعات سے متعلق اطلاعات (ایف سی ایم/اے پی این بمقابلہ پولنگ) | Android نیٹ ورکنگ TL | جے ایس لیڈ | ✅ Android پرس ایپس کے لئے اختیاری FCM ہک کو بے نقاب کرے گا۔ جے ایس پولنگ پر مبنی ہے جس میں بیکار بیک آف آف کے ساتھ براؤزر پش رکاوٹوں کو نوٹ کیا گیا ہے۔ |
+| موبائل کلائنٹس کے لئے پنگ/پونگ کیڈینس سرپرست | Android نیٹ ورکنگ TL | جے ایس لیڈ | 3 3 × مس رواداری کے ساتھ 30s معیاری پنگ ؛ براؤزر تھروٹلنگ سے بچنے کے لئے اینڈروئیڈ ڈوز اثر کو متوازن کرتا ہے۔ |
 
-## Encryption & Key Management
+## خفیہ کاری اور کلیدی انتظام
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| X25519 key storage expectations (StrongBox, WebCrypto secure contexts) | Android Crypto TL | JS Lead | ✅ Android stores X25519 in StrongBox when available (falls back to TEE); JS mandates secure-context WebCrypto for dApps, falling back to the native `iroha_js_host` bridge in Node. |
-| ChaCha20-Poly1305 nonce management sharing across SDKs | Android Crypto TL | JS Lead | ✅ Adopt shared `sequence` counter API with 64-bit wrap guard and shared tests; JS uses BigInt counters to match Rust behaviour. |
-| Hardware-backed attestation payload schema | Android Crypto TL | JS Lead | ✅ Schema finalised: `attestation { platform, evidence_b64, statement_hash }`; JS optional (browser), Node uses HSM plug-in hook. |
-| Recovery flow for lost wallets (key rotation handshake) | Android Crypto TL | JS Lead | ✅ Wallet rotation handshake accepted: dApp issues `rotate` control, wallet replies with new pubkey + signed acknowledgment; JS re-keys WebCrypto material immediately. |
+| عنوان | اینڈروئیڈ مالک | جے ایس مالک | حیثیت / نوٹ |
+| ------- | --------------- | ---------- | ------------------ |
+| x25519 کلیدی اسٹوریج کی توقعات (مضبوط باکس ، ویب کریپٹو محفوظ سیاق و سباق) | اینڈروئیڈ کریپٹو ٹی ایل | جے ایس لیڈ | ✅ android اسٹورز x25519 جب دستیاب ہو تو (TEE پر واپس آتا ہے) ؛ جے ایس ڈی اے پی پی ایس کے لئے محفوظ سیاق و سباق کے ویب کریپٹو کا مینڈیٹ کرتا ہے ، نوڈ میں آبائی `iroha_js_host` پل پر واپس گرتا ہے۔ |
+| SDKs میں Chacha20-poly1305 نونس مینجمنٹ شیئرنگ | اینڈروئیڈ کریپٹو ٹی ایل | جے ایس لیڈ | ✅ مشترکہ `sequence` کاؤنٹر API کو 64 بٹ لپیٹنے والے گارڈ اور مشترکہ ٹیسٹوں کے ساتھ اپنائیں۔ جے ایس زنگ کے رویے سے ملنے کے لئے بگینٹ کاؤنٹرز کا استعمال کرتا ہے۔ |
+| ہارڈ ویئر کی حمایت یافتہ تصدیق پے لوڈ اسکیما | اینڈروئیڈ کریپٹو ٹی ایل | جے ایس لیڈ | ✅ اسکیما کو حتمی شکل دی گئی: `attestation { platform, evidence_b64, statement_hash }` ؛ جے ایس اختیاری (براؤزر) ، نوڈ HSM پلگ ان ہک استعمال کرتا ہے۔ |
+| کھوئے ہوئے بٹوے (کلیدی گردش ہینڈ شیک) کے لئے بازیابی کا بہاؤ | اینڈروئیڈ کریپٹو ٹی ایل | جے ایس لیڈ | ✅ بٹوے کی گردش ہینڈ شیک قبول شدہ: ڈی اے پی پی کے مسائل `rotate` کنٹرول ، پرس کے جوابات نئے پبکی + دستخط شدہ اعتراف کے ساتھ۔ جے ایس دوبارہ کیز ویب کریپٹو مواد کو فوری طور پر۔ |
 
-## Permissions & Proof Bundles
+## اجازت اور پروف بنڈل| عنوان | اینڈروئیڈ مالک | جے ایس مالک | حیثیت / نوٹ |
+| ------- | --------------- | ---------- | ------------------ |
+| GA | کے لئے کم سے کم اجازت اسکیما (طریقے/واقعات/وسائل) Android ڈیٹا ماڈل TL | جے ایس لیڈ | ✅ GA بیس لائن: `methods` ، `events` ، `resources` ، `constraints` ؛ جے ایس زنگ آلودگی کے ساتھ ٹائپ اسکرپٹ کی اقسام کو سیدھ میں کرتا ہے۔ |
+| پرس کو مسترد کرنے والے پے لوڈ (`reason_code` ، مقامی پیغامات) | Android نیٹ ورکنگ TL | جے ایس لیڈ | ✅ کوڈز کو حتمی شکل دی گئی (`user_declined` ، `permissions_mismatch` ، `compliance_failed` ، `internal_error`) کے علاوہ اختیاری `localized_message`۔ |
+| پروف بنڈل اختیاری فیلڈز (تعمیل/کے وائی سی منسلکات) | Android ڈیٹا ماڈل TL | جے ایس لیڈ | ✅ تمام SDKs اختیاری `attachments[]` (Norito `AttachmentRef`) اور `compliance_manifest_id` کو قبول کرتے ہیں۔ کسی طرز عمل میں تبدیلی کی ضرورت نہیں ہے۔ |
+| Norito JSON اسکیما بمقابلہ پل سے تیار کردہ ڈھانچے پر سیدھ Android ڈیٹا ماڈل TL | جے ایس لیڈ | ✅ فیصلہ: پل سے تیار کردہ ڈھانچے کو ترجیح دیں۔ JSON راستہ صرف ڈیبگنگ کے لئے باقی ہے ، جے ایس `Value` اڈاپٹر رکھتا ہے۔ |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Minimum permission schema (methods/events/resources) for GA | Android Data Model TL | JS Lead | ✅ GA baseline: `methods`, `events`, `resources`, `constraints`; JS aligns TypeScript types with Rust manifest. |
-| Wallet rejection payload (`reason_code`, localized messages) | Android Networking TL | JS Lead | ✅ Codes finalised (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) plus optional `localized_message`. |
-| Proof bundle optional fields (compliance/KYC attachments) | Android Data Model TL | JS Lead | ✅ All SDKs accept optional `attachments[]` (Norito `AttachmentRef`) and `compliance_manifest_id`; no behaviour change required. |
-| Alignment on Norito JSON schema vs. bridge-generated structs | Android Data Model TL | JS Lead | ✅ Decision: prefer bridge-generated structs; JSON path remains for debugging only, JS keeps `Value` adapter. |
+## SDK facades اور API شکل
 
-## SDK Facades & API Shape
+| عنوان | اینڈروئیڈ مالک | جے ایس مالک | حیثیت / نوٹ |
+| ------- | --------------- | ---------- | ------------------ |
+| اعلی سطحی ASYNC انٹرفیس (`Flow` ، async Iterators) برابری | Android نیٹ ورکنگ TL | جے ایس لیڈ | ✅ android `Flow<ConnectEvent>` کو بے نقاب کرتا ہے۔ جے ایس `AsyncIterable<ConnectEvent>` استعمال کرتا ہے۔ دونوں نقشہ کو مشترکہ `ConnectEventKind`۔ |
+| غلطی کی درجہ بندی کی میپنگ (`ConnectError` ، ٹائپ شدہ سبکلاس) | Android نیٹ ورکنگ TL | جے ایس لیڈ | shared مشترکہ انیم {`Transport` ، `Codec` ، `Authorization` ، `Timeout` ، `QueueOverflow` ، `Internal`} پلیٹ فارم سے مخصوص پے لوڈ کی تفصیلات کے ساتھ۔ |
+| فلائٹ سائن کی درخواستوں کے لئے منسوخی کے الفاظ | Android نیٹ ورکنگ TL | جے ایس لیڈ | I `cancelRequest(hash)` کنٹرول متعارف کرایا گیا۔ دونوں SDKs کی سطح منسوخ کاروٹائنز/پرس کے اعتراف کا احترام کرنے والے وعدوں کا وعدہ کرتے ہیں۔ |
+| مشترکہ ٹیلی میٹری ہکس (واقعات ، میٹرکس کا نام) | Android نیٹ ورکنگ TL | جے ایس لیڈ | ✅ میٹرک کے نام منسلک: `connect.queue_depth` ، `connect.latency_ms` ، `connect.reconnects_total` ؛ نمونہ برآمد کنندگان نے دستاویزی کیا۔ |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| High-level async interfaces (`Flow`, async iterators) parity | Android Networking TL | JS Lead | ✅ Android exposes `Flow<ConnectEvent>`; JS uses `AsyncIterable<ConnectEvent>`; both map to shared `ConnectEventKind`. |
-| Error taxonomy mapping (`ConnectError`, typed subclasses) | Android Networking TL | JS Lead | ✅ Adopt shared enum {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} with platform-specific payload details. |
-| Cancellation semantics for in-flight sign requests | Android Networking TL | JS Lead | ✅ Introduced `cancelRequest(hash)` control; both SDKs surface cancellable coroutines/promises respecting wallet acknowledgment. |
-| Shared telemetry hooks (events, metrics naming) | Android Networking TL | JS Lead | ✅ Metric names aligned: `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; sample exporters documented. |
+## آف لائن استقامت اور جرنلنگ
 
-## Offline Persistence & Journaling
+| عنوان | اینڈروئیڈ مالک | جے ایس مالک | حیثیت / نوٹ |
+| ------- | --------------- | ---------- | ------------------ |
+| قطار کے فریموں کے لئے اسٹوریج فارمیٹ (بائنری Norito بمقابلہ JSON) | Android ڈیٹا ماڈل TL | جے ایس لیڈ | ✅ ہر جگہ بائنری Norito (`.to`) اسٹور کریں۔ جے ایس انڈیکسڈ ڈی بی `ArrayBuffer` استعمال کرتا ہے۔ |
+| جرنل برقرار رکھنے کی پالیسی اور سائز کیپس | Android نیٹ ورکنگ TL | جے ایس لیڈ | ✅ ڈیفالٹ برقراری 24H اور 1MIB فی سیشن ؛ `ConnectQueueConfig` کے ذریعے تشکیل کے قابل۔ |
+| تنازعات کا حل جب دونوں اطراف ری پلے فریم | Android نیٹ ورکنگ TL | جے ایس لیڈ | I `sequence` + `payload_hash` استعمال کریں ؛ ڈپلیکیٹس کو نظرانداز کیا گیا ، تنازعات کو ٹیلی میٹری ایونٹ کے ساتھ `ConnectError.Internal` کو متحرک کیا گیا۔ |
+| قطار کی گہرائی اور ری پلے کامیابی کے لئے ٹیلی میٹری | Android نیٹ ورکنگ TL | جے ایس لیڈ | I `connect.queue_depth` گیج اور `connect.replay_success_total` کاؤنٹر EMIT ؛ دونوں SDKs مشترکہ Norito ٹیلی میٹری اسکیما میں شامل ہیں۔ |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Storage format for queued frames (binary Norito vs. JSON) | Android Data Model TL | JS Lead | ✅ Store binary Norito (`.to`) everywhere; JS uses IndexedDB `ArrayBuffer`. |
-| Journal retention policy & size caps | Android Networking TL | JS Lead | ✅ Default retention 24 h and 1 MiB per session; configurable via `ConnectQueueConfig`. |
-| Conflict resolution when both sides replay frames | Android Networking TL | JS Lead | ✅ Use `sequence` + `payload_hash`; duplicates ignored, conflicts trigger `ConnectError.Internal` with telemetry event. |
-| Telemetry for queue depth and replay success | Android Networking TL | JS Lead | ✅ Emit `connect.queue_depth` gauge and `connect.replay_success_total` counter; both SDKs hook into shared Norito telemetry schema. |
+## نفاذ میں اضافے اور حوالہ جات- ** مورچا پل فکسچر: ** `crates/connect_norito_bridge/src/lib.rs` اور اس سے وابستہ ٹیسٹ ہر SDK کے ذریعہ استعمال ہونے والے کیننیکل انکوڈ/ڈیکوڈ راستوں کا احاطہ کرتے ہیں۔
+۔
+۔
+۔
+۔
 
-## Implementation Spikes & References
+## ورکشاپ پریپ آئٹمز
 
-- **Rust bridge fixtures:** `crates/connect_norito_bridge/src/lib.rs` and associated tests cover the canonical encode/decode paths used by every SDK.
-- **Swift demo harness:** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` exercises Connect session flows with mocked transports.
-- **Swift CI gating:** run `make swift-ci` when updating Connect artifacts to validate fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata before sharing with other SDKs.
-- **JavaScript SDK integration tests:** `javascript/iroha_js/test/integrationTorii.test.js` validate Connect status/session helpers against Torii.
-- **Android client resilience notes:** `java/iroha_android/README.md:150` documents the current connectivity experiments that inspired the queue/back-off defaults.
+- [x] android: مذکورہ بالا ہر ٹیبل قطار کے لئے پوائنٹ شخص تفویض کریں۔
+- [x] جے ایس: مذکورہ بالا ہر ٹیبل قطار کے لئے پوائنٹ شخص تفویض کریں۔
+- [x] موجودہ عمل درآمد کے اسپائکس یا تجربات کے لنکس جمع کریں۔
+-[x] فروری 2026 کونسل سے پہلے پہلے سے کام کا جائزہ لیں (2026-01-29 15:00 UTC کے ساتھ Android TL ، JS لیڈ ، سوئفٹ لیڈ کے ساتھ بک)۔
+- [x] قبول شدہ جوابات کے ساتھ `docs/source/connect_architecture_strawman.md` کو اپ ڈیٹ کریں۔
 
-## Workshop Prep Items
+## پہلے سے پڑھنے والا پیکیج
 
-- [x] Android: assign point person for each table row above.
-- [x] JS: assign point person for each table row above.
-- [x] Collect links to existing implementation spikes or experiments.
-- [x] Schedule pre-work review before Feb 2026 council (Booked for 2026-01-29 15:00 UTC with Android TL, JS Lead, Swift Lead).
-- [x] Update `docs/source/connect_architecture_strawman.md` with accepted answers.
-
-## Pre-read Package
-
-- ✅ Bundle recorded under `artifacts/connect/pre-read/20260129/` (generated via `make docs-html` after refreshing the strawman, SDK guides, and this checklist).
-- 📄 Summary + distribution steps live in `docs/source/project_tracker/connect_architecture_pre_read.md`; include the link in the Feb 2026 workshop invite and in the `#sdk-council` reminder.
-- 🔁 When refreshing the bundle, update the path and hash inside the pre-read note and archive the announcement in `status.md` under the IOS7/AND7 readiness logs.
+- ✅ بنڈل `artifacts/connect/pre-read/20260129/` کے تحت ریکارڈ کیا گیا (اسٹرا مین ، ایس ڈی کے گائیڈز ، اور اس چیک لسٹ کو تازہ دم کرنے کے بعد `make docs-html` کے ذریعے تیار کیا گیا)۔
+- 📄 خلاصہ + تقسیم کے اقدامات `docs/source/project_tracker/connect_architecture_pre_read.md` میں رہتے ہیں۔ لنک کو 2026 ورکشاپ انوائٹ میں اور `#sdk-council` یاد دہانی میں شامل کریں۔
+- 🔁 جب بنڈل کو تازہ دم کرتے ہو تو ، پہلے سے پڑھنے والے نوٹ کے اندر راستے اور ہیش کو اپ ڈیٹ کریں اور IOS7/and7 تیاری کے نوشتہ جات کے تحت `status.md` میں اعلان کو محفوظ کریں۔

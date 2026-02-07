@@ -4,46 +4,48 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/plan.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-plan
-title: Plan de intake comunitario W2
-sidebar_label: Plan W2
-description: Intake, aprobaciones y checklist de evidencia para la cohorte de preview comunitaria.
+المعرف: معاينة ردود الفعل W2-الخطة
+العنوان: خطة استيعاب المجتمع W2
+Sidebar_label: الخطة W2
+الوصف: المدخول والتوصيات وقائمة الأدلة المرجعية لمجموعة معاينة المجتمع.
 ---
 
-| Item | Detalles |
+| العنصر | تفاصيل |
 | --- | --- |
-| Ola | W2 - Reviewers comunitarios |
-| Ventana objetivo | Q3 2025 semana 1 (tentativa) |
-| Tag de artefacto (planeado) | `preview-2025-06-15` |
-| Issue del tracker | `DOCS-SORA-Preview-W2` |
+| علا | W2 - مجتمعات المراجعين |
+| فنتانا الهدف | Q3 2025 semana 1 (tentativa) |
+| بطاقة قطعة أثرية (planeado) | `preview-2025-06-15` |
+| إصدار المتتبع | `DOCS-SORA-Preview-W2` |
 
-## Objetivos
+##الأهداف
 
-1. Definir criterios de intake comunitario y flujo de vetting.
-2. Obtener aprobacion de gobernanza para el roster propuesto y el addendum de uso aceptable.
-3. Refrescar el artefacto de preview verificado por checksum y el bundle de telemetria para la nueva ventana.
-4. Preparar el proxy Try it y los dashboards antes del envio de invitaciones.
+1. تحديد معايير القبول المجتمعي وتدفق الفحص.
+2. الحصول على موافقة إدارة القائمة المقترحة وإضافة الاستخدام المقبول.
+3. قم بتحديث عنصر المعاينة الذي تم التحقق منه من خلال المجموع الاختباري وحزمة القياس عن بعد للنافذة الجديدة.
+4. قم بإعداد الوكيل، جربه من خلال لوحات المعلومات قبل إرسال الدعوات.
 
-## Desglose de tareas
+## قم بإلغاء تحديد الأشياء
 
-| ID | Tarea | Responsable | Fecha limite | Estado | Notas |
+| معرف | تاريا | مسؤول | فيشا ليميت | حالة | نوتاس |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Redactar criterios de intake comunitario (elegibilidad, max slots, requisitos de CoC) y circular a gobernanza | Docs/DevRel lead | 2025-05-15 | Completado | La politica de intake se fusiono en `DOCS-SORA-Preview-W2` y se respaldo en la reunion del consejo 2025-05-20. |
-| W2-P2 | Actualizar template de solicitud con preguntas especificas de comunidad (motivacion, disponibilidad, necesidades de localizacion) | Docs-core-01 | 2025-05-18 | Completado | `docs/examples/docs_preview_request_template.md` ahora incluye la seccion Community, referenciada en el formulario de intake. |
-| W2-P3 | Asegurar aprobacion de gobernanza para el plan de intake (voto en reunion + actas registradas) | Governance liaison | 2025-05-22 | Completado | Voto aprobado por unanimidad el 2025-05-20; actas y roll call enlazados en `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Programar staging del proxy Try it + captura de telemetria para la ventana W2 (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | Completado | Ticket de cambio `OPS-TRYIT-188` aprobado y ejecutado 2025-06-09 02:00-04:00 UTC; screenshots de Grafana archivados con el ticket. |
-| W2-P5 | Construir/verificar nuevo tag de artefacto de preview (`preview-2025-06-15`) y archivar descriptor/checksum/probe logs | Portal TL | 2025-06-07 | Completado | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` se ejecuto 2025-06-10; outputs guardados bajo `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Armar roster de invitaciones comunitarias (<=25 reviewers, lotes escalonados) con info de contacto aprobada por gobernanza | Community manager | 2025-06-10 | Completado | Primer cohorte de 8 reviewers comunitarios aprobado; IDs de solicitud `DOCS-SORA-Preview-REQ-C01...C08` registrados en el tracker. |
+| W2-P1 | تنقيح معايير المدخول المجتمعي (الأهلية، الحد الأقصى للفتحات، متطلبات مدونة قواعد السلوك) وتعميم الإدارة | مستندات/DevRel الرصاص | 2025-05-15 | اكتمل | تندمج سياسة المدخول في `DOCS-SORA-Preview-W2` ويتم الرد عليها في اجتماع النصائح 2025-05-20. |
+| W2-P2 | تحديث نموذج الطلب بأسئلة محددة للمجتمع (الحافز، التوفر، حاجيات التوطين) | مستندات-core-01 | 2025-05-18 | اكتمل | `docs/examples/docs_preview_request_template.md` يتضمن الآن قسم المجتمع، والمرجع في صيغة المدخول. |
+| W2-P3 | ضمان موافقة الإدارة على خطة الاستلام (تصويت في لم الشمل + أعمال مسجلة) | الاتصال بالحوكمة | 2025-05-22 | اكتمل | تم التصويت عليه بالإجماع في 20-05-2025؛ تم تسجيل الإجراءات وتسجيل الأسماء في `DOCS-SORA-Preview-W2`. |
+| W2-P4 | برنامج التدريج للوكيل Try it + التقاط القياس عن بعد لنافذة W2 (`preview-2025-06-15`) | مستندات/DevRel + Ops | 2025-06-05 | اكتمل | تم إصدار تذكرة التغيير `OPS-TRYIT-188` في 2025-06-09 02:00-04:00 بالتوقيت العالمي المنسق؛ لقطات من أرشيفات Grafana مع التذكرة. |
+| W2-P5 | إنشاء/التحقق من علامة معاينة أصلية جديدة (`preview-2025-06-15`) وأرشفة واصف/المجموع الاختباري/سجلات التحقيق | بوابة TL | 2025-06-07 | اكتمل | تم تنفيذ `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` في 10-06-2025; مخرجات Guardados bajo `artifacts/docs_preview/W2/preview-2025-06-15/`. |
+| W2-P6 | قم بإعداد قائمة الدعوات المجتمعية (<= 25 مراجعًا، والعديد من الدرجات المتدرجة) مع معلومات الاتصال المناسبة من أجل الإدارة | مدير المجتمع | 2025-06-10 | اكتمل | المجموعة الأولية من 8 مراجعين مجتمعيين معتمدين؛ معرفات الطلب `DOCS-SORA-Preview-REQ-C01...C08` المسجلة في المتتبع. |
 
-## Checklist de evidencia
+## قائمة التحقق من الأدلة
 
-- [x] Registro de aprobacion de gobernanza (notas de reunion + link de voto) adjunto a `DOCS-SORA-Preview-W2`.
-- [x] Template de solicitud actualizado commiteado bajo `docs/examples/`.
-- [x] Descriptor `preview-2025-06-15`, log de checksum, probe output, link report y transcript del proxy Try it guardados bajo `artifacts/docs_preview/W2/`.
-- [x] Screenshots de Grafana (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) capturados para la ventana de preflight W2.
-- [x] Tabla de roster de invitaciones con IDs de reviewers, tickets de solicitud y timestamps de aprobacion completados antes del envio (ver seccion W2 del tracker).
+- [x] سجل موافقة الحكومة (مذكرات لم الشمل + رابط التصويت) الملحق بـ `DOCS-SORA-Preview-W2`.
+- [x] نموذج طلب التحديث المخصص `docs/examples/`.
+- [x] الواصف `preview-2025-06-15`، سجل المجموع الاختباري، مخرجات المسبار، تقرير الارتباط ونسخة الوكيل جربه Guardados bajo `artifacts/docs_preview/W2/`.
+- [x] لقطات شاشة من Grafana (`docs.preview.integrity`، `TryItProxyErrors`، `DocsPortal/GatewayRefusals`) تم التقاطها لنافذة الاختبار المبدئي W2.
+- [x] قائمة الدعوات مع معرفات المراجعين، وتذاكر الطلبات، والطوابع الزمنية للموافقة المكتملة قبل الإرسال (الإصدار القسم W2 من المتتبع).
 
-Mantener este plan actualizado; el tracker lo referencia para que el roadmap DOCS-SORA vea exactamente lo que resta antes de que salgan las invitaciones W2.
+تحديث هذه الخطة باستمرار؛ يشير المتتبع إلى أن خريطة الطريق DOCS-SORA تشير بالضبط إلى ما تبقى قبل تلقي دعوات W2.

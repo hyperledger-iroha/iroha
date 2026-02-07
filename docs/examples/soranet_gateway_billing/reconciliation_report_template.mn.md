@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5c10cd7eda24260bfd1319c7b8ac23dba2a1c8a1cb39ea49f0f1a64427ca15db
 source_last_modified: "2025-12-29T18:16:35.086260+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraGlobal Gateway Billing Reconciliation
+# SoraGlobal Gateway тооцооны тохирол
 
-- **Window:** `<from>/<to>`
-- **Tenant:** `<tenant-id>`
-- **Catalog Version:** `<catalog-version>`
-- **Usage Snapshot:** `<path or hash>`
-- **Guardrails:** soft cap `<soft-cap-xor> XOR`, hard cap `<hard-cap-xor> XOR`, alert threshold `<alert-threshold>%`
-- **Payer -> Treasury:** `<payer>` -> `<treasury>` in `<asset-definition>`
-- **Total Due:** `<total-xor> XOR` (`<total-micros>` micro-XOR)
+- **Цонх:** `<from>/<to>`
+- **Түрээслэгч:** `<tenant-id>`
+- **Каталогийн хувилбар:** `<catalog-version>`
+- **Ашиглалтын агшин зураг:** `<path or hash>`
+- **Хамгаалалт:** зөөлөн таг `<soft-cap-xor> XOR`, хатуу таг `<hard-cap-xor> XOR`, дохиоллын босго `<alert-threshold>%`
+- **Төлбөр төлөгч -> Төрийн сан:** `<payer>` -> `<asset-definition>` дахь `<treasury>`
+- **Нийт төлбөр:** `<total-xor> XOR` (`<total-micros>` micro-XOR)
 
-## Line Item Checks
-- [ ] Usage entries cover only catalog meter ids and valid billing regions
-- [ ] Quantity units match catalog definitions (requests, GiB, ms, etc.)
-- [ ] Region multipliers and discount tiers applied as per catalog
-- [ ] CSV/Parquet exports match the JSON invoice line items
+## Мөрийн зүйл шалгах
+- [ ] Хэрэглээний бичилт нь зөвхөн каталогийн тоолуурын ID болон хүчинтэй тооцооны бүсүүдийг хамарна
+- [ ] Тоо хэмжээ нь каталогийн тодорхойлолттой таарч байна (хүсэлт, GiB, ms гэх мэт)
+- [ ] Каталогийн дагуу бүсийн үржүүлэгч болон хөнгөлөлтийн шатлалыг ашигласан
+- [ ] CSV/Паркетан экспорт нь JSON нэхэмжлэхийн мөртэй таарч байна
 
-## Guardrail Evaluation
-- [ ] Soft cap alert threshold reached? `<yes/no>` (attach alert evidence if yes)
-- [ ] Hard cap exceeded? `<yes/no>` (if yes, attach override approval)
-- [ ] Minimum invoice floor satisfied
+## Хамгаалалтын үнэлгээ
+- [ ] Зөөлөн тагны дохиоллын босгонд хүрсэн үү? `<yes/no>` (тийм бол анхааруулах нотолгоог хавсаргана уу)
+- [ ] Хатуу таг хэтэрсэн үү? `<yes/no>` (тийм бол хүчингүй болгох зөвшөөрлийг хавсаргана уу)
+- [ ] Нэхэмжлэхийн доод тал нь хангагдсан
 
-## Ledger Projection
-- [ ] Transfer batch total equals `total_micros` in invoice
-- [ ] Asset definition matches billing currency
-- [ ] Payer and treasury accounts match tenant and operator of record
-- [ ] Norito/JSON artefacts attached for audit replay
+## Бүртгэлийн проекц
+- [ ] Шилжүүлгийн багцын нийлбэр нь нэхэмжлэх дээрх `total_micros`-тэй тэнцүү
+- [ ] Хөрөнгийн тодорхойлолт нь тооцооны валюттай таарч байна
+- [ ] Төлбөр төлөгч болон төрийн сангийн данс нь түрээслэгч болон оператортой таарч байна
+- [ ] Norito/JSON олдворуудыг аудитын дахин тоглуулахад хавсаргасан
 
-## Dispute/Adjustment Notes
-- Observed variance: `<variance detail>`
-- Proposed adjustment: `<delta and rationale>`
-- Supporting evidence: `<logs/dashboards/alerts>`
+## Маргаан/Тохируулгын тэмдэглэл
+- Ажиглагдсан хэлбэлзэл: `<variance detail>`
+- Санал болгож буй тохируулга: `<delta and rationale>`
+- Дэмжих нотолгоо: `<logs/dashboards/alerts>`
 
-## Approvals
-- Billing analyst: `<name + signature>`
-- Treasury reviewer: `<name + signature>`
-- Governance packet hash: `<hash/reference>`
+## Зөвшөөрөл
+- Тооцооны шинжээч: `<name + signature>`
+- Төрийн сангийн хянагч: `<name + signature>`
+- Засаглалын багц хэш: `<hash/reference>`

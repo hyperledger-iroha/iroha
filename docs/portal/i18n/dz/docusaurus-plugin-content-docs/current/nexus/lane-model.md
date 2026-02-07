@@ -7,60 +7,62 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus lane model
 description: Logical lane taxonomy, configuration geometry, and world-state merge rules for Sora Nexus.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Nexus Lane Model & WSV Partitioning
+# Nexus ལམ་གྱི་དཔེ་གཟུགས་དང་ཌབ་ལུ་ཨེསི་ཝི་བར་བཅད་ཀྱི་སྐོར།
 
-> **Status:** NX-1 deliverable — lane taxonomy, configuration geometry, and storage layout are ready for implementation.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Roadmap reference:** NX-1 in `roadmap.md`
+S  
+>*ཇོ་བདག་:** I18NT00000005 ཀོར་ཌབ་ལུ་ཇི་ གཞུང་སྐྱོང་།  
+> **ལམ་ཐིག་གཞི་བསྟུན་:** `roadmap.md` ནང་ཡོད་པའི་ NX-1 ནང་།
 
-This portal page mirrors the canonical `docs/source/nexus_lanes.md` brief so Sora
-Nexus operators, SDK owners, and reviewers can read the lane guidance without
-diving into the mono-repo tree. The target architecture keeps the world state
-deterministic while allowing individual data spaces (lanes) to run public or
-private validator sets with isolated workloads.
+འདི་ དྲྭ་ཚིགས་ཤོག་ལེབ་འདི་གིས་ ཀེ་ནོ་ནིཀ་ `docs/source/nexus_lanes.md` ཐུང་ཀུ་སྦེ་ དེ་ལས་ སོ་ར་འདི་ མེ་ལོང་ནང་ཡོདཔ་ཨིན།
+Nexus བཀོལ་སྤྱོད་པ་ ཨེསི་ཌི་ཀེ་ ཇོ་བདག་ དེ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ལེན་པའི་ལམ་སྟོན་འདི་ མེད་པར་ལྷག་ཚུགས།
+མོ་ནོ་-རི་པོ་ཤིང་ནང་མཆོང་ནི། དམིགས་གཏད་ཅན་གྱི་བཟོ་རིགས་ཀྱིས་འཛམ་གླིང་འདི་གནས་ལུགས་བཞགཔ་ཨིན།
+མི་མང་གཡོག་བཀོལ་ནིའི་དོན་ལུ་ གནད་སྡུད་བར་སྟོང་ཚུ་ (ལམ་ཐིག་) འབད་བཅུག་པའི་སྐབས་ གཏན་འབེབས་བཟོ་ནི།
+སྒེར་གྱི་བདེན་དཔྱད་ཆ་ཚན་ཚུ་ སོ་སོ་སྦེ་ལཱ་གི་འབོར་ཚད་ཚུ་ཡོདཔ་ཨིན།
 
-## Concepts
+## བསམ་གཞི།
 
-- **Lane:** Logical shard of the Nexus ledger with its own validator set and
-  execution backlog. Identified by a stable `LaneId`.
-- **Data Space:** Governance bucket grouping one or more lanes that share
-  compliance, routing, and settlement policies.
-- **Lane Manifest:** Governance-controlled metadata describing validators, DA
-  policy, gas token, settlement rules, and routing permissions.
-- **Global Commitment:** Proof emitted by a lane summarising new state roots,
-  settlement data, and optional cross-lane transfers. The global NPoS ring
-  orders commitments.
+- **Lane:** རང་གི་བདེན་དཔྱད་ཆ་ཚན་དང་ Nexus གི་རྩིས་དེབ་ཀྱི་ ཚད་མ་ལྡན་པའི་ཤིང་ཆས།
+  ལག་ལེན་འཐབ་པའི་རྒྱབ་ལོག་། བརྟན་ཏོག་ཏོ་ `LaneId` གིས་ངོས་འཛིན་འབད་ཡོདཔ་ཨིན།
+- **གནད་སྡུད་ས་སྟོང་:** བརྗེ་སོར་གྱི་ལམ་གཅིག་ཡང་ན་མངམ་སྡེ་ཚན་བཟོ་བའི་གཞུང་སྐྱོང་།
+  བསྟར་སྤྱོད་དང་ འགྲུལ་ལམ་ དེ་ལས་ གཞིས་ཆགས་ཀྱི་སྲིད་བྱུས།
+- **ལེན་མ་ཕརན:** གཞུང་སྐྱོང་ཚད་འཛིན་འབད་མི་ མེ་ཊ་ཌེ་ཊ་ཚུ་ བདེན་དཔྱད་འབད་མི་ བདེན་དཔྱད་འབད་མི་ ཌི་ཨེ།
+  སྲིད་བྱུས་དང་རླངས་རྫས་ གཞིས་ཆགས་ལམ་ལུགས་ དེ་ལས་ འགྲུལ་ལམ་གནང་བ་ཚུ།
+- **འཛམ་གླིང་ཁས་བླངས་:** གནས་སྟངས་རྩ་བ་གསརཔ་ཚུ་ བཅུད་བསྡུ་སྟེ་ཡོད་མི་ ལེན་ཅིག་གིས་ བདེན་ཁུངས་བཀལ་ཡོདཔ།
+  གཞིས་ཆགས་གནས་སྡུད་དང་ གདམ་ཁ་ཅན་གྱི་བརྒལ་ལམ་སྤོ་བཤུད་ཚུ། འཛམ་གླིང་ཨེན་པི་ཨོ་ཨེསི་རིང་།
+  བཀའ་རྒྱ་གནང་ནི།
 
-## Lane taxonomy
+## ལམ་གྱི་དབྱེ་བ།
 
-Lane types canonically describe their visibility, governance surface, and
-settlement hooks. The configuration geometry (`LaneConfig`) captures these
-attributes so nodes, SDKs, and tooling can reason about the layout without
-bespoke logic.
+ལམ་གྱི་དབྱེ་བ་ཚུ་གིས་ ཁོང་རའི་མཐོང་སྣང་དང་ གཞུང་སྐྱོང་ཁ་ཐོག་ དེ་ལས་ ཁྲིམས་ལུགས་དང་འཁྲིལ་ཏེ་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+གཞིས་ཆགས་ཧུཀ། རིམ་སྒྲིག་དབྱིབས་རྩིས་ (`LaneConfig`) གིས་ འདི་ཚུ་བཟུང་ཡོདཔ་ཨིན།
+ཁྱད་ཆོས་ཚུ་ སོ་ཌིས་དང་ ཨེསི་ཌི་ཀེ་ཨེསི་ དེ་ལས་ ལག་ཆས་ཚུ་གིས་ བཀོད་སྒྲིག་ལུ་ རྒྱུ་མཚན་མེདཔ་སྦེ་ རྒྱུ་མཚན་བཀོད་ཚུགས།
+bespoke ཚད་མ།
 
-| Lane type | Visibility | Validator membership | WSV exposure | Default governance | Settlement policy | Typical use |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
-| `private_permissioned` | restricted | Fixed validator set (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
-| `hybrid_confidential` | restricted | Mixed membership; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| ལམ་ཐིག་དབྱེ་བ། | མཐོང་ཚུལ། | བདེན་དཔྱད་ཀྱི་འཐུས་མི། | WSV གི་འོད་འཕྲོ། | སྔོན་སྒྲིག་གཞུང་སྐྱོང་ | གཞིས་ཆགས་སྲིད་བྱུས། | སྤྱིའི་ལག་ལེན། |
+|-----------|------------|----------------------|---------- ----|--------------------|-------------------|-------------|
+| `default_public` | མི་མང་ | ཆོག་མཆན་མེད་པའི་ (འཛམ་གླིང་ནང་གི་ བགོ་བཤའ་) | མངའ་སྡེ་འདྲ་དཔེ་ཆ་ཚང་ | SORA སྤྱི་ཚོགས་ | I18NI0000021X | གཞི་རྟེན་མི་མང་ཡིག་འབྲེལ། |
+| I18NI0000022X | མི་མང་ | ཆོག་མཆན་མེད་པའམ་བརྐོས་བག | མངའ་སྡེ་འདྲ་དཔེ་ཆ་ཚང་ | ལྗིད་ཚད་ཅན་གྱི་ཚད་གཞི་ | I18NI0000023X | མི་མང་གི་ཞུ་ཡིག་མཐོ་དྲགས་འབད་ |
+| `private_permissioned` | regunted | གཏན་འཇགས་བདེན་དཔྱད་ཆ་ཚན་ (གཞུང་སྐྱོང་ཆ་འཇོག་འབད་ཡོདཔ་) | ཁས་བླངས་དང་བདེན་ཁུངས་ཚུ་ | སྤྱི་མཐུན་ཚོགས་སྡེ་ | I18NI0000025X | CBDC, མཉམ་འབྲེལ་གྱི་ལས་ཀ། |
+| `hybrid_confidential` | regunted | འཐུས་མིའི་འདྲ་བར། wlipts ZK བདེན་དཔང་ | ཁས་བླངས་ + གདམ་ཁའི་གསལ་བསྒྲགས། | ལས་རིམ་བཟོ་བཏུབ་པའི་དངུལ་གྱི་ཚད་གཞི་ | I18NI0000027X | སྒེར་གསང་ཉམས་སྲུང་ལས་རིམ་བཟོ་ཐུབ་པའི་དངུལ་ |
 
-All lane types must declare:
+ལམ་གྱི་དབྱེ་བ་ཆ་མཉམ་གསལ་བསྒྲགས་འབད་དགོ།
 
-- Dataspace alias — human-readable grouping that binds compliance policies.
-- Governance handle — identifier resolved through `Nexus.governance.modules`.
-- Settlement handle — identifier consumed by the settlement router to debit XOR
-  buffers.
-- Optional telemetry metadata (description, contact, business domain) surfaced
-  through `/status` and dashboards.
+- གནས་སྡུད་ས་སྟོང་ མིང་གཞན་ — བསྟར་སྤྱོད་སྲིད་བྱུས་ཚུ་ མཐུད་མི་ མི་གིས་ལྷག་ཚུགས་པའི་ སྡེ་ཚན་བཟོ་ནི།
+- གཞུང་སྐྱོང་ལག་ཆ་ — ངོས་འཛིན་འབད་མི་འདི་ `Nexus.governance.modules` བརྒྱུད་དེ་ བསལ་ཡོདཔ།
+- གཞིས་ཆགས་འཛིན་ཆས་ — ངོས་འཛིན་འབད་མི་འདི་ གཞིས་ཆགས་རའུ་ཊར་གྱིས་ ཨེགསི་ཨོ་ཨར་ བཏབ་ནིའི་དོན་ལུ་ བཟའ་སྤྱོད་འབད་ཡོདཔ།
+  བཱ་ཕར་ཚུ།
+- གདམ་ཁ་ཅན་གྱི་ བརྒྱུད་འཕྲིན་མེ་ཊ་ཌེ་ཊ་ (འགྲེལ་བཤད་, འབྲེལ་བ་འཐབ་སའི་ ཚོང་འབྲེལ་མངའ་ཁོངས་) ཕྱིར་བཏོན་འབད་ཡོདཔ་ཨིན།
+  བརྒྱུད་དེ་ `/status` དང་ དྲ་རྒྱའི་བང་ད།
 
-## Lane configuration geometry (`LaneConfig`)
+## ལམ་གྱི་རིམ་སྒྲིག་དབྱིབས་རྩིས་ (`LaneConfig`)
 
-`LaneConfig` is the runtime geometry derived from the validated lane catalog. It
-does **not** replace governance manifests; instead it provides deterministic
-storage identifiers and telemetry hints for every configured lane.
+`LaneConfig` འདི་ བདེན་དཔྱད་འབད་ཡོད་པའི་ ལམ་གྱི་ཐོ་གཞུང་ལས་ ཐོན་མི་ རན་ཊའིམ་དབྱིབས་རྩིས་ཨིན། འདི
+do **not** གཞུང་སྐྱོང་ཚབ་བཙུགས་ནི་; དེ་གི་ཚབ་ལུ་ དེ་གིས་ ཐག་བཅད་བྱིནམ་ཨིན།
+རིམ་སྒྲིག་འབད་ཡོད་པའི་ལམ་རེ་རེ་གི་དོན་ལུ་ གསོག་འཇོག་ངོས་འཛིན་འབད་ནི་དང་ ཊེ་ལི་མི་ཊི་གི་བརྡ་སྟོན་ཚུ།
 
 ```text
 LaneConfigEntry {
@@ -77,112 +79,112 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` recomputes the geometry whenever configuration is
-  loaded (`State::set_nexus`).
-- Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric
-  characters collapse into `_`. If the alias yields an empty slug we fall back
-  to `lane{id}`.
-- `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting
-  to `lane_id`) and drives the persisted shard cursor journal to keep DA replay
-  deterministic across restarts/resharding.
-- Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the
-  same backend is shared.
-- Kura segment names are deterministic across hosts; auditors can cross-check
-  segment directories and manifests without bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and
-  global state commitments for that lane.
+- `LaneConfig::from_catalog` རིམ་སྒྲིག་ག་དུས་འབད་རུང་ དབྱིབས་རྩིས་འདི་ ལོག་རྩིས་སྟོན་འབདཝ་ཨིན།
+  མངོན་གསལ་ (`State::set_nexus`).
+- མིང་ཚིག་ཚུ་ ཆུང་ཆུང་སྦེ་ གཙང་སྦྲ་འབདཝ་ཨིན། རིམ་ ཅུ ་ མ་རྙེད ་པའི ་ གླེགས་བ འི ་མི ན།
+  ཡིག་འབྲུ་ཚུ་ `_` ནང་ལུ་ བརྡབ་ཡོདཔ། གལ་ཏེ་མིང་གཞན་གྱིས་ slug སྟོང་པ་ཐོབ་པ་ཅིན་ ང་བཅས་ལོག་ལྷོདཔ་ཨིན།
+  ལས་ `lane{id}`.
+- I18NI000000036X འདི་ ཐོ་གཞུང་མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ I18NI000000037X (སྔོན་སྒྲིག་འབད་ནི།
+  ལས་ `lane_id`) དེ་ལས་ DA བསྐྱར་རྩེད་བཞག་ནིའི་དོན་ལུ་ འཕྲོ་མཐུད་དེ་ཡོད་པའི་ ཤརཌ་འོད་རྟགས་དུས་དེབ་འདི་ བཏངམ་ཨིན།
+  ལོག་འགོ་བཙུགས་/བསྐྱར་བཟོ་འབད་བའི་སྐབས་ གཏན་འབེབས་བཟོ་ནི།
+- ལྡེ་མིག་སྔོན་སྒྲིག་ཚུ་གིས་ ཌབ་ལུ་ཨེསི་ཝི་གིས་ ལམ་ཐིག་རེ་ལུ་ལྡེ་མིག་ཁྱབ་ཚད་བཞག་ནི་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+  རྒྱབ་རྟེན་གཅིག་པ་འདི་བགོ་བཤའ་རྐྱབ་ཨིན།
+- ཀུ་ར་ཆ་ཤས་ཀྱི་མིང་ཚུ་ ཧོསིཊི་ཚུ་ནང་ གཏན་འབེབས་བཟོཝ་ཨིན། རྩིས་ཞིབ་པ་ཚུ་གིས་ བརྒལ་ཚུགས།
+  ཆ་ཤས་སྣོད་ཐོ་དང་ གསལ་སྟོན་ཚུ་ ལག་ཆས་ཚུ་མ་བཀོད།
+- མཉམ་བསྡོམས་ཆ་ཤས་ཚུ་ (`lane_{id:03}_merge`) མཉམ་བསྡོམ་-བརྡ་སྟོན་རྩ་བ་དང་ རྩ་བའི་རྩ་བ་ཚུ་ བཟུང་ཡོདཔ་ཨིན།
+  ལམ་དེ་གི་དོན་ལུ་ འཛམ་གླིང་རྒྱལ་ཁབ་ཀྱི་ཁས་བླངས་ཚུ།
 
-## World-state partitioning
+## འཛམ་གླིང་-མངའ་སྡེ་བར་བཅད་འབད་མི།
 
-- The logical Nexus world state is the union of per-lane state spaces. Public
-  lanes persist full state; private/confidential lanes export Merkle/commitment
-  roots to the merge ledger.
-- MV storage prefixes every key with the 4-byte lane prefix from
-  `LaneConfigEntry::key_prefix`, yielding keys such as `[00 00 00 01] ++
+- གཏན་ཚིག་ཅན་གྱི་ I18NT0000009X འཛམ་གླིང་མངའ་སྡེ་འདི་ ལམ་རེ་རེ་གི་མངའ་སྡེ་གི་ས་སྟོང་ཚུ་གི་མཉམ་འབྲེལ་ཨིན། མི༌མང
+  ལམ་ཐིག་ཚུ་ གནས་ཡུན་ཆ་ཚང་སྦེ་ཡོདཔ་ཨིན། སྒེར་གཉེར་/གསང་སྤྱོད་ཀྱི་ལམ་ ཕྱིར་འདྲེན་ མེར་ཀལ་/བསམ་འཆར།
+  རྩ་བའི་མཉམ་བསྲེས་ལག་དེབ་ལུ།
+- ཨེམ་ཝི་གསོག་འཇོག་འདི་ ལས་ ༤-བཱའིཊི་ལམ་གྱི་སྔོན་ཚིག་དང་གཅིག་ཁར་ ལྡེ་མིག་རེ་རེ་གི་སྔོན་སྒྲིག་འབདཝ་ཨིན།
+  I18NI00000040, འདི་ `[00 00 00 01] ++ བཟུམ།
   PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) therefore store
-  entries grouped by lane prefix, keeping range scans deterministic.
-- Merge-ledger metadata mirrors the same layout: each lane writes merge-hint
-  roots and reduced global state roots to `lane_{id:03}_merge`, allowing
-  targeted retention or eviction when a lane retires.
-- Cross-lane indexes (account aliases, asset registries, governance manifests)
-  store explicit lane prefixes so operators can reconcile entries quickly.
-- **Retention policy** — public lanes retain full block bodies; commitment-only
-  lanes may compact older bodies after checkpoints because commitments are
-  authoritative. Confidential lanes keep ciphertext journals in dedicated
-  segments to avoid blocking other workloads.
-- **Tooling** — maintenance utilities (`kagami`, CLI admin commands) should
-  reference the slugged namespace when exposing metrics, Prometheus labels, or
-  archiving Kura segments.
+- བགོ་བཤའ་རྐྱབ་ཡོད་པའི་ཐིག་ཁྲམ་ (རྩིས་ཐོ་ རྒྱུ་དངོས་ ཊི་རི་ཊི་ཚུ་ གཞུང་སྐྱོང་དྲན་ཐོ་) དེ་འབདཝ་ལས་ གསོག་འཇོག་འབད།
+  ཐོ་བཀོད་ཚུ་ ལམ་གྱི་སྔོན་སྒྲིག་གིས་ སྡེ་ཚན་བཟོ་སྟེ་ ཁྱབ་ཚད་པར་ལེན་ཚུ་ གཏན་འབེབས་བཟོཝ་ཨིན།
+- མར་ཇི་-ལེ་ཇར་མེ་ཊ་ཌེ་ཊ་གིས་ བཀོད་སྒྲིག་ཅོག་འཐདཔ་མེ་ལོང་: ལམ་གྱི་མཉམ་བསྡོམས་-བརྡ་མཚོན་བྲིས།
+  རྩ་དང་མར་འབབ་འཛམ་གླིང་རྩ་བའི་རྩ་བར་ `lane_{id:03}_merge`
+  ལམ་ཐིག་ཅིག་དགོངས་ཞུ་འབད་བའི་སྐབས་ དམིགས་གཏད་ཅན་གྱི་བདག་འཛིན་ཡང་ན་ བཏོན་གཏང་ནི།
+- བརྒྱུད་ལམ་ཟུར་ཐོ་ (རྩིས་ཐོ་གཞན་དང་ རྒྱུ་དངོས་ཐོ་བཀོད་ གཞུང་སྐྱོང་མངོན་གསལ་ཚུ།)
+  གསལ་སྟོན་ལམ་ཐིག་སྔོན་སྒྲིག་ཚུ་ གསོག་འཇོག་འབད་ དེ་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཐོ་བཀོད་ཚུ་ མགྱོགས་དྲགས་སྦེ་ མཐུན་སྒྲིག་འབད་ཚུགས།
+- **བཀག་འཛིན་སྲིད་བྱུས་** — མི་མང་ལམ་གྱིས་ བཀག་ཆ་ཆ་ཚང་བཞག་དགོ། ཁས་བླངས།
+  ཁས་བླངས་ཚུ་ཨིནམ་ལས་ བརྟག་ཞིབ་ས་ཚིགས་ཚུ་གི་ཤུལ་ལས་ ལམ་ཚུ་གིས་ གཟུགས་རྙིངམ་ཚུ་ བསྡམ་བཞག་ཚུགས།
+  དབང་ཚད་ཅན་གྱི་དབང་ཚད། གསང་བའི་ལམ་ཚུ་གིས་ སི་ཕར་ཊེགསི་དུས་དེབ་ཚུ་ བརྩོན་ཤུགས་ཅན་སྦེ་བཞགཔ་ཨིན།
+  ལཱ་གི་འབོར་ཚད་གཞན་བཀག་ནི་ལས་འཛེམ་ནི་ལུ་ཆ་ཤས་ཚུ་ཨིན།
+- **ཊོ་ལིང་** — རྒྱུན་སྐྱོང་མཐུན་རྐྱེན་ཚུ་ (`kagami`, སི་ཨེལ་ཨའི་བདག་སྐྱོང་བརྡ་བཀོད་ཚུ་) འབད་དགོ།
+  མེ་ཊིགསི་ཚུ་ ཕྱིར་བཏོན་འབད་བའི་སྐབས་ བཤུད་ཡོད་པའི་མིང་གི་ས་སྒོ་འདི་ གཞི་བསྟུན་འབད་, Prometheus ཁ་ཡིག་ཚུ་, ཡང་ན་ ཡང་ན་
+  ཀུ་ར་ཆ་ཤས་ཚུ་ གཏན་མཛོད་འབད་དོ།
 
-## Routing & APIs
+## འགྲུལ་ལམ་དང་ཨེ་པི་ཨའི་ཚུ།
 
-- Torii REST/gRPC endpoints accept an optional `lane_id`; absence implies
+- I18NT0000000013X རེསི་ཊི་/ཇི་ཨར་པི་སི་ མཐའ་མཚམས་ཚུ་གིས་ གདམ་ཁ་ཅན་གྱི་ I18NI0000043X དང་ལེན་འབདཝ་ཨིན། བརྡ་སྟོན
   `lane_default`.
-- SDKs surface lane selectors and map user-friendly aliases to `LaneId` using
-  the lane catalog.
-- Routing rules operate on the validated catalog and may pick both lane and
-  dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and
+- ཨེསི་ཌི་ཀེ་ཨེསི་ ཁ་ཐོག་ལམ་སེལ་འཐུ་མི་དང་ སབ་ཁྲ་ལག་ལེན་འཐབ་མི་མཐུན་སྒྲིག་ཚུ་ ལག་ལེན་འཐབ་ཡོདཔ།
+  ལམ་གྱི་ཐོ་གཞུང་འདི་།
+- བདེན་དཔྱད་འབད་ཡོད་པའི་ཐོ་གཞུང་གུ་བཀོལ་སྤྱོད་འབད་མི་ འགྲུལ་ལམ་ལམ་ལུགས་ཚུ་ དང་ ལམ་གཉིས་ཆ་ར་ འཐུ་ཚུགས།
+  གནད་སྡུད་ས་སྟོང་། `LaneConfig` གིས་ ཌེཤ་བོརཌི་དང་ བརྡ་འཕྲིན་གྱི་ མཐུན་སྒྲིག་ཅན་གྱི་ མིང་ཚིག་ཚུ་ དང་།
   logs.
 
-## Settlement & fees
+## གཞིས་ཆགས་དང་འཐུས་མི།
 
-- Every lane pays XOR fees to the global validator set. Lanes may collect native
-  gas tokens but must escrow XOR equivalents alongside commitments.
-- Settlement proofs include amount, conversion metadata, and proof of escrow
-  (for example, transfer to the global fee vault).
-- The unified settlement router (NX-3) debits buffers using the same lane
-  prefixes, so settlement telemetry lines up with storage geometry.
+- ལམ་རེ་རེ་གིས་ འཛམ་གླིང་བདེན་དཔྱད་ཆ་ཚན་ལུ་ ཨེགསི་ཨོ་ཨར་གྱི་འཐུས་ཚུ་ སྤྲོདཔ་ཨིན། ལམ་ཚུ་གིས་ ས་གནས་ཀྱི་བསྡུ་ལེན་འབད་ཚུགས།
+  རླངས་རྫས་ཀྱི་རྟགས་མཚན་ཚུ་ཨིན་རུང་ ཁས་བླངས་ཚུ་དང་གཅིག་ཁར་ ཨེགསི་ཨོ་ཨར་འདྲ་མཉམ་ཚུ་ བཀོལ་སྤྱོད་འབད་དགོ།
+- གཞིས་ཆགས་ཀྱི་བདེན་ཁུངས་ཚུ་ཡང་ དངུལ་ཚད་དང་ བསྒྱུར་བཅོས་མེ་ཊ་ཌེ་ཊ་ དེ་ལས་ བཀོལ་སྤྱོད་ཀྱི་བདེན་ཁུངས་ཚུ་ཨིན།
+  (དཔེར་ན་ འཛམ་གླིང་ཡོངས་ཀྱི་འཐུས་ལུ་སྤོ་བཤུད་འབད།)
+- མཉམ་བསྡོམས་འབད་ཡོད་པའི་ གཞིས་ཆགས་རའུ་ཊར་ (NX-3) གིས་ ལམ་གཅིག་ལག་ལེན་འཐབ་སྟེ་ བཱ་ཕར་ཚུ་ བཀོདཔ་ཨིན།
+  སྔོན་འཇུག་ཚུ་ གཞིས་ཆགས་ཀྱི་བརྡ་འཕྲིན་ཚུ་ བསག་བཞག་དབྱིབས་རྩིས་རིག་པ་དང་གཅིག་ཁར་ གྱལ་རིམ་སྦེ་ཡོདཔ་ཨིན།
 
-## Governance
+## གཞུང་སྐྱོང་།
 
-- Lanes declare their governance module via the catalog. `LaneConfigEntry`
-  carries the original alias and slug to keep telemetry and audit trails
-  readable.
-- The Nexus registry distributes signed lane manifests that include the
-  `LaneId`, dataspace binding, governance handle, settlement handle, and
-  metadata.
-- Runtime-upgrade hooks continue to enforce governance policies
-  (`gov_upgrade_id` by default) and log diffs via the telemetry bridge
-  (`nexus.config.diff` events).
+- ལེནསི་གིས་ ཁོང་རའི་གཞུང་སྐྱོང་ཚད་གཞི་འདི་ ཐོ་གཞུང་བརྒྱུད་དེ་གསལ་བསྒྲགས་འབདཝ་ཨིན། `LaneConfigEntry`
+  བརྡ་དོན་དང་རྩིས་ཞིབ་ཀྱི་ལམ་ཚུ་བཞག་ནིའི་དོན་ལུ་ མིང་གཞན་ངོ་མ་ཚུ་ འབག་འོང་།
+  ཀློག་བཤད།
+- Nexus མཚན་རྟགས་བཀོད་པའི་ལམ་གསལ་གྱི་གསལ་སྟོན་ཚུ་ མིང་རྟགས་བཀོད་ཡོད་པའི་ བརྡ་རྟགས་ཚུ་ཚུདཔ་ཨིན།
+  `LaneId`, གནས་སྡུད་ས་སྒོའི་བསྡམས་པ། གཞུང་སྐྱོང་ལག་གདུབ། གཞིས་ཆགས་ལག་གདུབ།
+  མེ་ཊ་ཌེ་ཊ་.
+- རན་ཊའིམ་ཡར་འཕར་ཧུཀ་ཚུ་གིས་ གཞུང་སྐྱོང་སྲིད་བྱུས་ཚུ་ འཕྲོ་མཐུད་དེ་རང་ བསྟར་སྤྱོད་འབད་ནི།
+  (`gov_upgrade_id` སྔོན་སྒྲིག་གིས་) དང་ དྲན་ཐོ་ཌིཕ་ཚུ་ ཊེ་ལི་མི་ཊི་ཟམ་བརྒྱུད་དེ་ཨིན།
+  (`nexus.config.diff` བྱུང་ལས་)།
 
-## Telemetry & status
+## བརྒྱུད་འཕྲིན་དང་གནས་སྟངས།
 
-- `/status` exposes lane aliases, dataspace bindings, governance handles, and
-  settlement profiles, derived from the catalog and `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) render lane aliases/slugs so
-  operators can map backlog and TEU pressure quickly.
-- `nexus_lane_configured_total` counts the number of derived lane entries and is
-  recomputed when configuration changes. Telemetry emits signed diffs whenever
-  lane geometry changes.
-- Dataspace backlog gauges include the alias/description metadata to help
-  operators associate queue pressure with business domains.
+- I18NI000000051X གིས་ ལམ་གྱི་མཉམ་མཐུན་དང་ གནད་སྡུད་ས་སྒོའི་བཱའིན་བཱའིན་ཌིང་ གཞུང་སྐྱོང་འཛིན་སྐྱོང་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  གཞིས་ཆགས་གསལ་སྡུད་ཚུ་ ཐོ་གཞུང་དང་ I18NI000000052X ལས་ཐོན་ཡོདཔ།
+- ལས་འཆར་གྱི་མེ་ཊིགསི་ (`nexus_scheduler_lane_teu_*`) རེན་ཌར་ལམ་ཐིག་མིང་རྟགས་/ slugs སོ།
+  བཀོལ་སྤྱོད་པ་ཚུ་གིས་ རྒྱབ་ལོག་དང་ ཊི་ཨི་ཡུ་གནོན་ཤུགས་མགྱོགས་པ་རང་ སབ་ཁྲ་བཟོ་ཚུགས།
+- I18NI000000054X ལས་ཐོན་པའི་ལམ་ཐིག་ཐོ་བཀོད་ཚུ་གི་ཨང་གྲངས་དང་ འདི་ གྱངས་ཁ་བརྐྱབ་ཨིན།
+  རིམ་སྒྲིག་བསྒྱུར་བཅོས་ཚུ་འབད་བའི་སྐབས་ ལོག་རྩིས་སྟོན་ཡོདཔ། བརྒྱུད་འཕྲིན་ཚུ་ ག་དུས་འབད་རུང་ མིང་རྟགས་བཀོད་ཡོད་པའི་ ཌིཕ་ཚུ་ ག་དེམ་ཅིག་སྦེ་ མཚན་རྟགས་བཀོད་ཡོདཔ།
+  lane དབྱིབས་རྩིས་འགྱུར་བ།
+- གནད་སྡུད་ས་སྟོང་རྒྱབ་ལོག་ཚད་འཇལ་ཚུ་ནང་ གྲོགས་རམ་གྱི་དོན་ལུ་ མིང་གཞན་/འགྲེལ་བཤད་མེ་ཊ་ཌེ་ཊ་ཚུ་ ཚུདཔ་ཨིན།
+  བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཚོང་འབྲེལ་གྱི་མངའ་ཁོངས་ཚུ་དང་གཅིག་ཁར་ གྱལ་རིམ་གནོན་ཤུགས་འདི་ འབྲེལ་འཐུད་འབདཝ་ཨིན།
 
-## Configuration & Norito types
+## རིམ་སྒྲིག་དང་ Norito དབྱེ་བ་ཚུ།
 
-- `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in
-  `iroha_data_model::nexus` and provide Norito-format structures for
-  manifests and SDKs.
-- `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived
-  automatically from the catalog; it does not require Norito encoding because it
-  is an internal runtime helper.
-- The user-facing configuration (`iroha_config::parameters::user::Nexus`)
-  continues to accept declarative lane and dataspace descriptors; parsing now
-  derives the geometry and rejects invalid aliases or duplicate lane IDs.
+- I18NI0000005X, `LaneConfig`, དང་ I18NI000000057X ནང་སྡོད་ཡོད།
+  `iroha_data_model::nexus` དང་ I18NT0000002X-format format གཞི་བཀོད་ཚུ་ གི་དོན་ལུ་བྱིནམ་ཨིན།
+  གསལ་སྟོན་དང་ SDKs.
+- `LaneConfig` I18NI000000060X ནང་སྡོད་ཅིང་།
+  ཐོ་གཞུང་ལས་ རང་བཞིན་གྱིས་; འདི་ལུ་ Norito ཨིན་ཀོ་ཌིང་དགོཔ་མེདཔ་ཨིན།
+  འདི་ ནང་འཁོད་གཡོག་བཀོལ་མི་ གྲོགས་རམ་པ་ཅིག་ཨིན།
+- ལག་ལེན་པའི་གདོང་སྒྲིག་རིམ་སྒྲིག་ (`iroha_config::parameters::user::Nexus`)
+  འཕྲོ་མཐུད་དེ་ གསལ་བསྒྲགས་ཀྱི་ལམ་དང་ གནད་སྡུད་ས་ཁོངས་ཀྱི་འགྲེལ་བཤད་ཚུ་ ངོས་ལེན་འབད་དོ་ཡོདཔ་ཨིན། ད་ལྟོ་དབྱེ་དཔྱད་འབད་ནི།
+  དབྱིབས་རྩིས་འདི་བཏོན་ཞིནམ་ལས་ ནུས་མེད་ཀྱི་མིང་ཚིག་ཚུ་ཡང་ན་ ལམ་གྱི་ངོ་རྟགས་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
 
-## Outstanding work
+## ཁྱད་དུ་འཕགས་པའི་ལས་ཀ།
 
-- Integrate settlement router updates (NX-3) with the new geometry so XOR buffer
-  debits and receipts are tagged by lane slug.
-- Extend admin tooling to list column families, compact retired lanes, and
-  inspect per-lane block logs using the slugged namespace.
-- Finalise the merge algorithm (ordering, pruning, conflict detection) and
-  attach regression fixtures for cross-lane replay.
-- Add compliance hooks for whitelists/blacklists and programmable-money
-  policies (tracked under NX-12).
+- གཞིས་ཆགས་ རའུ་ཊར་དུས་མཐུན་བཟོ་ནི་ (NX-3) དབྱིབས་རྩིས་གསརཔ་དང་གཅིག་ཁར་ XOR buffer མཉམ་བསྡོམས་འབད།
+  བུན་གཡར་དང་ བྱུང་འཛིན་ཚུ་ ལམ་ཐིག་གིས་ རྟགས་བཀལ་ཡོདཔ་ཨིན།
+- ཀེར་ཐིག་བཟའ་ཚང་ཚུ་ཐོ་བཀོད་འབད་ནི་དང་ དགོངས་ཞུ་འབད་མི་ལམ་ཚུ་ ཆུང་ཀུ་བཟོ་ནི།
+  བཤུད་ཡོད་པའི་མིང་གི་ས་སྒོ་འདི་ལག་ལེན་འཐབ་ཐོག་ལས་ ལེན-ལེན་སྡེབ་ཚན་དྲན་ཐོ་ཚུ་ཞིབ་དཔྱད་འབད།
+- མཉམ་བསྡོམ་ཨཱལ་གོ་རི་དམ་ (མདོར་བསྐྲུན་འབད་ནི་དང་ གཤག་བཅོས་འབད་ནི་ འཁྲུག་རྩོད་) དང་ མཇུག་བསྡུ།
+  བརྒལ་ལམ་བསྐྱར་རྩེད་ཀྱི་དོན་ལུ་ འགྱུར་ལྡོག་སྒྲིག་སྟངས་ཚུ་ མཉམ་སྦྲགས་འབད།
+- དཀརཔོ་ཐོ་ཡིག་/ནགཔོ་དང་ ལས་རིམ་བཟོ་ཚུགས་པའི་ ཏི་རུ་ཚུ་གི་དོན་ལུ་ བསྟར་སྤྱོད་ཀྱི་ ཧུཀ་ཚུ་ཁ་སྐོང་རྐྱབས།
+  སྲིད་བྱུས་ (NX-12 འོག་ལུ་ཡོད་པའི་)།
 
 ---
 
-*This page will continue to track NX-1 follow-ups as NX-2 through NX-18 land.
-Please surface open questions in `roadmap.md` or the governance tracker so the
-portal stays aligned with the canonical docs.*
+*ཤོག་ལེབ་འདི་གིས་ NX-1 གི་རྗེས་འཇུག་ཚུ་ NX-2 ལས་ NX-18 གི་ས་ཆའི་སྦེ་ འཕྲོ་མཐུད་དེ་རང་ བལྟ་འོང་།
+ཁ་ཐོག་ཁ་ཕྱེ་བའི་དྲི་བ་ཚུ་ `roadmap.md` ནང་ ཡང་ན་ གཞུང་སྐྱོང་རྗེས་འདེད་ནང་ འབད་དགོ།
+དྲྭ་ཚིགས་འདི་ ཀེ་ནོ་ནིག་ཌོག་ཚུ་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་དེ་སྡོདཔ་ཨིན།

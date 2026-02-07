@@ -4,103 +4,101 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-rollout-checklist
-title: Checklist de rollout do registro de chunker da SoraFS
-sidebar_label: Checklist de rollout de chunker
-description: Plano de rollout passo a passo para atualizacoes do registro de chunker.
+المعرف: قائمة التحقق من تسجيل المقطع
+العنوان: قائمة التحقق من بدء تشغيل سجل القطع في SoraFS
+Sidebar_label: قائمة التحقق من بدء تشغيل القطعة
+الوصف: خطة بدء التشغيل لتحديث سجل القطع.
 ---
 
-:::note Fonte canonica
-Reflete `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Mantenha ambas as copias sincronizadas.
+:::ملاحظة فونتي كانونيكا
+ريفليت `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Mantenha ambas as copias sincronzadas.
 :::
 
-# Checklist de rollout do registro da SoraFS
+# قائمة التحقق من بدء التسجيل في SoraFS
 
-Este checklist captura os passos necessarios para promover um novo perfil de chunker
-ou bundle de admission de provedor da revisao para producao depois que o charter
-de governanca for ratificado.
+تلتقط قائمة المراجعة هذه الخطوات اللازمة للترويج لملف جديد للقطعة
+أو حزمة القبول التي تثبت المراجعة لإنتاجها بعد صدور الميثاق
+دي الحاكم للتصديق عليها.
 
-> **Escopo:** Aplica-se a todas as releases que modificam
-> `sorafs_manifest::chunker_registry`, provider admission envelopes, ou bundles
-> de fixtures canonicos (`fixtures/sorafs_chunker/*`).
+> **اللغة:** قم بتطبيق جميع الإصدارات التي تم تعديلها
+> `sorafs_manifest::chunker_registry`، مظاريف قبول المزود، أو الحزم
+> دي تركيبات Canonicos (`fixtures/sorafs_chunker/*`).
 
-## 1. Validacao pre-flight
+## 1. رحلة فاليداكاو قبل الرحلة
 
-1. Regenere fixtures e verifique determinismo:
+1. تجديد التركيبات والتحقق من التحديد:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Confirme que os hashes de determinismo em
-   `docs/source/sorafs/reports/sf1_determinism.md` (ou o relatorio de perfil
-   relevante) batem com os artefatos regenerados.
-3. Garanta que `sorafs_manifest::chunker_registry` compila com
-   `ensure_charter_compliance()` executando:
+2. تأكد من وجود تجزئات التحديد الخاصة بها
+   `docs/source/sorafs/reports/sf1_determinism.md` (أو رابط الملف الشخصي
+   ذات الصلة) Batem com os artefatos regenerados.
+3. تأكد من تجميع `sorafs_manifest::chunker_registry` com
+   تنفيذ `ensure_charter_compliance()`:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Atualize o dossier da proposta:
-   - `docs/source/sorafs/proposals/<profile>.json`
-   - Entrada de atas do conselho em `docs/source/sorafs/council_minutes_*.md`
-   - Relatorio de determinismo
+4. قم بتحديث ملف الاقتراح:
+   -`docs/source/sorafs/proposals/<profile>.json`
+   - أدخل هذه النصيحة في `docs/source/sorafs/council_minutes_*.md`
+   - علاقة الحتمية
 
-## 2. Sign-off de governanca
-
-1. Apresente o relatorio do Tooling Working Group e o digest da proposta ao
-   Sora Parliament Infrastructure Panel.
-2. Registre detalhes de aprovacao em
+## 2. التوقيع على الحكم1. اعرض علاقة مجموعة عمل الأدوات ولخص الاقتراح
+   لوحة البنية التحتية لبرلمان سورا.
+2. سجل تفاصيل الموافقة
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Publique o envelope assinado pelo Parlamento junto com os fixtures:
+3. قم بنشر المغلف الذي تم تجميعه من البرلمان جنبًا إلى جنب مع التركيبات:
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Verifique se o envelope esta acessivel via o helper de governance fetch:
+4. التحقق من إمكانية الوصول إلى المغلف عبر مساعد جلب الإدارة:
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Rollout em staging
+## 3. الطرح المرحلي
 
-Consulte o [playbook de manifest em staging](./staging-manifest-playbook) para um
+راجع [دليل التشغيل للبيان المرحلي](./staging-manifest-playbook) لها
 passo a passo detalhado.
 
-1. Implante Torii com discovery `torii.sorafs` habilitado e admission enforcement
-   ligado (`enforce_admission = true`).
-2. Envie os provider admission envelopes aprovados para o diretorio de registry
-   de staging referenciado por `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Verifique que provider adverts propagam via a API de discovery:
+1. الزرع Torii com Discover `torii.sorafs` تأهيل وإنفاذ القبول
+   وصلة (`enforce_admission = true`).
+2. قم بإرسال مظاريف قبول المزود الخاصة بمدير التسجيل
+   مرجع التدريج `torii.sorafs.discovery.admission.envelopes_dir`.
+3. التحقق من قيام المزود بالإعلان عن الإعلانات عبر واجهة برمجة التطبيقات للاكتشاف:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Exercite endpoints de manifest/plan com headers de governanca:
+4. قم بتمرين نقاط النهاية للبيان/الخطة مع رؤوس الحوكمة:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Confirme que dashboards de telemetria (`torii_sorafs_*`) e regras de alerta
-   reportam o novo perfil sem erros.
+5. تأكد من أن لوحات معلومات القياس عن بعد (`torii_sorafs_*`) ولوائح التنبيه
+   تقرير أو معلومات جديدة عن الأخطاء.
 
-## 4. Rollout em producao
+## 4. طرح المنتج1. قم بتكرار خطوات التدريج في العقد Torii من الإنتاج.
+2. الإعلان عن تاريخ البدء (البيانات/الوقت، فترة السماح، خطة التراجع) الآن
+   قنوات المشغلين وSDK.
+3. دمج العلاقات العامة للإصدار التنافسي:
+   - تركيبات و مغلف تم تحديثه
+   - Mudancas na documentacao (المراجع المتعلقة بالميثاق، وعلاقة الحتمية)
+   - تحديث خريطة الطريق/الحالة
+4. قم بإصدار وتسجيل القطع الأثرية التي تم قتلها من أجل مصدرها.
 
-1. Repita os passos de staging nos nodes Torii de producao.
-2. Anuncie a janela de ativacao (data/hora, grace period, plano de rollback) nos
-   canais de operadores e SDK.
-3. Merge o PR de release contendo:
-   - Fixtures e envelope atualizados
-   - Mudancas na documentacao (referencias ao charter, relatorio de determinismo)
-   - Refresh de roadmap/status
-4. Tagueie a release e arquive os artefatos assinados para provenance.
+## 5. عملية بدء تشغيل غرفة المراجعة
 
-## 5. Auditoria pos-rollout
-
-1. Capture metricas finais (discovery counts, taxa de sucesso de fetch, histograms
-   de erro) 24h apos o rollout.
-2. Atualize `status.md` com um resumo curto e link para o relatorio de determinismo.
-3. Registre tarefas de acompanhamento (ex., orientacao adicional para authoring
-   de perfis) em `roadmap.md`.
+1. التقاط المقاييس النهائية (أعداد الاكتشافات، وأصناف نجاح الجلب، والرسوم البيانية
+   خطأ) بعد 24 ساعة أو الطرح.
+2. قم بتحديث `status.md` كملخص قصير ورابط لنسبة التحديد.
+3. تسجيل متطلبات المرافقة (على سبيل المثال، التوجيه الإضافي للتأليف)
+   من بيرفيس) في `roadmap.md`.

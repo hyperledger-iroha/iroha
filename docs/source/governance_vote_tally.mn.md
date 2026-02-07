@@ -8,102 +8,101 @@ source_hash: 2ebff8477d06e2aac8840988d31762704d05ded353d3f900a87db3ea5091e718
 source_last_modified: "2026-01-04T08:19:26.508527+00:00"
 translation_last_reviewed: 2026-02-07
 title: Governance ZK Vote Tally
+translator: machine-google-reviewed
 ---
 
-## Overview
+## Тойм
 
-Iroha’s governance tally flow relies on a Halo2/IPA circuit that verifies a bit vote commitment and its membership in the eligible voter set. This note captures the circuit parameters, public inputs, and auditing fixtures so reviewers can regenerate the verifying key and proofs used in tests.
+Iroha-ийн засаглалын урсгал нь бага зэрэг санал өгөх амлалт болон сонгуулийн эрх бүхий багцад гишүүнчлэлээ баталгаажуулдаг Halo2/IPA хэлхээнд тулгуурладаг. Энэхүү тэмдэглэл нь хэлхээний параметрүүд, олон нийтийн оролт, аудитын хэрэгслүүдийг багтаасан бөгөөд ингэснээр хянагчид туршилтанд ашигласан баталгаажуулах түлхүүр болон нотолгоог сэргээх боломжтой.
 
-## Circuit Summary
+## Хэлхээний хураангуй
 
-- **Circuit identifier**: `halo2/pasta/vote-bool-commit-merkle8-v1`
-- **Implementation**: `VoteBoolCommitMerkle::<8>` in `iroha_core::zk::depth`
-- **Domain size**: `k = 6`
-- **Backend**: Transparent Halo2/IPA over Pasta (ZK1 envelope: `IPAK` + `H2VK` for VKs, `PROF` + `I10P` for proofs)
-- **Witness shape**:
-  - ballot bit `v ∈ {0,1}`
-  - randomness scalar `ρ`
-  - eight sibling scalars for the Merkle path
-  - direction bits (all zero in the reference witnesses)
-- **Merkle compressor**: `H(x, y) = 2·(x + 7)^5 + 3·(y + 13)^5 (mod p)` where `p` is the Pasta scalar modulus
-- **Public inputs**:
-  - column 0: `commit`
-  - column 1: Merkle root
-  - exposed via the `I10P` TLV (`cols = 2`, `rows = 1`)
+- **Хэлхээ танигч**: `halo2/pasta/vote-bool-commit-merkle8-v1`
+- **Хэрэгжүүлэх**: `VoteBoolCommitMerkle::<8>`, `iroha_core::zk::depth`
+- **Домэйн хэмжээ**: `k = 6`
+- **Арын хэсэг**: Гоймон дээрх ил тод Halo2/IPA (ZK1 дугтуй: `IPAK` + VK-д зориулсан `H2VK`, баталгааны хувьд `PROF` + `I10P`)
+- **Гэрчийн хэлбэр**:
+  - саналын хуудас `v ∈ {0,1}`
+  - санамсаргүй байдлын скаляр `ρ`
+  - Мерклийн замд зориулсан ах дүү найман скаляр
+  - чиглэлийн битүүд (лавлагааны гэрчүүдэд бүгд тэг)
+- **Merkle компрессор**: `H(x, y) = 2·(x + 7)^5 + 3·(y + 13)^5 (mod p)` энд `p` нь пастагийн скаляр модуль юм
+- **Олон нийтийн санал**:
+  - багана 0: `commit`
+  - багана 1: Мерклийн үндэс
+  - `I10P` TLV (`cols = 2`, `rows = 1`)
 
-### Circuit layout
+### Хэлхээний зохион байгуулалт
 
-- **Advice columns**:
-  - `v` – ballot bit constrained to be boolean.
-  - `ρ` – blinding scalar used in the vote commitment.
-  - `sibling[i]` for `i ∈ [0, 7]` – Merkle path element at depth `i`.
-  - `dir[i]` for `i ∈ [0, 7]` – direction bit selecting left (`0`) or right (`1`) branch.
-  - `node[i]` for `i ∈ [0, 7]` – Merkle accumulator after depth `i`.
-- **Instance columns**:
-  - `commit` – public commitment published by the voter.
-  - `root` – Merkle root of the eligible voter set.
-- **Selector**: `s_vote` enables the gate on the single populated row.
+- **Зөвлөмжийн багана**:
+  - `v` – саналын хуудасны бит нь логик байхаар хязгаарлагдсан.
+  - `ρ` – сонгуулийн амлалтад ашигласан харалган скаляр.
+  - `i ∈ [0, 7]`-д зориулсан `sibling[i]` – `i` гүн дэх Merkle замын элемент.
+  - `i ∈ [0, 7]`-д зориулсан `dir[i]` – зүүн (`0`) эсвэл баруун (`1`) салбарыг сонгох чиглэлийн бит.
+  - `node[i]`-д зориулсан `i ∈ [0, 7]` – `i` гүний дараа Merkle аккумлятор.
+- **Тухайн багана**:
+  - `commit` – сонгогчийн нийтэлсэн нийтийн амлалт.
+  - `root` – Сонгогчийн эрх бүхий багцын үндэс.
+- **Selector**: `s_vote` нь хүн амтай нэг эгнээний хаалгыг идэвхжүүлдэг.
 
-All advice cells are assigned in the first (and only) row of the region; the circuit uses a `SimpleFloorPlanner`.
+Бүх зөвлөгөөний нүдийг бүсийн эхний (ба цорын ганц) эгнээнд хуваарилдаг; хэлхээнд `SimpleFloorPlanner` ашигладаг.
 
-### Gate system
+### Хаалганы систем
 
-Let `H` be the compressor defined above and `prev_0 = H(v, ρ)`. The gate enforces:
+Дээр тодорхойлсон компрессор `H`, `prev_0 = H(v, ρ)` гэж үзье. Хаалга нь дараахь зүйлийг хэрэгжүүлдэг.
 
-1. `s_vote · v · (v - 1) = 0` – boolean ballot bit.
-2. `s_vote · (H(v, ρ) - commit) = 0` – commitment consistency.
-3. For each depth `i`:
-   - `s_vote · dir[i] · (dir[i] - 1) = 0` – boolean path direction.
+1. `s_vote · v · (v - 1) = 0` – логик саналын хуудас.
+2. `s_vote · (H(v, ρ) - commit) = 0` – амлалтын тууштай байдал.
+3. `i` гүн бүрийн хувьд:
+   - `s_vote · dir[i] · (dir[i] - 1) = 0` – логик замын чиглэл.
    - `left = H(prev_i, sibling[i])`
    - `right = H(sibling[i], prev_i)`
    - `expected = (1 - dir[i]) · left + dir[i] · right`
    - `s_vote · (node[i] - expected) = 0`
    - `prev_{i+1} = node[i]`
-4. `s_vote · (prev_8 - root) = 0` – accumulator equals the public Merkle root.
+4. `s_vote · (prev_8 - root) = 0` – аккумлятор нь нийтийн Merkle үндэстэй тэнцүү.
 
-The compressor uses quintic shapes only; no lookup tables are required. All arithmetic is performed in the Pasta scalar field, and the row count `k = 6` allocates `2^k = 64` rows — only row zero is populated.
+Компрессор нь зөвхөн квинтик хэлбэрийг ашигладаг; хайх хүснэгт шаардлагагүй. Бүх арифметикийг Pasta скаляр талбарт гүйцэтгэдэг бөгөөд `k = 6` мөрийн тоо нь `2^k = 64` мөрүүдийг хуваарилдаг - зөвхөн тэг мөрийг дүүргэсэн.
 
-### Canonical fixture
+### Каноник бэхэлгээ
 
-The deterministic harness (`zk_testkit::vote_merkle8_bundle`) populates the witness with:
+Детерминист оосор (`zk_testkit::vote_merkle8_bundle`) нь гэрчийг дараах байдлаар дүүргэдэг.
 
 - `v = 1`
 - `ρ = 12345`
-- `sibling[i] = 10 + i` for `i ∈ [0, 7]`
+- `sibling[i] = 10 + i`-д зориулсан `i ∈ [0, 7]`
 - `dir[i] = 0`
-- `node[i] = H(node[i-1], sibling[i])` with `node[-1] = H(v, ρ)`
+- `node[i] = H(node[i-1], sibling[i])`, `node[-1] = H(v, ρ)`-тай
 
-This produces the public values:
+Энэ нь олон нийтийн үнэт зүйлийг бий болгодог:
 
 ```text
 commit = 0x20574662a58708e02e0000000000000000000000000000000000000000000000
 root   = 0xb63752ff429362c3a9b3cd5966c23567fdb757ce3b38af724b9303a5ea2f5817
 ```
 
-The `public_inputs_schema_hash` recorded in the verifying-key registry is `blake2b-256(commit_bytes || root_bytes)` with the least significant bit forced to `1`, yielding:
+Баталгаажуулах түлхүүрийн бүртгэлд бүртгэгдсэн `public_inputs_schema_hash` нь `blake2b-256(commit_bytes || root_bytes)` бөгөөд хамгийн бага ач холбогдол бүхий бит нь `1` болж дараах үр дүнд хүрнэ.
 
 ```text
 public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3
 ```
 
-### Verifying key record
+### Түлхүүр бичлэгийг шалгаж байна
 
-Governance registers the verifier under:
-
-- `backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"`
+Засаглал баталгаажуулагчийг дараах дор бүртгэнэ.- `backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"`
 - `circuit_id = "halo2/pasta/vote-bool-commit-merkle8-v1"`
 - `backend tag = BackendTag::Halo2IpaPasta`
 - `curve = "pallas"`
 - `public_inputs_schema_hash = 0xfae4…64d3`
-- `commitment = sha256(backend || vk_bytes)` (32-byte digest)
+- `commitment = sha256(backend || vk_bytes)` (32 байт дижест)
 
-The canonical bundle includes an inline verifying key (`key = Some(VerifyingKeyBox { … })`) together with the proof envelope. `vk_len`, `max_proof_bytes`, and optional metadata URIs are populated from the generated artefacts.
+Каноник багц нь баталгаажуулах дугтуйны хамт мөрийн баталгаажуулах түлхүүрийг (`key = Some(VerifyingKeyBox { … })`) агуулдаг. `vk_len`, `max_proof_bytes` болон нэмэлт мета өгөгдлийн URI-г үүсгэсэн олдворуудаас дүүргэсэн.
 
-## Reference Fixtures
+## Лавлах хэрэгсэл
 
-Use `cargo xtask zk-vote-tally-bundle --print-hashes` to regenerate the inline verifying key and proof bundle consumed by integration tests (outputs land in `fixtures/zk/vote_tally/` by default). The command prints a short summary (`backend`, `commit`, `root`, schema hash, lengths) and optionally the file hashes so auditors can capture attestation notes. Pass `--summary-json -` to emit the same data as JSON (or supply a path to write it to disk). Pass `--attestation attestation.json` (or `-` for stdout) to write a Norito JSON manifest containing the summary plus Blake2b-256 digests and sizes for every bundle artifact so attestation packets can be archived with the fixtures. When run with `--verify`, providing `--attestation <path>` checks that the manifest’s bundle metadata and artifact lengths match the freshly regenerated bundle (it does not compare the per-run proof digest, which changes with transcript randomness).
+`cargo xtask zk-vote-tally-bundle --print-hashes`-г ашиглан интеграцийн тестээр (өгөгдмөлөөр `fixtures/zk/vote_tally/` дээр гарна) ашигласан мөрийн баталгаажуулалтын түлхүүр болон баталгааны багцыг сэргээнэ үү. Энэ тушаал нь товч хураангуй (`backend`, `commit`, `root`, схемийн хэш, урт) болон сонголтоор файлын хэшийг хэвлэдэг тул аудиторууд баталгаажуулалтын тэмдэглэлүүдийг авч болно. JSON-той ижил өгөгдөл гаргахын тулд `--summary-json -`-ийг дамжуулаарай (эсвэл диск рүү бичих замыг оруулна уу). `--attestation attestation.json` (эсвэл stdout-ийн хувьд `-`)-ыг дамжуулж, багц олдвор бүрийн хураангуй болон Blake2b-256 дижест болон хэмжээг агуулсан Norito JSON манифест бичихийн тулд баталгаажуулалтын багцуудыг засварын хамт архивлах боломжтой. `--verify`-тэй ажиллах үед `--attestation <path>`-г өгснөөр манифестын багцын мета өгөгдөл болон олдворын урт нь шинээр сэргээгдсэн багцтай таарч байгаа эсэхийг шалгадаг (энэ нь транскриптийн санамсаргүй байдлаар өөрчлөгддөг нэг гүйлтийн нотолгооны тоймтой харьцуулдаггүй).
 
-Regenerate the canonical fixtures and manifest:
+Каноник бэхэлгээг сэргээж, дараахыг харуулна:
 
 ```bash
 cargo xtask zk-vote-tally-bundle \
@@ -112,7 +111,7 @@ cargo xtask zk-vote-tally-bundle \
   --attestation fixtures/zk/vote_tally/bundle.attestation.json
 ```
 
-Verify the checked-in artifacts remain current (requires the fixture directory to contain the baseline bundle):
+Бүртгүүлсэн олдворууд одоо байгаа хэвээр байгаа эсэхийг шалгана уу (төхөөрөмжийн лавлах нь үндсэн багцыг агуулсан байхыг шаарддаг):
 
 ```bash
 cargo xtask zk-vote-tally-bundle \
@@ -121,7 +120,7 @@ cargo xtask zk-vote-tally-bundle \
   --attestation fixtures/zk/vote_tally/bundle.attestation.json
 ```
 
-Example manifest:
+Манифестийн жишээ:
 
 ```jsonc
 {
@@ -157,43 +156,41 @@ Example manifest:
 }
 ```
 
-Store the current manifest next to your canonical artifacts (for example at `fixtures/zk/vote_tally/bundle.attestation.json`). The upstream repository keeps this directory empty to avoid committing large binary bundles, so seed it locally before relying on `--verify`.
+Одоогийн манифестийг өөрийн каноник олдворуудын хажууд хадгал (жишээ нь `fixtures/zk/vote_tally/bundle.attestation.json`). Дээд талын репозитор нь том хоёртын багц үүсгэхгүйн тулд энэ лавлахыг хоосон байлгадаг тул `--verify` дээр найдахаасаа өмнө үүнийг дотооддоо суулгаарай.
 
-`generated_unix_ms` is derived deterministically from the commitment/verifying-key fingerprint so it remains stable across regenerations. The generator uses a fixed ChaCha20 transcript, so the metadata, verifying key, and proof envelope hashes are reproducible. Any digest mismatch now indicates drift that must be investigated. Auditors should record the emitted values alongside the artefacts they attest.
+`generated_unix_ms` нь амлалт/баталгаажуулах гол хурууны хээгээс тодорхойлогддог тул нөхөн төлжилтийн үед тогтвортой хэвээр байна. Генератор нь тогтсон ChaCha20 хуулбарыг ашигладаг тул мета өгөгдөл, баталгаажуулах түлхүүр болон нотлох дугтуйны хэшийг хуулбарлах боломжтой. Аливаа задаргаатай таарахгүй байх нь одоо судлах ёстой шилжилт хөдөлгөөнийг илтгэнэ. Аудиторууд ялгарсан утгыг баталгаажуулсан олдворуудын хамт бүртгэх ёстой.
 
-Workflow reminder:
+Ажлын урсгалын сануулга:
 
-1. Run `cargo xtask zk-vote-tally-bundle --out fixtures/zk/vote_tally --print-hashes --attestation fixtures/zk/vote_tally/bundle.attestation.json` to seed the bundle locally.
-2. Commit or archive the resulting artefacts as needed.
-3. Use `--verify` on subsequent regenerations to ensure the attestation matches the canonical bundle.
+1. Багцыг дотооддоо суулгахын тулд `cargo xtask zk-vote-tally-bundle --out fixtures/zk/vote_tally --print-hashes --attestation fixtures/zk/vote_tally/bundle.attestation.json`-г ажиллуул.
+2. Үүссэн олдворуудыг шаардлагатай гэж үзэх юм уу архивлах.
+3. Баталгаажуулалт нь каноник багцтай тохирч байгаа эсэхийг баталгаажуулахын тулд дараагийн нөхөн сэргээхэд `--verify`-г ашиглана.
 
-Internally the task runs the deterministic generator in `xtask/src/vote_tally.rs`, which:
+Даалгавар нь дотооддоо `xtask/src/vote_tally.rs` дахь детерминист үүсгэгчийг ажиллуулдаг бөгөөд үүнд:
 
-1. Samples the witnesses (`v = 1`, `ρ = 12345`, siblings `10..17`)
-2. Runs `keygen_vk`/`keygen_pk`
-3. Produces a Halo2 proof and wraps it in a ZK1 envelope (including public instances)
-4. Emits the verifying key record with the appropriate `public_inputs_schema_hash`
+1. Гэрчүүдээс дээж авах (`v = 1`, `ρ = 12345`, ах дүү нар `10..17`)
+2. `keygen_vk`/`keygen_pk` ажиллуулна
+3. Halo2 нотолгоог гаргаж, ZK1 дугтуйнд (олон нийтийн жишээг оруулаад) боож өгнө.
+4. Тохирох `public_inputs_schema_hash`-ээр баталгаажуулах түлхүүрийн бичлэгийг гаргадаг.
 
-## Tamper Coverage
+## Хөндлөнгийн хамрах хүрээ
 
-`crates/iroha_core/tests/zk_vote_tally_audit.rs` loads the bundle and checks:
+`crates/iroha_core/tests/zk_vote_tally_audit.rs` багцыг ачаалж, шалгана:
 
-- The genuine proof verifies against the bundled inline VK.
-- Flipping any byte in the commitment column causes verification to fail.
-- Flipping any byte in the root column causes verification to fail.
+- Жинхэнэ нотолгоо нь багцалсан Inline VK-г баталгаажуулдаг.
+- Амлалт баганад дурын байтыг эргүүлэх нь баталгаажуулалт амжилтгүй болоход хүргэдэг.
+- Үндсэн баганад дурын байтыг эргүүлэх нь баталгаажуулалт амжилтгүй болоход хүргэдэг.Эдгээр регрессийн тестүүд нь Torii (болон хостууд) нотлох баримт үүсгэсний дараа олон нийтийн оролтыг өөрчилсөн дугтуйнаас татгалзахыг баталгаажуулдаг.
 
-These regression tests guarantee Torii (and hosts) reject envelopes whose public inputs are tampered after proof generation.
-
-Run the regression locally with:
+Регрессийг локалаар ажиллуулна уу:
 
 ```bash
 cargo test -p iroha_core zk_vote_tally_audit -- --nocapture
 ```
 
-## Audit Checklist
+## Аудитын хяналтын хуудас
 
-1. Review `VoteBoolCommitMerkle::<8>` for constraint completeness and constant selection.
-2. Re-run `cargo xtask zk-vote-tally-bundle --verify --print-hashes` to reproduce the VK/proof and confirm the recorded hashes.
-3. Confirm Torii’s tally handler uses the same backend identifier and envelope layout.
-4. Execute the tamper regression to ensure mutated proofs fail verification.
-5. Hash and gossip the `bundle.attestation.json` output (Blake2b-256) so reviewers can log the canonical manifest alongside their attestations.
+1. `VoteBoolCommitMerkle::<8>`-д хязгаарлалтын бүрэн байдал, байнгын сонголттой эсэхийг шалгана уу.
+2. VK/proof-г хуулбарлахын тулд `cargo xtask zk-vote-tally-bundle --verify --print-hashes`-г дахин ажиллуулж, бүртгэгдсэн хэшийг баталгаажуулна.
+3. Torii-ийн тооцоологч нь ижил арын танигч болон дугтуйны байршлыг ашигладаг болохыг баталгаажуулна уу.
+4. Хувиргасан нотолгоог баталгаажуулж чадахгүй байхын тулд хөндлөнгийн регрессийг гүйцэтгэнэ.
+5. `bundle.attestation.json` гаралтыг (Blake2b-256) хэш хийж, хов жив хийснээр тоймчид өөрсдийн баталгаажуулалтын хажууд каноник манифестыг бүртгэх боломжтой.

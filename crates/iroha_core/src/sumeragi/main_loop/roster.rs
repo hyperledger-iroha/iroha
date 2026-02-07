@@ -28,9 +28,14 @@ pub(super) fn canonicalize_roster(roster: Vec<PeerId>) -> Vec<PeerId> {
 
 pub(super) fn canonicalize_roster_for_mode(
     roster: Vec<PeerId>,
-    _consensus_mode: ConsensusMode,
+    consensus_mode: ConsensusMode,
 ) -> Vec<PeerId> {
-    canonicalize_roster(roster)
+    match consensus_mode {
+        // Permissioned roster hashes stay canonicalized for deterministic commit-QC validation.
+        ConsensusMode::Permissioned => canonicalize_roster(roster),
+        // NPoS bootstrap/recovery follows active topology ordering.
+        ConsensusMode::Npos => dedup_preserving_order(roster),
+    }
 }
 
 #[allow(dead_code)]

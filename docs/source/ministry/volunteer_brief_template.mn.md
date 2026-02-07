@@ -9,70 +9,69 @@ source_last_modified: "2025-12-29T18:16:35.984008+00:00"
 translation_last_reviewed: 2026-02-07
 title: Volunteer Brief Template
 summary: Structured template for roadmap item MINFO-3a covering balanced briefs, fact tables, conflict disclosures, and moderation tags.
+translator: machine-google-reviewed
 ---
 
-# Volunteer Brief Template (MINFO-3a)
+# Сайн дурын ажилтны товч загвар (MINFO-3a)
 
-Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure.**
+Замын зургийн лавлагаа: **MINFO-3a — Тэнцвэржүүлсэн товч загварууд ба зөрчилдөөнийг тодруулах.**
 
-Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
+Сайн дурын товч танилцуулгад хар жагсаалтад өөрчлөлт оруулах эсвэл бусад яамыг хэрэгжүүлэх санал гаргах үед иргэдийн зөвлөл засаглалыг хянаж үзэхийг хүсч буй байр суурийг нэгтгэн харуулав. MINFO-3a нь товч мэдээлэл бүр тодорхойлогч бүтцийг дагаж мөрдөхийг шаарддаг бөгөөд ингэснээр ил тод байдлын дамжуулах хоолой нь (1) харьцуулж болохуйц баримтын хүснэгтүүдийг гаргах, (2) ашиг сонирхлын зөрчлийг илчлэхийг баталгаажуулах, (3) сэдвээс гадуурх материалыг автоматаар буулгах эсвэл дарцаглах боломжтой. Энэ хуудас нь `cargo xtask ministry-transparency`-д илгээсэн багаж хэрэгслээр хүлээгдэж буй каноник талбарууд, CSV маягийн баримтын хүснэгтийн байршил, зохицуулалтын шошгыг тодорхойлдог.
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> **Norito схем:** `iroha_data_model::ministry::VolunteerBriefV1` бүтэц (хувилбар `1`) нь одоо бүх илгээлтийн эрх бүхий схем болсон. Багаж хэрэгсэл болон портал баталгаажуулагч нь товч мэдээлэл нийтлэх эсвэл самбарын хураангуй хэсэгт лавлахаасаа өмнө `VolunteerBriefV1::validate` руу залгана.
 
-## Submission payload structure
+## Илгээх ачааллын бүтэц
 
-| Section | Fields | Requirements |
+| хэсэг | Талбарууд | Тавигдах шаардлага |
 |---------|--------|--------------|
-| **Envelope** | `version` (u16) | Must be `1`. The version guard allows the Ministry to evolve the schema without ambiguity. |
-| **Identity & stance** | `brief_id` (string, unique per calendar year), `proposal_id` (links to the blacklist or policy motion), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC 3339) | All fields required. `stance` feeds dashboards and must match the allowed vocabulary. |
-| **Author info** | `author.name`, `author.organization` (optional), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` is redacted from public dashboards but stored in the raw artefact. Set `no_conflicts_certified: true` only if the author attests that no disclosures apply. |
-| **Summary** | `summary.title`, `summary.abstract`, `summary.requested_action` | Textual overview surfaced beside the fact table. Limit `summary.abstract` to ≤2 000 characters. |
-| **Fact table** | `fact_table` array (see next section) | Required even for short briefs. The CLI and transparency ingest job reject submissions without a fact table. |
-| **Disclosures** | `disclosures` array OR `author.no_conflicts_certified: true` | Each disclosure row must include `type` (`financial`, `employment`, `governance`, `family`, `other`), `entity`, `relationship`, and `details`. |
-| **Moderation metadata** | `moderation.off_topic` (bool), `moderation.tags` (array of enum strings), `moderation.notes` | Used by reviewers to suppress astroturfing or unrelated submissions. Off-topic entries do not contribute to dashboards. |
+| **Дугтуй** | `version` (u16) | `1` байх ёстой. Хувилбарын хамгаалалт нь яаманд бүдүүвчийг тодорхой бус байдлаар хөгжүүлэх боломжийг олгодог. |
+| **Өөрийн шинж чанар, байр суурь** | `brief_id` (мөр, хуанлийн жилд өвөрмөц), `proposal_id` (хар жагсаалт эсвэл бодлогын хөдөлгөөний холбоосууд), `language` (BCP-47), `stance` (`support`/`oppose`/`context`), `submitted_at` (RFC3339) | Шаардлагатай бүх талбар. `stance` хяналтын самбарыг тэжээх ба зөвшөөрөгдсөн үгсийн сантай тохирч байх ёстой. |
+| **Зохиогчийн мэдээлэл** | `author.name`, `author.organization` (заавал биш), `author.contact`, `author.no_conflicts_certified` (bool) | `author.contact` нь олон нийтийн хяналтын самбараас засварлагдсан боловч түүхий эд өлгийн зүйлд хадгалагддаг. Зөвхөн зохиогч ямар нэгэн тодруулга хийхгүй гэдгийг нотолсон тохиолдолд л `no_conflicts_certified: true`-г тохируулна уу. |
+| ** Хураангуй** | `summary.title`, `summary.abstract`, `summary.requested_action` | Текстийн тойм нь баримтын хүснэгтийн хажууд гарч ирэв. `summary.abstract`-г ≤2000 тэмдэгтээр хязгаарлах. |
+| **Баримт хүснэгт** | `fact_table` массив (дараагийн хэсгийг үзнэ үү) | Богино товчлолд хүртэл шаардлагатай. CLI болон ил тод байдал нь баримтын хүснэгтгүйгээр илгээлтээс татгалздаг. |
+| **Тодруулга** | `disclosures` массив OR `author.no_conflicts_certified: true` | Ил тод болгох мөр бүр `type` (`financial`, `employment`, `governance`, `family`, `other`), `other`, I180300, `relationship`, `details`. |
+| **Модерация метадата** | `moderation.off_topic` (bool), `moderation.tags` (тооцооны мөрийн массив), `moderation.notes` | Шүүмжлэгч нар астротурфинг эсвэл хамааралгүй мэдүүлгийг дарах зорилгоор ашигладаг. Сэдвээс гадуурх бичлэгүүд нь хяналтын самбарт нэмэр болохгүй. |
 
-## Fact table specification
+## Баримт хүснэгтийн тодорхойлолт
 
-Each `fact_table` row captures a machine-readable claim. Store the rows as JSON objects with the following fields:
-
-| Field | Description |
+`fact_table` мөр бүр машинд уншигдахуйц нэхэмжлэлийг агуулна. Дараах талбар бүхий мөрүүдийг JSON объект болгон хадгална уу:| Талбай | Тодорхойлолт |
 |-------|-------------|
-| `claim_id` | Stable identifier (e.g., `VB-2026-04-F1`). |
-| `claim` | Single-sentence statement of fact or impact. |
-| `status` | One of `corroborated`, `disputed`, `context-only`. |
-| `impact` | Array containing one or more of `governance`, `technical`, `compliance`, `community`. |
-| `citations` | Non-empty array of strings. URLs, Torii case IDs, or CID references are accepted. |
-| `evidence_digest` | Optional BLAKE3 checksum of supporting documents. |
+| `claim_id` | Тогтвортой танигч (жишээ нь, `VB-2026-04-F1`). |
+| `claim` | Баримт эсвэл нөлөөллийн нэг өгүүлбэртэй мэдэгдэл. |
+| `status` | `corroborated`, `disputed`, `context-only`-ийн нэг. |
+| `impact` | `governance`, `technical`, `compliance`, `community`-ийн нэг буюу хэд хэдэн агуулсан массив. |
+| `citations` | Мөрний хоосон бус массив. URL, Torii тохиолдлын ID эсвэл CID лавлагааг хүлээн авна. |
+| `evidence_digest` | Дагалдах баримт бичгийн нэмэлт BLAKE3 шалгах нийлбэр. |
 
-Automation notes:
-- The ingest job counts `fact_rows` and `fact_rows_with_citation` to build publication scorecards. Rows without citations still appear in the human-readable table but are tracked as missing evidence.
-- Keep claims concise and reference the same identifiers used in governance proposals so cross-linking is deterministic.
+Автоматжуулалтын тэмдэглэл:
+- Залгих ажлыг `fact_rows` болон `fact_rows_with_citation` тоолж, нийтлэлийн онооны картыг бий болгоно. Ишлэлгүй мөрүүд нь хүний ​​унших боломжтой хүснэгтэд харагдсан хэвээр байгаа боловч нотлох баримт байхгүй гэж хянагддаг.
+- Нэхэмжлэлийг товчхон байлгаж, засаглалын саналд ашигласан ижил танигчийг лавлана уу.
 
-## Conflict disclosure requirements
+## Зөрчилдөөнийг ил болгох шаардлага
 
-1. Provide at least one disclosure entry when a financial, employment, governance, or familial tie exists.
-2. Use `author.no_conflicts_certified: true` to assert “no known conflicts.” Submissions must include either a disclosure entry or a `true` certification; otherwise, they’re flagged during ingest.
-3. Include `disclosures[i].evidence` whenever public documentation exists (e.g., corporate filings, DAO votes). Evidence is optional for “none” certifications but strongly recommended.
+1. Санхүү, ажил эрхлэлт, засаглал, гэр бүлийн холбоотой байгаа тохиолдолд дор хаяж нэг тодруулгын бичилт оруулах.
+2. `author.no_conflicts_certified: true` ашиглан "мэдэгдэж байгаа зөрчил байхгүй" гэж баталгаажуулна уу. Илгээсэн материал нь тодруулга эсвэл `true` гэрчилгээг агуулсан байх ёстой; эс бөгөөс тэдгээрийг нэвтрүүлэх явцад дарцагласан байна.
+3. Олон нийтийн баримт бичиг (жишээ нь, корпорацийн мэдүүлэг, DAO-ын санал) байгаа тохиолдолд `disclosures[i].evidence`-г оруулна уу. Нотлох баримт нь "байхгүй" гэрчилгээнд заавал байх ёстой боловч маш их зөвлөж байна.
 
-## Moderation tags & off-topic handling
+## Зохицуулах шошгууд ба сэдвээс гадуурх зохицуулалт
 
-Moderation reviewers can label submissions before they enter the transparency pipeline:
+Зохицуулах хянагч нар ил тод байдлын шугамд орохоосоо өмнө мэдүүлэгт шошго тавьж болно:
 
-- `moderation.off_topic: true` removes the entry from aggregate counts while incrementing an `off_topic_rejections` counter. The row is still available in raw archives for audit.
-- `moderation.tags` accepts enum values: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `policy-escalation`. Tags help downstream reviewers triage without re-reading the full brief.
-- `moderation.notes` stores a short justification for the moderation decision (≤512 characters).
+- `moderation.off_topic: true` нь `off_topic_rejections` тоолуурыг нэмэгдүүлэхийн зэрэгцээ нийт тооноос оруулгыг устгадаг. Энэ мөр нь аудит хийхээр түүхий архивт байгаа хэвээр байна.
+- `moderation.tags` тооллын утгыг хүлээн авдаг: `duplicate`, `needs-translation`, `needs-follow-up`, `spam`, `astroturf`, `astroturf`, Norito. Шошго нь тоймыг бүрэн эхээр нь дахин уншихгүйгээр тоймчдод түрүүлэхэд тусалдаг.
+- `moderation.notes` нь зохицуулах шийдвэрийн товч үндэслэлийг (≤512 тэмдэгт) хадгалдаг.
 
-## Submission checklist
+## Өргөдлийг шалгах хуудас
 
-1. Fill out the JSON payload using this template or the helper CLI described below.
-2. Populate at least one fact table row; include citations for each row.
-3. Provide disclosures or explicitly set `author.no_conflicts_certified: true`.
-4. Attach moderation metadata (default `off_topic: false`) so reviewers can triage quickly.
-5. Validate the payload with `cargo xtask ministry-transparency ingest --volunteer <file>` or any Norito validator before uploading.
+1. Энэ загвар эсвэл доор тайлбарласан туслах CLI ашиглан JSON ачааллыг бөглөнө үү.
+2. Дор хаяж нэг баримтын хүснэгтийн мөрийг бөглөнө үү; мөр бүрт ишлэл оруулах.
+3. Тодруулга өгөх эсвэл `author.no_conflicts_certified: true`-ийг тодорхой зааж өгөх.
+4. Зохицуулах мета өгөгдлийг (өгөгдмөл `off_topic: false`) хавсаргаснаар хянагчдыг хурдан шалгана.
+5. Байршуулахын өмнө ачааллыг `cargo xtask ministry-transparency ingest --volunteer <file>` эсвэл ямар нэгэн Norito баталгаажуулагчаар баталгаажуулна уу.
 
-## Validation CLI (MINFO-3)
+## Баталгаажуулах CLI (MINFO-3)
 
-The repository now ships a dedicated validator for volunteer briefs:
+Хадгалах газар одоо сайн дурынхны товч мэдээлэлд зориулсан тусгай баталгаажуулагчийг илгээдэг.
 
 ```bash
 cargo xtask ministry-transparency volunteer-validate \
@@ -80,32 +79,30 @@ cargo xtask ministry-transparency volunteer-validate \
   --json-output artifacts/ministry/volunteer_lint_report.json
 ```
 
-Key behaviour:
+Гол зан үйл:- Хувь хүний ​​JSON объектууд *эсвэл* мэдээллийн массивуудыг хүлээн авна; `--input`-г олон удаа дамжуулж, нэг гүйлтээр хэд хэдэн файлыг хөнддөг.
+- Алдаа, сэрэмжлүүлгийн тоог харуулсан товч тоймыг гаргадаг; Анхааруулга нь хоосон ишлэлийн жагсаалт эсвэл хэт урт тэмдэглэлийг онцлон тэмдэглэдэг бол алдаа нь нийтлэлийг блоклодог.
+- Шаардлагатай талбарууд (`brief_id`, `proposal_id`, `stance`, баримтын хүснэгтийн агуулга, тодруулга эсвэл `no_conflicts_certified`) энэ загвартай тохирч, тооллын утгууд баримтжуулсан үгсийн санд үлдэхийг баталгаажуулна.
+- `--json-output <path>`-г тохируулах үед баталгаажуулагч нь товч мэдээлэл (саналын ID, байр суурь, байдал, алдаа/сануулга) бүрийг хураангуйлан машинд уншигдахуйц манифест бичдэг. Порталын `npm run generate:volunteer-lint` тушаал нь саналын хуудас бүрийн хажууд хөвөнгийн статусыг харуулахын тулд энэ манифестийг зарцуулдаг.
 
-- Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
-- Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
-- Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+Сайн дурынхны ирүүлсэн материалыг ил тод байдлын ажилд хүрэхээс өмнө **MINFO-3**-д нийцүүлэн байлгахын тулд тушаалыг портал ажлын урсгал эсвэл CI-д нэгтгэнэ үү.
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+## Ачааллын жишээ
 
-## Example payload
+Баримт хүснэгтийн мөр, тодруулга, зохицуулалтын шошго зэрэг бүрэн дүүрэн жишээг `docs/examples/ministry/volunteer_brief_template.json`-ээс үзнэ үү. Доод талын хяналтын самбарууд нь түүхий JSON-г хэрэглэж, автоматаар тооцоолно:
 
-See `docs/examples/ministry/volunteer_brief_template.json` for a fully populated example, including fact table rows, disclosures, and moderation tags. Downstream dashboards consume the raw JSON and automatically calculate:
-
-- `total_briefs` (off-topic submissions excluded)
+- `total_briefs` (сэдвээс гадуурх материалыг хассан)
 - `fact_rows` / `fact_rows_with_citation`
 - `disclosures_missing`
 - `off_topic_rejections`
 
-If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
+Хэрэв шинэ талбар шаардлагатай бол засаглалын нотлох баримтыг дахин гаргах боломжтой хэвээр байлгахын тулд энэ баримт бичиг болон хураангуйлагчийг (`xtask/src/ministry.rs`) ижил өөрчлөлтөөр шинэчилнэ үү.
 
-## Publication SLA & portal surfacing (MINFO-3)
+## Нийтлэлийн SLA ба порталын гадаргуу (MINFO-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+Иргэдийн мэдүүлгийг ил тод байлгахын тулд портал одоо баталгаажуулалтад тэнцсэний дараа тогтмол хэмжүүрийн талаарх товч мэдээллийг нийтэлдэг.
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. **T+0–6цаг:** сайн дурынхны хүлээн авах маягт буюу `cargo xtask ministry-transparency ingest`-ээр дамжуулан материалаа илгээнэ. Баталгаажуулагчид `VolunteerBriefV1::validate` ажиллуулж, алдаатай ачааллаас татгалзаж, хулсны тайлан (дугасан тодруулга, давхардсан баримт гэх мэт) гаргадаг.
+2. **T+6–24цаг:** хүлээн зөвшөөрөгдсөн товч мэдээллийг орчуулах/triage хийх дараалалд тавьдаг. Зохицуулах шошгуудыг (`needs-translation`, `duplicate`, `policy-escalation`, …) хэрэглэж, сэдвээс гадуурх оруулгуудыг архивласан боловч нэгтгэсэн тооноос хассан.
+3. **T+24–48цаг:** портал нь холбогдох саналын хуудасны хамт товч мэдээллийг нийтэлдэг. Нийтэлсэн санал бүр нь одоо "Сайн дурынхны санал бодол"-той холбогдож байгаа тул хянагчид JSON-г нээхгүйгээр дэмжлэг/эсэргүүцэл/контекст тоймыг унших боломжтой.
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Operators can audit the SLA via the **Volunteer Briefs** page in the docs portal (`docs/portal/docs/ministry/volunteer-briefs.md`), which lists the latest publication windows, lint status, and links to Norito artefacts.
+Хэрэв мэдүүлгийг `policy-escalation` эсвэл `astroturf` гэж тэмдэглэсэн бол SLA нь **12 цаг** хүртэл чангардаг тул засаглал хурдан хариу өгөх боломжтой. Операторууд SLA-г docs порталын (`docs/portal/docs/ministry/volunteer-briefs.md`) **Сайн дурын товчоо** хуудсаар дамжуулан аудит хийх боломжтой бөгөөд энэ нь хамгийн сүүлийн үеийн нийтлэлийн цонх, хөвөнгийн байдал, Norito олдворуудын холбоосыг жагсаасан болно.

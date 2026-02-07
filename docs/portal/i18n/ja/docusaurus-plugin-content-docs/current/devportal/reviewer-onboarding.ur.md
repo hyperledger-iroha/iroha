@@ -4,58 +4,60 @@ direction: ltr
 source: docs/portal/docs/devportal/reviewer-onboarding.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# پریویو ریویور آن بورڈنگ
+#پریویو ریویور آن بورڈنگ
 
-## جائزہ
+## やあ
 
-DOCS-SORA ڈویلپر پورٹل کے مرحلہ وار لانچ کو ٹریک کرتا ہے۔ checksum-gated builds
-(`npm run serve`) اور مضبوط Try it فلو اگلا سنگ میل کھولتے ہیں: پبلک پریویو کے وسیع پیمانے پر
-کھلنے سے پہلے ویری فائیڈ ریویورز کی آن بورڈنگ۔ یہ گائیڈ بیان کرتا ہے کہ درخواستیں کیسے جمع کی جائیں،
-اہلیت کیسے چیک کی جائے، رسائی کیسے دی جائے، اور شرکاء کو محفوظ طریقے سے آف بورڈ کیسے کیا جائے۔
-کوهورٹ پلاننگ، دعوتی cadence، اور ٹیلی میٹری exports کے لئے
-[preview invite flow](./preview-invite-flow.md) دیکھیں؛ نیچے کے مراحل اس پر فوکس کرتے ہیں
-کہ ریویور منتخب ہونے کے بعد کون سی کارروائیاں کرنی ہیں۔
+DOCS-SORA 問題を解決する 問題を解決するチェックサムゲートされたビルド
+(`npm run serve`) 試してみてください فلو اگلا سنگ میل کھولتے ہیں: پبلک پریویو کے وسیع پیمانے پر
+٩ھلنے سے پہلے ویری فائیڈ ریویورز کی آن بورڈنگ۔ یہ گائیڈ بیان کرتا ہے کہ درخواستیں کیسے جمع کی جائیں،
+और देखें آف بورڈ کیسے کیا جائے۔
+生産性の向上 生産性の向上 輸出の生産性
+[プレビュー招待フロー](./preview-invite-flow.md) دیکھیں؛ فیچے کے مراحل اس پر فوکس کرتے ہیں
+کہ ریویور منتخب ہونے کے بعد کون سی کاروائیاں کرنی ہیں۔
 
-- **اسکوپ:** وہ ریویورز جنہیں GA سے پہلے docs preview (`docs-preview.sora`, GitHub Pages builds، یا SoraFS bundles) تک رسائی درکار ہے۔
-- **آؤٹ آف اسکوپ:** Torii یا SoraFS آپریٹرز (اپنے onboarding kits میں کور) اور پروڈکشن پورٹل deployments (دیکھیں [`devportal/deploy-guide`](./deploy-guide.md))۔
+- **回答:** GA ドキュメント プレビュー (`docs-preview.sora`、GitHub Pages ビルド、SoraFS バンドル) の評価درکار ہے۔
+- **آؤٹ آف اسکوپ:** Torii یا SoraFS آپریٹرز (اپنے オンボーディング キット میں کور) ال展開 (دیکھیں [`devportal/deploy-guide`](./deploy-guide.md))۔
 
-## رولز اور پری ریکویزٹس
+## پری ریکویزٹس
 
-| رول | عام اہداف | مطلوبہ artifacts | نوٹس |
+| | | और देखेंアーティファクト |にゅう |
 | --- | --- | --- | --- |
-| Core maintainer | نئی گائیڈز ویری فائی کرنا، smoke tests چلانا۔ | GitHub handle، Matrix contact، signed CLA فائل پر۔ | عموما پہلے سے `docs-preview` GitHub ٹیم میں ہوتا ہے؛ پھر بھی درخواست درج کریں تاکہ رسائی auditable رہے۔ |
-| Partner reviewer | پبلک ریلیز سے پہلے SDK snippets یا governance content ویری فائی کرنا۔ | Corporate email، legal POC، signed preview terms۔ | ٹیلی میٹری + data handling requirements کی منظوری لازم ہے۔ |
-| Community volunteer | گائیڈز پر usability feedback دینا۔ | GitHub handle، preferred contact، timezone، CoC قبولیت۔ | کوہورٹس چھوٹے رکھیں؛ contributor agreement سائن کرنے والے ریویورز کو ترجیح دیں۔ |
+|コアメンテナー |煙テスト| GitHub ハンドル、Matrix 連絡先、CLA 署名済み| عموما پہلے سے `docs-preview` GitHub ٹیم میں ہوتا ہے؛ پھر بھی درخواست درج کریں تاکہ رسائی 監査可能 رہے۔ |
+|パートナーレビューアー | SDK スニペット ガバナンス コンテンツ فائی کرنا۔ |企業メール、法的 POC、署名されたプレビュー規約| ٹیلی میٹری + データ処理要件 کی منظوری لازم ہے۔ |
+|地域ボランティア |ユーザビリティに関するフィードバック| GitHub ハンドル、優先連絡先、タイムゾーン、CoC など| ٩وہورٹس چھوٹے رکھیں؛貢献者契約 سائن کرنے والے ریویورز کو ترجیح دیں۔ |
 
-تمام ریویور اقسام کو لازمی ہے کہ:
+回答:
 
-1. preview artifacts کے لئے acceptable-use پالیسی تسلیم کریں۔
-2. security/observability appendices پڑھیں
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-3. لوکل snapshot serve کرنے سے پہلے `docs/portal/scripts/preview_verify.sh` چلانے پر رضامند ہوں۔
+1. アーティファクトのプレビューと使用許可の確認
+2. セキュリティ/可観測性の付録
+   ([`security-hardening`](./security-hardening.md)、
+   [`observability`](./observability.md)、
+   [`incident-runbooks`](./incident-runbooks.md))。
+3. スナップショット サーブ سے پہلے `docs/portal/scripts/preview_verify.sh` چلانے پر رضامند ہوں۔
 
-## Intake ورک فلو
+## 摂取量
 
-1. درخواست دینے والے سے
+1. और देखें
    [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   فارم بھرنے کو کہیں (یا issue میں copy/paste کریں)۔ کم از کم یہ ریکارڈ کریں: شناخت، رابطے کا طریقہ،
-   GitHub handle، مجوزہ review dates، اور security docs پڑھنے کی تصدیق۔
-2. درخواست کو `docs-preview` tracker (GitHub issue یا governance ticket) میں درج کریں اور approver assign کریں۔
+   فارم بھرنے کو کہیں (یا issue میں コピー/ペースト کریں)۔ کم از کم یہ ریکارڈ کریں: شناخت، رابطے کا طریقہ،
+   GitHub ハンドルのレビュー日付とセキュリティ ドキュメントの日付
+2. `docs-preview` トラッカー (GitHub 発行ガバナンス チケット) 承認者割り当て
 3. پری ریکویزٹس چیک کریں:
-   - CLA / contributor agreement فائل پر موجود ہو (یا partner contract reference)۔
-   - acceptable-use acknowledgement درخواست میں محفوظ ہو۔
-   - risk assessment مکمل ہو (مثال: partner reviewers کو Legal نے approve کیا ہو)۔
-4. Approver درخواست میں sign-off کرے اور tracking issue کو کسی بھی change-management entry سے لنک کرے
-   (مثال: `DOCS-SORA-Preview-####`)۔
+   - CLA / 貢献者契約 فائل پر موجود ہو (パートナー契約参照)۔
+   - 使用許諾の承認 درخواست میں محفوظ ہو۔
+   - リスク評価 (リスク評価: パートナーのレビュー担当者が法的承認を承認)۔
+4. 承認者 サインオフ 問題の追跡 変更管理エントリ 承認
+   (意味: `DOCS-SORA-Preview-####`)۔
 
-## Provisioning اور ٹولنگ
+## プロビジョニング
 
-1. **Artifacts شیئر کریں** — CI workflow یا SoraFS pin سے تازہ ترین preview descriptor + archive فراہم کریں
-   (`docs-portal-preview` artifact)۔ ریویورز کو یاد دلائیں کہ چلائیں:
+1. **アーティファクトの説明** — CI ワークフロー SoraFS ピンの作成とプレビュー記述子 + アーカイブの作成
+   (`docs-portal-preview` アーティファクト)۔アカウント:
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -64,54 +66,52 @@ DOCS-SORA ڈویلپر پورٹل کے مرحلہ وار لانچ کو ٹریک 
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Checksum enforcement کے ساتھ serve کریں** — ریویورز کو checksum-gated کمانڈ کی طرف ریفر کریں:
+2. **チェックサムの強制機能** — チェックサムゲートの機能:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-   یہ `scripts/serve-verified-preview.mjs` کو reuse کرتا ہے تاکہ کوئی unverified build غلطی سے لانچ نہ ہو۔
+   یہ `scripts/serve-verified-preview.mjs` کو 再利用 کرتا ہے تاکہ کوئی 未検証のビルド غلطی سے لانچ نہ ہو۔
 
-3. **GitHub رسائی دیں (اختیاری)** — اگر ریویورز کو unpublished branches چاہییں تو انہیں review مدت کے لئے
-   `docs-preview` GitHub ٹیم میں شامل کریں اور membership تبدیلی درخواست میں درج کریں۔
+3. **GitHub رسائی دیں (اختیاری)** — اگر ریویورز کو 未公開ブランチ چاہییں تو انہیں review مدت کے لئے
+   `docs-preview` GitHub ٹیم میں شامل کریں اور メンバーシップ تبدیلی درخواست میں درج کریں۔
 
-4. **Support channels شیئر کریں** — on-call contact (Matrix/Slack) اور incident procedure
+4. **サポート チャネル شیئر کریں** — オンコール連絡先 (Matrix/Slack) およびインシデント手順
    [`incident-runbooks`](./incident-runbooks.md) سے شیئر کریں۔
 
-5. **Telemetry + feedback** — ریویورز کو یاد دلائیں کہ anonymized analytics جمع کی جاتی ہے
-   (دیکھیں [`observability`](./observability.md))۔ دعوت میں دیے گئے feedback form یا issue template فراہم کریں
-   اور event کو [`preview-feedback-log`](./preview-feedback-log) helper سے لاگ کریں تاکہ wave summary اپ ٹو ڈیٹ رہے۔
+5. **テレメトリ + フィードバック** — 数字と数字、匿名化された分析、数字、数字
+   (دیکھیں [`observability`](./observability.md))۔ دعوت میں دیے گئے フィードバック フォーム یا 問題テンプレート فراہم کریں
+   イベント کو [`preview-feedback-log`](./preview-feedback-log) ヘルパー سے لاگ کریں تاکہ wave summary اپ ٹو ڈیٹ رہے۔
 
-## ریویور چیک لسٹ
+## سٹریویور چیک لسٹ
 
 پریویو تک رسائی سے پہلے ریویورز کو یہ مکمل کرنا ہوگا:
 
-1. downloaded artifacts verify کریں (`preview_verify.sh`)۔
-2. `npm run serve` (یا `serve:verified`) سے پورٹل لانچ کریں تاکہ checksum guard فعال ہو۔
-3. اوپر لنک کردہ security اور observability نوٹس پڑھیں۔
-4. OAuth/Try it console کو device-code login کے ذریعے ٹیسٹ کریں (اگر applicable ہو) اور production tokens دوبارہ استعمال نہ کریں۔
-5. agreed tracker میں findings درج کریں (issue، shared doc یا فارم) اور انہیں preview release tag سے tag کریں۔
+1. ダウンロードしたアーティファクトを確認します (`preview_verify.sh`)
+2. `npm run serve` (`serve:verified`) チェックサム ガード チェックサム ガード
+3. セキュリティと可観測性の確保
+4. OAuth/Try it コンソール、デバイス コード ログイン、デバイス コード ログイン、デバイス コード ログイン、デバイス コード ログイン、デバイス コード ログイン、プロダクション トークン、プロダクション トークン
+5. 合意されたトラッカーの調査結果 (問題の共有ドキュメント)、プレビュー リリース タグ、タグ、およびタグ
 
-## Maintainer ذمہ داریاں اور offboarding
-
-| مرحلہ | اقدامات |
+## メンテナー داریاں اور オフボーディング| |ありがとう |
 | --- | --- |
-| Kickoff | یقینی بنائیں کہ intake checklist درخواست کے ساتھ منسلک ہے، artifacts + ہدایات شیئر کریں، [`preview-feedback-log`](./preview-feedback-log) کے ذریعے `invite-sent` انٹری شامل کریں، اور اگر review ایک ہفتے سے زیادہ ہو تو midpoint sync شیڈول کریں۔ |
-| Monitoring | preview telemetry مانیٹر کریں (غیر معمولی Try it ٹریفک، probe failures) اور اگر کوئی مشکوک چیز ہو تو incident runbook فالو کریں۔ findings آنے پر `feedback-submitted`/`issue-opened` events لاگ کریں تاکہ wave metrics درست رہیں۔ |
-| Offboarding | عارضی GitHub یا SoraFS رسائی واپس لیں، `access-revoked` درج کریں، درخواست archive کریں (feedback summary + outstanding actions شامل کریں)، اور reviewer registry اپ ڈیٹ کریں۔ ریویور سے مقامی builds صاف کرنے کو کہیں اور [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md) سے بنا digest منسلک کریں۔ |
+|キックオフ |摂取チェックリストの摂取チェックリストの摂取チェックリストの摂取量のチェックリストの摂取量のチェックリストの摂取量のチェックリストの摂取量のチェックリストの摂取量の確認[`preview-feedback-log`](./preview-feedback-log) ذریعے `invite-sent` انٹری شامل کریں، اور اگر review ایک ہفتے سے中間点同期 ٩ریں۔ |
+|モニタリング |プレビュー テレメトリ (テスト テスト、プローブの失敗) テスト、インシデント ランブック、テスト調査結果 `feedback-submitted`/`issue-opened` イベント 波形メトリクス درست رہیں۔ |
+|オフボーディング | GitHub یا SoraFS رسائی واپس لیں، `access-revoked` درج کریں، درخواست アーカイブ کریں (フィードバックの概要 + 未解決のアクション) کریں)، اور reviewer registry اپ ڈیٹ کریں۔ سیویور مقامی builds صاف کرنے کو کہیں اور [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md) سے بنا ダイジェスト منسلک کریں۔ |
 
-ریویورز کو waves کے درمیان rotate کرتے وقت بھی یہی عمل استعمال کریں۔ repo میں paper trail
-(issue + templates) برقرار رکھنے سے DOCS-SORA auditable رہتا ہے اور governance کو تصدیق میں مدد ملتی ہے
-کہ preview access documented controls کے مطابق تھا۔
+波 کے درمیان 回転 کرتے وقت بھی یہی عمل استعمال کریں۔リポジトリの紙の軌跡
+(問題 + テンプレート) DOCS-SORA 監査可能 ガバナンス 管理 管理 管理
+プレビュー アクセス 文書化されたコントロール
 
-## Invite templates اور tracking
+## 招待テンプレートと追跡
 
-- ہر outreach کی شروعات
+- アウトリーチ活動
   [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  فائل سے کریں۔ یہ کم از کم قانونی زبان، preview checksum ہدایات، اور اس توقع کو شامل کرتی ہے کہ
-  ریویورز acceptable-use پالیسی تسلیم کریں۔
-- template ایڈٹ کرتے وقت `<preview_tag>`, `<request_ticket>` اور contact channels placeholders بدلیں۔
-  final message کی ایک کاپی intake ticket میں محفوظ کریں تاکہ ریویورز، approvers اور auditors
+  فائل سے کریں۔チェックサム プレビュー チェックサム チェックサム チェックサム チェックサム チェックサム チェックサム チェックサム チェックサム チェックサム
+  使用可能 پالیسی تسلیم کریں۔
+- テンプレート `<preview_tag>`、`<request_ticket>` 連絡先チャネル プレースホルダー بدلیں۔
+  最終メッセージ ایک کاپی 受験チケット میں محفوظ کریں تاکہ ریویورز، 承認者 اور 監査人
   بھیجے گئے الفاظ کا حوالہ دے سکیں۔
-- دعوت بھیجنے کے بعد tracking spreadsheet یا issue کو `invite_sent_at` timestamp اور متوقع end date کے ساتھ
-  اپ ڈیٹ کریں تاکہ [preview invite flow](./preview-invite-flow.md) رپورٹ خودکار طور پر cohort اٹھا سکے۔
+- 追跡スプレッドシートの発行日 `invite_sent_at` タイムスタンプ 終了日の確認
+  [プレビュー招待フロー](./preview-invite-flow.md) پورٹ خودکار طور پر cohort اٹھا سکے۔ [プレビュー招待フロー](./preview-invite-flow.md)

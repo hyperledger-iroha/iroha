@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# GPU Zstd (մետաղական) խողովակաշար
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+Այս փաստաթուղթը նկարագրում է դետերմինիստական GPU խողովակաշարը, որն օգտագործվում է Metal helper-ի կողմից
+zstd սեղմման համար. Դա նախագծման և իրականացման ուղեցույց է
+`gpuzstd_metal` օգնական, որը թողարկում է ստանդարտ zstd շրջանակներ և որոշիչ բայթեր
+տրված հաջորդականության հոսքի համար: Արդյունքները պետք է շրջադարձ կատարեն պրոցեսորի ապակոդավորիչներով. բայթ-համար-
+բայթերի հավասարություն պրոցեսորի կոմպրեսորի հետ չի պահանջվում, քանի որ հաջորդականության ստեղծումը
+տարբերվում է.
 
-## Goals
+## Գոլեր
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- Թողարկեք ստանդարտ zstd շրջանակներ, որոնք վերծանվում են CPU zstd-ի հետ նույնականությամբ; բայթերի հավասարություն
+  CPU կոմպրեսորով չի պահանջվում:
+- Դետերմինիստական ​​ելքեր ապարատային, դրայվերների և թելերի պլանավորման մեջ:
+- Հստակ սահմանների ստուգումներ և կանխատեսելի բուֆերային ժամկետներ:
 
-## Current implementation note
+## Ընթացիկ կատարման նշում
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- Համընկնումների որոնումը և հաջորդականության ստեղծումն աշխատում են GPU-ով:
+- Շրջանակի հավաքումը և էնտրոպիայի կոդավորումը (Huffman/FSE) ներկայումս աշխատում են հյուրընկալողի վրա
+  օգտագործելով ներդիրի կոդավորիչը; GPU Huffman/FSE միջուկները հավասարաչափ փորձարկված են, բայց ոչ
+  դեռ միացված է ամբողջ շրջանակի ճանապարհին:
+- Decode-ն օգտագործում է ներկառուցված շրջանակի ապակոդավորիչը՝ CPU zstd հետադարձ կապով չաջակցվող շրջանակների համար;
+  Ամբողջական GPU-ի բլոկի ապակոդավորումը դեռ ընթացքի մեջ է:
 
-## Encoding pipeline (high level)
+## Կոդավորման խողովակաշար (բարձր մակարդակ)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. Ներածման բեմադրություն
+   - Պատճենեք մուտքագրումը սարքի բուֆերի մեջ:
+   - Բաժանվել ֆիքսված չափի կտորների (հաջորդականության ստեղծման համար) և բլոկների (համար
+     zstd շրջանակի հավաքում):
+2. Համապատասխանության հայտնաբերում և հաջորդականության արտանետում
+   - GPU միջուկները սկանավորում են յուրաքանչյուր կտոր և թողարկում հաջորդականություններ (բառացի երկարություն, համընկնում
+     երկարություն, օֆսեթ):
+   - Հերթականության դասավորությունը կայուն է և որոշիչ:
+3. Բառացի պատրաստում
+   - Հավաքեք բառացիները, որոնք հղում են կատարում հաջորդականությամբ:
+   - Կառուցեք բառացի հիստոգրամներ և ընտրեք բառացի արգելափակման ռեժիմ (հում, RLE կամ
+     Հաֆման) դետերմինիստորեն:
+4. Հաֆմանի սեղաններ (բառացի)
+   - Ստեղծեք կոդի երկարություններ հիստոգրամից:
+   - Կառուցեք կանոնական աղյուսակներ դետերմինիստական կապի խախտմամբ, որը համապատասխանում է CPU-ին
+     zstd ելք.
+5. FSE աղյուսակներ (LL/ML/OF)
+   - Նորմալացնել հաճախականությունների հաշվումները:
+   - Կառուցեք FSE ապակոդավորման/կոդավորման աղյուսակներ դետերմինիստականորեն:
+6. Bitstream գրող
+   - Փաթեթավորեք փոքր կտորները (LSB-առաջին):
+   - ողողել բայթերի սահմաններում; պահոց միայն զրոներով:
+   - Քողարկեք արժեքները հայտարարված բիթերի լայնություններում և կատարեք հզորության ստուգում:
+7. Բլոկի և շրջանակի հավաքում
+   - Թողարկեք բլոկի վերնագրեր (տեսակ, չափ, վերջին բլոկի դրոշ):
+   - Շարքային բառերը և հաջորդականությունները սեղմված բլոկների մեջ:
+   - Թողարկեք ստանդարտ zstd շրջանակի վերնագրեր և կամընտիր ստուգիչ գումարներ:
 
-## Decoding pipeline (high level)
+## Ապակոդավորման խողովակաշար (բարձր մակարդակ)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. Շրջանակի վերլուծություն
+   - Վավերացրեք կախարդական բայթերը, պատուհանի կարգավորումները և շրջանակի վերնագրի դաշտերը:
+2. Bitstream ընթերցող
+   - Կարդացեք LSB-առաջին բիթերի հաջորդականությունը խիստ սահմանների ստուգմամբ:
+3. Բառացի վերծանում
+   - Վերծանեք բառացի բլոկները (հում, RLE կամ Huffman) բառացի բուֆերի մեջ:
+4. Հերթական վերծանում
+   - Վերծանել LL/ML/OF արժեքները՝ օգտագործելով FSE աղյուսակները:
+   - Վերակառուցեք լուցկիները՝ օգտագործելով լոգարիթմական պատուհանը:
+5. Արդյունք և ստուգիչ գումար
+   - Վերակառուցված բայթերը գրեք ելքային բուֆերի մեջ:
+   - Ստուգեք կամընտիր ստուգիչ գումարները, երբ միացված է:
 
-## Buffer lifetimes and ownership
+## Բուֆերային կյանքի տևողությունը և սեփականությունը- Ներածման բուֆեր՝ հոսթ -> սարք, միայն կարդալու համար:
+- Հերթականության բուֆեր. սարք, որը արտադրվում է համընկնումների որոնման արդյունքում և սպառվում է էնտրոպիայի միջոցով
+  կոդավորում; ոչ մի խաչաձեւ բլոկի վերօգտագործում:
+- Բառացի բուֆեր. սարք, որը արտադրվում է յուրաքանչյուր բլոկի համար և թողարկվում բլոկից հետո
+  արտանետում.
+- Արդյունքների բուֆեր. սարք, պահում է շրջանակի վերջնական բայթերը, մինչև հոսթավարը պատճենի դրանք
+  դուրս.
+- Scratch buffers. կրկին օգտագործվում են միջուկներում, բայց միշտ վերագրվում են դետերմինիստական ​​կերպով:
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## միջուկի պարտականությունները
 
-## Kernel responsibilities
+- Համընկնումներ գտնելու միջուկներ. գտեք համընկնումներ և թողարկեք հաջորդականություններ (LL/ML/OF + բառացի):
+- Հաֆմանի կառուցման միջուկներ. ստացեք կոդի երկարություններ և կանոնական աղյուսակներ:
+- FSE-ի կառուցման միջուկներ. կառուցել LL/ML/OF աղյուսակներ և պետական ​​մեքենաներ:
+- Արգելափակել կոդավորող միջուկները. սերիականացնել բառացիները և հաջորդականությունները բիթ հոսքի մեջ:
+- Արգելափակել վերծանման միջուկները. վերլուծել բիթ հոսքը և վերականգնել բառացիները/հաջորդականությունները:
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## Դետերմինիզմ և պարիտետային սահմանափակումներ
 
-## Determinism and parity constraints
-
-- Canonical table builds must use the same ordering and tie-breaking as CPU
+- Կանոնական աղյուսակների կառուցումները պետք է օգտագործեն նույն կարգը և կապը, ինչ CPU-ն
   zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+- Ոչ մի ատոմներ կամ կրճատումներ, որոնք կախված են թելի պլանավորումից որևէ ելքային բայթի համար:
+- Bitstream փաթեթավորումը քիչ էնդյան է, LSB-նախ; բայթերի հավասարեցման բարձիկներ զրոներով:
+- Սահմանների բոլոր ստուգումները հստակ են. անվավեր մուտքերը դետերմինիստիկ կերպով ձախողվում են:
 
-## Validation
+## Վավերացում
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+- CPU ոսկե վեկտորներ բիթսթրիմ գրողի/ընթերցողի համար:
+- Կորպուսի հավասարության թեստեր, որոնք համեմատում են GPU-ի և CPU-ի ելքերը:
+- Խեղաթյուրված շրջանակների և սահմանային պայմանների անորոշ ծածկույթ:
 
-## Benchmarking
+## Հենանիշավորում
 
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+Գործարկեք `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` դեպի
+համեմատել CPU-ն ընդդեմ GPU-ի կոդավորման հետաձգման՝ օգտակար բեռի չափերի համար: Թեստը բաց է թողնվում տանտերերի վրա
+առանց մետաղական սարքի; նկարահանել ելքը ապարատային մանրամասների հետ մեկտեղ
+GPU-ի բեռնաթափման շեմերը կարգավորելիս: Norito-ն ապահովում է նույն անջատումը
+`gpu_zstd::encode_all`, այնպես որ ուղղակի զանգողները համապատասխանում են էվրիստիկ դարպասին:

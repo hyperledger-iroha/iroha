@@ -7,169 +7,164 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9201c0027f05b1ab2c83fa6b3e1a1e6dad3ff9660a8ed23bac7667408d421ada
 source_last_modified: "2026-01-22T14:35:37.551676+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Governance Playbook
+# მმართველობის სათამაშო წიგნი
 
-This playbook captures the day-to-day rituals that keep the Sora Network
-governance council aligned. It aggregates the authoritative references from the
-repository so individual ceremonies can remain concise, while operators always
-have a single entry point for the broader process.
+ეს სათამაშო წიგნი ასახავს ყოველდღიურ რიტუალებს, რომლებიც ინარჩუნებს Sora Network-ს
+მმართველობითი საბჭო შეუერთდა. იგი აერთიანებს ავტორიტეტულ მითითებებს
+საცავი, ასე რომ ინდივიდუალური ცერემონიები შეიძლება დარჩეს ლაკონური, ხოლო ოპერატორები ყოველთვის
+გქონდეთ ერთი შესვლის წერტილი უფრო ფართო პროცესისთვის.
 
-## Council Ceremonies
+## საბჭოს ცერემონიები
 
-- **Fixture governance** – See [Sora Parliament Fixture Approval](sorafs/signing_ceremony.md)
-  for the on-chain approval flow that the Parliament’s Infrastructure Panel now
-  follows when reviewing SoraFS chunker updates.
-- **Vote tally publication** – Refer to
-  [Governance Vote Tally](governance_vote_tally.md) for the step-by-step CLI
-  workflow and reporting template.
+- **აღჭურვილობის მართვა** – იხილეთ [სორას პარლამენტის ნაგებობების დამტკიცება](sorafs/signing_ceremony.md)
+  პარლამენტის ინფრასტრუქტურის პანელი ახლა ჯაჭვური დამტკიცების ნაკადისთვის
+  შემდეგნაირად ხდება SoraFS ცუნკერის განახლებების განხილვისას.
+- **ხმის დათვლის პუბლიკაცია** – იხილეთ
+  [Governance Vote Tly] (governance_vote_tally.md) ნაბიჯ-ნაბიჯ CLI-სთვის
+  სამუშაო პროცესის და ანგარიშგების შაბლონი.
 
-## Operational Runbooks
+## ოპერატიული Runbooks
 
-- **API integrations** – [Governance API reference](governance_api.md) lists the
-  REST/gRPC surfaces exposed by council services, including authentication
-  requirements and pagination rules.
-- **Telemetry dashboards** – The Grafana JSON definitions under
-  `docs/source/grafana_*` define the “Governance Constraints” and “Scheduler
-  TEU” boards. Export the JSON into Grafana after each release to stay aligned
-  with the canonical layout.
+- **API ინტეგრაციები** – [Governance API reference](governance_api.md) ჩამოთვლის
+  REST/gRPC ზედაპირები გამოვლენილია საკრებულოს სერვისების მიერ, მათ შორის ავთენტიფიკაცია
+  მოთხოვნები და პაგინაციის წესები.
+- **ტელემეტრიის დაფები** – Grafana JSON განმარტებები ქვემოთ
+  `docs/source/grafana_*` განსაზღვრავს „მმართველობის შეზღუდვებს“ და „განრიგს“
+  TEU” დაფები. JSON-ის ექსპორტი Grafana-ში ყოველი გამოშვების შემდეგ, რათა დარჩეს თანხვედრაში
+  კანონიკური განლაგებით.
 
-## Data Availability Oversight
+## მონაცემთა ხელმისაწვდომობის ზედამხედველობა
 
-### Retention classes
+### შეკავების კლასები
 
-Parliament panels approving DA manifests must reference the enforced retention
-policy before voting. The table below mirrors the defaults enforced via
-`torii.da_ingest.replication_policy` so reviewers can spot mismatches without
-hunting for the source TOML.【docs/source/da/replication_policy.md:1】
+პარლამენტის პანელები, რომლებიც ამტკიცებენ DA მანიფესტებს, უნდა მიუთითონ იძულებით შეკავებაზე
+პოლიტიკა კენჭისყრამდე. ქვემოთ მოცემული ცხრილი ასახავს ნაგულისხმევი მოქმედებების მეშვეობით
+`torii.da_ingest.replication_policy`, რათა მიმომხილველებმა შეამჩნიონ შეუსაბამობების გარეშე
+ნადირობს TOML წყაროზე.【docs/source/da/replication_policy.md:1】
 
-| Governance tag | Blob class | Hot retention | Cold retention | Required replicas | Storage class |
-|----------------|------------|---------------|----------------|-------------------|---------------|
-| `da.taikai.live` | `taikai_segment` | 24 h | 14 d | 5 | `hot` |
-| `da.sidecar` | `nexus_lane_sidecar` | 6 h | 7 d | 4 | `warm` |
-| `da.governance` | `governance_artifact` | 12 h | 180 d | 3 | `cold` |
-| `da.default` | _all other classes_ | 6 h | 30 d | 3 | `warm` |
+| მმართველობის ტეგი | Blob კლასი | ცხელი შეკავება | სიცივის შეკავება | საჭირო ასლები | შენახვის კლასი |
+|--------------------------------------------------------------|------------------------------------------------------
+| `da.taikai.live` | `taikai_segment` | 24 სთ | 14d | 5 | `hot` |
+| `da.sidecar` | `nexus_lane_sidecar` | 6სთ | 7d | 4 | `warm` |
+| `da.governance` | `governance_artifact` | 12 სთ | 180d | 3 | `cold` |
+| `da.default` | _ყველა სხვა კლასი_ | 6სთ | 30d | 3 | `warm` |
 
-The Infrastructure Panel should attach the filled template from
-`docs/examples/da_manifest_review_template.md` to every ballot so the manifest
-digest, retention tag, and Norito artefacts remain linked in the governance
-record.
+ინფრასტრუქტურის პანელმა უნდა დაურთოს შევსებული შაბლონი
+`docs/examples/da_manifest_review_template.md` ყველა ბიულეტენზე, ასე რომ მანიფესტი
+დაიჯესტი, შეკავების ტეგი და Norito არტეფაქტები რჩება დაკავშირებული მმართველობაში
+ჩანაწერი.
 
-### Signed manifest audit trail
+### ხელმოწერილი მანიფესტის აუდიტის ბილიკი
 
-Before a ballot reaches the agenda, council staff must prove that the manifest
-bytes under review match the Parliament envelope and the SoraFS artefact. Use
-the existing tooling to collect that evidence:
-
-1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
-   or the equivalent SDK helper) so everyone hashes the same bytes that reached
-   the gateways.
-2. Run the manifest stub verifier with the signed envelope:
+სანამ კენჭისყრა დღის წესრიგში მივა, საბჭოს თანამშრომლებმა უნდა დაამტკიცონ, რომ მანიფესტი
+განხილული ბაიტები ემთხვევა პარლამენტის კონვერტს და SoraFS არტეფაქტს. გამოყენება
+არსებული ინსტრუმენტები ამ მტკიცებულებების შესაგროვებლად:1. მიიღეთ manifest-ის ნაკრები Torii-დან (`iroha app da get-blob --storage-ticket <hex>`
+   ან SDK-ის ექვივალენტი დამხმარე) ასე რომ, ყველას ჰაშიშებს იგივე ბაიტები, რომლებსაც მიაღწიეს
+   კარიბჭეები.
+2. გაუშვით ხელმოწერილი კონვერტით მანიფესტ-სტუბის დამადასტურებელი:
    ```
    cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```
-   This recomputes the BLAKE3 manifest digest, validates the
-   `chunk_digest_sha3_256`, and checks every Ed25519 signature embedded in
-   `manifest_signatures.json`. See `docs/source/sorafs/manifest_pipeline.md`
-   for additional CLI options.
-3. Copy the digest, `chunk_digest_sha3_256`, profile handle, and signer list into
-   the review template. NOTE: if the verifier reports “profile mismatch” or a
-   missing signature, halt the vote and request a corrected envelope.
-4. Store the verifier output (or CI artefact from
-   `ci/check_sorafs_fixtures.sh`) alongside the Norito `.to` payload so auditors
-   can replay the evidence without accessing internal gateways.
+   ეს ხელახლა ითვლის BLAKE3 მანიფესტის დაიჯესტს, ამოწმებს
+   `chunk_digest_sha3_256` და ამოწმებს ყველა Ed25519 ხელმოწერას, რომელიც ჩაშენებულია
+   `manifest_signatures.json`. იხილეთ `docs/source/sorafs/manifest_pipeline.md`
+   დამატებითი CLI პარამეტრებისთვის.
+3. დააკოპირეთ დაიჯესტი, `chunk_digest_sha3_256`, პროფილის სახელური და ხელმომწერთა სია
+   განხილვის შაბლონი. შენიშვნა: თუ შემმოწმებელი იტყობინება "პროფილის შეუსაბამობა" ან ა
+   აკლია ხელმოწერა, შეაჩერე კენჭისყრა და მოითხოვე შესწორებული კონვერტი.
+4. შეინახეთ დამადასტურებელი გამომავალი (ან CI არტეფაქტი დან
+   `ci/check_sorafs_fixtures.sh`) Norito `.to` დატვირთვასთან ერთად, ასე რომ აუდიტორები
+   შეუძლია მტკიცებულებების გამეორება შიდა კარიბჭეებზე წვდომის გარეშე.
 
-The resulting audit pack should let Parliament recreate every hash and signature
-check even after the manifest is rotated out of hot storage.
+შედეგად მიღებული აუდიტის პაკეტმა პარლამენტს უნდა მისცეს საშუალება ხელახლა შექმნას ყოველი ჰეში და ხელმოწერა
+შეამოწმეთ მაშინაც კი, როდესაც მანიფესტი ამოტრიალდება ცხელი მეხსიერებიდან.
 
-### Review checklist
+### გადახედეთ საკონტროლო სიას
 
-1. Pull the Parliament-approved manifest envelope (see
-   `docs/source/sorafs/signing_ceremony.md`) and record the BLAKE3 digest.
-2. Verify the manifest’s `RetentionPolicy` block matches the tag in the table
-   above; Torii will reject mismatches, but the council must capture the
-   evidence for auditors.【docs/source/da/replication_policy.md:32】
-3. Confirm that the submitted Norito payload references the same retention tag
-   and blob class that appears in the intake ticket.
-4. Attach proof of the policy check (CLI output, `torii.da_ingest.replication_policy`
-   dump, or CI artefact) to the review packet so SRE can replay the decision.
-5. Record planned subsidy taps or rent adjustments when the proposal depends on
+1. გაიყვანეთ პარლამენტის მიერ დამტკიცებული მანიფესტის კონვერტი (იხ
+   `docs/source/sorafs/signing_ceremony.md`) და ჩაწერეთ BLAKE3 დაიჯესტი.
+2. შეამოწმეთ, რომ manifest-ის `RetentionPolicy` ბლოკი ემთხვევა ცხრილის ტეგს
+   ზემოთ; Torii უარყოფს შეუსაბამობებს, მაგრამ საბჭომ უნდა დაიკავოს ის
+   მტკიცებულება აუდიტორებისთვის.【docs/source/da/replication_policy.md:32】
+3. დაადასტურეთ, რომ წარდგენილი Norito იტვირთება იმავე შეკავების ტეგზე
+   და ბლომების კლასი, რომელიც ჩნდება მიღების ბილეთში.
+4. მიამაგრეთ პოლიტიკის შემოწმების დამადასტურებელი საბუთი (CLI გამომავალი, `torii.da_ingest.replication_policy`
+   ნაგავსაყრელი, ან CI არტეფაქტი) განხილვის პაკეტში, რათა SRE-მ შეძლოს გადაწყვეტილების გამეორება.
+5. ჩაწერეთ დაგეგმილი სუბსიდირების ონკანები ან იჯარის კორექტირება, როდესაც წინადადება დამოკიდებულია
    `docs/source/sorafs_reserve_rent_plan.md`.
 
-### Escalation matrix
+### ესკალაციის მატრიცა
 
-| Request type | Owning panel | Evidence to attach | Deadlines & telemetry | References |
-|--------------|--------------|--------------------|-----------------------|------------|
-| Subsidy / rent adjustment | Infrastructure + Treasury | Filled DA packet, rent delta from `reserve_rentd`, updated reserve projection CSV, council vote minutes | Note rent impact before submitting the Treasury update; include rolling 30 d buffer telemetry so Finance can reconcile within the next settlement window | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
-| Moderation takedown / compliance action | Moderation + Compliance | Compliance ticket (`ComplianceUpdateV1`), proof tokens, signed manifest digest, appeal status | Follow the gateway compliance SLA (acknowledge within 24 h, full removal ≤72 h). Attach `TransparencyReportV1` excerpt showing the action. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
-| Emergency freeze / rollback | Parliament moderation panel | Prior approval packet, new freeze order, rollback manifest digest, incident log | Publish freeze notice immediately and schedule the rollback referendum within the next governance slot; include buffer saturation + DA replication telemetry to justify the emergency. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| მოთხოვნის ტიპი | მფლობელი პანელი | დასამაგრებელი მტკიცებულება | ვადები და ტელემეტრია | ლიტერატურა |
+|--------------|-------------|-------------------|---------------------|-----------------|
+| სუბსიდირება/იჯარის კორექტირება | ინფრასტრუქტურა + ხაზინა | შევსებული DA პაკეტი, ქირავდება დელტა `reserve_rentd`-დან, განახლებული სარეზერვო პროექცია CSV, საბჭოს ხმის მიცემის წუთები | სახაზინო განახლების წარდგენამდე გაითვალისწინეთ ქირის გავლენა; ჩართეთ მოძრავი 30D ბუფერული ტელემეტრია, რათა ფინანსებმა შეძლოს შერიგება მომდევნო ანგარიშსწორების ფანჯარაში | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
+| მოდერაცია წაშლის / შესაბამისობის ქმედება | ზომიერება + შესაბამისობა | შესაბამისობის ბილეთი (`ComplianceUpdateV1`), დამადასტურებელი ნიშნები, ხელმოწერილი მანიფესტის დაიჯესტი, გასაჩივრების სტატუსი | მიჰყევით კარიბჭის შესაბამისობას SLA (დადასტურება 24 საათის განმავლობაში, სრული მოცილება ≤72 სთ). მიამაგრეთ `TransparencyReportV1` ამონაწერი, რომელიც აჩვენებს მოქმედებას. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| გადაუდებელი გაყინვა / უკან დაბრუნება | პარლამენტის მოდერაციის პანელი | წინასწარი დამტკიცების პაკეტი, ახალი გაყინვის ორდერი, მანიფესტის უკან დაბრუნება, ინციდენტების ჟურნალი | დაუყოვნებლივ გამოაქვეყნეთ გაყინვის შესახებ შეტყობინება და დაგეგმეთ რეფერენდუმის რეფერენდუმი მომდევნო მმართველობის დროს; მოიცავს ბუფერულ გაჯერებას + DA რეპლიკაციის ტელემეტრიას საგანგებო მდგომარეობის გასამართლებლად. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |გამოიყენეთ ცხრილი ბილეთების ტრიაჟისას, რათა ყველა პანელმა მიიღოს ზუსტი
+არტეფაქტები, რომლებიც საჭიროა მისი მანდატის შესასრულებლად.
 
-Use the table when triaging intake tickets so every panel receives the exact
-artefacts required to execute its mandate.
+### ანგარიშგების მიწოდება
 
-### Reporting deliverables
+DA-10-ის ყოველი გადაწყვეტილება უნდა გაიგზავნოს შემდეგი არტეფაქტებით (დაამაგრეთ ისინი
+მმართველობის DAG ჩანაწერი მითითებულია კენჭისყრაში):
 
-Every DA-10 decision must ship with the following artefacts (attach them to the
-Governance DAG entry referenced in the vote):
+- დასრულებული Markdown პაკეტიდან
+  `docs/examples/da_manifest_review_template.md` (ახლა ხელმოწერის ჩათვლით და
+  ესკალაციის სექციები).
+- ხელმოწერილი Norito მანიფესტი (`.to`) პლუს `manifest_signatures.json` კონვერტი
+  ან CI დამადასტურებელი ჟურნალები, რომლებიც ადასტურებენ მოპოვების დაჯესტს.
+- მოქმედებით გამოწვეული გამჭვირვალობის ნებისმიერი განახლება:
+  - `TransparencyReportV1` დელტა წაშლისთვის ან შესაბამისობის საფუძველზე გაყინვისთვის.
+  - დაქირავება/რეზერვი ledger delta ან `ReserveSummaryV1` სნეპშოტი სუბსიდიებისთვის.
+- მიმოხილვის დროს შეგროვებული ტელემეტრიული კადრების ბმულები (განმეორების სიღრმე,
+  ბუფერული სათავე ოთახი, მოდერაციის ნარჩენი) ასე რომ დამკვირვებლებს შეუძლიათ გადაამოწმონ პირობები
+  ფაქტის შემდეგ.
 
-- The completed Markdown packet from
-  `docs/examples/da_manifest_review_template.md` (now including signature and
-  escalation sections).
-- The signed Norito manifest (`.to`) plus the `manifest_signatures.json` envelope
-  or CI verifier logs that prove the fetch digest.
-- Any transparency updates triggered by the action:
-  - `TransparencyReportV1` delta for takedowns or compliance-driven freezes.
-  - Rent/reserve ledger delta or `ReserveSummaryV1` snapshot for subsidies.
-- Links to telemetry snapshots collected during the review (replication depth,
-  buffer headroom, moderation backlog) so observers can cross-check conditions
-  after the fact.
+## მოდერაცია და ესკალაცია
 
-## Moderation & Escalation
+Gateway-ის წაშლა, სუბსიდიის clawback ან DA გაყინვა მოჰყვება შესაბამისობას
+მილსადენი აღწერილია `docs/source/sorafs_gateway_compliance_plan.md`-ში და
+გასაჩივრების ხელსაწყოები `docs/source/sorafs_moderation_panel_plan.md`-ში. პანელები უნდა:
 
-Gateway takedowns, subsidy clawbacks, or DA freezes follow the compliance
-pipeline described in `docs/source/sorafs_gateway_compliance_plan.md` and the
-appeal tooling in `docs/source/sorafs_moderation_panel_plan.md`. Panels should:
+1. დაარეგისტრირეთ საწყისი შესაბამისობის ბილეთი (`ComplianceUpdateV1` ან
+   `ModerationAppealV1`) და მიამაგრეთ დაკავშირებული მტკიცებულების ნიშნები.【docs/source/sorafs_gateway_compliance_plan.md:20】
+2. დაადასტურეთ, მოწოდებულია თუ არა მოთხოვნა მოდერაციის გასაჩივრების გზაზე (მოქალაქის პანელი
+   ხმის მიცემა) ან პარლამენტის საგანგებო გაყინვა; ორივე ნაკადმა უნდა მოიხსენიოს მანიფესტი
+   დაიჯესტი და შეკავების ტეგი აღბეჭდილია ახალ შაბლონში.【docs/source/sorafs_moderation_panel_plan.md:1】
+3. ჩამოთვალეთ ესკალაციის ვადები (სააპელაციო წარდგენის/გამოვლენის ფანჯრები, საგანგებო
+   გაყინვის ხანგრძლივობა) და მიუთითეთ, რომელ საბჭო ან კოლეგია ფლობს შემდგომ მუშაობას.
+4. გადაიღეთ ტელემეტრიის სნეპშოტი (ბუფერული სათავე ოთახი, მოდერაციის ჩამორჩენა) გამოყენებული
+   დაასაბუთეთ ქმედება ისე, რომ ქვედა დინების აუდიტმა შეძლოს გადაწყვეტილების პირდაპირ ეთერში შეხამება
+   სახელმწიფო.
 
-1. Log the originating compliance ticket (`ComplianceUpdateV1` or
-   `ModerationAppealV1`) and attach the associated proof tokens.【docs/source/sorafs_gateway_compliance_plan.md:20】
-2. Confirm whether the request invokes the moderation appeal path (citizen panel
-   vote) or an emergency Parliament freeze; both flows must cite the manifest
-   digest and retention tag captured in the new template.【docs/source/sorafs_moderation_panel_plan.md:1】
-3. Enumerate escalation deadlines (appeal commit/reveal windows, emergency
-   freeze duration) and state which council or panel owns the follow-up.
-4. Capture the telemetry snapshot (buffer headroom, moderation backlog) used to
-   justify the action so downstream audits can match the decision to the live
-   state.
+შესაბამისობისა და მოდერაციის პანელებმა უნდა მოახდინოს მათი ყოველკვირეული გამჭვირვალობის ანგარიშების სინქრონიზაცია
+დასახლების როუტერის ოპერატორებთან, ამიტომ წაშლა და სუბსიდიები იგივე გავლენას ახდენს
+მანიფესტების ნაკრები.
 
-The compliance and moderation panels must sync their weekly transparency reports
-with the settlement router operators so takedowns and subsidies affect the same
-set of manifests.
+## მოხსენების შაბლონები
 
-## Reporting Templates
+ყველა DA-10 მიმოხილვას ახლა სჭირდება ხელმოწერილი Markdown პაკეტი. კოპირება
+`docs/examples/da_manifest_review_template.md`, შეავსეთ manifest მეტამონაცემები,
+შეკავების გადამოწმების ცხრილი და პანელის ხმის მიცემის შეჯამება, შემდეგ დაამაგრეთ დასრულებული
+დოკუმენტი (პლუს მითითებული Norito/JSON არტეფაქტები) Governance DAG ჩანაწერისთვის.
+პანელებმა უნდა დააკავშირონ პაკეტი მმართველობის წუთებში, რათა მომავალში წაშლა ან
+სუბსიდიის განახლებას შეუძლია მოჰყვეს ორიგინალური მანიფესტის დაიჯესტი ხელახლა გაშვების გარეშე
+მთელი ცერემონია.
 
-All DA-10 reviews now require a signed Markdown packet. Copy
-`docs/examples/da_manifest_review_template.md`, populate the manifest metadata,
-retention verification table, and panel vote summary, then pin the completed
-document (plus referenced Norito/JSON artefacts) to the Governance DAG entry.
-Panels should link the packet in the governance minutes so future takedowns or
-subsidy renewals can cite the original manifest digest without re-running the
-entire ceremony.
+## ინციდენტის და გაუქმების სამუშაო პროცესი
 
-## Incident & Revocation Workflow
+გადაუდებელი ქმედებები ახლა ხდება ჯაჭვზე. როდესაც არმატურის გამოშვება საჭიროა
+უკან დაბრუნდა, შეიტანა მმართველობის ბილეთი და გახსნა პარლამენტის წინადადების დაბრუნება
+მიუთითებს ადრე დამტკიცებულ მანიფესტის დაიჯესტზე. ინფრასტრუქტურის პანელი
+ამუშავებს ხმის მიცემას და როგორც კი დასრულდება, Nexus გაშვების დრო აქვეყნებს დაბრუნებას
+მოვლენა, რომელსაც ქვედა დინებაში კლიენტები მოიხმარენ. ადგილობრივი JSON არტეფაქტები არ არის საჭირო.
 
-Emergency actions now happen on-chain. When a fixture release needs to be
-rolled back, file a governance ticket and open a Parliament revert proposal
-pointing at the previously approved manifest digest. The Infrastructure Panel
-handles the vote, and once finalized the Nexus runtime publishes the rollback
-event that downstream clients consume. No local JSON artefacts are required.
-
-## Keeping the Playbook Current
-
-- Update this file whenever a new governance-facing runbook lands in the
-  repository.
-- Cross-link new ceremonies here so the council index remains discoverable.
-- If a referenced document moves (for example, a new SDK path), update the link
-  as part of the same pull request to avoid stale pointers.
+## სათამაშო წიგნის მიმდინარეობის შენარჩუნება- განაახლეთ ეს ფაილი, როდესაც ახალი მმართველობის წინაშე დგას რენტაბელური წიგნი
+  საცავი.
+- გადაკვეთეთ ახალი ცერემონიები აქ, რათა საბჭოს ინდექსი აღმოჩენილი დარჩეს.
+- თუ მითითებული დოკუმენტი გადაადგილდება (მაგალითად, ახალი SDK ბილიკი), განაახლეთ ბმული
+  როგორც იგივე pull მოთხოვნის ნაწილი, რათა თავიდან იქნას აცილებული შემორჩენილი მაჩვენებლები.

@@ -4,36 +4,38 @@ direction: ltr
 source: docs/portal/docs/devportal/observability.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # مراقبة البوابة والتحليلات
 
-خارطة طريق DOCS-SORA تتطلب تحليلات، وprobes اصطناعية، واتمتة الروابط المكسورة لكل build معاينة.
-توثق هذه الملاحظة التوصيلات التي تأتي مع البوابة حتى يتمكن المشغلون من ربط المراقبة دون تسريب بيانات الزوار.
+Установите DOCS-SORA для проверки и проверки зондов. Создайте новую сборку.
+Он сказал, что в 2017 году он был главой государства-члена Совета Безопасности ООН. Он выступил в роли Дэниэла Пьера Бэнгера.
 
 ## وسم الاصدار
 
-- اضبط `DOCS_RELEASE_TAG=<identifier>` (يرجع الى `GIT_COMMIT` او `dev` عند الغياب) عند
-  بناء البوابة. يتم حقن القيمة في `<meta name="sora-release">`
-  حتى تتمكن probes وdashboards من تمييز عمليات النشر.
+- `DOCS_RELEASE_TAG=<identifier>` (от `GIT_COMMIT` до `dev`)
+  بناء البوابة. Создан для `<meta name="sora-release">`
+  Он исследует информационные панели в Нью-Йорке.
 - `npm run build` ينتج `build/release.json` (يكتبه
-  `scripts/write-checksums.mjs`) ويصف الوسم والطابع الزمني و`DOCS_RELEASE_SOURCE` الاختياري.
-  يتم تضمين الملف نفسه في اثار المعاينة ويشار اليه في تقرير فحص الروابط.
+  `scripts/write-checksums.mjs`) ويصف الختياري.
+  Он был показан в фильме "Старый мир" в фильме "Тридцатье" в Нью-Йорке.
 
 ## تحليلات تحافظ على الخصوصية
 
-- اضبط `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` لتمكين المتتبع الخفيف.
-  تحتوي الحمولات على `{ event, path, locale, release, ts }` دون metadata مرجع او IP، ويتم استخدام
-  `navigator.sendBeacon` كلما امكن لتجنب حجب التنقلات.
-- تحكم في اخذ العينات عبر `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). يخزن المتتبع اخر path مرسل ولا يرسل
+- اضبط `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` для дальнейшего использования.
+  Используйте `{ event, path, locale, release, ts }` для метаданных, IP и IP-адресов.
+  `navigator.sendBeacon` находится в центре внимания.
+- Было выполнено в режиме `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). يخزن المتتبع اخر path مرسل ولا يرسل
   احداثا مكررة لنفس التنقل.
-- التنفيذ موجود في `src/components/AnalyticsTracker.jsx` ويتم تركيبه عالميا عبر `src/theme/Root.js`.
+- Создан для `src/components/AnalyticsTracker.jsx` и установлен в `src/theme/Root.js`.
 
-## probes اصطناعية
+## зонды
 
 - `npm run probe:portal` يرسل طلبات GET الى المسارات الشائعة
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, وغيرها) ويتحقق من ان وسم
-  `sora-release` يطابق `--expect-release` (او `DOCS_RELEASE_TAG`). مثال:
+  (`/`, `/norito/overview`, `/reference/torii-swagger`, وغيرها)
+  `sora-release` или `--expect-release` (также `DOCS_RELEASE_TAG`). Название:
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -41,51 +43,49 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-يتم الابلاغ عن الاخفاقات لكل path، ما يسهل بوابة CD على نجاح probes.
+Он находится в разделе «Путь», а компакт-диск с датчиками.
 
 ## اتتمة الروابط المكسورة
 
-- `npm run check:links` يفحص `build/sitemap.xml`، ويتاكد ان كل مدخل يطابق ملفا محليا
-  (مع التحقق من fallbacks `index.html`)، ويكتب `build/link-report.json` الذي يحتوي على
-  metadata الاصدار، الاجمالي، الاخفاقات، وبصمة SHA-256 لـ `checksums.sha256`
-  (معروضة كـ `manifest.id`) حتى يرتبط كل تقرير بmanifest الاثر.
-- السكربت يخرج بكود غير صفري عند فقدان صفحة، لذا يمكن لـ CI منع الاصدارات عند وجود مسارات قديمة او
-  مكسورة. التقارير تذكر المسارات المرشحة التي تمت تجربتها، ما يساعد على تتبع تراجعات التوجيه
-  الى شجرة docs.
+- `npm run check:links` на `build/sitemap.xml`, который находится в центре города.
+  (для резервных копий `index.html`) и `build/link-report.json` для резервного копирования.
+  Метаданные хранятся в формате SHA-256 с именем `checksums.sha256`.
+  (написано на `manifest.id`) Зарегистрируйтесь в манифесте манифеста.
+- Он был назначен президентом США Джоном Сингхом, сотрудником CI в штате Калифорния. عند وجود مسارات قديمة او
+  مكسورة. Вы можете получить информацию о том, как это сделать, если вы хотите, чтобы это произошло. تراجعات التوجيه
+  Воспользуйтесь документами.
 
-## لوحة Grafana والتنبيهات
-
-- `dashboards/grafana/docs_portal.json` ينشر لوحة Grafana **Docs Portal Publishing**.
-  وتتضمن اللوحات التالية:
-  - *Gateway Refusals (5m)* يستخدم `torii_sorafs_gateway_refusals_total` بنطاق
-    `profile`/`reason` حتى يتمكن SRE من كشف دفعات سياسة خاطئة او فشل رموز.
-  - *Alias Cache Refresh Outcomes* و*Alias Proof Age p90* تتبع
-    `torii_sorafs_alias_cache_*` لاثبات وجود proofs حديثة قبل DNS cut over.
-  - *Pin Registry Manifest Counts* واحصائية *Active Alias Count* تعكس backlog pin-registry
-    واجمالي alias حتى تتمكن الحوكمة من تدقيق كل اصدار.
-  - *Gateway TLS Expiry (hours)* يبرز عندما يقترب TLS cert لبوابة النشر من الانتهاء
-    (عتبة التنبيه 72 h).
-  - *Replication SLA Outcomes* و*Replication Backlog* تراقب telemetria
-    `torii_sorafs_replication_*` لضمان ان كل النسخ تحقق معيار GA بعد النشر.
-- استخدم متغيرات القالب المدمجة (`profile`, `reason`) للتركيز على ملف نشر `docs.sora`
-  او التحقيق في الطفرات عبر كل البوابات.
-- توجيه PagerDuty يستخدم لوحات dashboard كدليل: التنبيهات
+## Grafana والتنبيهات- `dashboards/grafana/docs_portal.json` — ссылка Grafana **Публикация на портале документации**.
+  Важная информация:
+  - *Отказы шлюза (5 м)* يستخدم `torii_sorafs_gateway_refusals_total` بنطاق
+    `profile`/`reason` был установлен в SRE в штате Калифорния.
+  - *Результаты обновления кэша псевдонимов* и *Alias Proof Age p90* تتبع
+    `torii_sorafs_alias_cache_*` заблокировал доказательства того, что DNS обрезан.
+  - *Подсчет манифеста реестра контактов* واحصائية *Счетчик активных псевдонимов* Зарегистрируйте невыполненный реестр контактов
+    Он псевдоним Тэтчер Тэхен الحوكمة, которого зовут Тэрри в اصدار.
+  - *Срок действия TLS шлюза (часы)* Вы можете получить сертификат TLS в любое время.
+    (Движение 72 ч).
+  - *Результаты соглашения об уровне обслуживания репликации* и *Журнал репликации* Телеметрия
+    `torii_sorafs_replication_*` был создан в рамках проекта GA.
+- Установите флажок для проверки (`profile`, `reason`). `docs.sora`
+  В 2007 году он был отправлен в Нью-Йорк.
+- Приложение PagerDuty в Лос-Анджелесе. Панель управления: التنبيهات
   `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, و`DocsPortal/TLSExpiry`
-  تطلق عندما تتجاوز السلاسل المقابلة عتباتها. اربط runbook التنبيه بهذه الصفحة حتى يتمكن
-  مهندسو on-call من اعادة تشغيل استعلامات Prometheus الدقيقة.
+  Он сказал, что хочет сделать это. اربط runbook التنبيه بهذه الصفحة حتى يتمكن
+  Дежурный оператор по вызову Prometheus.
 
 ## جمع الخطوات
 
-1. اثناء `npm run build`، اضبط متغيرات بيئة release/analytics ودع خطوة ما بعد البناء تصدر
+1. Установите `npm run build`, чтобы получить доступ к выпуску/аналитике, который будет доступен для просмотра.
    `checksums.sha256`, `release.json`, و`link-report.json`.
-2. شغل `npm run probe:portal` مقابل hostname المعاينة مع
-   `--expect-release` مربوطا بنفس الوسم. احفظ stdout لقائمة نشر النشر.
-3. شغل `npm run check:links` للفشل السريع على مدخلات sitemap المكسورة وارشف تقرير JSON الناتج
-   مع اثار المعاينة. تقوم CI بوضع اخر تقرير في `artifacts/docs_portal/link-report.json` حتى تتمكن
-   الحوكمة من تنزيل حزمة الادلة مباشرة من سجلات البناء.
-4. وجه endpoint التحليلات الى مجمع يحافظ على الخصوصية (Plausible، OTEL ingest مستضاف ذاتيا، وغيرها)
-   وتاكد من توثيق معدلات العينة لكل اصدار حتى تفسر لوحات التحكم العدادات بدقة.
-5. CI تربط هذه الخطوات بالفعل عبر workflows المعاينة/النشر
+2. Введите `npm run probe:portal` для имени хоста.
+   `--expect-release` отключен от сети. Это стандартное сообщение.
+3. Создайте `npm run check:links` для просмотра карты сайта и создания файла JSON.
+   Это не так. Выполнил команду CI для `artifacts/docs_portal/link-report.json`.
+   Он был убит Стивом Дэвисом в 2007 году.
+4. Получение конечной точки в режиме ожидания (Plausible, прием данных от OTEL). да)
+   Он был показан в фильме "Лейт-Стрит" в Лос-Анджелесе. بدقة.
+5. CI позволяет управлять рабочими процессами/процессами.
    (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`)، لذلك يكفي ان تغطي الاختبارات المحلية
-   سلوك الاسرار فقط.
+   `.github/workflows/docs-portal-deploy.yml`) и нажмите на него в разделе «Обзор».
+   Сыграл он.

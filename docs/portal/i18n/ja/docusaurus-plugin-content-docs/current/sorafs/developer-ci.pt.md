@@ -4,25 +4,27 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Receitas de CI da SoraFS
-sidebar_label: Receitas de CI
-description: Execute o CLI da SoraFS em pipelines do GitHub e GitLab com assinatura sem chaves.
+ID: 開発者-ci
+タイトル: Receitas de CI da SoraFS
+サイドバーラベル: CI の受信
+説明: CLI da SoraFS を実行して、GitHub および GitLab com assinatura sem Chaves のパイプラインを実行します。
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/ci.md`. Mantenha ambas as copias sincronizadas.
+:::note フォンテ カノニカ
+エスタ・ページナ・エスペルハ`docs/source/sorafs/developer/ci.md`。マンテンハ・アンバスはコピア・シンクロニザダスとして。
 :::
 
-# Receitas de CI
+# CI の受信
 
-Pipelines da SoraFS se beneficiam de chunking deterministico, assinatura de manifests e verificacao de proofs. A superficie de comandos
-`sorafs_cli` mantem esses passos portaveis entre provedores de CI. Esta pagina destaca as receitas canonicas e aponta para templates prontos para uso.
+SoraFS のパイプラインは、チャンクの確定性、マニフェストの検証、証明の実行に役立ちます。コマンドの特権
+`sorafs_cli` は、CI の検証に必要なすべてのポートを管理します。正規のテンプレートとしてページを開き、使用するためのテンプレートを作成します。
 
-## GitHub Actions (sem chaves)
+## GitHub アクション (sem chaves)
 
 ```yaml
 name: sorafs-artifacts
@@ -95,11 +97,11 @@ jobs:
           path: artifacts/
 ```
 
-Pontos chave:
+ポントス・チャベ:
 
-- Nenhuma chave de assinatura estatica e armazenada; tokens OIDC sao obtidos sob demanda.
-- Artefatos (CAR, manifest, bundle, resumos de proofs) sao enviados para revisao.
-- O job reutiliza os mesmos esquemas Norito usados nos rollouts de producao.
+- 軍事行動を強化するネンフマ チャベ。トークン OIDC SAO オブティドス すすり泣く要求。
+- Artefatos (CAR、マニフェスト、バンドル、証拠の履歴) 改訂版。
+- O ジョブは、Norito のロールアウトを再利用しません。
 
 ## GitLab CI
 
@@ -135,12 +137,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provisione `SIGSTORE_ID_TOKEN` via federacao de identidade de workload do GitLab ou um segredo selado antes de executar a etapa de publish.
-- A falha de qualquer etapa do CLI faz o pipeline parar, preservando artefatos consistentes.
+- 連邦政府経由で `SIGSTORE_ID_TOKEN` をプロビジョニングし、ワークロードを特定して GitLab を実行し、公開する前に実行する必要があります。
+- CLI でパイプライン パラレルを実行するためのファルハ デ クアルケールは、一貫した保存技術を備えています。
 
-## Recursos adicionais
+## Recursos アディシオネ
 
-- Templates end-to-end (inclui helpers Bash, configuracao de identidade federada e passos de limpeza): `docs/examples/sorafs_ci.md`
-- Referencia do CLI cobrindo todas as opcoes: `docs/source/sorafs_cli.md`
-- Requisitos de governanca/alias antes do envio:
+- エンドツーエンドのテンプレート (Bash ヘルパー、ID フェデラーダおよびリンペザの構成を含む): `docs/examples/sorafs_ci.md`
+- CLI cobrindo todas を opcoes として参照: `docs/source/sorafs_cli.md`
+- Requisitos de Governmenta/alias antes do envio:
   `docs/source/sorafs/provider_admission_policy.md`

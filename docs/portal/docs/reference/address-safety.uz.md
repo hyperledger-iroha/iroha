@@ -9,71 +9,72 @@ source_last_modified: "2026-01-28T17:11:30.641899+00:00"
 translation_last_reviewed: 2026-02-07
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
+translator: machine-google-reviewed
 ---
 
-This page captures the ADDR-6c documentation deliverable. Apply these
-constraints to wallets, explorers, SDK tooling, and any portal surface that
-renders or accepts human-facing addresses. The canonical data model lives in
-`docs/account_structure.md`; the checklist below explains how to expose those
-formats without compromising safety or accessibility.
+Ushbu sahifada ADDR-6c hujjatlari taqdim etiladi. Bularni qo'llang
+hamyonlar, tadqiqotchilar, SDK vositalari va har qanday portal yuzasiga cheklovlar
+insonga qaragan manzillarni ko'rsatadi yoki qabul qiladi. Kanonik ma'lumotlar modeli yashaydi
+`docs/account_structure.md`; Quyidagi nazorat ro'yxati ularni qanday ochishni tushuntiradi
+xavfsizlik yoki foydalanish imkoniyatini buzmasdan formatlar.
 
-## Safe sharing flows
+## Xavfsiz almashish oqimlari
 
-- Default every copy/share action to the IH58 address. Display the resolved
-  domain as supporting context so the checksummed string stays front and centre.
-- Offer a “Share” affordance that bundles the full plain-text address and a QR
-  code derived from the same payload. Let users inspect both before committing.
-- When space requires truncation (tiny cards, notifications), keep the leading
-  human-readable prefix, show ellipses, and retain the final 4–6 characters so
-  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
-  string without truncation.
-- Prevent clipboard desync by emitting a confirmation toast that previews the
-  exact IH58 string that was copied. Where telemetry is available, count copy
-  attempts versus share actions so UX regressions surface quickly.
+- IH58 manziliga nusxa ko'chirish/ulashish uchun har bir amalni standart qilib qo'ying. Yechilganlarni ko'rsatish
+  domenni qo'llab-quvvatlovchi kontekst sifatida ishlating, shuning uchun nazorat yig'indisi qatori old va markazda qoladi.
+- Toʻliq matnli manzil va QRni birlashtirgan “Ulashish” imtiyozini taklif qiling
+  bir xil foydali yukdan olingan kod. Foydalanuvchilarga amal qilishdan oldin ikkalasini ham tekshirishga ruxsat bering.
+- Bo'sh joy kesishni talab qilganda (kichik kartalar, bildirishnomalar), yetakchilikni saqlang
+  inson tomonidan o'qiladigan prefiks, ellipslarni ko'rsating va oxirgi 4-6 belgini shunday saqlang
+  nazorat summasi langari saqlanib qoladi. Toʻliq nusxa olish uchun teginish/klaviatura yorligʻini taqdim eting
+  kesilmasdan string.
+- Oldindan ko'rib chiqadigan tasdiqlovchi tostni chiqarish orqali almashish buferining sinxronlanishini oldini oling
+  ko'chirilgan aniq IH58 qatori. Telemetriya mavjud bo'lgan joyda nusxasini hisoblang
+  UX regressiyalari tezda yuzaga kelishi uchun harakatlarni almashishga urinishlar.
 
-## IME & input safeguards
+## IME va kiritish himoyasi
 
-- Reject non-ASCII input in address fields. When IME composition artefacts (full
-  width, Kana, tone marks) appear, surface an inline warning that explains how
-  to switch the keyboard to Latin input before retrying.
-- Provide a plain-text paste zone that strips combining marks and replaces
-  whitespace with ASCII spaces before validation. This keeps users from losing
-  progress when they disable their IME mid-flow.
-- Harden validation against zero-width joiners, variation selectors, and other
-  stealth Unicode code points. Log the rejected code point category so fuzzing
-  suites can import the telemetry.
+- Manzil maydonlarida ASCII bo'lmagan kiritishni rad etish. Qachon IME kompozitsion artefaktlar (to'liq
+  kengligi, Kana, ohang belgilari) paydo bo'ladi, qanday qilib tushuntirilgan qatorli ogohlantirish paydo bo'ladi
+  qayta urinishdan oldin klaviaturani lotin yozuviga oʻtkazish uchun.
+- Birlashtiruvchi belgilarni ajratib turadigan va almashtiradigan oddiy matn joylashtirish zonasini taqdim eting
+  tekshirishdan oldin ASCII bo'shliqlari bilan bo'sh joy. Bu foydalanuvchilarni yo'qotishdan saqlaydi
+  ular IME o'rta oqimini o'chirib qo'yganlarida taraqqiyot.
+- Nol kenglikdagi birlashtiruvchilarga, variatsiya selektorlariga va boshqalarga nisbatan tasdiqlashni qattiqlashtiring
+  yashirin Unicode kod nuqtalari. Rad etilgan kod nuqtasi toifasini ro'yxatdan o'tkazing
+  Suite telemetriyani import qilishi mumkin.
 
-## Assistive technology expectations
+## Yordamchi texnologiya kutilmalari
 
-- Annotate every address block with `aria-label` or `aria-describedby` that
-  spells out the human-readable prefix and chunks the payload in 4–8 character
-  groups (“ih dash b three two …”). This stops screen readers from producing an
-  unintelligible stream of characters.
-- Announce successful copy/share events via a polite live region update. Include
-  the destination (clipboard, share sheet, QR) so the user knows the action
-  completed without moving focus.
-- Supply descriptive `alt` text for QR previews (e.g., “IH58 address for
-  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
-  fallback adjacent to the QR canvas for low-vision users.
+- `aria-label` yoki `aria-describedby` bilan har bir manzil blokiga izoh bering
+  inson oʻqishi mumkin boʻlgan prefiksni talaffuz qiladi va foydali yukni 4–8 belgidan iborat boʻladi
+  guruhlar ("ih tire b uch ikki ..."). Bu ekranni o'qiydiganlarni ishlab chiqarishni to'xtatadi
+  tushunarsiz belgilar oqimi.
+- Hududni muloyim jonli yangilash orqali muvaffaqiyatli nusxa ko'chirish/ulashish voqealarini e'lon qiling. O'z ichiga oladi
+  maqsad (bufer, almashish varag'i, QR), shuning uchun foydalanuvchi harakatni biladi
+  diqqatni harakatlantirmasdan yakunlandi.
+- QR oldindan koʻrish uchun tavsiflovchi `alt` matnini taqdim eting (masalan, “IH58 manzili
+  `<account>` zanjirida `0x1234`”). “Manzilni matn sifatida nusxalash”ni taqdim eting
+  ko'rish qobiliyati past bo'lgan foydalanuvchilar uchun QR tuvaliga ulashgan zaxira.
 
-## Sora-only compressed addresses
+## Sora-faqat siqilgan manzillar
 
-- Gating: hide the `sora…` compressed string behind an explicit confirmation.
-  The confirmation must reiterate that the form only works on Sora Nexus chains.
-- Labelling: every occurrence must include a visible “Sora-only” badge and a
-  tooltip describing why other networks require the IH58 form.
-- Guardrails: if the active chain discriminant is not the Nexus allocation,
-  refuse to generate the compressed address entirely and direct the user back to
+- Gating: `sora…` siqilgan qatorni aniq tasdiqlash orqasida yashiring.
+  Tasdiqlash ariza faqat Sora Nexus zanjirlarida ishlashini takrorlashi kerak.
+- Yorliqlash: har bir hodisada ko'rinadigan "Faqat Sora" nishoni va a bo'lishi kerak
+  Boshqa tarmoqlar nima uchun IH58 shaklini talab qilishini tavsiflovchi maslahat.
+- Guardrails: agar faol zanjir diskriminanti Nexus taqsimoti bo'lmasa,
+  siqilgan manzilni to'liq yaratishdan bosh torting va foydalanuvchini qaytib yo'naltiring
   IH58.
-- Telemetry: record how often the compressed form is requested and copied so the
-  incident playbook can detect accidental sharing spikes.
+- Telemetriya: siqilgan shakl qanchalik tez-tez so'ralishini va shuning uchun nusxa ko'chirilishini yozib oling
+  voqea o'yin kitobi tasodifiy almashish keskinliklarini aniqlay oladi.
 
-## Quality gates
+## Sifatli eshiklar
 
-- Extend automated UI tests (or storybook a11y suites) to assert that address
-  components expose the required ARIA metadata and that IME rejection messages
-  appear.
-- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
-  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
-- Surface these checks in release checklists alongside the IH58 parity tests
-  so regressions remain blocked until corrected.
+- Ushbu manzilni tasdiqlash uchun avtomatlashtirilgan UI testlarini (yoki hikoyalar kitobi a11y to'plamlarini) kengaytiring
+  komponentlar zarur ARIA metama'lumotlarini va IME rad etish xabarlarini ochib beradi
+  paydo bo'ladi.
+- IME kiritish (kana, pinyin), ekranni o'qish uchun o'tish uchun qo'lda QA stsenariylarini qo'shing
+  (VoiceOver/NVDA) va yuqori kontrastli mavzularda QR nusxasini chiqarishdan oldin.
+- Ushbu tekshiruvlarni IH58 paritet testlari bilan bir qatorda relizlar ro'yxatida ko'rsating
+  shuning uchun regressiyalar tuzatilmaguncha bloklanadi.

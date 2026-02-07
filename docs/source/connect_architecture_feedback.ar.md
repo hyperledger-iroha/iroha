@@ -6,83 +6,80 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 097ea58d49f48d059cda762cd719bc62f0b2d6f6ddecedef3f9bac030ae46aec
 source_last_modified: "2026-01-03T18:07:58.674563+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-#! Connect Architecture Feedback Checklist
+#! ربط قائمة مراجعة ردود الفعل الهندسة المعمارية
 
-This checklist captures the open questions from the Connect Session Architecture
-strawman that require input from the Android and JavaScript leads before the
-Feb 2026 cross-SDK workshop. Use it to collect comments asynchronously, track
-ownership, and unblock the workshop agenda.
+تتضمن قائمة المراجعة هذه الأسئلة المفتوحة من بنية جلسة الاتصال
+رجل القش الذي يتطلب مدخلات من عملاء Android وJavaScript المتوقعين قبل
+فبراير 2026 ورشة عمل مشتركة بين أدوات تطوير البرامج (SDK). استخدامه لجمع التعليقات بشكل غير متزامن، وتتبع
+ملكية، وإلغاء حظر جدول أعمال ورشة العمل.
 
-> Status / Notes column captured final responses from Android and JS leads as of
-> the Feb 2026 pre-workshop sync; link new follow-up issues inline if decisions
-> evolve.
+> سجل عمود الحالة / الملاحظات الاستجابات النهائية من عملاء Android وJS اعتبارًا من
+> مزامنة ما قبل ورشة العمل في فبراير 2026؛ ربط قضايا المتابعة الجديدة في حالة القرارات
+> تتطور.
 
-## Session Lifecycle & Transport
+## دورة حياة الجلسة والنقل
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| WebSocket reconnect back-off strategy (exponential vs. capped linear) | Android Networking TL | JS Lead | ✅ Agreed on exponential back-off with jitter, capped at 60 s; JS mirrors same constants for browser/node parity. |
-| Offline buffer capacity defaults (current strawman: 32 frames) | Android Networking TL | JS Lead | ✅ Confirmed 32-frame default with config override; Android persists via `ConnectQueueConfig`, JS respects `window.connectQueueMax`. |
-| Push-style reconnect notifications (FCM/APNS vs. polling) | Android Networking TL | JS Lead | ✅ Android will expose optional FCM hook for wallet apps; JS remains polling-based with exponential back-off, noting browser push constraints. |
-| Ping/pong cadence guardrails for mobile clients | Android Networking TL | JS Lead | ✅ Standardised 30 s ping with 3× miss tolerance; Android balances Doze impact, JS clamps to ≥15 s to avoid browser throttling. |
+| الموضوع | مالك أندرويد | مالك شبيبة | الحالة / الملاحظات |
+|-------|--------------|----------|----------------|
+| استراتيجية إعادة الاتصال بـ WebSocket (الخطية الأسية مقابل الحد الأقصى) | شبكات أندرويد TL | شبيبة الرصاص | ✅ تم الاتفاق على التراجع الأسي مع الارتعاش، بحد أقصى 60 ثانية؛ يعكس JS نفس الثوابت لتكافؤ المتصفح/العقدة. |
+| الإعدادات الافتراضية لسعة المخزن المؤقت دون اتصال (رجل القش الحالي: 32 إطارًا) | شبكات أندرويد TL | شبيبة الرصاص | ✅ تم تأكيد 32 إطارًا افتراضيًا مع تجاوز التكوين؛ يستمر Android عبر `ConnectQueueConfig`، ويحترم JS `window.connectQueueMax`. |
+| إشعارات إعادة الاتصال بنمط الدفع (FCM/APNS مقابل الاستقصاء) | شبكات أندرويد TL | شبيبة الرصاص | ✅ سيكشف Android عن ربط FCM الاختياري لتطبيقات المحفظة؛ يظل JS قائمًا على الاقتراع مع التراجع الأسي، مع ملاحظة قيود الدفع في المتصفح. |
+| حواجز حماية إيقاع بينج/بونج لعملاء الهاتف المحمول | شبكات أندرويد TL | شبيبة الرصاص | ✅ اختبار اختبار موحد لمدة 30 ثانية مع تفاوت خطأ 3×؛ يقوم Android بموازنة تأثير Doze، ويثبت JS بـ ≥15s لتجنب اختناق المتصفح. |
 
-## Encryption & Key Management
+## التشفير وإدارة المفاتيح
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| X25519 key storage expectations (StrongBox, WebCrypto secure contexts) | Android Crypto TL | JS Lead | ✅ Android stores X25519 in StrongBox when available (falls back to TEE); JS mandates secure-context WebCrypto for dApps, falling back to the native `iroha_js_host` bridge in Node. |
-| ChaCha20-Poly1305 nonce management sharing across SDKs | Android Crypto TL | JS Lead | ✅ Adopt shared `sequence` counter API with 64-bit wrap guard and shared tests; JS uses BigInt counters to match Rust behaviour. |
-| Hardware-backed attestation payload schema | Android Crypto TL | JS Lead | ✅ Schema finalised: `attestation { platform, evidence_b64, statement_hash }`; JS optional (browser), Node uses HSM plug-in hook. |
-| Recovery flow for lost wallets (key rotation handshake) | Android Crypto TL | JS Lead | ✅ Wallet rotation handshake accepted: dApp issues `rotate` control, wallet replies with new pubkey + signed acknowledgment; JS re-keys WebCrypto material immediately. |
+| الموضوع | مالك أندرويد | مالك شبيبة | الحالة / الملاحظات |
+|-------|--------------|----------|----------------|
+| توقعات تخزين المفاتيح X25519 (سياقات StrongBox وWebCrypto الآمنة) | الروبوت التشفير TL | شبيبة الرصاص | ✅ يقوم Android بتخزين X25519 في StrongBox عندما يكون متاحًا (يعود إلى TEE)؛ يتطلب JS استخدام WebCrypto للسياق الآمن للتطبيقات اللامركزية، ويعود إلى جسر `iroha_js_host` الأصلي في Node. |
+| مشاركة إدارة ChaCha20-Poly1305 nonce عبر أدوات تطوير البرامج (SDK) | الروبوت التشفير TL | شبيبة الرصاص | ✅ اعتماد واجهة برمجة تطبيقات العداد `sequence` المشتركة مع حماية التفاف 64 بت والاختبارات المشتركة؛ يستخدم JS عدادات BigInt لمطابقة سلوك Rust. |
+| مخطط حمولة الشهادة المدعومة بالأجهزة | الروبوت التشفير TL | شبيبة الرصاص | ✅ تم الانتهاء من المخطط: `attestation { platform, evidence_b64, statement_hash }`؛ JS اختياري (متصفح)، تستخدم Node ربط المكون الإضافي HSM. |
+| تدفق الاسترداد للمحافظ المفقودة (مصافحة دوران المفتاح) | الروبوت التشفير TL | شبيبة الرصاص | ✅ قبول مصافحة تدوير المحفظة: يصدر تطبيق dApp التحكم في `rotate`، وترد المحفظة بمفتاح pubkey الجديد + إقرار موقّع؛ يقوم JS بإعادة مفاتيح مادة WebCrypto على الفور. |
 
-## Permissions & Proof Bundles
+## الأذونات وحزم الإثبات| الموضوع | مالك أندرويد | مالك شبيبة | الحالة / الملاحظات |
+|-------|--------------|----------|----------------|
+| الحد الأدنى لمخطط الأذونات (الطرق/الأحداث/الموارد) لـ GA | نموذج بيانات Android TL | شبيبة الرصاص | ✅ خط الأساس GA: `methods`، `events`، `resources`، `constraints`؛ يقوم JS بمحاذاة أنواع TypeScript مع بيان Rust. |
+| حمولة رفض المحفظة (`reason_code`، الرسائل المترجمة) | شبكات أندرويد TL | شبيبة الرصاص | ✅ تم الانتهاء من الرموز (`user_declined`، `permissions_mismatch`، `compliance_failed`، `internal_error`) بالإضافة إلى `localized_message` الاختياري. |
+| الحقول الاختيارية لحزمة إثبات (الامتثال/مرفقات KYC) | نموذج بيانات Android TL | شبيبة الرصاص | ✅ تقبل جميع مجموعات SDK الاختيارية `attachments[]` (Norito `AttachmentRef`) و`compliance_manifest_id`؛ لا يلزم تغيير السلوك. |
+| المحاذاة على مخطط Norito JSON مقابل البنيات التي تم إنشاؤها بواسطة الجسر | نموذج بيانات Android TL | شبيبة الرصاص | ✅ القرار: تفضيل الهياكل المولدة بالجسور؛ يبقى مسار JSON لتصحيح الأخطاء فقط، ويحتفظ JS بمحول `Value`. |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Minimum permission schema (methods/events/resources) for GA | Android Data Model TL | JS Lead | ✅ GA baseline: `methods`, `events`, `resources`, `constraints`; JS aligns TypeScript types with Rust manifest. |
-| Wallet rejection payload (`reason_code`, localized messages) | Android Networking TL | JS Lead | ✅ Codes finalised (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) plus optional `localized_message`. |
-| Proof bundle optional fields (compliance/KYC attachments) | Android Data Model TL | JS Lead | ✅ All SDKs accept optional `attachments[]` (Norito `AttachmentRef`) and `compliance_manifest_id`; no behaviour change required. |
-| Alignment on Norito JSON schema vs. bridge-generated structs | Android Data Model TL | JS Lead | ✅ Decision: prefer bridge-generated structs; JSON path remains for debugging only, JS keeps `Value` adapter. |
+## واجهات SDK وشكل API
 
-## SDK Facades & API Shape
+| الموضوع | مالك أندرويد | مالك شبيبة | الحالة / الملاحظات |
+|-------|--------------|----------|----------------|
+| واجهات غير متزامنة عالية المستوى (`Flow`، التكرارات غير المتزامنة) تكافؤ | شبكات أندرويد TL | شبيبة الرصاص | ✅ أندرويد يعرض `Flow<ConnectEvent>`؛ يستخدم JS `AsyncIterable<ConnectEvent>`؛ يتم تعيين كلاهما إلى `ConnectEventKind` المشترك. |
+| تعيين تصنيف الأخطاء (`ConnectError`، الفئات الفرعية المكتوبة) | شبكات أندرويد TL | شبيبة الرصاص | ✅ اعتماد التعداد المشترك {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} مع تفاصيل الحمولة الصافية الخاصة بالمنصة. |
+| دلالات الإلغاء لطلبات التوقيع على متن الطائرة | شبكات أندرويد TL | شبيبة الرصاص | ✅ تقديم التحكم `cancelRequest(hash)`؛ تعرض كل من حزمتي تطوير البرامج (SDK) كوروتينات/وعودًا قابلة للإلغاء فيما يتعلق بإقرار المحفظة. |
+| خطافات القياس عن بعد المشتركة (الأحداث، تسمية المقاييس) | شبكات أندرويد TL | شبيبة الرصاص | ✅ تمت محاذاة أسماء المقاييس: `connect.queue_depth`، `connect.latency_ms`، `connect.reconnects_total`؛ تم توثيق عينة المصدرين. |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| High-level async interfaces (`Flow`, async iterators) parity | Android Networking TL | JS Lead | ✅ Android exposes `Flow<ConnectEvent>`; JS uses `AsyncIterable<ConnectEvent>`; both map to shared `ConnectEventKind`. |
-| Error taxonomy mapping (`ConnectError`, typed subclasses) | Android Networking TL | JS Lead | ✅ Adopt shared enum {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} with platform-specific payload details. |
-| Cancellation semantics for in-flight sign requests | Android Networking TL | JS Lead | ✅ Introduced `cancelRequest(hash)` control; both SDKs surface cancellable coroutines/promises respecting wallet acknowledgment. |
-| Shared telemetry hooks (events, metrics naming) | Android Networking TL | JS Lead | ✅ Metric names aligned: `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; sample exporters documented. |
+## المثابرة والتسجيل دون اتصال بالإنترنت
 
-## Offline Persistence & Journaling
+| الموضوع | مالك أندرويد | مالك شبيبة | الحالة / الملاحظات |
+|-------|--------------|----------|----------------|
+| تنسيق التخزين للإطارات الموضوعة في قائمة الانتظار (الثنائي Norito مقابل JSON) | نموذج بيانات Android TL | شبيبة الرصاص | ✅ قم بتخزين الملف الثنائي Norito (`.to`) في كل مكان؛ يستخدم JS IndexedDB `ArrayBuffer`. |
+| سياسة الاحتفاظ بالمجلة والحد الأقصى للحجم | شبكات أندرويد TL | شبيبة الرصاص | ✅ الاحتفاظ الافتراضي 24 ساعة و1 ميجابايت لكل جلسة؛ قابل للتكوين عبر `ConnectQueueConfig`. |
+| حل النزاع عندما يقوم كلا الجانبين بإعادة تشغيل الإطارات | شبكات أندرويد TL | شبيبة الرصاص | ✅ استخدم `sequence` + `payload_hash`؛ تم تجاهل التكرارات، وتؤدي التعارضات إلى تشغيل `ConnectError.Internal` مع حدث القياس عن بعد. |
+| القياس عن بعد لعمق قائمة الانتظار وإعادة التشغيل بنجاح | شبكات أندرويد TL | شبيبة الرصاص | ✅ ينبعث منها مقياس `connect.queue_depth` وعداد `connect.replay_success_total`؛ يتم ربط كلا حزمتي SDK بمخطط القياس عن بعد Norito المشترك. |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Storage format for queued frames (binary Norito vs. JSON) | Android Data Model TL | JS Lead | ✅ Store binary Norito (`.to`) everywhere; JS uses IndexedDB `ArrayBuffer`. |
-| Journal retention policy & size caps | Android Networking TL | JS Lead | ✅ Default retention 24 h and 1 MiB per session; configurable via `ConnectQueueConfig`. |
-| Conflict resolution when both sides replay frames | Android Networking TL | JS Lead | ✅ Use `sequence` + `payload_hash`; duplicates ignored, conflicts trigger `ConnectError.Internal` with telemetry event. |
-| Telemetry for queue depth and replay success | Android Networking TL | JS Lead | ✅ Emit `connect.queue_depth` gauge and `connect.replay_success_total` counter; both SDKs hook into shared Norito telemetry schema. |
+## ارتفاعات التنفيذ والمراجع- **تركيبات جسر الصدأ:** يغطي `crates/connect_norito_bridge/src/lib.rs` والاختبارات المرتبطة به مسارات التشفير/فك التشفير الأساسية التي يستخدمها كل SDK.
+- **أداة العرض التوضيحي السريع:** تمارين `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` قم بتوصيل تدفقات الجلسة مع وسائل النقل الساخرة.
+- **Swift CI gating:** قم بتشغيل `make swift-ci` عند تحديث عناصر Connect للتحقق من تكافؤ التركيبات وموجزات لوحة المعلومات وبيانات تعريف Buildkite `ci/xcframework-smoke:<lane>:device_tag` قبل المشاركة مع مجموعات SDK الأخرى.
+- **اختبارات تكامل JavaScript SDK:** `javascript/iroha_js/test/integrationTorii.test.js` للتحقق من صحة حالة الاتصال/مساعدي الجلسة مقابل Torii.
+- **ملاحظات مرونة عميل Android:** يوثق `java/iroha_android/README.md:150` تجارب الاتصال الحالية التي ألهمت الإعدادات الافتراضية لقائمة الانتظار/التراجع.
 
-## Implementation Spikes & References
+## عناصر الإعداد لورشة العمل
 
-- **Rust bridge fixtures:** `crates/connect_norito_bridge/src/lib.rs` and associated tests cover the canonical encode/decode paths used by every SDK.
-- **Swift demo harness:** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` exercises Connect session flows with mocked transports.
-- **Swift CI gating:** run `make swift-ci` when updating Connect artifacts to validate fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata before sharing with other SDKs.
-- **JavaScript SDK integration tests:** `javascript/iroha_js/test/integrationTorii.test.js` validate Connect status/session helpers against Torii.
-- **Android client resilience notes:** `java/iroha_android/README.md:150` documents the current connectivity experiments that inspired the queue/back-off defaults.
+- [x] Android: قم بتعيين شخص نقطة لكل صف في الجدول أعلاه.
+- [x] JS: قم بتعيين شخص نقطة لكل صف في الجدول أعلاه.
+- [x] جمع الروابط إلى طفرات التنفيذ أو التجارب الحالية.
+- [x] حدد موعدًا لمراجعة ما قبل العمل قبل مجلس فبراير 2026 (تم الحجز بتاريخ 29-01-2026 الساعة 15:00 بالتوقيت العالمي المنسق مع Android TL وJS Lead وSwift Lead).
+- [x] تحديث `docs/source/connect_architecture_strawman.md` بالإجابات المقبولة.
 
-## Workshop Prep Items
+## حزمة القراءة المسبقة
 
-- [x] Android: assign point person for each table row above.
-- [x] JS: assign point person for each table row above.
-- [x] Collect links to existing implementation spikes or experiments.
-- [x] Schedule pre-work review before Feb 2026 council (Booked for 2026-01-29 15:00 UTC with Android TL, JS Lead, Swift Lead).
-- [x] Update `docs/source/connect_architecture_strawman.md` with accepted answers.
-
-## Pre-read Package
-
-- ✅ Bundle recorded under `artifacts/connect/pre-read/20260129/` (generated via `make docs-html` after refreshing the strawman, SDK guides, and this checklist).
-- 📄 Summary + distribution steps live in `docs/source/project_tracker/connect_architecture_pre_read.md`; include the link in the Feb 2026 workshop invite and in the `#sdk-council` reminder.
-- 🔁 When refreshing the bundle, update the path and hash inside the pre-read note and archive the announcement in `status.md` under the IOS7/AND7 readiness logs.
+- ✅ الحزمة المسجلة تحت `artifacts/connect/pre-read/20260129/` (تم إنشاؤها عبر `make docs-html` بعد تحديث رجل القش وأدلة SDK وقائمة التحقق هذه).
+- 📄 الملخص + خطوات التوزيع مباشرة في `docs/source/project_tracker/connect_architecture_pre_read.md`؛ قم بتضمين الرابط في دعوة ورشة العمل لشهر فبراير 2026 وفي التذكير `#sdk-council`.
+- 🔁 عند تحديث الحزمة، قم بتحديث المسار والتجزئة داخل ملاحظة القراءة المسبقة وأرشفة الإعلان في `status.md` ضمن سجلات الاستعداد IOS7/AND7.

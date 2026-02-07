@@ -10,26 +10,27 @@ translation_last_reviewed: 2026-02-07
 title: Rust ledger flow recipe
 description: Use the Rust SDK to register an asset, mint supply, transfer it, and query balances against the default single-peer network.
 slug: /sdks/recipes/rust-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-г '@site/src/components/SampleDownload'-аас импортлох;
 
-This recipe mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-but runs everything from a Rust binary. It reuses the default dev network
-(`docker compose -f defaults/docker-compose.single.yml up --build`) and the demo
-credentials in `defaults/client.toml`, so you can compare SDK and CLI hashes one
-for one.
+Энэ жор нь [CLI дэвтэрийн дэлгэрэнгүй танилцуулга](../../norito/ledger-walkthrough.md)
+гэхдээ Rust хоёртын файлаас бүгдийг ажиллуулдаг. Энэ нь анхдагч хөгжүүлэлтийн сүлжээг дахин ашигладаг
+(`docker compose -f defaults/docker-compose.single.yml up --build`) болон демо
+`defaults/client.toml` дахь итгэмжлэлүүд, ингэснээр та SDK болон CLI хэшүүдийг нэгээр нь харьцуулах боломжтой.
+нэг нь.
 
-<SampleDownload
+<Жишээ татаж авах
   href="/sdk-recipes/rust/src/main.rs"
-  filename="src/main.rs"
-  description="Use this Rust source file as a baseline to follow along or to diff against your changes."
+  файлын нэр = "src/main.rs"
+  description="Өөрчлөлтүүдийг дагаж мөрдөх эсвэл өөрчлөхийн тулд энэ Rust эх файлыг үндсэн шугам болгон ашиглаарай."
 />
 
-## Prerequisites
+## Урьдчилсан нөхцөл
 
-1. Run the dev peer with Docker Compose (see the [Norito quickstart](../../norito/quickstart.md)).
-2. Export the default admin/receiver accounts and the admin private key from
+1. Docker Compose ашиглан dev peer-ийг ажиллуул ([Norito хурдан эхлүүлэх](../../norito/quickstart.md)-г үзнэ үү).
+2. Анхдагч админ/хүлээн авагчийн бүртгэл болон админ хувийн түлхүүрийг эндээс экспортлох
    `defaults/client.toml`:
 
    ```bash
@@ -38,16 +39,16 @@ for one.
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 
-   The private key string is the multihash-encoded value stored under `[account].private_key`.
-3. Create a new workspace binary (or reuse an existing one):
+   Хувийн түлхүүр мөр нь `[account].private_key` доор хадгалагдсан олон хэш кодлогдсон утга юм.
+3. Ажлын талбарын шинэ хоёртын файл үүсгэх (эсвэл байгаа нэгийг нь дахин ашиглах):
 
    ```bash
    cargo new --bin rust-ledger-recipe
    cd rust-ledger-recipe
    ```
 
-4. Add the dependencies (use a crates.io version if you are outside the
-   workspace):
+4. Хамааралуудыг нэмнэ үү (хэрэв та гаднаас байгаа бол crates.io хувилбарыг ашиглаарай
+   ажлын талбар):
 
    ```toml title="Cargo.toml"
    [dependencies]
@@ -57,7 +58,7 @@ for one.
    iroha_data_model = { path = "../../crates/iroha_data_model", features = ["transparent_api", "json"] }
    ```
 
-## Example program
+## Жишээ програм
 
 ```rust title="src/main.rs"
 use std::str::FromStr;
@@ -112,28 +113,28 @@ fn main() -> Result<()> {
 }
 ```
 
-## Run the recipe
+## Жорыг ажиллуул
 
 ```bash
 cargo run
 ```
 
-You should see log output similar to:
+Та дараахтай төстэй бүртгэлийн гаралтыг харах ёстой:
 
 ```
 ih58... now holds:
   50 units of coffee#wonderland
 ```
 
-If the asset definition already exists, the register call returns a
-`ValidationError::Duplicate`. Either ignore it (the mint still succeeds) or pick
-a new name.
+Хэрэв хөрөнгийн тодорхойлолт аль хэдийн байгаа бол бүртгэлийн дуудлага нь a буцаана
+`ValidationError::Duplicate`. Үүнийг үл тоомсорлох (гаа амжилттай хэвээр байна) эсвэл сонгох
+шинэ нэр.
 
-## Verify hashes and parity
+## Хэш болон паритетыг шалгана уу
 
-- Use `iroha --config defaults/client.toml transaction get --hash <hash>` to
-  inspect the transactions that the SDK submitted.
-- Cross-check balances with `iroha --config defaults/client.toml asset list all --table`
-  or `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Repeat the same flow from the CLI walkthrough to confirm both surfaces produce
-  the same Norito payloads and transaction statuses.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` ашиглана уу
+  SDK-ийн ирүүлсэн гүйлгээг шалгах.
+- Үлдэгдлийг `iroha --config defaults/client.toml asset list all --table` ашиглан шалгана уу
+  эсвэл `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Хоёр гадаргуугийн үйлдвэрлэлийг баталгаажуулахын тулд CLI-ийн алхмаас ижил урсгалыг давт
+  ижил Norito ачаалал болон гүйлгээний төлөв.

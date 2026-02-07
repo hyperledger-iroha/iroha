@@ -6,112 +6,105 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T20:16:38.056405+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# عالمی خصوصیت میٹرکس
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+علامات: `◉` مکمل طور پر نافذ · `○` زیادہ تر نافذ کردہ · `▲` جزوی طور پر نافذ شدہ · `△` عمل درآمد ابھی شروع ہوا · `✖︎` شروع نہیں ہوا ہے۔
 
-## Consensus & Networking
+## اتفاق رائے اور نیٹ ورکنگ
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| ملٹی کلیکٹر K/R سپورٹ اور فرسٹ کمٹ-سرٹیفکیٹ جیت | ◉ | ٹیسٹوں کے ساتھ بھیجے گئے پہلے سے متعلق کلیکٹر کا انتخاب ، بے کار فین آؤٹ ، آن چین کے/آر پیرامیٹرز ، اور پہلی جائز کمٹ-سرٹیفیکیٹ قبولیت۔ | status.md:255 ؛ status.md:314 |
+| پیس میکر بیک آف ، آر ٹی ٹی فلور ، ڈٹرمینسٹک جِٹر | ◉ | کنفیگ ، ٹیلی میٹری ، اور دستاویزات کے ذریعے وائرڈ جِٹر بینڈ کے ساتھ ترتیب دینے والے ٹائمر۔ | status.md:251 |
+| نیا_ویو گیٹنگ اور اعلی ترین کیو سی ٹریکنگ | ◉ | کنٹرول فلو نیا_ویو/شواہد رکھتا ہے ، سب سے زیادہ کیو سی نے اجارہ دار ، ہینڈ شیک گارڈز کمپیوٹڈ فنگر پرنٹ کو اپنایا ہے۔ | status.md:210 |
+| دستیابی کے ثبوت سے باخبر رہنے (مشاورتی) | ◉ | دستیابی کے ثبوت خارج اور ٹریک ؛ کمٹ V1 میں دستیابی پر نہیں جاتا ہے۔ | status.md: latest |
+| قابل اعتماد براڈکاسٹ (ڈا پے لوڈ ٹرانسپورٹ) | ◉ | جب `da_enabled=true` ٹرانسپورٹ/بازیابی کے راستے کے طور پر `da_enabled=true` ؛ دستیابی کے ثبوتوں کا سراغ لگایا جاتا ہے (مشاورتی) جبکہ عہد آزادانہ طور پر آگے بڑھتا ہے۔ | status.md: latest |
+| کیو سی اسٹیٹ روٹ بائنڈنگ کا ارتکاب کریں ◉ | کیو سی ایس لے کر `parent_state_root`/`post_state_root` لے جا ؛ ؛ کوئی علیحدہ پھانسی-کیو سی گیٹ نہیں ہے۔ | status.md: latest |
+| ثبوت کی تشہیر اور آڈٹ اختتامی مقامات | ◉ | کنٹرول فلو :: ثبوت ، Torii ثبوت اختتامی نکات ، اور منفی ٹیسٹ اتر گئے۔ | status.md:176 ؛ status.md:760-761 |
+| آر بی سی ٹیلی میٹری ، تیاری/فراہمی میٹرکس | ◉ | `/v1/sumeragi/rbc*` اختتامی نکات اور ٹیلی میٹری کاؤنٹرز/ہسٹگرام آپریٹرز کے لئے دستیاب ہے۔ | status.md: 283-284 ؛ status.md:772 |
+| اتفاق رائے پیرامیٹر اشتہار اور ٹوپولوجی کی توثیق | ◉ | نوڈس نے `(collectors_k, redundant_send_r)` کو نشر کیا اور ساتھیوں میں مساوات کی توثیق کی۔ | status.md:255 |
+| اجازت شدہ PRF پر مبنی گردش | ◉ | اجازت نامہ لیڈر/کلکٹر کا انتخاب پی آر ایف سیڈ + اونچائی/ویو کا استعمال کیننیکل روسٹر پر کرتا ہے۔ پری ہیش گردش ایک میراثی مددگار بنی ہوئی ہے۔ | status.md: latest |
 
-## Pipeline, Kura & State
+## پائپ لائن ، کورا اور ریاست| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| قرنطین لین کیپس اور ٹیلی میٹری | ◉ | کنفیگ نوبس ، ڈٹرمینسٹک اوور فلو ہینڈلنگ ، اور ٹیلی میٹری کاؤنٹرز نافذ کیے گئے ہیں۔ | status.md: 263 |
+| پائپ لائن ورکر پول نوب | ◉ | `[pipeline].workers` اسٹیٹ ان init کے ذریعے Traded env env پارسنگ ٹیسٹوں کے ساتھ۔ | status.md:264 |
+| اسنیپ شاٹ استفسار لین (ذخیرہ شدہ/ابتدائی کرسر) | ◉ | Torii انضمام اور مسدود کرنے والے کارکنوں کے تالابوں کے ساتھ ذخیرہ شدہ کرسر وضع۔ | status.md: 265 ؛ status.md:371 ؛ status.md:501 |
+| جامد ڈی اے جی فنگر پرنٹ ریکوری سیڈیکار | ◉ | کورا میں ذخیرہ شدہ سائڈیکارس ، اسٹارٹ اپ پر توثیق شدہ ، مماثلتوں پر خارج ہونے والے انتباہات۔ | status.md:106 ؛ status.md:349 |
+| کورا بلاک اسٹور ہیش ڈیکوڈنگ سختی | ◉ | Norito- آزاد راؤنڈ ٹریپ ٹیسٹ کے ساتھ ہیش پڑھتا ہے RAW 32-BYTE ہینڈلنگ میں بدل گیا۔ | status.md:608 ؛ status.md:668 |
+| کوڈیکس کے لئے Norito انکولی ٹیلی میٹری | ◉ | AOS بمقابلہ NCB سلیکشن میٹرکس Norito میں شامل کیا گیا۔ | status.md:156 |
+| Torii کے ذریعے اسنیپ شاٹ WSV سوالات | ◉ | Torii اسنیپ شاٹ کوئری لین بلاک کرنے والے کارکن پول ، ڈٹرمینسٹک سیمنٹکس کا استعمال کرتی ہے۔ | status.md:501 |
+| ٹرگر بذریعہ کال پر عملدرآمد زنجیر | ◉ | اعداد و شمار کو متحرک ترتیب کے ساتھ بذریعہ کال پر عمل درآمد کے فورا. بعد چین کا سلسلہ چلاتا ہے۔ | status.md:668 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+## Norito سیریلائزیشن اور ٹولنگ
 
-## Norito Serialization & Tooling
+| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| Norito JSON ہجرت (ورک اسپیس) | ◉ | سیرڈ کو پیداوار سے ہٹا دیا گیا۔ انوینٹری + گارڈرییلز ورک اسپیس Norito صرف صرف رکھیں۔ | status.md:112 ؛ status.md:124 |
+| سیرڈ ڈینس لسٹ اور سی آئی گارڈیلز | ◉ | گارڈ ورک فلوز/اسکرپٹس ورک اسپیس میں براہ راست سیرڈ کے نئے استعمال کو روکتے ہیں۔ | status.md:218 |
+| Norito کوڈیک گولڈنز اور AOS/NCB ٹیسٹ | ◉ | AOS/NCB گولڈنز ، تراشنے والے ٹیسٹ ، اور DOC Sync نے مزید کہا۔ | status.md:140-147 ؛ status.md: 149-150 ؛ status.md:332 ؛ status.md:666 |
+| Norito خصوصیت میٹرکس ٹولنگ | ◉ | `scripts/run_norito_feature_matrix.sh` بہاو دھواں ٹیسٹوں کی حمایت کرتا ہے۔ سی آئی نے پیک سیکس/ڈھانچے کومبوس کا احاطہ کیا ہے۔ | status.md:146 ؛ status.md:152 |
+| Norito زبان بائنڈنگز (ازگر/جاوا) | ◉ | ازگر اور جاوا Norito کوڈیکس مطابقت پذیری اسکرپٹ کے ساتھ برقرار ہیں۔ | status.md:74 ؛ status.md:81 |
+| Norito اسٹیج -1 سم ڈی ساختی درجہ بندی | ◉ | کراس آرچ گولڈنز اور بے ترتیب کارپورا ٹیسٹ کے ساتھ نیین/اے وی ایکس 2 اسٹیج 1 درجہ بندی۔ | status.md:241 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
-| Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+## گورننس اور رن ٹائم اپ گریڈ| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| رن ٹائم اپ گریڈ داخلہ (ABI گیٹنگ) | ◉ | فعال ABI سیٹ سٹرکچرڈ غلطیوں اور ٹیسٹوں کے ساتھ داخلے کے وقت نافذ کیا گیا۔ | status.md:196 |
+| محفوظ نام کی جگہ تعینات گیٹنگ | ▲ | میٹا ڈیٹا کی ضروریات اور گیٹنگ وائرڈ کو تعینات کریں۔ پالیسی/UX اب بھی تیار ہورہی ہے۔ | status.md:171 |
+| Torii گورننس پڑھیں اختتامی مقامات | ◉ | `/v1/gov/*` روٹر ٹیسٹ کے ساتھ روٹڈ APIs پڑھیں۔ | status.md: 212 |
+| تصدیق کرنے والی کلیدی رجسٹری لائف سائیکل اور واقعات | ◉ | وی کے رجسٹر/اپ ڈیٹ/فرسودہ ، واقعات ، سی ایل آئی فلٹرز ، اور برقرار رکھنے کے الفاظ نافذ کیے گئے ہیں۔ | status.md: 236-239 ؛ status.md:595 ؛ status.md:603 |
 
-## Governance & Runtime Upgrades
+## صفر-جانکاری انفراسٹرکچر
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| منسلک اسٹوریج API | ◉ | `POST/GET/LIST/DELETE` منسلک IDs اور ٹیسٹ کے ساتھ منسلک اختتامی نکات۔ | status.md:231 |
+| پس منظر پروور ورکر اور رپورٹ ٹی ٹی ایل | ▲ | خصوصیت کے جھنڈے کے پیچھے پروور اسٹب ؛ ٹی ٹی ایل جی سی اور کنفیگ نوبس وائرڈ۔ مکمل پائپ لائن زیر التوا ہے۔ | status.md: 212 ؛ status.md: 233 |
+| کور ہوسٹ میں لفافہ ہیش بائنڈنگ | ◉ | کور ہوسٹ کے ذریعہ پابند لفافے کی ہیشوں کی تصدیق کریں اور آڈٹ دالوں کے ذریعہ بے نقاب ہوں۔ | status.md:250 |
+| شیلڈڈ روٹ ہسٹری گیٹنگ | ◉ | جڑوں کی اسنیپ شاٹس کو پابند تاریخ اور خالی جڑوں کی تشکیل کے ساتھ کور ہوسٹ میں تھریڈ کیا گیا ہے۔ | status.md:303 |
+| زیڈ کے بیلٹ پھانسی اور گورننس لاک | ○ | نیلیفائر مشتق ، لاک اپڈیٹس ، توثیق کے ٹوگل پر عمل درآمد ؛ مکمل پروف لائف سائیکل اب بھی پختہ ہے۔ | status.md: 126-128 ؛ status.md:194-195 |
+| پروف اٹیچمنٹ پری تصدیق اور ڈیڈ اپ | ◉ | پسدید-ٹیگ سنجیدگی ، کٹوتی ، اور پروف ریکارڈز نے پہلے سے عمل درآمد کو برقرار رکھا۔ | status.md:348 ؛ status.md:602 |
+| ZK Torii پروف بازیافت اختتامی نقطہ | ◉ | Izanami پروف ریکارڈز (حیثیت ، اونچائی ، VK_REF/عزم) کو بے نقاب کرتا ہے۔ | status.md:94 |
 
-## Zero-Knowledge Infrastructure
+## IVM اور Kotodama انضمام| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| کور ہسٹ سیسکل → آئی ایس آئی برج | ○ | پوائنٹر TLV ضابطہ کشائی اور سیسکل قطار میں چلانے والے آپریشنل ؛ کوریج کے فرق/برابری کے ٹیسٹ کی منصوبہ بندی کی گئی ہے۔ | status.md: 299-307 ؛ status.md:477-486 |
+| پوائنٹر کنسٹرکٹرز اور ڈومین بلٹ انز | ◉ | Kotodama بلٹ ان ٹائپڈ Norito TLVS اور SCALLS ، IR/E2E ٹیسٹ اور دستاویزات کے ساتھ۔ | status.md: 299-301 |
+| پوائنٹر-ابی سخت توثیق اور ڈاکٹر مطابقت پذیری | ◉ | TLV پالیسی کو گولڈن ٹیسٹ اور تیار کردہ دستاویزات کے ساتھ میزبان/IVM میں نافذ کیا گیا ہے۔ | status.md: 227 ؛ status.md:317 ؛ status.md:344 ؛ status.md:366 ؛ status.md:527 |
+| ZK syscall gitting کے ذریعے کور ہوسٹ | ◉ | فی آپپ قطار گیٹ کی تصدیق شدہ لفافے اور آئی ایس آئی کے پھانسی سے پہلے ہیش کے مماثل کو نافذ کرتے ہیں۔ | کریٹس/آئروہ_کور/ایس آر سی/اسمارٹ کنٹریکٹ/IVM/میزبان۔ آر ایس: 213 ؛ کریٹس/آئروہ_کور/ایس آر سی/اسمارٹ کنٹریکٹز/IVM/میزبان۔ آر ایس: 279 |
+| Kotodama پوائنٹر-ابی دستاویزات اور گرائمر | ◉ | براہ راست کنسٹرکٹرز اور اسکیل میپنگز کے ساتھ ہم آہنگ گرائمر/دستاویزات۔ | status.md: 299-301 |
+| آئی ایس او 20022 اسکیما سے چلنے والا انجن اور Torii برج | ◉ | کیننیکل آئی ایس او 20022 اسکیموں کو سرایت ، ڈٹرمینسٹک ایکس ایم ایل پارسنگ ، اور `/v1/iso20022/status/{MsgId}` API بے نقاب۔ | status.md:65-70 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+## ہارڈ ویئر ایکسلریشن
 
-## IVM & Kotodama Integration
+| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| سمد ٹیل/غلط سلیئنمنٹ برابری کے ٹیسٹ | ◉ | بے ترتیب برابری کے ٹیسٹ کو یقینی بناتے ہیں کہ صوابدیدی سیدھ کے ل Sim سمڈ ویکٹر آپس اسکیلر سیمنٹکس سے ملتے ہیں۔ | status.md:243 |
+| دھات/CUDA فال بیک اور سیلف ٹیسٹ | ◉ | جی پی یو بیک اینڈ گولڈن سیلف ٹیسٹ چلاتے ہیں اور مماثلت پر اسکیلر/سمڈ پر واپس گر جاتے ہیں۔ پیراٹی سویٹس کا احاطہ SHA-256/KECKAK/AES۔ | status.md:244-246 |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+## نیٹ ورک کا وقت اور اتفاق رائے کے طریقوں
 
-## Hardware Acceleration
+| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| نیٹ ورک ٹائم سروس (این ٹی ایس) | ✖︎ | ڈیزائن `new_pipeline.md` میں موجود ہے۔ عمل کو ابھی تک اسٹیٹس کی تازہ کاریوں میں ٹریک نہیں کیا گیا ہے۔ | new_pipline.md |
+| نامزد POS اتفاق رائے موڈ | ✖︎ | Nexus ڈیزائن دستاویزات بند سیٹ اور NPOS طریقوں ؛ بنیادی نفاذ زیر التوا ہے۔ | new_pipline.md ؛ nexus.md |
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+## Nexus لیجر روڈ میپ| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| اسپیس ڈائرکٹری معاہدہ سہارا | ✖︎ | ڈی ایس کے ظاہر/گورننس کے لئے عالمی رجسٹری کا معاہدہ ابھی تک نافذ نہیں ہوا ہے۔ | nexus.md |
+| ڈیٹا اسپیس مینی فیسٹ فارمیٹ اور لائف سائیکل | ✖︎ | Norito مینی فیسٹ اسکیما ، ورژننگ ، اور گورننس فلو روڈ میپ پر باقی ہے۔ | nexus.md |
+| ڈی ایس گورننس اور ویلڈیٹر گردش | ✖︎ | ڈی ایس ممبرشپ/گردش کے لئے چین پر چین کے طریقہ کار ابھی بھی ڈیزائن کے مرحلے میں ہیں۔ | nexus.md |
+| کراس-ڈی ایس اینکرنگ اور Nexus بلاک کمپوزیشن | ✖︎ | ساخت کی پرت اور لنگر انداز کرنے کے وعدوں کا خاکہ لیکن غیر لیس۔ | nexus.md |
+| کورا/ڈبلیو ایس وی مٹانے والے کوڈڈ اسٹوریج | ✖︎ | سرکاری/نجی DS کے لئے ابھی تک تعمیر نہیں کیا گیا ہے۔ | nexus.md |
+| زیڈ کے/پرامید پروف پالیسی فی ڈی ایس | ✖︎ | فی-ڈی ایس پروف کی ضروریات اور نفاذ کوڈ میں ٹریک نہیں کی جاتی ہے۔ | nexus.md |
+| فیس/کوٹہ تنہائی فی ڈیٹا اسپیس | ✖︎ | ڈی ایس سے متعلق کوٹہ اور فیس پالیسی کے طریقہ کار مستقبل کے کام میں ہیں۔ | nexus.md |
 
-## Network Time & Consensus Modes
+## افراتفری اور غلطی انجیکشن
 
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
-
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
-
-## Chaos & Fault Injection
-
-| Feature | Status | Notes | Evidence |
-|---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+| خصوصیت | حیثیت | نوٹ | ثبوت |
+| --------- | -------- | ------- | ------------ |
+| Izanami افراتفری آرکیسٹریشن | ○ | Izanami کام کا بوجھ اب اثاثوں کی تعریف ، میٹا ڈیٹا ، این ایف ٹی ، اور ٹرگر-ریپیٹیشن کی ترکیبیں چلاتا ہے جس میں نئی ​​راستوں کے لئے یونٹ کوریج ہے۔ | کریٹس/ایزانامی/ایس آر سی/ہدایات۔ آر۔ کریٹس/ایزانامی/ایس آر سی/ہدایات۔ آر ایس#ٹیسٹ |

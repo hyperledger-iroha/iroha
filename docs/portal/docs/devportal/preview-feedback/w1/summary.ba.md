@@ -11,42 +11,43 @@ id: preview-feedback-w1-summary
 title: W1 partner feedback & exit summary
 sidebar_label: W1 summary
 description: Findings, actions, and exit evidence for the partner/Torii integrator preview wave.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| Элемент | Ентекле |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Invite window | 2025‑04‑12 → 2025‑04‑26 |
-| Artefact tag | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
+| Тулҡын | W1 — Партнерҙар һәм I18NT000000001X интеграторҙары |
+| Тәҙрәгә саҡырығыҙ | 2025‐04‐12 → 2025‐04‐26 |
+| Артефакт билдәһе | `preview-2025-04-12` |
+| Трекер мәсьәләһе | `DOCS-SORA-Preview-W1` |
+| Ҡатнашыусылар | сора-оп-01...03, тори-инт-01...02, sdk-партнер-01...02, шлюз-опс-01 |
 
-## Highlights
+##
 
-1. **Checksum workflow** — All reviewers verified the descriptor/archive via `scripts/preview_verify.sh`; logs stored alongside the invite acknowledgements.
-2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards stayed green for the entire wave; no incidents or alert pages fired.
-3. **Doc feedback (`docs-preview/w1`)** — Two minor nits filed:
-   - `docs-preview/w1 #1`: clarify nav wording in the Try it section (resolved).
-   - `docs-preview/w1 #2`: update Try it screenshot (resolved).
-4. **Runbook parity** — SoraFS operators confirmed the new cross-links between `orchestrator-ops` and `multi-source-rollout` addressed their W0 concerns.
+1. **Чексум эш ағымы** — Бөтә рецензенттар ҙа `scripts/preview_verify.sh` аша дескриптор/архивты раҫланы; логтар һаҡлана менән бергә саҡырыу таныуҙары.
+2. **Телеметрия** — `docs.preview.integrity`, `TryItProxyErrors`, һәм `DocsPortal/GatewayRefusals` приборҙар таҡталары бөтә тулҡын өсөн йәшел булып ҡала; бер ниндәй ҙә ваҡиғалар йәки иҫкәртмә биттәре эштән бушатылмаған.
+3. **Док кире бәйләнеш (`docs-preview/w1`)*** — Ике бәләкәй генә нит:
+   - `docs-preview/w1 #1`: уны һынап ҡарау бүлегендә нав формулировкаһын асыҡлай (хәл ителә).
+   - `docs-preview/w1 #2`: яңыртыу уны скриншот һынап ҡарағыҙ (хәл ителә).
+4. **Ранбук паритеты** — I18NT00000000000000 операторҙары яңы һылтанмаларҙы `orchestrator-ops` һәм I18NI0000014X араһында W0 борсолоуҙарын хәл итте.
 
-## Action items
+## Эш әйберҙәре
 
-| ID | Description | Owner | Status |
+| ID | Тасуирлама | Хужа | Статус |
 | --- | --- | --- | --- |
-| W1-A1 | Update Try it nav wording per `docs-preview/w1 #1`. | Docs-core-02 | ✅ Completed (2025‑04‑18). |
-| W1-A2 | Refresh Try it screenshot per `docs-preview/w1 #2`. | Docs-core-03 | ✅ Completed (2025‑04‑19). |
-| W1-A3 | Summarise partner findings + telemetry evidence in roadmap/status. | Docs/DevRel lead | ✅ Completed (see tracker + status.md). |
+| W1-A1 | Яңыртыу тырышып ҡарағыҙ, уны нав формулировкаһы I18NI000000015X. | Док-ядро-02 | ✅ тамамланған (2025‐04‐18). |
+| W1-A2 | Яңыртыу уны скриншот һынап ҡарағыҙ `docs-preview/w1 #2`. | Док-ядро-03 | ✅ тамамланған (2025‐04‐19). |
+| W1-A3 | Йәмғеһе партнер табыштар + телеметрия дәлилдәре юл картаһы/статус. | Док/ДевРел лидеры | ✅ Төҙөлгән (ҡара: трекер + статус.мд). |
 
-## Exit summary (2025-04-26)
+## Сығыш резюмеһы (2025-04-26)
 
-- All eight reviewers confirmed completion during the final office hours, purged local artefacts, and had their access revoked.
-- Telemetry remained green through exit; final snapshots attached to `DOCS-SORA-Preview-W1`.
-- Invite log updated with exit acknowledgements; tracker flipped W1 to 🈴 and added the checkpoint entries.
-- Evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) archived under `artifacts/docs_preview/W1/`.
+- Һигеҙ рецензенттың барыһы ла һуңғы офис ваҡытында тамамланыуын раҫланы, урындағы артефакттарҙы таҙартты һәм уларҙы рөхсәт итеүҙе тартып алды.
+- Телеметрия сығыу аша йәшел булып ҡалды; `DOCS-SORA-Preview-W1`-ҡа беркетелгән һуңғы снимоктар.
+- Сығыу таныуҙары менән яңыртылған журналды саҡырыу; трекер W1 тиклем әйләндереп 🈴 һәм тикшерелгән пункт яҙмаларын өҫтәне.
+- Дәлилдәр өйөмө (тапҡыр, чемпионат логы, зонд сығышы, Уны прокси-крандировка, телеметрия скриншоттары, кире бәйләнеш дисперсия) I18NI000000018X буйынса архивланған.
 
-## Next steps
+## Киләһе аҙымдар
 
-- Prepare the W2 community intake plan (governance approval + request template tweaks).
-- Refresh the preview artefact tag for the W2 wave and re-run the preflight script once dates are finalised.
-- Port applicable W1 findings into roadmap/status so the community wave has the latest guidance.
+- W2 йәмәғәтселек ҡабул итеү планын әҙерләү (идара итеүҙе раҫлау + үтенес шаблон твик).
+- Яңыртыу өсөн алдан ҡарау артефакт билдәһе өсөн W2 тулҡын һәм яңынан йүгерә скрипт бер тапҡыр даталар финаллаштырылған.
+- порт ҡулланыла W1 табыштар юл картаһы/статус шулай йәмәғәт тулҡыны һуңғы йүнәлештәргә эйә.

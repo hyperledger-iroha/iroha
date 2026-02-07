@@ -6,20 +6,21 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: d5dd8e1b666be34bb9101898d355fe5e3c6efc32500c238c72a6ef9228c157f0
 source_last_modified: "2026-01-22T15:38:30.662574+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Repo Settlement Runbook
+# レポ決済ランブック
 
-This guide documents the deterministic flow for repo and reverse-repo agreements in Iroha.
-It covers CLI orchestration, SDK helpers, and the expected governance knobs so operators can
-initiate, margin, and unwind agreements without writing raw Norito payloads. For governance
-checklists, evidence capture, and fraud/rollback procedures see
-[`repo_ops.md`](./repo_ops.md), which satisfies roadmap item F1.
+このガイドでは、Iroha のレポ契約およびリバースレポ契約の決定的なフローについて説明します。
+CLI オーケストレーション、SDK ヘルパー、および予想されるガバナンス ノブについて説明しているため、オペレーターは次のことを行うことができます。
+生の Norito ペイロードを書き込むことなく、契約を開始、マージン、およびアンワインドします。ガバナンスのため
+チェックリスト、証拠の収集、不正行為/ロールバック手順については、を参照してください。
+[`repo_ops.md`](./repo_ops.md)、ロードマップ項目 F1 を満たします。
 
-## CLI commands
+## CLI コマンド
 
-The `iroha app repo` command groups repo-specific helpers:
+`iroha app repo` コマンドは、リポジトリ固有のヘルパーをグループ化します。
 
 ```bash
 # Stage an initiation instruction without submitting
@@ -57,17 +58,17 @@ iroha --config client.toml repo margin --agreement-id daily_repo
 iroha --config client.toml repo margin-call --agreement-id daily_repo
 ```
 
-* `repo initiate` and `repo unwind` respect `--input/--output` so the generated `InstructionBox`
-  payloads can be piped into other CLI flows or submitted immediately.
-* Pass `--custodian <account>` to route collateral to a tri-party custodian. When omitted, the
-  counterparty receives the pledge directly (bilateral repo).
-* `repo margin` queries the ledger via `FindRepoAgreements` and reports the next expected margin
-  timestamp (in milliseconds) alongside whether a margin callback is currently due.
-* `repo margin-call` appends a `RepoMarginCallIsi` instruction, recording the margin checkpoint and
-  emitting events for all participants. Calls are rejected if the cadence has not elapsed or if the
-  instruction is submitted by a non-participant.
+* `repo initiate` および `repo unwind` は `--input/--output` を尊重するため、生成される `InstructionBox`
+  ペイロードは他の CLI フローにパイプしたり、すぐに送信したりできます。
+* `--custodian <account>` を渡して担保を三者保管者にルーティングします。省略した場合、
+  取引相手は質権を直接受け取ります（二国間レポ）。
+* `repo margin` は `FindRepoAgreements` 経由でレジャーをクエリし、次に予想されるマージンを報告します
+  タイムスタンプ (ミリ秒単位) と、現在マージンコールバックの期限があるかどうかを示します。
+* `repo margin-call` は `RepoMarginCallIsi` 命令を追加し、マージン チェックポイントと
+  すべての参加者にイベントを発行します。一定のリズムが経過していない場合、または次の場合、通話は拒否されます。
+  参加者以外から指示が提出された場合。
 
-## Python SDK helpers
+## Python SDK ヘルパー
 
 ```python
 from iroha_python import (
@@ -111,13 +112,13 @@ record = RepoAgreementRecord.from_payload(agreements[0])
 next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
 ```
 
-* Both helpers normalise numeric quantities and metadata fields before invoking the PyO3 bindings.
-* `RepoAgreementRecord` mirrors the runtime schedule calculation so off-ledger automation can
-  determine when callbacks are due without recomputing the cadence manually.
+* どちらのヘルパーも、PyO3 バインディングを呼び出す前に数値とメタデータ フィールドを正規化します。
+* `RepoAgreementRecord` は実行時スケジュール計算を反映するため、台帳外の自動化が可能です。
+  手動でリズムを再計算することなく、コールバックの期限を決定します。
 
-## DvP / PvP settlements
+## DvP / PvP 決済
 
-The `iroha app settlement` command stages delivery-versus-payment and payment-versus-payment instructions:
+`iroha app settlement` コマンドは、配送対支払い、および支払い対支払いの指示をステージングします。
 
 ```bash
 # Delivery leg first, then payment
@@ -153,20 +154,20 @@ iroha --config client.toml --output \
   --iso-xml-out trade_pvp.xml
 ```
 
-* Leg quantities accept integral or decimal values and are validated against the asset precision.
-* `--atomicity` accepts `all-or-nothing`, `commit-first-leg`, or `commit-second-leg`. Use these modes
-  with `--order` to express which leg remains committed if subsequent processing fails (`commit-first-leg`
-  keeps the first leg applied; `commit-second-leg` retains the second).
-* CLI invocations emit empty instruction metadata today; use the Python helpers when settlement-level
-  metadata needs to be attached.
-* See [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) for the ISO 20022 field mapping that
-  backs these instructions (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
-* Pass `--iso-xml-out <path>` to have the CLI emit a canonical XML preview alongside the Norito
-  instruction; the file follows the mapping above (`sese.023` for DvP, `sese.025` for PvP`). Pair the
-  flag with `--iso-reference-crosswalk <path>` so the CLI verifies `--delivery-instrument-id` against the
-  same snapshot Torii uses during runtime admission.
+* レッグ数量は整数値または 10 進数値を受け入れ、資産の精度に対して検証されます。
+* `--atomicity` は、`all-or-nothing`、`commit-first-leg`、または `commit-second-leg` を受け入れます。これらのモードを使用します
+  `--order` を使用して、後続の処理が失敗した場合にコミットされたままになるレッグを表現します (`commit-first-leg`
+  最初の脚を適用したままにします。 `commit-second-leg` は 2 番目を保持します)。
+* 現在、CLI 呼び出しは空の命令メタデータを生成します。決済レベルで Python ヘルパーを使用する
+  メタデータを添付する必要があります。
+* ISO 20022 フィールド マッピングについては、[`settlement_iso_mapping.md`](./settlement_iso_mapping.md) を参照してください。
+  これらの指示 (`sese.023`、`sese.025`、`colr.007`、`pacs.009`、`camt.054`) をサポートします。
+* `--iso-xml-out <path>` を渡すと、CLI は Norito とともに正規の XML プレビューを出力します
+  指示;ファイルは上記のマッピングに従います (DvP の場合は `sese.023`、PvP の場合は `sese.025``)。ペアリングする
+  `--iso-reference-crosswalk <path>` でフラグを設定するため、CLI は `--delivery-instrument-id` を
+  Torii が実行時受付中に使用するのと同じスナップショット。
 
-Python helpers mirror the CLI surface:
+Python ヘルパーは CLI サーフェスをミラーリングします。
 
 ```python
 from iroha_python import (
@@ -211,21 +212,19 @@ draft.settlement_pvp(
 )
 ```
 
-## Determinism & Governance Expectations
+## 決定論とガバナンスへの期待
 
-Repo instructions rely exclusively on Norito-encoded numeric types and the shared
-`RepoGovernance::with_defaults` logic. Keep the following invariants in mind:
-
-* Quantities are serialised with deterministic `NumericSpec` values: cash legs use
-  `fractional(2)` (two decimal places), collateral legs use `integer()`. Do not submit
-  values with greater precision—runtime guards will reject them and peers would diverge.
-* Tri-party repos persist the custodian account id in `RepoAgreement`. Lifecycle and margin events
-  emit a `RepoAccountRole::Custodian` payload so custodians can subscribe and reconcile inventory.
-* Haircuts are clamped to 10 000 bps (100 %) and margin frequencies are whole seconds. Provide
-  governance parameters in those canonical units to stay aligned with runtime expectations.
-* Timestamps are always unix milliseconds. All helpers forward them unchanged to the Norito
-  payload so peers derive identical schedules.
-* Initiation and unwind instructions reuse the same agreement identifier. The runtime rejects
-  duplicate IDs and unwinds for unknown agreements; CLI/SDK helpers surface those errors early.
-* `repo margin`/`RepoAgreementRecord::next_margin_check_after` return the canonical cadence. Always
-  consult this snapshot before triggering callbacks to avoid replaying stale schedules.
+リポジトリ命令は、Norito でエンコードされた数値型と共有
+`RepoGovernance::with_defaults` ロジック。次の不変条件に留意してください。* 数量は決定的な `NumericSpec` 値でシリアル化されます: キャッシュ レッグを使用
+  `fractional(2)` (小数点以下 2 桁)、側副脚は `integer()` を使用します。提出しないでください
+  より高い精度の値 - ランタイム ガードがそれらを拒否し、ピアが分岐します。
+* トライパーティ リポジトリは、カストディアン アカウント ID を `RepoAgreement` に保持します。ライフサイクルとマージンイベント
+  `RepoAccountRole::Custodian` ペイロードを発行して、管理者が在庫をサブスクライブして調整できるようにします。
+* ヘアカットは 10000bps (100%) に固定され、マージン頻度は整数秒です。提供する
+  これらの正規単位のガバナンス パラメータを実行時の期待に合わせて調整します。
+* タイムスタンプは常に unix ミリ秒です。すべてのヘルパーは、それらを変更せずに Norito に転送します。
+  ペイロードを使用するため、ピアは同一のスケジュールを取得します。
+* 開始命令とアンワインド命令は同じアグリーメント識別子を再利用します。ランタイムが拒否する
+  ID が重複し、不明な契約が解除される。 CLI/SDK ヘルパーは、これらのエラーを早期に発見します。
+* `repo margin`/`RepoAgreementRecord::next_margin_check_after` は正規のケイデンスを返します。いつも
+  古いスケジュールの再実行を避けるために、コールバックをトリガーする前にこのスナップショットを参照してください。

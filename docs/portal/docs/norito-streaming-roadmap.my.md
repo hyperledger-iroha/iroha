@@ -8,12 +8,13 @@ source_hash: f69d3794b9b508ce447d5599bf7f2f7b862bae44fe2f0ad2f6a16837eb313ee8
 source_last_modified: "2025-12-29T18:16:35.148037+00:00"
 translation_last_reviewed: 2026-02-07
 title: Norito Streaming Roadmap
+translator: machine-google-reviewed
 ---
 
-The following backlog captures the near-term work items the Streaming Working
-Group tracks for Norito audio/video delivery. Values are updated alongside
-`status.md` and shared here for portal consumers who prefer a machine-friendly
-view.
+အောက်ပါ backlog သည် အနီးနားရှိ အလုပ်အရာများကို လွှင့်ထုတ်ခြင်းအား ဖမ်းယူပါသည်။
+Norito အော်ဒီယို/ဗီဒီယို ပေးပို့မှုအတွက် အုပ်စုသီချင်းများ။ တန်ဖိုးများနှင့်အတူ အပ်ဒိတ်လုပ်ထားသည်။
+`status.md` နှင့် စက်နှင့်လိုက်ဖက်သော စက်ကိုနှစ်သက်သော portal သုံးစွဲသူများအတွက် ဤနေရာတွင် မျှဝေပါသည်။
+အမြင်။
 
 ```json
 [

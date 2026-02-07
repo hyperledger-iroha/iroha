@@ -8,40 +8,42 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Portal Observability & Analytics
 sidebar_label: Observability
 description: Telemetry, release tagging, and verification automation for the developer portal.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The DOCS-SORA roadmap requires analytics, synthetic probes, and broken-link
-automation for every preview build. This note documents the plumbing that now
-ships with the portal so operators can wire monitoring without leaking visitor
-data.
+DOCS-SORA замын зураг нь аналитик, синтетик датчик, эвдэрсэн холбоос шаарддаг.
+Урьдчилан харах бүрдлийн автоматжуулалт. Энэ тэмдэглэл одоо сантехникийн талаар баримтжуулж байна
+порталтай хамт ирдэг тул операторууд зочдыг алдагдуулахгүйгээр хяналт тавих боломжтой
+өгөгдөл.
 
-## Release tagging
+## Шошгоныг гарга
 
-- Set `DOCS_RELEASE_TAG=<identifier>` (falls back to `GIT_COMMIT` or `dev`) when
-  building the portal. The value is injected into `<meta name="sora-release">`
-  so probes and dashboards can distinguish deployments.
-- `npm run build` emits `build/release.json` (written by
-  `scripts/write-checksums.mjs`) describing the tag, timestamp, and optional
-  `DOCS_RELEASE_SOURCE`. The same file is bundled into preview artefacts and
-  referenced by the link checker report.
+- `DOCS_RELEASE_TAG=<identifier>` (`GIT_COMMIT` эсвэл `dev` руу буцна) тохируулах үед
+  портал барих. Энэ утгыг `<meta name="sora-release">` руу оруулна
+  Тиймээс датчик болон хяналтын самбар нь байршуулалтыг ялгаж чаддаг.
+- `npm run build` нь `build/release.json` ялгаруулдаг (бичсэн:
+  `scripts/write-checksums.mjs`) шошго, цагийн тэмдэг болон нэмэлтийг дүрсэлсэн
+  `DOCS_RELEASE_SOURCE`. Ижил файлыг урьдчилан харах олдворууд болон
+  холбоос шалгагчийн тайлангаас иш татсан.
 
-## Privacy-preserving analytics
+## Нууцлалыг хамгаалах аналитик
 
-- Configure `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` to
-  enable the lightweight tracker. Payloads contain `{ event, path, locale,
-  release, ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
-  is used whenever possible to avoid blocking navigations.
-- Control sampling with `DOCS_ANALYTICS_SAMPLE_RATE` (0–1). The tracker stores
-  the last-sent path and never emits duplicate events for the same navigation.
-- The implementation lives in `src/components/AnalyticsTracker.jsx` and is
-  mounted globally through `src/theme/Root.js`.
+- `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>`-г тохируулна уу
+  хөнгөн жингийн трекерийг идэвхжүүл. Ачаалал нь `{ үйл явдал, зам, локал,
+  хувилбар, ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
+  навигацийг хаахаас зайлсхийхийн тулд боломжтой бол ашигладаг.
+- `DOCS_ANALYTICS_SAMPLE_RATE` (0–1) ашиглан дээжийг хянах. Tracker хадгалдаг
+  хамгийн сүүлд илгээсэн зам бөгөөд ижил навигацийн хувьд давхардсан үйл явдлуудыг хэзээ ч гаргадаггүй.
+- Хэрэгжилт нь `src/components/AnalyticsTracker.jsx`-д амьдардаг бөгөөд ийм байна
+  `src/theme/Root.js`-ээр дамжуулан дэлхий даяар суурилуулсан.
 
-## Synthetic probes
+## Синтетик датчик
 
-- `npm run probe:portal` issues GET requests against common routes
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) and verifies the
-  `sora-release` meta tag matches `--expect-release` (or
-  `DOCS_RELEASE_TAG`). Example:
+- `npm run probe:portal` нийтлэг маршрутын эсрэг GET хүсэлт гаргадаг
+  (`/`, `/norito/overview`, `/reference/torii-swagger` гэх мэт) ба баталгаажуулна.
+  `sora-release` мета шошготой таарч `--expect-release` (эсвэл
+  `DOCS_RELEASE_TAG`). Жишээ:
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -49,59 +51,59 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Failures are reported per path, making it easy to gate CD on probe success.
+Алдаа дутагдлыг зам тус бүрээр мэдээлдэг бөгөөд энэ нь CD-ийн амжилтыг шалгахад хялбар болгодог.
 
-## Broken-link automation
+## Хагарсан холбоосын автоматжуулалт
 
-- `npm run check:links` scans `build/sitemap.xml`, ensures every entry maps to a
-  local file (checking `index.html` fallbacks), and writes
-  `build/link-report.json` containing the release metadata, totals, failures,
-  and the SHA-256 fingerprint of `checksums.sha256` (exposed as `manifest.id`)
-  so every report can be tied back to the artefact manifest.
-- The script exits non-zero when a page is missing, so CI can block releases on
-  stale or broken routes. Reports cite the candidate paths that were attempted,
-  which helps trace routing regressions back to the docs tree.
+- `npm run check:links` нь `build/sitemap.xml`-г сканнердаж, бүх газрын зураг руу орохыг баталгаажуулдаг.
+  локал файл (`index.html` нөөцийг шалгаж байна), бичнэ
+  `build/link-report.json` хувилбарын мета өгөгдөл, нийт дүн, алдаа,
+  болон `checksums.sha256` (`manifest.id` хэлбэрээр ил гарсан) SHA-256 хурууны хээ
+  Тиймээс тайлан бүрийг олдворын манифесттэй холбож болно.
+- Хуудас байхгүй үед скрипт тэгээс өөр гарах тул CI нь хувилбаруудыг хааж болно
+  хуучирсан эсвэл эвдэрсэн замууд. Тайлангууд оролдсон нэр дэвшигчийн замыг иш татсан.
+  Энэ нь чиглүүлэлтийн регрессийг баримтын мод руу буцаахад тусалдаг.
 
-## Grafana dashboard & alerts
+## Grafana хяналтын самбар ба анхааруулга
 
-- `dashboards/grafana/docs_portal.json` publishes the **Docs Portal Publishing**
-  Grafana board. It ships the following panels:
-  - *Gateway Refusals (5m)* uses `torii_sorafs_gateway_refusals_total` scoped by
-    `profile`/`reason` so SREs can detect bad policy pushes or token failures.
-  - *Alias Cache Refresh Outcomes* and *Alias Proof Age p90* track
-    `torii_sorafs_alias_cache_*` to prove fresh proofs exist before a DNS cut
-    over.
-  - *Pin Registry Manifest Counts* plus the *Active Alias Count* stat mirror the
-    pin-registry backlog and total aliases so governance can audit each release.
-  - *Gateway TLS Expiry (hours)* highlights when the publishing gateway’s TLS
-    cert approaches expiry (alert threshold at 72 h).
-  - *Replication SLA Outcomes* and *Replication Backlog* keep an eye on
-    `torii_sorafs_replication_*` telemetry to ensure all replicas meet the GA
-    bar after publishing.
-- Use the built-in template variables (`profile`, `reason`) to focus on the
-  `docs.sora` publishing profile or investigate spikes across all gateways.
-- PagerDuty routing uses the dashboard panels as evidence: alerts named
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, and
-  `DocsPortal/TLSExpiry` fire when the corresponding series breach their
-  thresholds. Link the alert’s runbook to this page so on-call engineers can
-  replay the exact Prometheus queries.
+- `dashboards/grafana/docs_portal.json` нь **Docs Portal Publishing**-г нийтэлдэг.
+  Grafana самбар. Энэ нь дараах хавтангуудыг тээвэрлэнэ.
+  - *Гарцын татгалзал (5м)* хамрах хүрээтэй `torii_sorafs_gateway_refusals_total`-г ашигладаг
+    `profile`/`reason` нь SRE нь бодлогын буруу түлхэлт эсвэл жетон алдааг илрүүлэх боломжтой.
+  - *Alias Cache Refresh Үр дүн* ба *Alias Proof Age p90* дуу
+    DNS таслагдахаас өмнө шинэ нотолгоог нотлохын тулд `torii_sorafs_alias_cache_*`
+    дууссан.
+  - *Бүртгэлийн манифестын тоог тогтоох* дээр нэмэх нь *Идэвхтэй нэрийн тоо* статистикийг тусгана.
+    pin-registry backlog болон нийт өөр нэрүүдийг оруулснаар засаглал нь хувилбар бүрт аудит хийх боломжтой.
+  - *Гатварын TLS дуусах хугацаа (цаг)* нийтлэх гарцын TLS-ийг онцлон харуулдаг
+    гэрчилгээний хугацаа дуусах дөхөж байна (сэрэмжлүүлэх босго 72 цаг).
+  - *Хуулбарлах SLA-ын үр дүн* болон *Хуулбарлалтын хоцрогдол*-ыг ажиглаж байгаарай
+    Бүх хуулбарууд GA-д нийцэж байгаа эсэхийг баталгаажуулахын тулд `torii_sorafs_replication_*` телеметр
+    нийтлэсний дараа баар.
+- Суурилуулсан загвар хувьсагчдыг (`profile`, `reason`) ашиглана.
+  `docs.sora` профайлыг нийтлэх эсвэл бүх гарц дээрх огцом өсөлтийг судлах.
+- PagerDuty чиглүүлэлт нь хяналтын самбарыг нотлох баримт болгон ашигладаг: дохиолол
+  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, болон
+  `DocsPortal/TLSExpiry` харгалзах цувралууд нь тэдгээрийн зөрчлийн үед гал гардаг
+  босго. Дуудлагын инженерүүд боломжтой болохын тулд дохионы runbook-г энэ хуудсанд холбоно уу
+  яг Prometheus асуултуудыг дахин тоглуулна уу.
 
-## Putting it together
+## Үүнийг нэгтгэж байна
 
-1. During `npm run build`, set the release/analytics environment variables and
-   let the post-build step emit `checksums.sha256`, `release.json`, and
+1. `npm run build` үед хувилбар/аналитик орчны хувьсагчдыг тохируулж,
+   бүтээсний дараах алхам нь `checksums.sha256`, `release.json`, ба
    `link-report.json`.
-2. Run `npm run probe:portal` against the preview hostname with
-   `--expect-release` wired to the same tag. Save the stdout for the publishing
-   checklist.
-3. Run `npm run check:links` to fail fast on broken sitemap entries and archive
-   the generated JSON report together with the preview artefacts. CI drops the
-   latest report at `artifacts/docs_portal/link-report.json` so governance can
-   download the evidence bundle straight from the build logs.
-4. Forward the analytics endpoint to your privacy-preserving collector (Plausible,
-   self-hosted OTEL ingest, etc.) and ensure sampling rates are documented per
-   release so dashboards interpret counts correctly.
-5. CI already wires these steps through the preview/deploy workflows
+2. Урьдчилан үзэх хостын нэрийн эсрэг `npm run probe:portal`-г ажиллуул
+   `--expect-release` нь ижил шошготой холбогдсон. Нийтлэлд зориулж stdout-г хадгална уу
+   шалгах хуудас.
+3. `npm run check:links`-г ажиллуулж сайтын газрын зургийн эвдэрсэн оруулгууд болон архивт хурдан амжилтгүй болно.
+   үүсгэсэн JSON тайланг урьдчилан харах олдворуудын хамт. CI-г буулгана
+   `artifacts/docs_portal/link-report.json` дээрх хамгийн сүүлийн тайланг засаглал хийх боломжтой
+   нотлох баримтын багцыг барилгын бүртгэлээс шууд татаж аваарай.
+4. Шинжилгээний төгсгөлийн цэгийг нууцлалыг хадгалдаг цуглуулагч руугаа дамжуулаарай (Үнэн боломжтой,
+   өөрөө зохион байгуулсан OTEL ingest гэх мэт) болон түүврийн хэмжээг баримтжуулсан эсэхийг баталгаажуулах
+   гаргаснаар хяналтын самбар тооллыг зөв тайлбарлах болно.
+5. CI нь эдгээр алхмуудыг урьдчилан харах/байруулах ажлын урсгалаар дамжуулан аль хэдийн холбодог
    (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), so local dry runs only need to
-   cover secret-specific behaviour.
+   `.github/workflows/docs-portal-deploy.yml`), тиймээс орон нутгийн хуурай гүйлтэд зөвхөн хэрэгтэй
+   нууцад хамаарах зан үйлийг хамрах.

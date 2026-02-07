@@ -8,21 +8,23 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Docs Portal → SoraFS Publish Plan
 sidebar_label: Portal Publish Plan
 description: Step-by-step checklist for shipping the docs portal, OpenAPI, and SBOM bundles via SoraFS.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/portal_publish_plan.md`. Update both copies when the workflow changes.
+:::注意規範來源
+鏡子 `docs/source/sorafs/portal_publish_plan.md`。當工作流程發生變化時更新兩個副本。
 :::
 
-Roadmap item DOCS-7 requires every docs artefact (portal build, OpenAPI spec,
-SBOMs) to flow through the SoraFS manifest pipeline and serve via `docs.sora`
-with `Sora-Proof` headers. This checklist stitches the existing helpers together
-so Docs/DevRel, Storage, and Ops can run the release without hunting through
-multiple runbooks.
+路線圖項目 DOCS-7 需要每個文檔 artefact（門戶構建、OpenAPI 規範、
+SBOM）流經 SoraFS 清單管道並通過 `docs.sora` 提供服務
+帶有 `Sora-Proof` 標頭。該清單將現有的助手縫合在一起
+因此 Docs/DevRel、Storage 和 Ops 可以運行版本而無需搜索
+多個運行手冊。
 
-## 1. Build & Package Payloads
+## 1. 構建和打包有效負載
 
-Run the packaging helper (skip options are available for dry-runs):
+運行打包助手（試運行時可以使用跳過選項）：
 
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
@@ -33,12 +35,12 @@ Run the packaging helper (skip options are available for dry-runs):
   --proof
 ```
 
-- `--skip-build` reuses `docs/portal/build` if CI already produced it.
-- Add `--skip-sbom` when `syft` is unavailable (e.g., air-gapped rehearsal).
-- The script runs the portal tests, emits CAR + manifest pairs for `portal`,
-  `openapi`, `portal-sbom`, and `openapi-sbom`, verifies each CAR when
-  `--proof` is set, and drops Sigstore bundles when `--sign` is set.
-- Output structure:
+- 如果 CI 已經生成了 `--skip-build`，則重用 `docs/portal/build`。
+- 當 `syft` 不可用時添加 `--skip-sbom`（例如，氣隙排練）。
+- 該腳本運行門戶測試，發出 `portal` 的 CAR + 清單對，
+  `openapi`、`portal-sbom` 和 `openapi-sbom`，在以下情況下驗證每個 CAR：
+  設置 `--proof`，並在設置 `--sign` 時丟棄 Sigstore 捆綁包。
+- 輸出結構：
 
 ```json
 {
@@ -60,14 +62,14 @@ Run the packaging helper (skip options are available for dry-runs):
 }
 ```
 
-Keep the entire folder (or symlink via `artifacts/devportal/sorafs/latest`) so
-governance reviewers can trace build artifacts.
+保留整個文件夾（或通過 `artifacts/devportal/sorafs/latest` 的符號鏈接）
+治理審查者可以跟踪構建工件。
 
-## 2. Pin Manifests + Aliases
+## 2. Pin 清單 + 別名
 
-Use `sorafs_cli manifest submit` to push manifests into Torii and bind aliases.
-Set `${SUBMITTED_EPOCH}` to the latest consensus epoch (from
-`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` or your dashboard).
+使用 `sorafs_cli manifest submit` 將清單推送到 Torii 並綁定別名。
+將 `${SUBMITTED_EPOCH}` 設置為最新的共識紀元（從
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` 或您的儀表板）。
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -92,18 +94,18 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --response-out "${OUT}/portal.manifest.response.json"
 ```
 
-- Repeat for `openapi.manifest.to` and the SBOM manifests (omit alias flags for
-  SBOM bundles unless governance assigns a namespace).
-- Alternative: `iroha app sorafs pin register` works with the digest from the submit
-  summary if the binary is already installed.
-- Verify registry state with
-  `iroha app sorafs pin list --alias docs:portal --format json | jq`.
-- Dashboards to watch: `sorafs_pin_registry.json` (`torii_sorafs_replication_*`
-  metrics).
+- 對 `openapi.manifest.to` 和 SBOM 清單重複（省略別名標誌）
+  SBOM 捆綁，除非治理分配命名空間）。
+- 替代方案：`iroha app sorafs pin register` 適用於提交的摘要
+  摘要（如果二進製文件已安裝）。
+- 驗證註冊表狀態
+  `iroha app sorafs pin list --alias docs:portal --format json | jq`。
+- 要觀看的儀表板：`sorafs_pin_registry.json` (`torii_sorafs_replication_*`
+  指標）。
 
-## 3. Gateway Headers & Proofs
+## 3. 網關標頭和證明
 
-Generate the HTTP header block + binding metadata:
+生成HTTP標頭塊+綁定元數據：
 
 ```bash
 iroha app sorafs gateway route-plan \
@@ -116,11 +118,11 @@ iroha app sorafs gateway route-plan \
   --out "${OUT}/portal.gateway.plan.json"
 ```
 
-- The template includes `Sora-Name`, `Sora-CID`, `Sora-Proof`, and
-  `Sora-Proof-Status` headers plus the default CSP/HSTS/Permissions-Policy.
-- Use `--rollback-manifest-json` to render a paired rollback header set.
+- 模板包括 `Sora-Name`、`Sora-CID`、`Sora-Proof` 和
+  `Sora-Proof-Status` 標頭加上默認的 CSP/HSTS/Permissions-Policy。
+- 使用 `--rollback-manifest-json` 渲染成對的回滾標頭集。
 
-Before exposing traffic, run:
+在公開流量之前，運行：
 
 ```bash
 ./ci/check_sorafs_gateway_probe.sh -- \
@@ -133,14 +135,14 @@ scripts/sorafs_gateway_self_cert.sh \
   --output artifacts/sorafs_gateway_self_cert/docs
 ```
 
-- The probe enforces GAR signature freshness, alias policy, and TLS cert
-  fingerprints.
-- The self-cert harness downloads the manifest with `sorafs_fetch` and stores
-  CAR replay logs; keep the outputs for audit evidence.
+- 探針強制執行 GAR 簽名新鮮度、別名策略和 TLS 證書
+  指紋。
+- 自認證線束下載帶有 `sorafs_fetch` 的清單並存儲
+  CAR重播日誌；保留審計證據的輸出。
 
-## 4. DNS & Telemetry Guardrails
+## 4. DNS 和遙測護欄
 
-1. Refresh the DNS skeleton so governance can prove the binding:
+1. 刷新 DNS 框架，以便治理可以證明綁定：
 
    ```bash
    scripts/sns_zonefile_skeleton.py \
@@ -148,32 +150,32 @@ scripts/sorafs_gateway_self_cert.sh \
      --out artifacts/sorafs/portal.dns-cutover.json
    ```
 
-2. Monitor during rollout:
+2. 部署期間監控：
 
    - `torii_sorafs_alias_cache_refresh_total`
    - `torii_sorafs_gateway_refusals_total{profile="docs"}`
    - `torii_sorafs_fetch_duration_ms` / `_failures_total`
 
-   Dashboards: `sorafs_gateway_observability.json`,
-   `sorafs_fetch_observability.json`, and the pin registry board.
+   儀表板：`sorafs_gateway_observability.json`，
+   `sorafs_fetch_observability.json`，以及引腳註冊板。
 
-3. Smoke the alert rules (`scripts/telemetry/test_sorafs_fetch_alerts.sh`) and
-   capture logs/screenshots for the release archive.
+3. 刪除警報規則 (`scripts/telemetry/test_sorafs_fetch_alerts.sh`) 並
+   捕獲發布存檔的日誌/屏幕截圖。
 
-## 5. Evidence Bundle
+## 5. 證據包
 
-Include the following in the release ticket or governance package:
+在發布票證或治理包中包含以下內容：
 
-- `artifacts/devportal/sorafs/<stamp>/` (CARs, manifests, SBOMs, proofs,
-  Sigstore bundles, submit summaries).
-- Gateway probe + self-cert outputs
-  (`artifacts/sorafs_gateway_probe/<stamp>/`,
-  `artifacts/sorafs_gateway_self_cert/<stamp>/`).
-- DNS skeleton + header templates (`portal.gateway.headers.txt`,
-  `portal.gateway.plan.json`, `portal.dns-cutover.json`).
-- Dashboard screenshots + alert acknowledgements.
-- `status.md` update referencing the manifest digest and alias binding time.
+- `artifacts/devportal/sorafs/<stamp>/`（CAR、清單、SBOM、證明、
+  Sigstore 捆綁包，提交摘要）。
+- 網關探頭+自認證輸出
+  （`artifacts/sorafs_gateway_probe/<stamp>/`，
+  `artifacts/sorafs_gateway_self_cert/<stamp>/`）。
+- DNS 骨架 + 標頭模板 (`portal.gateway.headers.txt`,
+  `portal.gateway.plan.json`、`portal.dns-cutover.json`）。
+- 儀表板屏幕截圖+警報確認。
+- `status.md` 更新引用清單摘要和別名綁定時間。
 
-Following this checklist delivers DOCS-7: the portal/OpenAPI/SBOM payloads are
-packaged deterministically, pinned with aliases, guarded by `Sora-Proof`
-headers, and monitored end-to-end through the existing observability stack.
+遵循此清單可提供 DOCS-7：portal/OpenAPI/SBOM 有效負載是
+確定性打包，用別名固定，由 `Sora-Proof` 保護
+標頭，並通過現有的可觀察性堆棧進行端到端監控。

@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ee9b1be07edfee6d71031362a5ea95138a6b743a7e596537c1b1c02ce8edef9f
 source_last_modified: "2026-01-22T14:45:02.068538+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM Configuration Migration
+///! ཨེསི་ཨེམ་རིམ་སྒྲིག་གནས་སྤོས།
 
-# SM Configuration Migration
+# ཨེསི་ཨེམ་རིམ་སྒྲིག་གནས་སྤོས།
 
-Rolling out the SM2/SM3/SM4 feature set requires more than compiling with the
-`sm` feature flag. Nodes gate the functionality behind the layered
-`iroha_config` profiles and expect the genesis manifest to carry matching
-defaults. This note captures the recommended workflow when promoting an
-existing network from “Ed25519-only” to “SM-enabled”.
+ཨེསི་ཨེམ་༢/ཨེསི་ཨེམ་༣/ཨེསི་ཨེམ་༤ ཁྱད་རྣམ་ཆ་ཚན་འདི་ བཤུད་འབད་ནི་ལུ་ འདི་དང་གཅིག་ཁར་ བསྡུ་སྒྲིག་འབད་ནི་ལས་ལྷག་སྟེ་ དགོཔ་ཨིན།
+`sm` ཁྱད་ཆོས་དར་སྲོལ། ནའུསི་གིས་ བང་རིམ་འབད་ཡོད་པའི་རྒྱབ་ཁར་ཡོད་པའི་ལས་འགན་འདི་སྒོ་སྒྲིག།
+`iroha_config` གསལ་སྡུད་དང་ རིགས་མཚན་འདི་ མཐུན་སྒྲིག་འབག་འོང་ནི་གི་རེ་བ་ཡོདཔ་ཨིན།
+སྔོན་སྒྲིག་ཚུ། དྲན་འཛིན་འདི་གིས་ ཅིག་ ཁྱབ་སྤེལ་འབད་བའི་སྐབས་ གྲོས་འཆར་བཀོད་ཡོད་པའི་ལཱ་གི་རྒྱུན་རིམ་འདི་ བཟུངམ་ཨིན།
+ད་ལྟོ་ཡོད་པའི་ཡོངས་འབྲེལ་འདི་ “Ed25519-རྐྱངམ་ཅིག་” ལས་ “SM-enabled” ཚུན་ཨིན།
 
-## 1. Verify the Build Profile
+## 1. བཟོ་བསྐྲུན་གསལ་སྡུད་བདེན་དཔྱད་འབད་ནི།
 
-- Compile the binaries with `--features sm`; add `sm-ffi-openssl` only when you
-  plan to exercise the OpenSSL/Tongsuo preview path. Builds without the `sm`
-  feature reject `sm2` signatures during admission even if the config enables
-  them.
-- Confirm CI publishes the `sm` artefacts and that all validation steps (`cargo
-  test -p iroha_crypto --features sm`, integration fixtures, fuzz suites) pass
-  on the exact binaries you intend to deploy.
+- `--features sm` དང་གཅིག་ཁར་ གཉིས་ལྡན་ཚུ་བསྡུ་སྒྲིག་འབད་ནི། ཁྱོད་ཀྱིས་ `sm-ffi-openssl` ཁ་སྐོང་འབད།
+  OpenSSL/Tongsoo སྔོན་ལྟའི་ལམ་འདི་ ལག་ལེན་འཐབ་ནི་གི་འཆར་གཞི་ཡོདཔ། `sm` མེད་པའི་བཟོ་བསྐྲུན་ཚུ།
+  ལྡེ་མིག་གིས་ ལྕོགས་ཅན་བཟོ་རུང་ འཛུལ་ཞུགས་འབད་བའི་སྐབས་ `sm2` མིང་རྟགས་ཚུ་ ངོས་ལེན་མ་འབད་བས།
+  ཁོང།
+- CI གིས་ `sm` ཅ་རྙིང་ཚུ་དཔར་བསྐྲུན་འབདཝ་ཨིནམ་དང་ བདེན་དཔྱད་ཀྱི་གོ་རིམ་ཆ་མཉམ་ (`cargo) གིས་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  བརྟག་དཔྱད་ -p iroha_crypto --ཁྱད་རྣམ་sm`, མཉམ་བསྡོམས་སྒྲིག་བཀོད་, ཕཱ་ཟི་ཆ་ཚང་) བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+  ཁྱོད་ཀྱིས་བཀྲམ་སྤེལ་འབད་ནི་ཨིན་མི་ གཉིས་ལྡན་ཚུ་ ངེས་བདེན་གྱི་ཐོག་ལུ་ཨིན།
 
-## 2. Layer Configuration Overrides
+## 2. བང་རིམ་རིམ་སྒྲིག་ལས་དབང་།
 
-`iroha_config` applies three tiers: `defaults` → `user` → `actual`. Ship the SM
-overrides in the `actual` profile that operators distribute to validators and
-leave `user` at Ed25519-only so the developer defaults remain unchanged.
+../../genesis.md འདི་ `defaults` → `user` → `actual`. SM གྲུ་གཟིངས།
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བདེན་དཔྱད་འབད་མི་དང་ བཀྲམ་སྤེལ་འབད་མི་ `actual` གསལ་སྡུད་ནང་ བརྒལ་ཡོདཔ་ཨིན།
+`user` ལུ་ Ed25519-རྐྱངམ་ཅིག་ལུ་བཞག་དགོཔ་ལས་ གོང་འཕེལ་གཏང་མི་སྔོན་སྒྲིག་ཚུ་ འགྱུར་བ་མེད་པར་ལུས་ཡོདཔ་ཨིན།
 
 ```toml
 # defaults/actual/config.toml
@@ -44,49 +45,47 @@ allowed_signing = ["ed25519", "sm2"]      # keep sorted for deterministic manife
 sm2_distid_default = "CN12345678901234"   # organisation-specific distinguishing identifier
 ```
 
-Copy the same block into the `defaults/genesis` manifest via `kagami genesis
-generate …` (add `--allowed-signing sm2 --default-hash sm3-256` if you need
-overrides) so the `parameters` block and injected metadata agree with the
-runtime configuration. Peers refuse to start when the manifest and config
-snapshots diverge.
+`kagami རིགས་མཚན་བརྒྱུད་དེ་ `defaults/genesis` གསལ་སྟོན་ནང་ལུ་ བཀག་ཆ་གཅིག་པ་འདྲ་བཤུས་རྐྱབ།
+བཟོ་སྐྲུན་ ...` (add `--ངེས་པར་དུ་མཚན་རྟགས་བཀོད་པའི་sm2 --སྔོན་སྒྲིག་-ཧེཤ་ sm3-256` ཁྱོད་ལུ་དགོས་པ་ཅིན།
+perrids) དེ་འབདཝ་ལས་ `parameters` བཀག་ཆ་དང་ བཙུགས་ཡོད་པའི་མེ་ཊ་ཌེ་ཊ་ཚུ་གིས་ ཆ་འཇོག་འབདཝ་ཨིན།
+རན་ཊའིམ་རིམ་སྒྲིག་། མངོན་གསལ་དང་ གསལ་སྟོན་འབད་བའི་སྐབས་ མཉམ་རོགས་ཚུ་གིས་ འགོ་བཙུགས་ནི་ལས་ ཁས་མ་ལེན།
+པར་ལེན་ཚུ་ཁ་སྟོར་འགྱོཝ་ཨིན།
 
-## 3. Regenerate Genesis Manifests
+## 3. འབྱུང་ཁུངས་མངོན་གསལ་བསྐྱར་བཟོ་འབད་ནི།
 
-- Run `kagami genesis generate --consensus-mode <mode>` for every
-  environment and commit the updated JSON alongside the TOML overrides.
-- Sign the manifest (`kagami genesis sign …`) and distribute the `.nrt` payload.
-  Nodes that bootstrap from an unsigned JSON manifest derive the runtime crypto
-  configuration directly from the file—still subject to the same consistency
-  checks.
+- རེ་རེ་ལུ་ `kagami genesis generate --consensus-mode <mode>` གཡོག་བཀོལ།
+  མཐའ་འཁོར་དང་ དུས་མཐུན་བཟོ་ཡོད་པའི་ JSON འདི་ TOML བཀག་ཆ་ཚུ་གི་སྦོ་ལོགས་ཁར་ཨིན།
+- གསལ་སྟོན་ (`kagami genesis sign …`) ལུ་མིང་རྟགས་བཀོད་ཞིནམ་ལས་ `.nrt` པེ་ལོཌི་འདི་བཀྲམ་སྤེལ་འབད།
+  མཚན་རྟགས་མ་བཀོད་པའི་ཇེ་ཨེསི་ཨོ་ཨེན་ལས་ བུཊི་སི་ཊརཔ་དེ་ རན་ཊའིམ་ཀིརིཔ་ཊོ་ལས་ བཏོནམ་ཨིན།
+  ཡིག་སྣོད་ལས་ཐད་ཀར་དུ་རིམ་སྒྲིག་འབད་—ད་ལྟོ་ཡང་དེ་སྦེ་རང་ རྟག་བརྟན་གཅིག་པའི་གཞི་བསྟུན་འབད།
+  བརྟག་དཔྱད།
 
-## 4. Validate Before Traffic
+## 4. འགྲིམ་འགྲུལ་མ་འབད་བའི་ཧེ་མ།
 
-- Provision a staging cluster with the new binaries and config, then verify:
-  - `/status` exposes `crypto.sm_helpers_available = true` once peers restart.
-  - Torii admission still rejects SM2 signatures while `sm2` is absent from
-    `allowed_signing` and accepts mixed Ed25519/SM2 batches when the list
-    includes both algorithms.
-  - `iroha_cli tools crypto sm2 export …` round-trips key material seeded via the new
-    defaults.
-- Run the integration smoke scripts that cover SM2 deterministic signatures and
-  SM3 hashing to confirm host/VM consistency.
+- གཉིས་ལྡན་གསརཔ་དང་གཅིག་ཁར་ གནས་རིམ་གྱི་ཀླད་ཀོར་ཅིག་ བཀོད་སྒྲིག་འབད་ཞིནམ་ལས་ བདེན་དཔྱད་འབད།
+  - `/status` མཉམ་རོགས་ཚུ་ ལོག་འགོ་བཙུགས་ཚརཝ་ཅིག་ `crypto.sm_helpers_available = true` ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  - Torii འཛུལ་ཞུགས་འདི་ད་ལྟོ་ཡང་ SM2 མཚན་རྟགས་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན་རུང་ `sm2` འདི་ ༢༠༠༨ ལུ་མེདཔ་ཨིན།
+    `allowed_signing` དང་ངོས་ལེན་ལུ་ བསྲེས་སྦྱོར་འབདཝ་ཨིན།
+    གིས་ ཨེལ་གོ་རི་དམ་གཉིས་ཆ་ར་ ཚུདཔ་ཨིན།
+  - `iroha_cli tools crypto sm2 export …` སྒོར་སྒོར་གྱི་ལྡེ་མིག་རྒྱུ་ཆ་གསརཔ་བརྒྱུད་དེ་བཙུགས་ཡོདཔ།
+    སྔོན་སྒྲིག་ཚུ།
+- ཨེསི་ཨེམ་༢ གཏན་འབེབས་མཚན་རྟགས་ཚུ་ཁྱབ་པའི་ མཉམ་འབྲེལ་དུ་པའི་ཡིག་ཆ་ཚུ་གཡོག་བཀོལ།
+  ཧོསིཊི་/ཝི་ཨེམ་ རྟགས་མཐུན་ངེས་གཏན་བཟོ་ནི་ལུ་ SM3 ཧ་ཤིང་།
 
-## 5. Rollback Plan
+## 5. བསྐོར་རྒྱབ་འཆར་གཞི།- ཡིག་ཆའི་ཡིག་ཆ་: `sm2` འདི་ `allowed_signing` ལས་བཏོན་གཏང་ཞིནམ་ལས་ སླར་གསོ་འབད།
+  `default_hash = "blake2b-256"`. བསྒྱུར་བཅོས་འདི་ `actual` གཅིག་ལས་བརྒྱུད་དེ་ཨེབ་གཏང་།
+  གསལ་སྡུད་ཀྱི་པའིཔ་ལའིན་འབདཝ་ལས་ བདེན་དཔྱད་འབད་མི་ཆ་མཉམ་གྱིས་ གཅིག་མཚུངས་སྦེ་བསྒྱིར་དོ་ཡོདཔ་ཨིན།
+- ཨེསི་ཨེམ་འདི་ ཌིཀསི་གུ་གསལ་སྟོན་འབད་བཞག། མཐུན་སྒྲིག་མ་མཐུན་པའི་རིམ་སྒྲིག་དང་རིགས་མཚན་མཐོང་མི་ མཉམ་རོགས་ཚུ།
+  གནད་སྡུད་འགོ་བཙུགས་ནི་ལུ་ ངོས་ལེན་མེདཔ་ཨིན་ དེ་གིས་ ཆ་ཤས་བཤུད་བརྙན་ཚུ་ལས་སྲུང་སྐྱོབ་འབདཝ་ཨིན།
+- ཨོ་པཱན་ཨེསི་ཨེསི་ཨེལ་/ཊོང་སུའོ་སྔོན་ལྟ་འདི་ འབྲེལ་གཏོགས་ཡོད་པ་ཅིན་ ལྕོགས་མིན་བཟོ་ནིའི་དོན་ལུ་ རིམ་པ་ཚུ་ བཙུགས།
+  `crypto.enable_sm_openssl_preview` ལས་ རུབ་སྤྱོད་འབད་ཡོད་པའི་དངོས་པོ་ཚུ་རྩ་བསྐྲད་གཏང་ནི།
+  runtime ཁོར་ཡུག.
 
-- Document the reversal: remove `sm2` from `allowed_signing` and restore
-  `default_hash = "blake2b-256"`. Push the change through the same `actual`
-  profile pipeline so every validator flips monotonically.
-- Keep the SM manifests on disk; peers that see mismatched config and genesis
-  data refuse to start, which protects against partial rollbacks.
-- If the OpenSSL/Tongsuo preview is involved, include the steps for disabling
-  `crypto.enable_sm_openssl_preview` and removing the shared objects from the
-  runtime environment.
+## དཔྱད་གཞིའི་དངོས་གཞི།
 
-## Reference Material
-
-- [`docs/genesis.md`](../../genesis.md) – structure of the genesis manifest and
-  the `crypto` block.
+- [`docs/genesis.md`](../../genesis.md) – རིགས་མཚན་གྱི་གསལ་སྟོན་དང་།
+  `crypto` སྡེ།
 - [`docs/source/references/configuration.md`](../references/configuration.md) –
-  overview of `iroha_config` sections and defaults.
-- [`docs/source/crypto/sm_operator_rollout.md`](sm_operator_rollout.md) – end to
-  end operator checklist for shipping SM cryptography.
+  ../references/configuration.md དབྱེ་ཚན་དང་སྔོན་སྒྲིག་ཚུ་གི་སྤྱིར་བཏང་མཐོང་སྣང་།
+- [`docs/source/crypto/sm_operator_rollout.md`](sm_operator_rollout.md) – མཇུག་བསྡུ།
+  མཇུག་བཀོལ་སྤྱོད་པའི་ཞིབ་དཔྱད་ཐོ་ཡིག་ SM གསང་ཡིག་འབྲི་ནི།

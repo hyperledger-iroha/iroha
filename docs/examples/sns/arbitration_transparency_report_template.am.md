@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 305a3f3b253a013825d4dd798d2282e111913ec777fe0fbf5b02a92c7172b92a
 source_last_modified: "2025-12-29T18:16:35.076964+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
-# SNS Arbitration Transparency Report — <Month YYYY>
+# የኤስኤንኤስ የግልግል ግልፅነት ሪፖርት - < ወር ዓ.ም
 
-- **Suffix:** `<.sora / .nexus / .dao>`
-- **Reporting window:** `<ISO start>` → `<ISO end>`
-- **Prepared by:** `<Council liaison>`
-- **Source artefacts:** `cases.ndjson` SHA256 `<hash>`, dashboard export `<filename>.json`
+- ** ቅጥያ፡** `<.sora / .nexus / .dao>`
+- ** የሪፖርት ማድረጊያ መስኮት:** I18NI0000003X → `<ISO end>`
+- ** ተዘጋጅቷል: ** `<Council liaison>`
+- **ምንጭ ቅርሶች፡** `cases.ndjson` SHA256 `<hash>`፣ ዳሽቦርድ ወደ ውጪ መላክ `<filename>.json`
 
-## 1. Executive Summary
+## 1. አስፈፃሚ ማጠቃለያ
 
-- Total new cases: `<count>`
-- Cases closed this period: `<count>`
-- SLA compliance: `<ack %>` acknowledge / `<resolution %>` decision
-- Guardian overrides issued: `<count>`
-- Transfers/refunds executed: `<count>`
+- ጠቅላላ አዲስ ጉዳዮች: `<count>`
+በዚህ ጊዜ የተዘጉ ጉዳዮች፡ `<count>`
+- SLA ተገዢነት፡ `<ack %>` እውቅና / `<resolution %>` ውሳኔ
+- ጠባቂ ተሽሯል: `<count>`
+- ማስተላለፎች/ገንዘብ ተመላሽ ተፈፅሟል፡ `<count>`
 
-## 2. Case Mix
+## 2. መያዣ ቅልቅል
 
-| Dispute type | New cases | Closed cases | Median resolution (days) |
-|--------------|-----------|--------------|--------------------------|
-| Ownership | 0 | 0 | 0 |
-| Policy violation | 0 | 0 | 0 |
-| Abuse | 0 | 0 | 0 |
-| Billing | 0 | 0 | 0 |
-| Other | 0 | 0 | 0 |
+| የክርክር አይነት | አዳዲስ ጉዳዮች | የተዘጉ ጉዳዮች | መካከለኛ ጥራት (ቀናት) |
+|-------------|-----------|-------------|
+| ባለቤትነት | 0 | 0 | 0 |
+| ፖሊሲ ጥሰት | 0 | 0 | 0 |
+| አላግባብ መጠቀም | 0 | 0 | 0 |
+| ማስከፈል | 0 | 0 | 0 |
+| ሌላ | 0 | 0 | 0 |
 
-## 3. SLA Performance
+## 3. SLA አፈጻጸም
 
-| Priority | Acknowledge SLA | Achieved | Resolution SLA | Achieved | Breaches |
-|----------|-----------------|----------|----------------|----------|----------|
-| Urgent | ≤ 2 h | 0% | ≤ 72 h | 0% | 0 |
-| High | ≤ 8 h | 0% | ≤ 10 d | 0% | 0 |
-| Standard | ≤ 24 h | 0% | ≤ 21 d | 0% | 0 |
-| Info | ≤ 3 d | 0% | ≤ 30 d | 0% | 0 |
+| ቅድሚያ | SLA እውቅና | ደረሰ | ጥራት SLA | ደረሰ | ጥሰቶች |
+|-------------|------------|
+| አስቸኳይ | ≤ 2ሰ | 0% | ≤ 72 ሰ | 0% | 0 |
+| ከፍተኛ | ≤ 8 ሰአት | 0% | ≤ 10 ቀ | 0% | 0 |
+| መደበኛ | ≤ 24 ሰአት | 0% | ≤ 21ኛ | 0% | 0 |
+| መረጃ | ≤ 3d | 0% | ≤ 30 ቀ | 0% | 0 |
 
-Describe root causes for any breaches and link to remediation tickets.
+ለማንኛውም ጥሰቶች ዋና መንስኤዎችን ይግለጹ እና የማሻሻያ ትኬቶችን ያገናኙ።
 
-## 4. Case Register
+## 4. የጉዳይ መዝገብ
 
-| Case ID | Selector | Priority | Status | Outcome | Notes |
-|---------|----------|----------|--------|---------|-------|
-| SNS-YYYY-NNNNN | `label.suffix` | Standard | Closed | Upheld | `<summary>` |
+| የጉዳይ መታወቂያ | መራጭ | ቅድሚያ | ሁኔታ | ውጤት | ማስታወሻ |
+|--------|----------|-------|--------|--------|------|
+| ኤስኤንኤስ-አአአ-ኤንኤን | `label.suffix` | መደበኛ | ተዘግቷል | ተደግፏል | `<summary>` |
 
-Provide one-line notes referencing anonymised facts or public vote links. Seal
-where required and mention redactions applied.
+ስማቸው ያልተገለጡ እውነታዎችን ወይም የህዝብ ድምጽ ማያያዣዎችን የሚያመለክቱ የአንድ መስመር ማስታወሻዎችን ያቅርቡ። ማኅተም
+በተፈለገበት ቦታ እና እንደገና ማሻሻያዎችን ይጥቀሱ.
 
-## 5. Actions & Remedies
+## 5. ድርጊቶች እና መፍትሄዎች
 
-- **Freezes / releases:** `<counts + case ids>`
-- **Transfers:** `<counts + assets moved>`
-- **Billing adjustments:** `<credits/debits>`
-- **Policy follow-ups:** `<tickets or RFCs opened>`
+- ** ይቀዘቅዛል / ይለቀቃል: ** `<counts + case ids>`
+- ** ማስተላለፎች: ** `<counts + assets moved>`
+- ** የሂሳብ አከፋፈል ማስተካከያዎች: *** `<credits/debits>`
+- ** የፖሊሲ ክትትልዎች: ** `<tickets or RFCs opened>`
 
-## 6. Appeals & Guardian Overrides
+## 6. ይግባኝ እና ጠባቂ ይሽራል።
 
-Summarise any appeals escalated to the guardian board, including timestamps and
-decisions (approve/deny). Link to `sns governance appeal` records or council
-votes.
+የጊዜ ማህተሞችን እና ጨምሮ ወደ ሞግዚት ቦርድ የተጋረጡ አቤቱታዎችን ማጠቃለል
+ውሳኔዎች (ማጽደቅ/መከልከል)። ወደ `sns governance appeal` መዝገቦች ወይም ምክር ቤት አገናኝ
+ድምጾች.
 
-## 7. Outstanding Items
+## 7. ምርጥ እቃዎች
 
-- `<Action item>` — Owner `<name>`, ETA `<date>`
-- `<Action item>` — Owner `<name>`, ETA `<date>`
+- `<Action item>` — ባለቤት I18NI0000023X፣ ETA `<date>`
+- `<Action item>` — ባለቤት I18NI0000026X፣ ETA `<date>`
 
-Attach NDJSON, Grafana exports, and CLI logs referenced in this report.
+በዚህ ሪፖርት ውስጥ የተጠቀሱ NDJSON፣ Grafana እና የCLI ምዝግብ ማስታወሻዎችን ያያይዙ።

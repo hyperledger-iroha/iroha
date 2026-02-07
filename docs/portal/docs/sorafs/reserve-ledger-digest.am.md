@@ -9,18 +9,19 @@ source_last_modified: "2026-01-22T16:26:46.526983+00:00"
 translation_last_reviewed: 2026-02-07
 title: Reserve Ledger Digest & Dashboards
 description: How to turn `sorafs reserve ledger` output into telemetry, dashboards, and alerts for the Reserve+Rent policy.
+translator: machine-google-reviewed
 ---
 
-The Reserve+Rent policy (roadmap item **SFM‑6**) now ships the `sorafs reserve`
-CLI helpers plus the `scripts/telemetry/reserve_ledger_digest.py` translator so
-treasury runs can emit deterministic rent/reserve transfers. This page mirrors
-the workflow defined in `docs/source/sorafs_reserve_rent_plan.md` and explains
-how to wire the new transfer feed into Grafana + Alertmanager so economics and
-governance reviewers can audit every billing cycle.
+የመጠባበቂያ+ኪራይ ፖሊሲ (የመንገድ ካርታ ንጥል **SFM‑6**) አሁን `sorafs reserve` ይልካል።
+የ CLI ረዳቶች እና የ `scripts/telemetry/reserve_ledger_digest.py` ተርጓሚ እንዲሁ
+የግምጃ ቤት ስራዎች ወሳኙን የኪራይ/የመጠባበቂያ ዝውውሮችን ሊያወጡ ይችላሉ። ይህ ገጽ መስተዋቶች
+የስራ ፍሰት በ `docs/source/sorafs_reserve_rent_plan.md` ውስጥ ተገልጿል እና ያብራራል
+አዲሱን የዝውውር ምግብ እንዴት ወደ Grafana + Alertmanager ስለዚህ ኢኮኖሚክስ እና
+የአስተዳደር ገምጋሚዎች እያንዳንዱን የሂሳብ አከፋፈል ዑደት ኦዲት ማድረግ ይችላሉ።
 
-## End-to-end workflow
+## ከጫፍ እስከ ጫፍ የስራ ሂደት
 
-1. **Quote + ledger projection**
+1. ** ጥቅስ + የሂሳብ መዝገብ ትንበያ **
    ```bash
    sorafs reserve quote \
      --storage-class hot \
@@ -37,11 +38,11 @@ governance reviewers can audit every billing cycle.
     --asset-definition xor#sora \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
-   The ledger helper attaches a `ledger_projection` block (rent due, reserve
-   shortfall, top-up delta, underwriting booleans) plus the Norito `Transfer`
-   ISIs needed to move XOR between the treasury and reserve accounts.
+   የሂሳብ ደብተር አጋዥ የ`ledger_projection` ብሎክን (የኪራይ ክፍያ ፣ የተጠራቀመ) አያይዞ።
+   እጥረት፣ ከፍተኛ-ላይ ዴልታ፣ ቡሊያንስ በጽሑፍ የሚጻፍ) እና Norito `Transfer`
+   XORን በግምጃ ቤት እና በመጠባበቂያ ሂሳቦች መካከል ለማንቀሳቀስ አይኤስአይኤስ ያስፈልጋል።
 
-2. **Generate the digest + Prometheus/NDJSON outputs**
+2. ** የምግብ መፍጫውን + I18NT0000000X/NDJSON ውጽዓቶችን ይፍጠሩ **
    ```bash
    python3 scripts/telemetry/reserve_ledger_digest.py \
      --ledger artifacts/sorafs_reserve/ledger/provider-alpha-apr.json \
@@ -51,41 +52,41 @@ governance reviewers can audit every billing cycle.
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   The digest helper normalises micro‑XOR totals into XOR, records whether the
-   projection meets underwriting, and emits the **transfer feed** metrics
-   `sorafs_reserve_ledger_transfer_xor` and
-   `sorafs_reserve_ledger_instruction_total`. When multiple ledgers need to be
-   processed (e.g., a batch of providers), repeat `--ledger`/`--label` pairs and
-   the helper writes a single NDJSON/Prometheus file containing every digest so
-   dashboards ingest the entire cycle without bespoke glue. The `--out-prom`
-   file targets a node-exporter textfile collector—drop the `.prom` file into
-   the exporter’s watched directory or upload it to the telemetry bucket
-   consumed by the Reserve dashboard job—while `--ndjson-out` feeds the same
-   payloads into data pipelines.
+   የምግብ መፈጨት ረዳቱ የማይክሮ-XOR ድምርን ወደ XOR መደበኛ ያደርገዋል፣ ይህም መሆኑን ይመዘግባል
+   ትንበያ ከስር ጽሑፍ ጋር ይገናኛል፣ እና **የማስተላለፊያ ምግብ** መለኪያዎችን ያወጣል።
+   `sorafs_reserve_ledger_transfer_xor` እና
+   `sorafs_reserve_ledger_instruction_total`. ብዙ ደብተሮች ሲያስፈልጉ
+   የተቀነባበረ (ለምሳሌ፣ የአቅራቢዎች ስብስብ)፣ `--ledger`/`--label` ጥንዶችን ይድገሙ እና
+   ረዳቱ እያንዳንዱን መፈጨት የያዘ አንድ ነጠላ NDJSON/Prometheus ፋይል ይጽፋል።
+   ዳሽቦርዶች ሙሉውን ዑደቱን ያለ ማጣበቂያ ያስገባሉ። የ `--out-prom`
+   ፋይሉ የሚያነጣጥረው መስቀለኛ-ላኪ የጽሑፍ ፋይል ሰብሳቢ - የ`.prom` ፋይልን ወደ ውስጥ ይጥሉት
+   ላኪው የታየበት ማውጫ ወይም ወደ ቴሌሜትሪ ባልዲ ይስቀሉት
+   በመጠባበቂያ ዳሽቦርድ ሥራ ተበላ - `--ndjson-out` ሲመግብ
+   ጭነት ወደ የውሂብ ቧንቧዎች.
 
-3. **Publish artefacts + evidence**
-   - Store digests under `artifacts/sorafs_reserve/ledger/<provider>/` and link
-     the Markdown summary from your weekly economics report.
-   - Attach the JSON digest to the rent burn-down (so auditors can replay the
-     math) and include the checksum inside the governance evidence packet.
-   - If the digest signals a top-up or underwriting breach, reference the alert
-     IDs (`SoraFSReserveLedgerTopUpRequired`,
-     `SoraFSReserveLedgerUnderwritingBreach`) and note which transfer ISIs were
-     applied.
+3. **ቅርሶችን + ማስረጃዎችን አትም**
+   - የምግብ መፍጫዎችን በ I18NI0000021X እና አገናኝ ስር ያከማቹ
+     ከሳምንታዊ የኢኮኖሚክስ ሪፖርትዎ የማርክዳውን ማጠቃለያ።
+   - የJSON ዲጀስትን ከተቃጠለ ኪራይ ጋር አያይዘው (ስለዚህ ኦዲተሮች እንደገና መጫወት ይችላሉ።
+     ሒሳብ) እና በአስተዳደር ማስረጃ ፓኬት ውስጥ ያለውን ቼክ ድምር ያካትቱ።
+   - የምግብ መፍጫ መሣሪያው መሙላቱን ወይም የጽሑፍ ጥሰትን ካሳየ ማንቂያውን ያጣቅሱ
+     መታወቂያዎች (`SoraFSReserveLedgerTopUpRequired`፣
+     `SoraFSReserveLedgerUnderwritingBreach`) እና የትኛዎቹ የዝውውር አይኤስአይኤስ እንደነበሩ ልብ ይበሉ
+     ተተግብሯል.
 
-## Metrics → dashboards → alerts
+## መለኪያዎች → ዳሽቦርዶች → ማንቂያዎች
 
-| Source metric | Grafana panel | Alert / policy hook | Notes |
-|---------------|---------------|---------------------|-------|
-| `torii_da_rent_base_micro_total`, `torii_da_protocol_reserve_micro_total`, `torii_da_provider_reward_micro_total` | “DA Rent Distribution (XOR/hour)” in `dashboards/grafana/sorafs_capacity_health.json` | Feed the weekly treasury digest; spikes in reserve flow propagate into `SoraFSCapacityPressure` (`dashboards/alerts/sorafs_capacity_rules.yml`). |
-| `torii_da_rent_gib_months_total` | “Capacity Usage (GiB-months)” (same dashboard) | Pair with the ledger digest to prove the invoiced storage matches the XOR transfers. |
-| `sorafs_reserve_ledger_rent_due_xor`, `sorafs_reserve_ledger_reserve_shortfall_xor`, `sorafs_reserve_ledger_top_up_shortfall_xor` | “Reserve Snapshot (XOR)” + status cards in `dashboards/grafana/sorafs_reserve_economics.json` | `SoraFSReserveLedgerTopUpRequired` fires when `requires_top_up=1`; `SoraFSReserveLedgerUnderwritingBreach` fires when `meets_underwriting=0`. |
-| `sorafs_reserve_ledger_transfer_xor`, `sorafs_reserve_ledger_instruction_total` | “Transfers by Kind”, “Latest Transfer Breakdown”, and the coverage cards in `dashboards/grafana/sorafs_reserve_economics.json` | `SoraFSReserveLedgerInstructionMissing`, `SoraFSReserveLedgerRentTransferMissing`, and `SoraFSReserveLedgerTopUpTransferMissing` warn when the transfer feed is absent or zeroed even though rent/top-up is required; the coverage cards fall to 0% in the same cases. |
+| ምንጭ ሜትሪክ | Grafana ፓነል | ማንቂያ / ፖሊሲ መንጠቆ | ማስታወሻ |
+|-------------|
+| `torii_da_rent_base_micro_total`፣ `torii_da_protocol_reserve_micro_total`፣ `torii_da_provider_reward_micro_total` | "DA ኪራይ ስርጭት (XOR / ሰዓት)" በ I18NI0000027X | ሳምንታዊውን የግምጃ ቤት ምግብ ይመግቡ; በመጠባበቂያ ፍሰት ውስጥ ያሉ ስፒሎች ወደ `SoraFSCapacityPressure` (`dashboards/alerts/sorafs_capacity_rules.yml`) ይሰራጫሉ። |
+| `torii_da_rent_gib_months_total` | "የአቅም አጠቃቀም (GiB-ወሮች)" (ተመሳሳይ ዳሽቦርድ) | የክፍያ መጠየቂያ ማከማቻው ከXOR ዝውውሮች ጋር እንደሚዛመድ ለማረጋገጥ ከመመዝገቢያ ደብተር ጋር ያጣምሩ። |
+| `sorafs_reserve_ledger_rent_due_xor`፣ `sorafs_reserve_ledger_reserve_shortfall_xor`፣ `sorafs_reserve_ledger_top_up_shortfall_xor` | "Snapshot (XOR)" + የሁኔታ ካርዶች በ I18NI0000034X | `SoraFSReserveLedgerTopUpRequired` ሲቃጠል `requires_top_up=1`; `SoraFSReserveLedgerUnderwritingBreach` ሲቃጠል I18NI0000038X. |
+| `sorafs_reserve_ledger_transfer_xor`, `sorafs_reserve_ledger_instruction_total` | "በአይነት ይሸጋገራል"፣ "የቅርብ ጊዜ የዝውውር ልዩነት"፣ እና የሽፋን ካርዶች በ`dashboards/grafana/sorafs_reserve_economics.json` | `SoraFSReserveLedgerInstructionMissing`, `SoraFSReserveLedgerRentTransferMissing` እና `SoraFSReserveLedgerTopUpTransferMissing` የዝውውር ምግብ ሲቀር ወይም ዜሮ ሲቀንስ ያስጠነቅቃሉ በተመሳሳይ ጊዜ የሽፋን ካርዶች ወደ 0% ይወርዳሉ. |
 
-When a rent cycle completes, refresh the Prometheus/NDJSON snapshots, confirm
-that the Grafana panels pick up the new `label`, and attach screenshots +
-Alertmanager IDs to the rent governance packet. This proves the CLI projection,
-telemetry, and governance artefacts all stem from the **same** transfer feed and
-keeps the roadmap’s economics dashboards aligned with the Reserve+Rent
-automation. The coverage cards should read 100% (or 1.0) and the new alerts
-should clear once rent and reserve top-up transfers are present in the digest.
+የኪራይ ዑደት ሲጠናቀቅ፣ የPrometheus/NDJSON ቅጽበተ-ፎቶዎችን ያድሱ፣ ያረጋግጡ
+የ Grafana ፓነሎች አዲሱን `label` እንዲወስዱ እና ቅጽበታዊ ገጽ እይታዎችን ያያይዙ +
+ለኪራይ አስተዳደር ፓኬት የማንቂያ አስተዳዳሪ መታወቂያዎች። ይህ የ CLI ትንበያን ያረጋግጣል ፣
+ቴሌሜትሪ፣ እና የአስተዳደር ቅርሶች ሁሉም ከአንድ **ተመሳሳይ** የማስተላለፊያ ምግብ እና
+የፍኖተ ካርታውን ኢኮኖሚክስ ዳሽቦርዶች ከመጠባበቂያ+ኪራይ ጋር እንዲጣጣሙ ያደርጋል
+አውቶሜሽን. የሽፋን ካርዶቹ 100% (ወይም 1.0) እና አዲሱን ማንቂያዎች ማንበብ አለባቸው
+አንድ ጊዜ ኪራይ ማጽዳት እና የተጨማሪ ክፍያ ዝውውሮች በመመገቢያው ውስጥ ካሉ።

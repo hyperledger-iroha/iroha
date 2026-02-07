@@ -8,40 +8,42 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Portal Observability & Analytics
 sidebar_label: Observability
 description: Telemetry, release tagging, and verification automation for the developer portal.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The DOCS-SORA roadmap requires analytics, synthetic probes, and broken-link
-automation for every preview build. This note documents the plumbing that now
-ships with the portal so operators can wire monitoring without leaking visitor
-data.
+DOCS-SORA საგზაო რუკა საჭიროებს ანალიტიკას, სინთეტიკურ ზონდებს და გატეხილ ბმულს
+ავტომატიზაცია ყველა გადახედვისთვის. ეს შენიშვნა ადასტურებს სანტექნიკას, რომ ახლა
+იგზავნება პორტალთან, რათა ოპერატორებმა შეძლონ მავთულის მონიტორინგი ვიზიტორების გაჟონვის გარეშე
+მონაცემები.
 
-## Release tagging
+## მონიშვნის გამოშვება
 
-- Set `DOCS_RELEASE_TAG=<identifier>` (falls back to `GIT_COMMIT` or `dev`) when
-  building the portal. The value is injected into `<meta name="sora-release">`
-  so probes and dashboards can distinguish deployments.
-- `npm run build` emits `build/release.json` (written by
-  `scripts/write-checksums.mjs`) describing the tag, timestamp, and optional
-  `DOCS_RELEASE_SOURCE`. The same file is bundled into preview artefacts and
-  referenced by the link checker report.
+- დააყენეთ `DOCS_RELEASE_TAG=<identifier>` (უბრუნდება `GIT_COMMIT` ან `dev`), როდესაც
+  პორტალის აშენება. მნიშვნელობა შეყვანილია `<meta name="sora-release">`-ში
+  ასე რომ, ზონდებსა და დაფებს შეუძლიათ განასხვავონ განლაგება.
+- `npm run build` ასხივებს `build/release.json` (დაწერილი
+  `scripts/write-checksums.mjs`) აღწერს ტეგს, დროის ნიშანს და არჩევითს
+  `DOCS_RELEASE_SOURCE`. იგივე ფაილი შეფუთულია წინასწარი გადახედვის არტეფაქტებში და
+  მითითებულია ბმულის შემოწმების ანგარიშით.
 
-## Privacy-preserving analytics
+## კონფიდენციალურობის შენარჩუნების ანალიტიკა
 
-- Configure `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` to
-  enable the lightweight tracker. Payloads contain `{ event, path, locale,
-  release, ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
-  is used whenever possible to avoid blocking navigations.
-- Control sampling with `DOCS_ANALYTICS_SAMPLE_RATE` (0–1). The tracker stores
-  the last-sent path and never emits duplicate events for the same navigation.
-- The implementation lives in `src/components/AnalyticsTracker.jsx` and is
-  mounted globally through `src/theme/Root.js`.
+- დააკონფიგურირეთ `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>`
+  ჩართეთ მსუბუქი ტრეკერი. დატვირთვა შეიცავს `{ მოვლენას, გზას, ლოკალს,
+  გამოშვება, ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
+  გამოიყენება შეძლებისდაგვარად ნავიგაციის დაბლოკვის თავიდან ასაცილებლად.
+- საკონტროლო ნიმუშის აღება `DOCS_ANALYTICS_SAMPLE_RATE`-ით (0–1). ტრეკერი ინახავს
+  ბოლო გაგზავნილი გზა და არასოდეს ასხივებს დუბლიკატ მოვლენებს იმავე ნავიგაციისთვის.
+- იმპლემენტაცია ცხოვრობს `src/components/AnalyticsTracker.jsx`-ში და არის
+  გლობალურად დამონტაჟებული `src/theme/Root.js`-ის საშუალებით.
 
-## Synthetic probes
+## სინთეზური ზონდები
 
-- `npm run probe:portal` issues GET requests against common routes
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) and verifies the
-  `sora-release` meta tag matches `--expect-release` (or
-  `DOCS_RELEASE_TAG`). Example:
+- `npm run probe:portal` გამოსცემს GET მოთხოვნებს საერთო მარშრუტებთან მიმართებაში
+  (`/`, `/norito/overview`, `/reference/torii-swagger` და ა.შ.) და ამოწმებს
+  `sora-release` მეტათეგი ემთხვევა `--expect-release` (ან
+  `DOCS_RELEASE_TAG`). მაგალითი:
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -49,59 +51,59 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Failures are reported per path, making it easy to gate CD on probe success.
+წარუმატებლობა დაფიქსირდა თითო ბილიკზე, რაც აადვილებს CD-ის კარიბჭეს გამოძიების წარმატებაზე.
 
-## Broken-link automation
+## გატეხილი ბმულის ავტომატიზაცია
 
-- `npm run check:links` scans `build/sitemap.xml`, ensures every entry maps to a
-  local file (checking `index.html` fallbacks), and writes
-  `build/link-report.json` containing the release metadata, totals, failures,
-  and the SHA-256 fingerprint of `checksums.sha256` (exposed as `manifest.id`)
-  so every report can be tied back to the artefact manifest.
-- The script exits non-zero when a page is missing, so CI can block releases on
-  stale or broken routes. Reports cite the candidate paths that were attempted,
-  which helps trace routing regressions back to the docs tree.
+- `npm run check:links` სკანირებს `build/sitemap.xml`-ს, უზრუნველყოფს ყოველი შესვლის რუქებს
+  ლოკალური ფაილი (შეამოწმეთ `index.html` ჩანაცვლება) და წერს
+  `build/link-report.json`, რომელიც შეიცავს გამოშვების მეტამონაცემებს, ჯამებს, წარუმატებლობებს,
+  და `checksums.sha256`-ის SHA-256 თითის ანაბეჭდი (გამოფენილი, როგორც `manifest.id`)
+  ასე რომ, ყოველი ანგარიში შეიძლება მიბმული იყოს არტეფაქტის მანიფესტთან.
+- სკრიპტი გადის ნულის გარეშე, როდესაც გვერდი აკლია, ამიტომ CI-ს შეუძლია დაბლოკოს გამოშვებები
+  შემორჩენილი ან გატეხილი მარშრუტები. მოხსენებებში მითითებულია კანდიდატის გზები, რომლებიც სცადეს,
+  რაც ხელს უწყობს მარშრუტიზაციის რეგრესიის მიკვლევას დოკუმენტების ხემდე.
 
-## Grafana dashboard & alerts
+## Grafana დაფა და გაფრთხილებები
 
-- `dashboards/grafana/docs_portal.json` publishes the **Docs Portal Publishing**
-  Grafana board. It ships the following panels:
-  - *Gateway Refusals (5m)* uses `torii_sorafs_gateway_refusals_total` scoped by
-    `profile`/`reason` so SREs can detect bad policy pushes or token failures.
-  - *Alias Cache Refresh Outcomes* and *Alias Proof Age p90* track
-    `torii_sorafs_alias_cache_*` to prove fresh proofs exist before a DNS cut
-    over.
-  - *Pin Registry Manifest Counts* plus the *Active Alias Count* stat mirror the
-    pin-registry backlog and total aliases so governance can audit each release.
-  - *Gateway TLS Expiry (hours)* highlights when the publishing gateway’s TLS
-    cert approaches expiry (alert threshold at 72 h).
-  - *Replication SLA Outcomes* and *Replication Backlog* keep an eye on
-    `torii_sorafs_replication_*` telemetry to ensure all replicas meet the GA
-    bar after publishing.
-- Use the built-in template variables (`profile`, `reason`) to focus on the
-  `docs.sora` publishing profile or investigate spikes across all gateways.
-- PagerDuty routing uses the dashboard panels as evidence: alerts named
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, and
-  `DocsPortal/TLSExpiry` fire when the corresponding series breach their
-  thresholds. Link the alert’s runbook to this page so on-call engineers can
-  replay the exact Prometheus queries.
+- `dashboards/grafana/docs_portal.json` აქვეყნებს **Docs Portal Publishing**
+  Grafana დაფა. ის აგზავნის შემდეგ პანელებს:
+  - *კარიბჭეზე უარის თქმა (5მ)* იყენებს `torii_sorafs_gateway_refusals_total`-ის ფარგლებში
+    `profile`/`reason`, რათა SRE-ებმა დააფიქსირონ ცუდი პოლიტიკის ბიძგები ან ნიშნების წარუმატებლობა.
+  - * Alias Cache Refresh Outcomes* და * Alias Proof Age p90* ჩანაწერი
+    `torii_sorafs_alias_cache_*` ახალი მტკიცებულებების არსებობის დასამტკიცებლად DNS-ის შეწყვეტამდე
+    დასრულდა.
+  - *Pin Registry Manifest Counts* პლუს *Active Alias Count* სტატისტიკა ასახავს
+    pin-registry backlog და სულ მეტსახელები, რათა მმართველობამ შეძლოს თითოეული გამოშვების აუდიტი.
+  - *Gateway TLS Expiry (საათები)* ხაზს უსვამს, როდესაც გამომცემელი კარიბჭის TLS
+    სერთიფიკატის მიდგომა ვადის გასვლისას (გაფრთხილების ბარიერი 72 სთ-ზე).
+  - *Replication SLA შედეგები* და *Replication Backlog* თვალი ადევნეთ
+    `torii_sorafs_replication_*` ტელემეტრია, რათა უზრუნველყოფილ იქნას ყველა რეპლიკა აკმაყოფილებს GA-ს
+    ბარი გამოქვეყნების შემდეგ.
+- გამოიყენეთ ჩაშენებული შაბლონის ცვლადები (`profile`, `reason`) ფოკუსირებისთვის
+  `docs.sora` გამოაქვეყნეთ პროფილი ან გამოიკვლიეთ მწვერვალები ყველა კარიბჭეზე.
+- PagerDuty მარშრუტიზაცია იყენებს დაფის პანელებს მტკიცებულებად: დასახელებული სიგნალიზაცია
+  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache` და
+  `DocsPortal/TLSExpiry` სროლა, როდესაც შესაბამისი სერიები არღვევს მათ
+  ზღურბლები. დააკავშირეთ გაფრთხილების წიგნაკი ამ გვერდზე, რათა მოწოდებულმა ინჟინრებმა შეძლონ
+  გაიმეორეთ ზუსტი Prometheus მოთხოვნები.
 
-## Putting it together
+## შეკრება
 
-1. During `npm run build`, set the release/analytics environment variables and
-   let the post-build step emit `checksums.sha256`, `release.json`, and
+1. `npm run build`-ის დროს დააყენეთ გამოშვების/ანალიტიკის გარემოს ცვლადები და
+   ნება მიეცით მშენებლობის შემდგომ საფეხურს გამოსცეს `checksums.sha256`, `release.json` და
    `link-report.json`.
-2. Run `npm run probe:portal` against the preview hostname with
-   `--expect-release` wired to the same tag. Save the stdout for the publishing
-   checklist.
-3. Run `npm run check:links` to fail fast on broken sitemap entries and archive
-   the generated JSON report together with the preview artefacts. CI drops the
-   latest report at `artifacts/docs_portal/link-report.json` so governance can
-   download the evidence bundle straight from the build logs.
-4. Forward the analytics endpoint to your privacy-preserving collector (Plausible,
-   self-hosted OTEL ingest, etc.) and ensure sampling rates are documented per
-   release so dashboards interpret counts correctly.
-5. CI already wires these steps through the preview/deploy workflows
+2. გაუშვით `npm run probe:portal` წინასწარი გადახედვის ჰოსტის სახელით
+   `--expect-release` სადენიანი იმავე ტეგზე. შეინახეთ stdout გამოქვეყნებისთვის
+   საკონტროლო სია.
+3. გაუშვით `npm run check:links`, რათა სწრაფად არ მოხდეს გატეხილი საიტის რუქის ჩანაწერები და არქივი
+   გენერირებული JSON ანგარიში წინასწარი გადახედვის არტეფაქტებთან ერთად. CI ჩამოაგდებს
+   უახლესი ანგარიში `artifacts/docs_portal/link-report.json`-ზე, რათა მმართველობამ შეძლოს
+   ჩამოტვირთეთ მტკიცებულებების ნაკრები პირდაპირ build ჟურნალებიდან.
+4. გადაიტანეთ ანალიტიკის საბოლოო წერტილი თქვენს კონფიდენციალურობის დამცავ კოლექციონერთან (სავარაუდო,
+   თვითმმართველობის OTEL-ის მიღება და ა.შ.) და დარწმუნდით, რომ შერჩევის ტარიფები დოკუმენტირებულია თითოზე
+   გაათავისუფლეთ, რათა დაფები სწორად განმარტონ დათვლა.
+5. CI უკვე აკავშირებს ამ ნაბიჯებს წინასწარი გადახედვის/დანერგვის სამუშაო ნაკადების მეშვეობით
    (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), so local dry runs only need to
-   cover secret-specific behaviour.
+   `.github/workflows/docs-portal-deploy.yml`), ასე რომ ადგილობრივი მშრალი გაშვებები მხოლოდ საჭიროა
+   ფარავს საიდუმლო სპეციფიკურ ქცევას.

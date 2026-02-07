@@ -8,21 +8,23 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Orchestrator Operations Runbook
 sidebar_label: Orchestrator Ops Runbook
 description: Step-by-step operational guide for rolling out, monitoring, and rolling back the multi-source orchestrator.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-This runbook guides SREs through preparing, rolling out, and operating the multi-source fetch orchestrator. It complements the developer guide with procedures tuned for production rollouts, including staged enablement and peer blacklisting.
+ဤအပြေးစာအုပ်သည် SRE များကို ပြင်ဆင်ခြင်း၊ ဖြန့်ကျက်ခြင်းနှင့် ရင်းမြစ်များစွာကို ဆွဲယူမှုတီးခတ်မှုပြုခြင်းတို့ကို လုပ်ဆောင်ခြင်းဖြင့် လမ်းညွှန်ပေးသည်။ ၎င်းသည် အဆင့်လိုက်ဖွင့်ထားမှုနှင့် သက်တူရွယ်တူများကို အမည်ပျက်စာရင်းသွင်းခြင်းအပါအဝင် ထုတ်လုပ်မှုစတင်ခြင်းအတွက် ချိန်ညှိထားသော လုပ်ထုံးလုပ်နည်းများဖြင့် ဆော့ဖ်ဝဲအင်ဂျင်နီယာလမ်းညွှန်ကို ဖြည့်စွက်ပေးပါသည်။
 
-> **See also:** The [Multi-Source Rollout Runbook](./multi-source-rollout.md) focuses on fleet-wide rollout waves and emergency provider denial. Reference it for governance / staging coordination while using this document for day-to-day orchestrator operations.
+> **ကိုလည်းကြည့်ပါ-** [Multi-Source Rollout Runbook](./multi-source-rollout.md) သည် သင်္ဘောတစ်စင်းလုံးထုတ်လွှင့်ခြင်းလှိုင်းများနှင့် အရေးပေါ်ဝန်ဆောင်မှုပေးသူငြင်းဆိုခြင်းတို့ကို အာရုံစိုက်ထားသည်။ ဤစာတမ်းကို နေ့စဥ်တီးမှုတ်ခြင်းလုပ်ငန်းဆောင်ရွက်မှုများအတွက် ဤစာတမ်းကိုအသုံးပြုနေစဉ် အုပ်ချုပ်မှု/အဆင့်ညှိနှိုင်းဆောင်ရွက်မှုအတွက် ၎င်းကို ကိုးကားပါ။
 
-## 1. Pre-flight Checklist
+## 1. လေယာဉ်အကြိုစစ်ဆေးရေးစာရင်း
 
-1. **Collect provider inputs**
-   - Latest provider adverts (`ProviderAdvertV1`) and telemetry snapshot for the target fleet.
-   - Payload plan (`plan.json`) derived from the manifest under test.
-2. **Render a deterministic scoreboard**
+1. **ပံ့ပိုးပေးသူ သွင်းအားစုများ စုဆောင်းပါ**
+   - ပစ်မှတ်သင်္ဘောအတွက် နောက်ဆုံးပံ့ပိုးပေးသူကြော်ငြာများ (`ProviderAdvertV1`) နှင့် telemetry လျှပ်တစ်ပြက်။
+   - စမ်းသပ်မှုအောက်ရှိ ထင်ရှားပေါ်လွင်မှုမှ ဆင်းသက်လာသော Payload အစီအစဉ် (`plan.json`)။
+2. **အဆုံးအဖြတ်ပေးသော အမှတ်စာရင်းကို တင်ဆက်ပါ**
 
    ```bash
    sorafs_fetch \
@@ -35,30 +37,30 @@ This runbook guides SREs through preparing, rolling out, and operating the multi
      --json-out artifacts/session.summary.json
    ```
 
-   - Validate that `artifacts/scoreboard.json` lists every production provider as `eligible`.
-   - Archive the summary JSON alongside the scoreboard; auditors rely on the chunk retry counters when certifying the change request.
-3. **Dry-run with fixtures** — Exercise the same command against the public fixtures in `docs/examples/sorafs_ci_sample/` to ensure the orchestrator binary matches the expected version before touching production payloads.
+   - `artifacts/scoreboard.json` သည် ထုတ်လုပ်သူတိုင်းကို `eligible` အဖြစ် စာရင်းသွင်းကြောင်း အတည်ပြုပါ။
+   - ရမှတ်ဘုတ်နှင့်အတူ အကျဉ်းချုပ် JSON ကို သိမ်းဆည်းပါ။ ပြောင်းလဲမှုတောင်းဆိုချက်ကို အတည်ပြုသည့်အခါ စာရင်းစစ်များသည် အတုံးလိုက်ပြန်စမ်းသည့်ကောင်တာများကို အားကိုးသည်။
+3. ** Dry-run with fixtures** — `docs/examples/sorafs_ci_sample/` ရှိ အများသူငှာ တန်ဆာပလာများကို ဆန့်ကျင်သည့် တူညီသော အမိန့်ကို တီးမှုတ်တီးခတ်သူ binary သည် ထုတ်လုပ်ရေး ဝန်ထုပ်ဝန်ပိုးများကို မထိမီ မျှော်လင့်ထားသည့် ဗားရှင်းနှင့် ကိုက်ညီကြောင်း သေချာစေရန်။
 
-## 2. Staged Rollout Procedure
+## 2. Staged Rollout လုပ်ထုံးလုပ်နည်း
 
-1. **Canary stage (≤2 providers)**
-   - Rebuild the scoreboard and run with `--max-peers=2` to clamp the orchestrator to a small subset.
-   - Monitor:
+1. **ကိန္နရီအဆင့် (≤2 ပံ့ပိုးသူများ)**
+   - ရမှတ်ဘုတ်ကို ပြန်လည်တည်ဆောက်ပြီး သံစုံတီးဝိုင်းကို သေးငယ်သောအခွဲတစ်ခုသို့ ချိတ်ဆွဲရန် `--max-peers=2` ဖြင့် လုပ်ဆောင်ပါ။
+   - မော်နီတာ
      - `sorafs_orchestrator_active_fetches`
      - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
      - `sorafs_orchestrator_retries_total`
-   - Proceed once retry rates remain below 1% for a complete manifest fetch and no provider accumulates failures.
-2. **Ramp stage (50% providers)**
-   - Increase `--max-peers` and rerun with a fresh telemetry snapshot.
-   - Persist every run with `--provider-metrics-out` and `--chunk-receipts-out`. Retain the artefacts for ≥7 days.
-3. **Full rollout**
-   - Remove `--max-peers` (or set it to the full eligible count).
-   - Enable orchestrator mode in client deployments: distribute the persisted scoreboard and configuration JSON via your configuration management system.
-   - Update dashboards to display `sorafs_orchestrator_fetch_duration_ms` p95/p99 and retry histograms per region.
+   - ပြီးပြည့်စုံသော manifest ထုတ်ယူမှုအတွက် ထပ်တလဲလဲနှုန်းထားများသည် 1% အောက်တွင်ရှိနေသည်နှင့် ဝန်ဆောင်မှုပေးသူသည် ပျက်ကွက်မှုများစုပုံလာခြင်းမရှိပါက ဆက်လက်လုပ်ဆောင်ပါ။
+2. **ချဉ်းကပ်လမ်း အဆင့် (50% ပံ့ပိုးပေးသူများ)**
+   - `--max-peers` ကို တိုးမြှင့်ပြီး အသစ်သော တယ်လီမီတာ လျှပ်တစ်ပြက် ရိုက်ချက်ဖြင့် ပြန်လည်လုပ်ဆောင်ပါ။
+   - `--provider-metrics-out` နှင့် `--chunk-receipts-out` ဖြင့် ပြေးတိုင်း ဆက်နေပါ။ ပစ္စည်းများကို ≥7 ရက်ကြာ ထိန်းသိမ်းပါ။
+3. ** အပြည့်အဝ စတင်ရောင်းချခြင်း**
+   - `--max-peers` ကို ဖယ်ရှားပါ (သို့မဟုတ် ၎င်းကို အရည်အချင်းပြည့်မီသော အရေအတွက်သို့ သတ်မှတ်ပါ)။
+   - ကလိုင်းယင့် ဖြန့်ကျက်မှုများတွင် သံစုံတီးဝိုင်းမုဒ်ကို ဖွင့်ပါ- သင်၏ဖွဲ့စည်းပုံ စီမံခန့်ခွဲမှုစနစ်မှတစ်ဆင့် ဆက်ရှိနေသော ရမှတ်ဘုတ်နှင့် ဖွဲ့စည်းမှု JSON ကို ဖြန့်ဝေပါ။
+   - `sorafs_orchestrator_fetch_duration_ms` p95/p99 ကိုပြသရန် ဒက်ရှ်ဘုတ်များကို အပ်ဒိတ်လုပ်ပြီး ဒေသအလိုက် ဟီစတိုဂရမ်များကို ထပ်စမ်းကြည့်ပါ။
 
 ## 3. Peer Blacklisting & Boosting
 
-Use the CLI’s scoring policy overrides to triage unhealthy providers without waiting for governance updates.
+အုပ်ချုပ်မှုအပ်ဒိတ်များကို မစောင့်ဘဲ ကျန်းမာရေးနှင့်မညီညွတ်သော ဝန်ဆောင်မှုပေးသူများကို စမ်းသပ်ရန် CLI ၏ အမှတ်ပေးမူဝါဒကို ထပ်သုံးပါ။
 
 ```bash
 sorafs_fetch \
@@ -72,33 +74,33 @@ sorafs_fetch \
   --json-out artifacts/override.summary.json
 ```
 
-- `--deny-provider` removes the listed alias from consideration for the current session.
-- `--boost-provider=<alias>=<weight>` raises the provider’s scheduler weight. Values are additive to the normalised scoreboard weight and apply only to the local run.
-- Record overrides in the incident ticket and attach the JSON outputs so the owning team can reconcile state once the underlying issue is fixed.
+- `--deny-provider` သည် လက်ရှိစက်ရှင်အတွက် ထည့်သွင်းစဉ်းစားခြင်းမှ စာရင်းသွင်းထားသော အမည်များကို ဖယ်ရှားသည်။
+- `--boost-provider=<alias>=<weight>` သည် ဝန်ဆောင်မှုပေးသူ၏ အစီအစဉ်ဆွဲသူကို အလေးချိန်တိုးစေသည်။ တန်ဖိုးများသည် ပုံမှန်ရမှတ်ဘုတ်အလေးချိန်အတွက် ပေါင်းထည့်ထားပြီး ဒေသတွင်း ပြေးပွဲအတွက်သာ သက်ရောက်မှုရှိသည်။
+- အရင်းခံပြဿနာကို ဖြေရှင်းပြီးသည်နှင့် ပိုင်ဆိုင်သောအဖွဲ့သည် အခြေအနေကို ပြန်လည်ညှိနှိုင်းနိုင်စေရန် အဖြစ်အပျက်လက်မှတ်တွင် ထပ်ဆင့်မှတ်တမ်းတင်ပြီး JSON ရလဒ်များကို ပူးတွဲပါရှိသည်။
 
-For permanent changes, amend the source telemetry (mark the offender penalised) or refresh the advert with updated stream budgets before clearing the CLI overrides.
+အမြဲတမ်းပြောင်းလဲမှုများအတွက်၊ ရင်းမြစ်တယ်လီမီတာကို ပြင်ဆင်ပါ (ပြစ်မှုကျူးလွန်သူအား ပြစ်ဒဏ်ချမှတ်ခံရကြောင်း အမှတ်အသားပြုပါ) သို့မဟုတ် CLI မှ အစားထိုးမှုများကို မရှင်းလင်းမီ အပ်ဒိတ်စီးကြောင်းဘတ်ဂျက်များဖြင့် ကြော်ငြာကို ပြန်လည်စတင်ပါ။
 
 ## 4. Failure Triage
 
-When a fetch fails:
+ထုတ်ယူမှု မအောင်မြင်သောအခါ-
 
-1. Capture the following artefacts before rerunning:
+1. ပြန်မလည်ပတ်မီ အောက်ပါအရာများကို ဖမ်းယူပါ-
    - `scoreboard.json`
    - `session.summary.json`
    - `chunk_receipts.json`
    - `provider_metrics.json`
-2. Inspect `session.summary.json` for the human-readable error string:
-   - `no providers were supplied` → verify provider paths and adverts.
-   - `retry budget exhausted ...` → increase `--retry-budget` or remove unstable peers.
-   - `no compatible providers available ...` → audit the offending provider’s range capability metadata.
-3. Correlate the provider name with `sorafs_orchestrator_provider_failures_total` and create a follow-up ticket if the metric spikes.
-4. Replay the fetch offline with `--scoreboard-json` and the captured telemetry to reproduce the failure deterministically.
+2. လူသားဖတ်နိုင်သော error string အတွက် `session.summary.json` ကို စစ်ဆေးပါ-
+   - `no providers were supplied` → ပံ့ပိုးသူလမ်းကြောင်းများနှင့် ကြော်ငြာများကို အတည်ပြုပါ။
+   - `retry budget exhausted ...` → `--retry-budget` ကို တိုးမြှင့်ပါ သို့မဟုတ် မတည်မငြိမ်ဖြစ်နေသော ရွယ်တူများကို ဖယ်ရှားပါ။
+   - `no compatible providers available ...` → အနှောင့်အယှက်ပေးသူ၏ အပိုင်းအခြားစွမ်းရည် မက်တာဒေတာကို စစ်ဆေးပါ။
+3. ဝန်ဆောင်မှုပေးသူအမည်ကို `sorafs_orchestrator_provider_failures_total` နှင့် ဆက်စပ်ပြီး မက်ထရစ်တိုးလာပါက နောက်ဆက်တွဲ လက်မှတ်တစ်ခု ဖန်တီးပါ။
+4. ပျက်ကွက်မှုကို အဆုံးအဖြတ်ကျကျ ပြန်ထုတ်ပေးရန် `--scoreboard-json` နှင့် ဖမ်းထားသော တယ်လီမီတာဖြင့် ရယူထားသော အော့ဖ်လိုင်းကို ပြန်ဖွင့်ပါ။
 
-## 5. Rollback
+## 5. နောက်ပြန်ဆုတ်ခြင်း။
 
-To revert an orchestrator rollout:
+သံစုံတီးဝိုင်းအဖွဲ့ ထုတ်လွှင့်မှုကို ပြန်ပြောင်းရန်-
 
-2. Remove any `--boost-provider` overrides so the scoreboard reverts to neutral weighting.
-3. Continue scraping the orchestrator metrics for at least one day to confirm no residual fetches are in-flight.
+2. မည်သည့် `--boost-provider` အပေါ်ထပ်မှ ဖယ်ရှားပါ ထို့ကြောင့် အမှတ်စာရင်းဘုတ်သည် ကြားနေအလေးချိန်အဖြစ်သို့ ပြန်သွားသည်။
+3. လေယာဉ်ပေါ်တွင် ကျန်ရှိသော ထုတ်ယူမှုများ မရှိကြောင်း အတည်ပြုရန် သံစုံတီးဝိုင်း မက်ထရစ်များကို အနည်းဆုံး တစ်ရက်ကြာ ဆက်လက် ခြစ်ပါ။
 
-Maintaining disciplined artefact capture and staged rollouts ensures the multi-source orchestrator can be operated safely across heterogeneous provider fleets while keeping observability and audit requirements intact.
+စည်းမျဥ်းစည်းကမ်းရှိသော အနုပညာပစ္စည်းများကို ဖမ်းယူထိန်းသိမ်းခြင်းနှင့် အဆင့်မြှင့်တင်ခြင်းများကို ထိန်းသိမ်းခြင်းသည် ရင်းမြစ်ပေါင်းစုံမှ သံစုံတီးဝိုင်းအား ကြည့်ရှုနိုင်စွမ်းနှင့် စာရင်းစစ်လိုအပ်ချက်များကို နဂိုအတိုင်း ထိန်းသိမ်းထားစဉ်တွင် ကွဲပြားနေသော ပံ့ပိုးပေးသူအဖွဲ့များတစ်လျှောက် ဘေးကင်းစွာ လည်ပတ်နိုင်သည်ကို သေချာစေသည်။

@@ -7,23 +7,24 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a5ac4be3d387269898112d465ec404490f67c6c2b9267c0a0781d0de70cf783d
 source_last_modified: "2025-12-29T18:16:35.951567+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docker Builder Image
+# Docker 生成器映像
 
-This container is defined in `Dockerfile.build` and bundles all toolchain
-dependencies required for CI and local release builds. The image now runs as a
-non-root user by default, so Git operations continue to work with Arch Linux’s
-`libgit2` package without resorting to the global `safe.directory` workaround.
+該容器在 `Dockerfile.build` 中定義，並捆綁所有工具鏈
+CI 和本地發布版本所需的依賴項。該圖像現在作為
+默認情況下非 root 用戶，因此 Git 操作繼續與 Arch Linux 一起使用
+`libgit2` 軟件包，無需求助於全局 `safe.directory` 解決方法。
 
-## Build arguments
+## 構建參數
 
-- `BUILDER_USER` – login name created inside the container (default: `iroha`).
-- `BUILDER_UID` – numeric user id (default: `1000`).
-- `BUILDER_GID` – primary group id (default: `1000`).
+- `BUILDER_USER` – 在容器內創建的登錄名（默認值：`iroha`）。
+- `BUILDER_UID` – 數字用戶 ID（默認值：`1000`）。
+- `BUILDER_GID` – 主要組 ID（默認值：`1000`）。
 
-When you mount the workspace from your host, pass matching UID/GID values so
-generated artifacts remain writable:
+當您從主機掛載工作區時，傳遞匹配的 UID/GID 值，以便
+生成的工件保持可寫：
 
 ```bash
 docker build \
@@ -34,14 +35,14 @@ docker build \
   -t iroha-builder .
 ```
 
-The toolchain directories (`/usr/local/rustup`, `/usr/local/cargo`, `/opt/poetry`)
-are owned by the configured user so Cargo, rustup, and Poetry commands remain fully
-functional once the container drops root privileges.
+工具鏈目錄（`/usr/local/rustup`、`/usr/local/cargo`、`/opt/poetry`）
+由配置的用戶擁有，因此 Cargo、rustup 和 Poetry 命令完全保留
+一旦容器刪除 root 權限，就可以使用。
 
-## Running builds
+## 運行構建
 
-Attach your workspace to `/workspace` (the container `WORKDIR`) when invoking the
-image. Example:
+調用時將您的工作區附加到 `/workspace`（容器 `WORKDIR`）
+圖像。示例：
 
 ```bash
 docker run --rm -it \
@@ -50,22 +51,22 @@ docker run --rm -it \
   cargo build --workspace
 ```
 
-The image keeps the `docker` group membership so nested Docker commands (e.g.
-`docker buildx bake`) remain available for CI workflows that mount the host PID
-and socket. Adjust group mappings as needed for your environment.
+該映像保留 `docker` 組成員身份，因此嵌套 Docker 命令（例如
+`docker buildx bake`) 仍然可用於掛載主機 PID 的 CI 工作流程
+和插座。根據您的環境需要調整組映射。
 
-## Iroha 2 vs Iroha 3 artefacts
+## Iroha 2 與 Iroha 3 文物
 
-The workspace now emits separate binaries per release line to avoid collisions:
-`iroha3`/`iroha3d` (default) and `iroha2`/`iroha2d` (Iroha 2). Use the helpers to
-produce the desired pair:
+工作區現在為每個發布行發出單獨的二進製文件以避免衝突：
+`iroha3`/`iroha3d`（默認）和 `iroha2`/`iroha2d` (Iroha 2)。使用助手來
+產生所需的對：
 
-- `make build` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i3`) for Iroha 3
-- `make build-i2` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i2`) for Iroha 2
+- `make build`（或 `BUILD_PROFILE=deploy bash scripts/build_line.sh --i3`）用於 Iroha 3
+- `make build-i2`（或 `BUILD_PROFILE=deploy bash scripts/build_line.sh --i2`）用於 Iroha 2
 
-The selector pins the feature sets (`telemetry` + `schema-endpoint` plus the
-line-specific `build-i{2,3}` flag) so Iroha 2 builds cannot accidentally pick up
-Iroha 3-only defaults.
+選擇器引腳功能集（`telemetry` + `schema-endpoint` 加上
+線路特定的 `build-i{2,3}` 標誌），因此 Iroha 2 版本不會意外拾取
+Iroha 僅 3 個默認值。
 
-Release bundles built via `scripts/build_release_bundle.sh` pick the correct binary
-names automatically when `--profile` is set to `iroha2` or `iroha3`.
+通過 `scripts/build_release_bundle.sh` 構建的發布包選擇正確的二進製文件
+當 `--profile` 設置為 `iroha2` 或 `iroha3` 時，自動命名。

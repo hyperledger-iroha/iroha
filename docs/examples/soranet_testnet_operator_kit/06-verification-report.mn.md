@@ -7,46 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf489427d0eba2beebfdefc44092730c3963cbd77e83669853f4e9681ac9fd2d
 source_last_modified: "2025-12-29T18:16:35.092552+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Operator Verification Report (Phase T0)
+## Операторын баталгаажуулалтын тайлан (Үе шат T0)
 
-- Operator name: ______________________
-- Relay descriptor ID: ______________________
-- Submission date (UTC): ___________________
-- Contact email / matrix: ___________________
+- Операторын нэр: ______________________
+- Релений тодорхойлогч ID: ______________________
+- Илгээсэн огноо (UTC): ___________________
+- Холбоо барих имэйл / матриц: ___________________
 
-### Checklist Summary
+### Хяналтын хуудасны хураангуй
 
-| Item | Completed (Y/N) | Notes |
+| Зүйл | Дууссан (Ө/Ү) | Тэмдэглэл |
 |------|-----------------|-------|
-| Hardware & network validated | | |
-| Compliance block applied | | |
-| Admission envelope verified | | |
-| Guard rotation smoke test | | |
-| Telemetry scraped & dashboards live | | |
-| Brownout drill executed | | |
-| PoW ticket success within target | | |
+| Техник хангамж ба сүлжээг баталгаажуулсан | | |
+| Дагаж мөрдөх блок ашигласан | | |
+| Элсэлтийн дугтуйг баталгаажуулсан | | |
+| Хамгаалалтын эргэлтийн утааны туршилт | | |
+| Телеметрийн хуссан & хянах самбар шууд | | |
+| Brownout өрөмдлөгийг гүйцэтгэсэн | | |
+| Зорилтот хүрээнд PoW тасалбар амжилт | | |
 
-### Metrics Snapshot
+### Хэмжилтийн агшин зураг
 
-- PQ ratio (`sorafs_orchestrator_pq_ratio`): ________
-- Downgrade count last 24h: ________
-- Average circuit RTT (p95): ________ ms
-- PoW median solve time: ________ ms
+- PQ харьцаа (`sorafs_orchestrator_pq_ratio`): ________
+- Сүүлийн 24 цагийн бууралтын тоо: ________
+- Дундаж хэлхээний RTT (p95): ________ мс
+- PoW дундаж шийдвэрлэх хугацаа: ________ мс
 
-### Attachments
+### Хавсралт
 
-Please attach:
+Хавсаргана уу:
 
-1. Relay support bundle hash (`sha256`): __________________________
-2. Dashboard screenshots (PQ ratio, circuit success, PoW histogram).
-3. Signed drill bundle (`drills-signed.json` + signer public key hex and attachments).
-4. SNNet-10 metrics report (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
+1. Релений дэмжлэгийн багцын хэш (`sha256`): __________________________
+2. Самбарын дэлгэцийн агшин (PQ харьцаа, хэлхээний амжилт, PoW гистограмм).
+3. Гарын үсэг зурсан өрмийн багц (`drills-signed.json` + гарын үсэг зурсан нийтийн түлхүүрийн зургаан өнцөгт ба хавсралт).
+4. SNNet-10 хэмжүүрийн тайлан (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
 
-### Operator Signature
+### Операторын гарын үсэг
 
-I certify the above information is accurate and all required steps have been
-completed.
+Дээрх мэдээлэл үнэн зөв, шаардлагатай бүх алхам хийгдсэн болохыг би баталж байна
+дууссан.
 
-Signature: _________________________  Date: ___________________
+Гарын үсэг: _______________________ Огноо: ___________________

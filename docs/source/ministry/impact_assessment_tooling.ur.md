@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2026-01-03T18:07:57.641039+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# امپیکٹ اسسمنٹ ٹولنگ (MINFO - 4B)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+روڈ میپ حوالہ: ** MINFO - 4B - امپیکٹ اسسمنٹ ٹولنگ۔ **  
+مالک: گورننس کونسل / تجزیات
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+اس نوٹ میں `cargo xtask ministry-agenda impact` کمانڈ کی دستاویز کی گئی ہے
+ریفرنڈم پیکٹوں کے ل required مطلوبہ خودکار ہیش فیملی فرق پیدا کرتا ہے۔
+ٹول درست ایجنڈا کونسل کی تجاویز ، ڈپلیکیٹ رجسٹری ، اور استعمال کرتا ہے
+ایک اختیاری ڈینیلسٹ/پالیسی اسنیپ شاٹ تاکہ جائزہ لینے والے بالکل وہی دیکھ سکیں جو
+فنگر پرنٹس نئے ہیں ، جو موجودہ پالیسی سے ٹکرا جاتے ہیں ، اور کتنی اندراجات ہیں
+ہر ہیش خاندان میں حصہ ڈالتا ہے۔
 
-## Inputs
+## ان پٹ
 
-1. **Agenda proposals.** One or more files that follow
-   [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
-   [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+1. ** ایجنڈا کی تجاویز۔ ** ایک یا زیادہ فائلیں جو پیروی کرتی ہیں
+   [`docs/source/ministry/agenda_council_proposal.md`] (agenda_council_proposal.md)۔
+   ان کو واضح طور پر `--proposal <path>` کے ساتھ پاس کریں یا کمانڈ کو ایک پر اشارہ کریں
+   `--proposal-dir <dir>` کے ذریعے ڈائرکٹری اور اس راستے کے تحت ہر `*.json` فائل
+   شامل ہے۔
+2. ** ڈپلیکیٹ رجسٹری (اختیاری)۔ ** JSON فائل مماثل
+   `docs/examples/ministry/agenda_duplicate_registry.json`۔ تنازعات ہیں
+   `source = "duplicate_registry"` کے تحت رپورٹ کیا گیا۔
+3. ** پالیسی اسنیپ شاٹ (اختیاری)۔
+   فنگر پرنٹ پہلے ہی GAR/وزارت پالیسی کے ذریعہ نافذ کیا گیا ہے۔ لوڈر کی توقع ہے
+   اسکیما ذیل میں دکھایا گیا ہے (دیکھیں
+   [`docs/examples/ministry/policy_snapshot_example.json`] (../../examples/ministry/policy_snapshot_example.json)
+   ایک مکمل نمونے کے لئے):
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+کوئی بھی اندراج جس کا `hash_family:hash_hex` فنگر پرنٹ کسی تجویز کا ہدف سے میل کھاتا ہے
+`source = "policy_snapshot"` کے تحت حوالہ `policy_id` کے ساتھ رپورٹ کیا گیا ہے۔
 
-## Usage
+## استعمال
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+اضافی تجاویز کو دہرائے ہوئے `--proposal` جھنڈوں کے ذریعے یا بذریعہ شامل کیا جاسکتا ہے
+ایک ڈائریکٹری کی فراہمی جس میں ایک پورا ریفرنڈم بیچ ہوتا ہے:
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+جب `--out` کو خارج کیا جاتا ہے تو کمانڈ تیار کردہ JSON کو STDOUT پر پرنٹ کرتا ہے۔
 
-## Output
+## آؤٹ پٹ
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+رپورٹ ایک دستخط شدہ آرٹ فیکٹ ہے (اسے ریفرنڈم پیکٹ کے تحت ریکارڈ کریں
+`artifacts/ministry/impact/` ڈائرکٹری) مندرجہ ذیل ڈھانچے کے ساتھ:
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+اس JSON کو غیر جانبدار خلاصہ کے ساتھ ساتھ ہر ریفرنڈم ڈوزیئر سے منسلک کریں
+پینلسٹ ، جورز ، اور گورننس مبصرین کے عین مطابق دھماکے کا رداس دیکھ سکتے ہیں
+ہر تجویز آؤٹ پٹ عین مطابق ہے (ہیش فیملی کے ذریعہ ترتیب دیا گیا ہے) اور اس کے لئے محفوظ ہے
+CI/رن بکس میں شامل کریں ؛ اگر ڈپلیکیٹ رجسٹری یا پالیسی اسنیپ شاٹ میں تبدیلی آتی ہے ،
+کمانڈ دوبارہ چلائیں اور ووٹ کے کھلنے سے پہلے ریفریشڈ آرٹ فیکٹ منسلک کریں۔
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> ** اگلا مرحلہ: ** پیدا شدہ اثر کی رپورٹ کو کھانا کھلانا
+> [`cargo xtask ministry-panel packet`] (referendum_packet.md) تو
+> `ReferendumPacketV1` ڈوسیئر میں ہیش فیملی خرابی اور دونوں پر مشتمل ہے
+> جائزہ کے تحت تجویز کے لئے تنازعہ کی تفصیلی فہرست۔

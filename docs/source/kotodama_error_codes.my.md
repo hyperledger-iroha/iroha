@@ -7,19 +7,20 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e0e4f16000f6a578fe9c9d6e204c01087e987ac3b46d70537a15b072df48a13
 source_last_modified: "2025-12-29T18:16:35.974178+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Compiler Error Codes
+# Kotodama Compiler အမှားကုဒ်များ
 
-The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
-to print the corresponding hint.
+Kotodama compiler သည် tooling နှင့် CLI အသုံးပြုသူများအတွက် တည်ငြိမ်သော အမှားကုဒ်များကို ထုတ်လွှတ်သည်။
+ရှုံးနိမ့်ရခြင်းအကြောင်းရင်းကို မြန်မြန်နားလည်ပါ။ `koto_compile --explain <code>` ကိုသုံးပါ။
+သက်ဆိုင်ရာ အရိပ်အမြွက်ကို ပုံနှိပ်ရန်။
 
-| Code  | Description | Typical Fix |
-|-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+| ကုတ် | ဖော်ပြချက် | ရိုးရိုးပြင်ဆင်ခြင်း |
+|--------|----------------|-------------|
+| `E0001` | ဘဏ်ခွဲပစ်မှတ်သည် IVM ခုန်ကုဒ်ကုဒ်အတွက် အကွာအဝေးပြင်ပတွင် ရှိနေသည်။ | အလွန်ကြီးမားသော လုပ်ဆောင်ချက်များကို ခွဲထုတ်ပါ သို့မဟုတ် အတွင်းပိုင်းကို လျှော့ချခြင်းဖြင့် အခြေခံ ဘလောက်အကွာအဝေးများသည် ±1MiB အတွင်း ရှိနေမည်ဖြစ်သည်။ |
+| `E0002` | ခေါ်ဆိုမှုဆိုက်များသည် သတ်မှတ်မထားသော လုပ်ဆောင်ချက်တစ်ခုကို ရည်ညွှန်းပါသည်။ | ခေါ်ဆိုသူအား ဖယ်ရှားသည့် အမှားအယွင်းများ၊ မြင်နိုင်မှု မွမ်းမံမှုများ သို့မဟုတ် အင်္ဂါရပ်အလံများကို စစ်ဆေးပါ။ |
+| `E0003` | ABI v1 ကိုမဖွင့်ဘဲ တာရှည်ခံသော syscalls များကို ထုတ်လွှတ်သည်။ | `CompilerOptions::abi_version = 1` သတ်မှတ်ပါ သို့မဟုတ် `seiyaku` စာချုပ်အတွင်း `meta { abi_version: 1 }` ကို ထည့်ပါ။ |
+| `E0004` | ပိုင်ဆိုင်မှုနှင့်ဆက်စပ်သော syscalls များသည် ပကတိမဟုတ်သော ညွှန်ပြချက်များကို လက်ခံရရှိခဲ့သည်။ | `account_id(...)`၊ `asset_definition(...)` စသည်ဖြင့် သုံးပါ သို့မဟုတ် လက်ခံသူ၏ ပုံသေများအတွက် 0 sentinels ကို ဖြတ်သန်းပါ။ |
+| `E0005` | `for`-loop initializer သည် ယနေ့ပံ့ပိုးထားသည်ထက် ပိုမိုရှုပ်ထွေးပါသည်။ | စက်ဝိုင်းရှေ့တွင် ရှုပ်ထွေးသော setup ကိုရွှေ့ပါ။ ရိုးရိုး `let`/expression initialisers များကို လောလောဆယ် လက်ခံပါသည်။ |
+| `E0006` | `for`-loop step clause သည် ယနေ့ပံ့ပိုးထားသည်ထက် ပိုမိုရှုပ်ထွေးပါသည်။ | ရိုးရှင်းသောအသုံးအနှုန်းဖြင့် loop ကောင်တာအား အပ်ဒိတ်လုပ်ပါ (ဥပမာ `i = i + 1`)။ |

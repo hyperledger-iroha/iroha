@@ -7,11 +7,12 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 56951fb1e07d90ed062c24f6ef80b8e211b37be008becba9a1fdb16d522d5230
 source_last_modified: "2026-01-21T19:17:13.230513+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Comment Audit Notes
+# Sharh tekshiruvi eslatmalari
 
-Checked the following IVM modules and confirmed their inline/docs comments match the current behaviour (no code edits required):
+Quyidagi IVM modullari tekshirildi va ularning inline/docs sharhlari joriy xatti-harakatlarga mos kelishini tasdiqladi (kodni tahrirlash shart emas):
 
 - `crates/ivm/src/runtime.rs`
 
@@ -39,4 +40,4 @@ Checked the following IVM modules and confirmed their inline/docs comments match
 - `crates/ivm_abi/src/pointer_abi.rs`
 - `crates/ivm/src/ivm_cache.rs`
 
-Remaining workspace crates still need a pass if further comment updates become necessary.
+Qolgan ish maydoni qutilari uchun qo'shimcha sharh yangilanishlari zarur bo'lsa, hali ham ruxsat talab qilinadi.

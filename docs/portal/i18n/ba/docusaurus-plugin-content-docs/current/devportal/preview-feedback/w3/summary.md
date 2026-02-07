@@ -8,32 +8,34 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W3 beta feedback & status
 sidebar_label: W3 summary
 description: Live digest for the 2026 beta preview wave (finance, observability, SDK, and ecosystem cohorts).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| Элемент | Ентекле |
 | --- | --- |
-| Wave | W3 — Beta cohorts (finance + ops + SDK partner + ecosystem advocate) |
-| Invite window | 2026‑02‑18 → 2026‑02‑28 |
-| Artefact tag | `preview-20260218` |
-| Tracker issue | `DOCS-SORA-Preview-W3` |
-| Participants | finance-beta-01, observability-ops-02, partner-sdk-03, ecosystem-advocate-04 |
+| Тулҡын | W3 — Бета когорталары (финанс + опс + SDK партнеры + экосистема яҡлаусыһы) |
+| Тәҙрәгә саҡырығыҙ | 2026‐02‐18 → 2026‐02‐28 |
+| Артефакт билдәһе | `preview-20260218` |
+| Трекер мәсьәләһе | `DOCS-SORA-Preview-W3` |
+| Ҡатнашыусылар | финанс-бета-01, күҙәтеүсәнлек-опс-02, партнер-sdk-03, экосистема-адвокат-04 |
 
-## Highlights
+##
 
-1. **End-to-end evidence pipeline.** `npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` generates the per-wave summary (`artifacts/docs_portal_preview/preview-20260218-summary.json`), digest (`preview-20260218-digest.md`), and refreshes `docs/portal/src/data/previewFeedbackSummary.json` so governance reviewers can rely on a single command.
-2. **Telemetry + governance coverage.** All four reviewers acknowledged checksum-gated access, submitted feedback, and were revoked on time; the digest references the feedback issues (`docs-preview/20260218` set + `DOCS-SORA-Preview-20260218`) alongside the Grafana runs collected during the wave.
-3. **Portal surfacing.** The refreshed portal table now shows the closed W3 wave with latency and response-rate metrics, and the new log page below mirrors the event timeline for auditors who do not pull the raw JSON log.
+**Аҙаҡҡы-осҡа дәлилдәр торба үткәргес.** `npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` генерациялау өсөн резюме (`artifacts/docs_portal_preview/preview-20260218-summary.json`), distest (`preview-20260218-digest.md`), һәм яңыртыу `docs/portal/src/data/previewFeedbackSummary.json` шулай идара итеү тикшерелгән бер командаға таяна ала.
+2. **Телеметрия + идара итеү ҡаплауы.** Дүрт рецензенттар ҙа чемпионат суммаһы-ҡапҡалы инеү, тапшырылған кире бәйләнештәрҙе таныны, һәм ваҡытында тартып алынған; disigers һылтанмалар кире бәйләнеш мәсьәләләре (I18NI0000011X комплекты + I18NI000000012X) менән бер рәттән I18NT0000000000000000 йыйылған тулҡын ваҡытында йыйылған.
+3. **Порталь өҫкө өҫтө.** Яңыртылған портал таблицаһы хәҙер күрһәтә ябыҡ W3 тулҡын менән латентлыҡ һәм яуап ставкаһы метрикаһы, һәм яңы журнал битендә түбән көҙгө ваҡиға ваҡыт һыҙығы аудиторҙар өсөн, улар сеймал JSON журнал тартып түгел.
 
-## Action items
+## Эш әйберҙәре
 
-| ID | Description | Owner | Status |
+| ID | Тасуирлама | Хужа | Статус |
 | --- | --- | --- | --- |
-| W3-A1 | Capture preview digest and attach to tracker. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
-| W3-A2 | Mirror invite/digest evidence into portal + roadmap/status. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
+| W3-A1 | Ҡабул итеү алдан ҡарау distest һәм треклерға беркетергә. | Док/ДевРел лидеры | ✅ 2026-02‐28-се тамамланған |
+| W3-A2 | Көҙгө саҡыра/ҡабаҡ дәлилдәр портал + юл картаһы/статус. | Док/ДевРел лидеры | ✅ 2026-02‐28-се тамамланған |
 
-## Exit summary (2026-02-28)
+## Сығыш резюмеһы (2026-02-28)
 
-- Invites dispatched 2026‑02‑18 with acknowledgements logged minutes later; preview access revoked 2026‑02‑28 after the final telemetry check passed.
-- Digest + summary captured under `artifacts/docs_portal_preview/`, with the raw log anchored by `artifacts/docs_portal_preview/feedback_log.json` for replayability.
-- Issue follow-ups filed under `docs-preview/20260218` with the governance tracker `DOCS-SORA-Preview-20260218`; CSP/Try it notes routed to the observability/finance owners and linked from the digest.
-- Tracker row updated to 🈴 Completed and the portal feedback table reflects the closed wave, completing the remaining DOCS-SORA beta-readiness task.
+- 2026 йылдың 02‐18-се һанлы 18-се һанлыһын таныуҙар менән ебәргән минуттарҙан һуң логиндар; алдан ҡарау мөмкинлеге 2026-02‐28-се һанлы чек үткәндән һуң 2026-02‐28-се тапҡыр ҡабул ителгән.
+- Digest + резюме `artifacts/docs_portal_preview/` буйынса төшөрөлгән, сеймал журналы менән якорь I18NI000000014X өсөн реплейлыҡ.
+- I18NI000000015X буйынса идара итеү трекеры I18NI000000016X менән бирелгән мәсьәләләрҙе күҙәтеү; CSP/тырышып ҡарағыҙ, ул күҙәтә, күҙәтеүсәнлек/финанс хужалары һәм бәйләнгән дигест.
+- Трекер рәт яңыртылған 🈴 тамамланды һәм портал кире бәйләнеш таблицаһы ябыҡ тулҡын сағылдыра, ҡалған DOCS-I18NT000000004X бета-әҙерлек бурысын тамамлай.

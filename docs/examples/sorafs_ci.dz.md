@@ -9,87 +9,29 @@ source_last_modified: "2026-01-03T19:37:11.140795+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS CI Cookbook
 summary: Reference GitHub Actions workflow bundling sign + verify steps with review notes.
+translator: machine-google-reviewed
 ---
 
-# SoraFS CI Cookbook
+# I18NT00000000 CI བག་ལེབ་དེབ།
 
-This snippet mirrors the guidance in `docs/source/sorafs_ci_templates.md` and
-demonstrates how to integrate signing, verification, and proof checks into a
-single GitHub Actions job.
+འདིའི་ནང་དུ་ `docs/source/sorafs_ci_templates.md` དང་ནང་དུ་ལམ་སྟོན་བཟོས།
+མཚན་རྟགས་དང་བདེན་དཔྱད་ དེ་ལས་ བདེན་ཁུངས་ཞིབ་དཔྱད་ཚུ་ ག་དེ་སྦེ་ མཉམ་བསྡོམས་འབད་ནི་ཨིན་ན་ སྟོནམ་ཨིན།
+reghtHub Actions ལས་ཀ།
 
-```yaml
-name: sorafs-cli-release
+I18NF0000002X
 
-on:
-  push:
-    branches: [main]
+## དྲན་ཐོ།
 
-permissions:
-  contents: read
-  id-token: write
+- I18NI000000005X འདི་ རྒྱུག་མི་གུ་ཐོབ་དགོཔ་ཨིན་ (དཔེར་ན་ SoraFSX ཚུ་ གོ་རིམ་འདི་ཚུ་གི་ཧེ་མ་)
+- ལཱ་གི་རྒྱུན་རིམ་འདི་གིས་ གསལ་ཏོག་ཏོ་ I18NT0000001X གི་ལྟདམོ་ལྟ་མི་ཅིག་ (ནཱ་ལུ་ I18NI000000007X); ཁྱོད་རའི་ཕུལ་སིའོ་སྲིད་བྱུས་དང་མཐུན་སྒྲིག་འབད་ནིའི་དོན་ལུ་ `--identity-token-audience` བདེ་སྒྲིག་འབད།
+- གསར་བཏོན་འབད་མི་ མདོང་ལམ་འདི་གིས་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་ཀྱི་དོན་ལུ་ I18NI0000009X, `artifacts/manifest.sig`, དང་ I18NI000000011X ཚུ་ གཏན་མཛོད་འབད་དགོ།
+- གཏན་འབེབས་ཀྱི་དཔེ་ཚད་ཀྱི་ཅ་རྙིང་ཚུ་ I18NI000000012X ནང་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན། ཁྱོད་ལུ་ གསེར་གྱི་གསལ་སྟོན་དང་ ཆ་ཤས་འཆར་གཞི་ ཡང་ན་ ཆུ་དུང་འདི་ ལོག་རྩིས་མ་རྐྱབ་པར་ ཇེ་ཨེསི་ཨོ་ཨེན་ དགོ་པའི་སྐབས་ བརྟག་དཔྱད་ཚུ་ནང་ འདྲ་བཤུས་རྐྱབས།
 
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-rust@v1
-        with:
-          rust-version: 1.92
+## བསྒྲིགས་བཅོས་བདེན་དཔང་།
 
-      - name: Package payload
-        run: |
-          mkdir -p artifacts
-          sorafs_cli car pack \
-            --input payload.bin \
-            --car-out artifacts/payload.car \
-            --plan-out artifacts/chunk_plan.json \
-            --summary-out artifacts/car_summary.json
-          sorafs_cli manifest build \
-            --summary artifacts/car_summary.json \
-            --manifest-out artifacts/manifest.to
-
-      - name: Sign manifest bundle
-        run: |
-          sorafs_cli manifest sign \
-            --manifest artifacts/manifest.to \
-            --chunk-plan artifacts/chunk_plan.json \
-            --bundle-out artifacts/manifest.bundle.json \
-            --signature-out artifacts/manifest.sig \
-            --identity-token-provider=github-actions \
-            --identity-token-audience=sorafs | tee artifacts/manifest.sign.summary.json
-
-      - name: Verify manifest bundle
-        run: |
-          sorafs_cli manifest verify-signature \
-            --manifest artifacts/manifest.to \
-            --bundle artifacts/manifest.bundle.json \
-            --summary artifacts/car_summary.json
-
-      - name: Proof verification
-        run: |
-          sorafs_cli proof verify \
-            --manifest artifacts/manifest.to \
-            --car artifacts/payload.car \
-            --summary-out artifacts/proof.json
-
-      - uses: sigstore/cosign-installer@v3
-      - name: Verify bundle with cosign
-        run: cosign verify-blob --bundle artifacts/manifest.bundle.json artifacts/manifest.to
-```
-
-## Notes
-
-- `sorafs_cli` must be available on the runner (e.g., `cargo install --path crates/sorafs_car --features cli` prior to these steps).
-- The workflow must supply an explicit OIDC audience (here `sorafs`); adjust `--identity-token-audience` to match your Fulcio policy.
-- The release pipeline should archive `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, and `artifacts/proof.json` for governance review.
-- Deterministic sample artefacts live in `fixtures/sorafs_manifest/ci_sample`; copy them into tests when you need golden manifests, chunk plans, or bundle JSON without recomputing the pipeline.
-
-## Fixture Verification
-
-Deterministic artefacts for this workflow live under
-`fixtures/sorafs_manifest/ci_sample`. Pipelines can replay the steps above and
-diff their outputs against the canonical files, for example:
+ལཱ་གི་རྒྱུན་རིམ་འདི་གི་དོན་ལུ་ གཏན་འབེབས་བཟོ་རྙིང་ཚུ་ འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+`fixtures/sorafs_manifest/ci_sample`. Pipelines གིས་ གོང་གི་རིམ་པ་ཚུ་ ལོག་གཏང་ཚུགས།
+diff གི་ཐོན་འབྲས་ཚུ་ དཔེར་ན་ ཀེན་ནོ་ནིག་ཡིག་སྣོད་ཚུ་ལུ་རྒྱབ་འགལ་འབདཝ་ཨིན།
 
 ```bash
 diff -u fixtures/sorafs_manifest/ci_sample/car_summary.json artifacts/car_summary.json
@@ -100,7 +42,7 @@ diff -u fixtures/sorafs_manifest/ci_sample/manifest.verify.summary.json artifact
 diff -u fixtures/sorafs_manifest/ci_sample/proof.json artifacts/proof.json
 ```
 
-Empty diffs confirm the build produced byte-identical manifests, plans, and
-signature bundles. See `fixtures/sorafs_manifest/ci_sample/README.md` for a full
-directory listing and tips on templating release notes from the captured
-summaries.
+སྟོང་པའི་ཁྱད་པར་གྱིས་ བཟོ་བསྐྲུན་འབད་བའི་ བཱའིཊ་འདྲ་མཚུངས་ཀྱི་རྟགས་མཚན་དང་ འཆར་གཞི་ དེ་ལས་ དེ་ལས་ ངེས་གཏན་བཟོཝ་ཨིན།
+མཚན་རྟགས་བསྡམས་པ། ཆ་ཚང་ཅིག་གི་དོན་ལུ་ `fixtures/sorafs_manifest/ci_sample/README.md` ལུ་བལྟ།
+འཛིན་བཟུང་འབད་ཡོད་མི་ལས་ ཊེམ་པེལེཊི་གསར་བཏོན་དྲན་ཐོ་ཚུ་གུ་ཡོད་པའི་སྣོད་ཐོ་ཐོ་ཡིག་དང་ བསླབ་བྱ་ཚུ།
+བཅུད་བསྡུས།

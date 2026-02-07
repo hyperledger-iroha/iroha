@@ -7,95 +7,93 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c9ce6010594e495116c1397b984000d1ee5d45d064294eca046f8dc762fa73b6
 source_last_modified: "2026-01-05T09:28:11.999442+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Env → Config Migration Tracker
+# Env → Migratsiya kuzatuvchisini sozlash
 
-This tracker summarizes production-facing environment-variable toggles surfaced
-by `docs/source/agents/env_var_inventory.{json,md}` and the intended migration
-path into `iroha_config` (or explicit dev/test-only scoping).
+Ushbu treker ishlab chiqarishga qaratilgan atrof-muhit o'zgaruvchan o'zgarishlarni umumlashtiradi
+`docs/source/agents/env_var_inventory.{json,md}` tomonidan va mo'ljallangan migratsiya
+`iroha_config` ga yo'l (yoki aniq ishlab chiquvchi/faqat sinov qamrovi).
 
 
-Note: `ci/check_env_config_surface.sh` now fails when new **production** env
-shims appear relative to `AGENTS_BASE_REF` unless `ENV_CONFIG_GUARD_ALLOW=1` is
-set; document intentional additions here before using the override.
+Eslatma: `ci/check_env_config_surface.sh` endi yangi **ishlab chiqarish** envda ishlamay qoladi
+Shimlar `AGENTS_BASE_REF` ga nisbatan paydo bo'ladi, agar `ENV_CONFIG_GUARD_ALLOW=1` bo'lmasa
+to'plam; bekor qilishni ishlatishdan oldin bu yerda qasddan qoʻshimchalarni hujjatlashtiring.
 
-## Completed migrations
-
-- **IVM ABI opt-out** — Removed `IVM_ALLOW_NON_V1_ABI`; the compiler now rejects
-  non-v1 ABIs unconditionally with a unit test guarding the error path.
-- **IVM debug banner env shim** — Dropped the `IVM_SUPPRESS_BANNER` env opt-out;
-  banner suppression remains available via the programmatic setter.
-- **IVM cache/sizing** — Threaded cache/prover/GPU sizing through
+## Tugallangan migratsiya- **IVM ABI rad etish** — `IVM_ALLOW_NON_V1_ABI` olib tashlandi; kompilyator endi rad etadi
+  xato yo'lini himoya qiluvchi birlik testi bilan shartsiz v1 bo'lmagan ABI.
+- **IVM disk raskadrovka banneri env shim** — `IVM_SUPPRESS_BANNER` env dan voz kechish bekor qilindi;
+  bannerni bostirish dasturiy sozlagich orqali mavjud bo'lib qoladi.
+- **IVM kesh/oʻlchami** — tishli kesh/prover/GPU oʻlchami orqali
   `iroha_config` (`pipeline.{cache_size,ivm_cache_max_decoded_ops,ivm_cache_max_bytes,ivm_prover_threads}`,
-  `accel.max_gpus`) and removed runtime env shims. Hosts now call
-  `ivm::ivm_cache::configure_limits` and `ivm::zk::set_prover_threads`, tests use
-  `CacheLimitsGuard` instead of env overrides.
-- **Connect queue root** — Added `connect.queue.root` (default:
-  `~/.iroha/connect`) to the client config and threaded it through the CLI and
-  JS diagnostics. JS helpers resolve the config (or an explicit `rootDir`) and
-  only honour `IROHA_CONNECT_QUEUE_ROOT` in dev/test via `allowEnvOverride`;
-  templates document the knob so operators no longer need env overrides.
-- **Izanami network opt-in** — Added an explicit `allow_net` CLI/config flag for
-  the Izanami chaos tool; runs now require `allow_net=true`/`--allow-net` and
-- **IVM banner beep** — Replaced the `IROHA_BEEP` env shim with config-driven
-  `ivm.banner.{show,beep}` toggles (default: true/true). Startup banner/beep
-  wiring now reads configuration only in production; dev/test builds still honour
-  the env override for manual toggles.
-- **DA spool override (tests only)** — The `IROHA_DA_SPOOL_DIR` override is now
-  fenced behind `cfg(test)` helpers; production code always sources the spool
-  path from configuration.
-- **Crypto intrinsics** — Replaced `IROHA_DISABLE_SM_INTRINSICS` /
-  `IROHA_ENABLE_SM_INTRINSICS` with the config-driven
-  `crypto.sm_intrinsics` policy (`auto`/`force-enable`/`force-disable`) and
-  removed the `IROHA_SM_OPENSSL_PREVIEW` guard. Hosts apply the policy at
-  startup, benches/tests may opt in via `CRYPTO_SM_INTRINSICS`, and the OpenSSL
-  preview now respects only the config flag.
-  Izanami already requires `--allow-net`/persisted config, and tests now rely on
-  that knob rather than ambient env toggles.
-- **FastPQ GPU tuning** — Added `fastpq.metal.{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum,metal_debug_fused}`
-  config knobs (defaults: `None`/`None`/`false`/`false`/`false`) and thread them through CLI parsing
-  `FASTPQ_METAL_*` / `FASTPQ_DEBUG_*` shims now behave as dev/test fallbacks and
-  are ignored once configuration loads (even when the config leaves them unset); docs/inventory were
-  refreshed to flag the migration.【crates/irohad/src/main.rs:2609】【crates/iroha_core/src/fastpq/lane.rs:109】【crates/fastpq_prover/src/overrides.rs:11】
+  `accel.max_gpus`) va ish vaqti env shimlarini olib tashladi. Xostlar endi qo'ng'iroq qilishmoqda
+  `ivm::ivm_cache::configure_limits` va `ivm::zk::set_prover_threads`, testlardan foydalanish
+  Env bekor qilish o'rniga `CacheLimitsGuard`.
+- ** Navbat ildizini ulash** — `connect.queue.root` qo‘shildi (standart:
+  `~/.iroha/connect`) mijoz konfiguratsiyasiga o'tkazing va uni CLI va
+  JS diagnostikasi. JS yordamchilari konfiguratsiyani (yoki aniq `rootDir`) hal qiladi va
+  faqat `allowEnvOverride` orqali ishlab/sinovda `IROHA_CONNECT_QUEUE_ROOT` ni hurmat qiling;
+  andozalar tugmani hujjatlashtiradi, shuning uchun operatorlar endi env bekor qilishlariga muhtoj emas.
+- **Izanami tarmog‘iga kirish** — Aniq `allow_net` CLI/config bayrog‘i qo‘shildi
+  Izanami xaos vositasi; ishga tushirish uchun endi `allow_net=true`/`--allow-net` talab qilinadi va
+- **IVM banner signali** — `IROHA_BEEP` env simi konfiguratsiyaga asoslangan holda almashtirildi
+  `ivm.banner.{show,beep}` almashtiriladi (standart: rost/true). Ishga tushirish banneri/bip
+  simlar endi konfiguratsiyani faqat ishlab chiqarishda o'qiydi; dev/test quradi hali ham hurmat
+  qo'lda almashtirishlar uchun env bekor qilish.
+- **DA spoolni bekor qilish (faqat testlarda)** — `IROHA_DA_SPOOL_DIR` bekor qilish endi
+  `cfg(test)` yordamchilari orqasida o'ralgan; ishlab chiqarish kodi har doim g'altakning manbai hisoblanadi
+  konfiguratsiyadan yo'l.
+- **Kripto intrinsics** - `IROHA_DISABLE_SM_INTRINSICS` almashtirildi /
+  `IROHA_ENABLE_SM_INTRINSICS` konfiguratsiyaga asoslangan
+  `crypto.sm_intrinsics` siyosati (`auto`/`force-enable`/`force-disable`) va
+  `IROHA_SM_OPENSSL_PREVIEW` qo'riqchisini olib tashladi. Xostlar siyosatni quyidagi manzilda qo'llaydi:
+  ishga tushirish, dastgohlar/testlar `CRYPTO_SM_INTRINSICS` va OpenSSL orqali ulanishi mumkin
+  oldindan ko'rish endi faqat konfiguratsiya bayrog'ini hurmat qiladi.
+  Izanami allaqachon `--allow-net`/doimiy konfiguratsiyani talab qiladi va sinovlar endi
+  muhit muhitini almashtirishdan ko'ra bu tugma.
+- **FastPQ GPU sozlash** — `fastpq.metal.{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum,metal_debug_fused}` qo‘shildi
+  konfiguratsiya tugmalari (standart: `None`/`None`/`false`/`false`/`false`) va ularni CLI tahlili orqali oʻtkazing.
+  `FASTPQ_METAL_*` / `FASTPQ_DEBUG_*` shimlari endi ishlab chiquvchi/sinov zaxiralari sifatida ishlaydi va
+  konfiguratsiya yuklangandan keyin e'tiborga olinmaydi (hatto konfiguratsiya ularni o'rnatmagan bo'lsa ham); hujjatlar/inventar edi
+  migratsiyani belgilash uchun yangilandi.【crates/irohad/src/main.rs:2609】【crates/iroha_core/src/fastpq/lane.rs:109】【crates/fastpq_prover/src/overrides.rs:11】
   (`IVM_DECODE_TRACE`, `IVM_DEBUG_WSV`, `IVM_DEBUG_COMPACT`, `IVM_DEBUG_INVALID`,
   `IVM_DEBUG_REGALLOC`, `IVM_DEBUG_METAL_ENUM`, `IVM_DEBUG_METAL_SELFTEST`,
   `IVM_FORCE_METAL_ENUM`, `IVM_FORCE_METAL_SELFTEST_FAIL`, `IVM_FORCE_CUDA_SELFTEST_FAIL`,
-  `IVM_DISABLE_METAL`, `IVM_DISABLE_CUDA`) are now gated behind debug/test builds via a shared
-  helper so production binaries ignore them while preserving the knobs for local diagnostics. Env
-  inventory was regenerated to reflect the dev/test-only scope.
-- **FASTPQ fixture updates** — `FASTPQ_UPDATE_FIXTURES` now appears only in FASTPQ integration
-  tests; production sources no longer read the env toggle and the inventory reflects the test-only
-  scope.
-- **Inventory refresh + scope detection** — The env inventory tooling now tags `build.rs` files as
-  build scope and tracks `#[cfg(test)]`/integration harness modules so test-only toggles (e.g.,
-  `IROHA_TEST_*`, `IROHA_RUN_IGNORED`) and CUDA build flags show up outside the production count.
-  Inventory regenerated Dec 07, 2025 (518 refs / 144 vars) to keep the env-config guard diff green.
-- **P2P topology env shim release guard** — `IROHA_P2P_TOPOLOGY_UPDATE_MS` now triggers a deterministic
-  startup error in release builds (warn-only in debug/test) so production nodes rely solely on
-  `network.peer_gossip_period_ms`. The env inventory was regenerated to reflect the guard and the
-  updated classifier now scopes `cfg!`-guarded toggles as debug/test.
+  `IVM_DISABLE_METAL`, `IVM_DISABLE_CUDA`) endi birgalikda disk raskadrovka/sinov tuzilmalari orqasida joylashgan.
+  yordamchi, shuning uchun ishlab chiqarish ikkiliklari mahalliy diagnostika uchun tugmachalarni saqlab, ularga e'tibor bermaydi. Env
+  inventarizatsiya faqat ishlab chiquvchi/sinov doirasini aks ettirish uchun qayta tiklandi.- **FASTPQ armatura yangilanishlari** — `FASTPQ_UPDATE_FIXTURES` endi faqat FASTPQ integratsiyasida paydo bo'ladi
+  testlar; ishlab chiqarish manbalari endi env almashtirishni o'qimaydi va inventar faqat sinovni aks ettiradi
+  qamrovi.
+- **Inventarizatsiyani yangilash + qamrovni aniqlash** — Env inventarizatsiya vositalari endi `build.rs` fayllarini quyidagicha teglar.
+  `#[cfg(test)]`/integratsiya jabduqlar modullarini yaratish va treklarni yaratish, shuning uchun faqat sinov o'tkaziladi (masalan,
+  `IROHA_TEST_*`, `IROHA_RUN_IGNORED`) va CUDA qurish bayroqlari ishlab chiqarish sonidan tashqarida ko'rinadi.
+  Env-config himoyasi farqini yashil rangda saqlash uchun inventarizatsiya 2025-yil 07-dekabrda qayta tiklandi (518 refs / 144 vars).
+- **P2P topologiyasi env shim bo'shatish himoyasi** — `IROHA_P2P_TOPOLOGY_UPDATE_MS` endi deterministikni ishga tushiradi
+  Relizlar qurishda ishga tushirish xatosi (faqat disk raskadrovka/sinovda ogohlantirish), shuning uchun ishlab chiqarish tugunlari faqat quyidagilarga tayanadi.
+  `network.peer_gossip_period_ms`. Env inventarizatsiyasi qo'riqchi va uni aks ettirish uchun qayta tiklandi
+  yangilangan klassifikator endi disk raskadrovka/sinov sifatida `cfg!` himoyalangan almashuvlarni qamrab oladi.
 
-## High-priority migrations (production paths)
+## Yuqori ustuvor migratsiya (ishlab chiqarish yo'llari)
 
-- _None (inventory refreshed with cfg!/debug detection; env-config guard green after P2P shim hardening)._
+- _Yo'q (inventar cfg!/debug aniqlash bilan yangilandi; P2P shim qattiqlashgandan keyin env-config himoyasi yashil rangda)._
 
-## Dev/test-only toggles to fence
+## Devorga o'tish uchun ishlab/faqat sinovdan o'tadi
 
-- Current sweep (Dec 07, 2025): build-only CUDA flags (`IVM_CUDA_*`) are scoped as `build` and the
-  harness toggles (`IROHA_TEST_*`, `IROHA_RUN_IGNORED`, `IROHA_SKIP_BIND_CHECKS`) now register as
-  `test`/`debug` in the inventory (including `cfg!`-guarded shims). No additional fencing is required;
-  keep future additions behind `cfg(test)`/bench-only helpers with TODO markers when shims are temporary.
+- Joriy tozalash (2025-yil 07-dekabr): faqat tuziladigan CUDA bayroqlari (`IVM_CUDA_*`) `build` va
+  jabduqlar (`IROHA_TEST_*`, `IROHA_RUN_IGNORED`, `IROHA_SKIP_BIND_CHECKS`) endi ro'yxatdan o'ting
+  Inventarizatsiyadagi `test`/`debug` (jumladan, `cfg!` himoyalangan shimlar). Qo'shimcha to'siqlar kerak emas;
+  Shimlar vaqtinchalik bo'lsa, kelajakdagi qo'shimchalarni TODO markerlari bilan `cfg(test)`/faqat dastgoh yordamchilari orqasida saqlang.
 
-## Build-time envs (leave as-is)
+## Qurilish vaqti (hozirgidek qoldiring)
 
-- Cargo/feature envs (`CARGO_*`, `OUT_DIR`, `DOCS_RS`, `PROFILE`, `CUDA_HOME`,
-  `CUDA_PATH`, `JSONSTAGE1_CUDA_ARCH`, `FASTPQ_SKIP_GPU_BUILD`, etc.) remain
-  build-script concerns and are out-of-scope for runtime config migration.
+- Yuk/xususiyatlar envs (`CARGO_*`, `OUT_DIR`, `DOCS_RS`, `PROFILE`, `CUDA_HOME`,
+  `CUDA_PATH`, `JSONSTAGE1_CUDA_ARCH`, `FASTPQ_SKIP_GPU_BUILD` va boshqalar) qoladi
+  build-skript bilan bog'liq va ish vaqti konfiguratsiyasini ko'chirish doirasidan tashqarida.
 
-## Next actions
+## Keyingi harakatlar
 
-1) Run `make check-env-config-surface` after config-surface updates to catch new production env shims
-   early and assign subsystem owners/ETAs.  
-2) Refresh the inventory (`make check-env-config-surface`) after each sweep so
-   the tracker stays aligned with new guardrails and the env-config guard diff stays noise-free.
+1) `make check-env-config-surface` ni konfiguratsiya yuzasi yangilangandan so'ng ishga tushiring va yangi ishlab chiqarish env shimlarini ushlang
+   erta va quyi tizim egalarini/ETAlarni tayinlang.  
+2) Har bir tozalashdan keyin inventarni yangilang (`make check-env-config-surface`).
+   treker yangi himoya panjaralari bilan bir xilda qoladi va env-config guard diff shovqinsiz qoladi.

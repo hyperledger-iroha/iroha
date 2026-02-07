@@ -9,13 +9,14 @@ source_last_modified: "2026-01-03T19:37:11.140795+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS CI Cookbook
 summary: Reference GitHub Actions workflow bundling sign + verify steps with review notes.
+translator: machine-google-reviewed
 ---
 
-# SoraFS CI Cookbook
+# SoraFS CI Хоолны ном
 
-This snippet mirrors the guidance in `docs/source/sorafs_ci_templates.md` and
-demonstrates how to integrate signing, verification, and proof checks into a
-single GitHub Actions job.
+Энэ хэсэг нь `docs/source/sorafs_ci_templates.md` дээрх зааврыг тусгасан бөгөөд
+гарын үсэг зурах, баталгаажуулах, нотлох шалгалтыг хэрхэн нэгтгэхийг харуулж байна
+ганц GitHub Үйлдлүүд ажил.
 
 ```yaml
 name: sorafs-cli-release
@@ -78,18 +79,18 @@ jobs:
         run: cosign verify-blob --bundle artifacts/manifest.bundle.json artifacts/manifest.to
 ```
 
-## Notes
+## Тэмдэглэл
 
-- `sorafs_cli` must be available on the runner (e.g., `cargo install --path crates/sorafs_car --features cli` prior to these steps).
-- The workflow must supply an explicit OIDC audience (here `sorafs`); adjust `--identity-token-audience` to match your Fulcio policy.
-- The release pipeline should archive `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, and `artifacts/proof.json` for governance review.
-- Deterministic sample artefacts live in `fixtures/sorafs_manifest/ci_sample`; copy them into tests when you need golden manifests, chunk plans, or bundle JSON without recomputing the pipeline.
+- `sorafs_cli` гүйгч дээр бэлэн байх ёстой (жишээ нь, эдгээр алхмуудын өмнө `cargo install --path crates/sorafs_car --features cli`).
+- Ажлын урсгал нь тодорхой OIDC үзэгчдийг хангах ёстой (энд `sorafs`); `--identity-token-audience`-г Fulcio бодлогодоо тохируулан тохируулна уу.
+- Хувилбарын шугам нь `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, `artifacts/proof.json` архивуудыг засаглалын хяналтад оруулах ёстой.
+- Тодорхойлогч дээжийн олдворууд `fixtures/sorafs_manifest/ci_sample`-д амьдардаг; Алтан манифест, хэсэгчилсэн төлөвлөгөө эсвэл JSON-г багцлах шаардлагатай үед дамжуулах хоолойг дахин тооцоолохгүйгээр тэдгээрийг тест болгон хуулж аваарай.
 
-## Fixture Verification
+## Бэхэлгээний баталгаажуулалт
 
-Deterministic artefacts for this workflow live under
-`fixtures/sorafs_manifest/ci_sample`. Pipelines can replay the steps above and
-diff their outputs against the canonical files, for example:
+Энэ ажлын урсгалын тодорхойлогч олдворууд дор амьдардаг
+`fixtures/sorafs_manifest/ci_sample`. Дамжуулах хоолой нь дээрх алхмуудыг давтаж болно
+Тэдний гаралтыг каноник файлуудаас ялгах, жишээ нь:
 
 ```bash
 diff -u fixtures/sorafs_manifest/ci_sample/car_summary.json artifacts/car_summary.json
@@ -100,7 +101,7 @@ diff -u fixtures/sorafs_manifest/ci_sample/manifest.verify.summary.json artifact
 diff -u fixtures/sorafs_manifest/ci_sample/proof.json artifacts/proof.json
 ```
 
-Empty diffs confirm the build produced byte-identical manifests, plans, and
-signature bundles. See `fixtures/sorafs_manifest/ci_sample/README.md` for a full
-directory listing and tips on templating release notes from the captured
-summaries.
+Хоосон ялгаа нь бүтээгдсэн байт-ижил манифест, төлөвлөгөө, болон
+гарын үсгийн багцууд. Бүрэн эхээр нь `fixtures/sorafs_manifest/ci_sample/README.md`-с үзнэ үү
+лавлах жагсаалт болон баригдсан хувилбарын тэмдэглэлийг загварчлах зөвлөмж
+хураангуй.

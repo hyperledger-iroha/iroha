@@ -11,64 +11,65 @@ id: reviewer-onboarding
 title: Preview reviewer onboarding
 sidebar_label: Reviewer onboarding
 description: Process and checklists for enrolling reviewers in the docs portal public preview.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## ခြုံငုံသုံးသပ်ချက်
 
-DOCS-SORA tracks a staged launch of the developer portal. Checksum-gated builds
-(`npm run serve`) and hardened Try it flows unblock the next milestone:
-onboarding vetted reviewers before the public preview opens broadly. This guide
-describes how to collect requests, verify eligibility, provision access, and
-offboard participants safely. Refer to the
-[preview invite flow](./preview-invite-flow.md) for cohort planning, invite
-cadence, and telemetry exports; the steps below focus on the actions to take
-once a reviewer has been selected.
+DOCS-SORA သည် ဆော့ဖ်ဝဲရေးသားသူပေါ်တယ်၏ အဆင့်လိုက်စတင်ခြင်းကို ခြေရာခံသည်။ Checksum-gated တည်ဆောက်မှုများ
+(`npm run serve`) နှင့် မာကျောသော စမ်းသုံးကြည့်ပါက စီးဆင်းနေသော နောက်ထပ်မှတ်တိုင်တစ်ခုကို ပိတ်ဆို့လိုက်ပါ-
+အများသူငှာ အစမ်းကြည့်ရှုမှုကို ကျယ်ကျယ်ပြန့်ပြန့် မဖွင့်မီတွင် စတင်စစ်ဆေးပြီး စစ်ဆေးသူများ။ ဒီလမ်းညွှန်
+တောင်းဆိုမှုများကို စုဆောင်းပုံ၊ အရည်အချင်းပြည့်မီမှုကို စစ်ဆေးရန်၊ ပံ့ပိုးပေးခွင့်နှင့် တို့ကို ဖော်ပြသည်။
+offboard ပါဝင်သူများ ဘေးကင်းစွာ။ ကိုကိုးကားပါ။
+[အကြိုကြည့်ရှုရန် ဖိတ်ကြားချက်စီးဆင်းမှု](./preview-invite-flow.md) အစုအဝေးစီစဉ်ခြင်းအတွက် ဖိတ်ကြားပါ၊ ဖိတ်ကြားပါ။
+cadence နှင့် telemetry တင်ပို့မှု၊ အောက်ပါအဆင့်များသည် လုပ်ဆောင်ရမည့် လုပ်ဆောင်ချက်များအပေါ် အာရုံစိုက်ပါ။
+သုံးသပ်သူအား ရွေးချယ်ပြီးသည်နှင့်။
 
-- **Scope:** reviewers who need access to the docs preview (`docs-preview.sora`,
-  GitHub Pages builds, or SoraFS bundles) before GA.
-- **Out-of-scope:** Torii or SoraFS operators (covered by their own onboarding
-  kits) and production portal deployments (see
-  [`devportal/deploy-guide`](./deploy-guide.md)).
+- **Scope-** docs preview ကို ဝင်ရောက်ကြည့်ရှုရန် လိုအပ်သော သုံးသပ်သူများ (`docs-preview.sora`၊
+  GA မတိုင်မီ GitHub Pages တည်ဆောက်မှုများ သို့မဟုတ် SoraFS အစုအဝေးများ)။
+- **နယ်ပယ်ပြင်ပ-** Torii သို့မဟုတ် SoraFS အော်ပရေတာများ (၎င်းတို့၏ကိုယ်ပိုင်စတင်အသုံးပြုခြင်းဖြင့် အကျုံးဝင်သည်
+  kits) နှင့် ထုတ်လုပ်မှုပေါ်တယ် ဖြန့်ကျက်မှုများ (ကြည့်ရှုပါ။
+  [`devportal/deploy-guide`](./deploy-guide.md))။
 
-## Roles & prerequisites
+## ရာထူးများနှင့် ကြိုတင်လိုအပ်ချက်များ
 
-| Role | Typical goals | Required artefacts | Notes |
-| --- | --- | --- | --- |
-| Core maintainer | Verify new guides, run smoke tests. | GitHub handle, Matrix contact, signed CLA on file. | Usually already in the `docs-preview` GitHub team; still file a request so access is auditable. |
-| Partner reviewer | Validate SDK snippets or governance content before public release. | Corporate email, legal POC, signed preview terms. | Must acknowledge telemetry + data handling requirements. |
-| Community volunteer | Provide usability feedback on guides. | GitHub handle, preferred contact, timezone, acceptance of CoC. | Keep cohorts small; prioritize reviewers who have signed the contributor agreement. |
+| အခန်းကဏ္ဍ | ရိုးရိုးပန်းတိုင် | လိုအပ်သောပစ္စည်းများ | မှတ်စုများ |
+| ---| ---| ---| ---|
+| အမာခံထိန်းသိမ်းသူ | လမ်းညွှန်အသစ်များကို အတည်ပြုပါ၊ မီးခိုးစမ်းသပ်မှုများ လုပ်ဆောင်ပါ။ | GitHub လက်ကိုင်၊ Matrix အဆက်အသွယ်၊ ဖိုင်တွင် CLA လက်မှတ်ထိုးထားသည်။ | အများအားဖြင့် `docs-preview` GitHub အဖွဲ့တွင်ရှိပြီး၊ တောင်းဆိုချက်ကို တင်သွင်းဆဲဖြစ်သောကြောင့် ဝင်ရောက်ကြည့်ရှုစစ်ဆေးနိုင်သည်။ |
+| ပါတနာ ဝေဖန်သုံးသပ်သူ | SDK အတိုအထွာများ သို့မဟုတ် အုပ်ချုပ်မှုအကြောင်းအရာကို အများသူငှာ မထုတ်ပြန်မီ အတည်ပြုပါ။ | ကော်ပိုရိတ်အီးမေးလ်၊ တရားဝင် POC၊ အကြိုကြည့်ရှုမှု စည်းမျဉ်းများကို လက်မှတ်ရေးထိုးထားသည်။ | တယ်လီမီတာ + ဒေတာ ကိုင်တွယ်ခြင်းဆိုင်ရာ လိုအပ်ချက်များကို အသိအမှတ်ပြုရပါမည်။ |
+| ရပ်ရွာစေတနာ့ဝန်ထမ်း | လမ်းညွှန်ချက်များအပေါ် အသုံးပြုနိုင်သော တုံ့ပြန်ချက်ပေးပါ။ | GitHub လက်ကိုင်၊ နှစ်သက်သော အဆက်အသွယ်၊ အချိန်ဇုန်၊ CoC လက်ခံမှု။ | အတွဲများကို သေးငယ်အောင်ထားပါ။ ပံ့ပိုးကူညီသူသဘောတူညီချက်ကို လက်မှတ်ရေးထိုးထားသော သုံးသပ်သူများကို ဦးစားပေးပါ။ |
 
-All reviewer types must:
+ဝေဖန်သုံးသပ်သူ အမျိုးအစားအားလုံးသည်-
 
-1. Acknowledge the acceptable-use policy for preview artefacts.
-2. Read the security/observability appendices
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-3. Agree to run `docs/portal/scripts/preview_verify.sh` before serving any
-   snapshot locally.
+1. ရှေးဟောင်းပစ္စည်းများကို အစမ်းကြည့်ရှုရန်အတွက် လက်ခံနိုင်သော-အသုံးပြုမှုမူဝါဒကို အသိအမှတ်ပြုပါ။
+2. လုံခြုံရေး/ကြည့်ရှုနိုင်မှု နောက်ဆက်တွဲများကို ဖတ်ပါ။
+   ([`security-hardening`](./security-hardening.md)၊
+   [`observability`](./observability.md)၊
+   [`incident-runbooks`](./incident-runbooks.md))။
+3. မည်သည့်အရာကိုမဆိုမထမ်းဆောင်မီ `docs/portal/scripts/preview_verify.sh` ကိုဖွင့်ရန်သဘောတူသည်။
+   ဒေသအလိုက် လျှပ်တစ်ပြက်ရိုက်ချက်။
 
-## Intake workflow
+## အလုပ်အသွားအလာကို ခံယူပါ။
 
-1. Ask the requester to fill out the
+1. တောင်းဆိုသူကို ဖြည့်စွက်ခိုင်းပါ။
    [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   form (or copy/paste it into an issue). Capture at least: identity, contact
-   method, GitHub handle, intended review dates, and confirmation that the
-   security docs were read.
-2. Record the request in the `docs-preview` tracker (GitHub issue or governance
-   ticket) and assign an approver.
-3. Validate prerequisites:
-   - CLA / contributor agreement on file (or partner contract reference).
-   - Acceptable-use acknowledgement stored in the request.
-   - Risk assessment complete (for example, partner reviewers approved by Legal).
-4. Approver signs off in the request and links the tracking issue to any
-   change-management entry (example: `DOCS-SORA-Preview-####`).
+   ဖောင်ပုံစံ (သို့မဟုတ် ကော်ပီ/ကူးထည့်ခြင်း) ပြဿနာတစ်ခုထဲသို့ ကူးထည့်ပါ။ အနည်းဆုံး ရိုက်ကူးပါ- အထောက်အထား၊ အဆက်အသွယ်
+   နည်းလမ်း၊ GitHub ကိုင်တွယ်မှု၊ ရည်ရွယ်ထားသော ပြန်လည်သုံးသပ်သည့်ရက်စွဲများနှင့် အတည်ပြုချက်
+   လုံခြုံရေးစာရွက်စာတမ်းများကို ဖတ်ကြားခဲ့သည်။
+2. တောင်းဆိုချက်ကို `docs-preview` ခြေရာခံကိရိယာ (GitHub ပြဿနာ သို့မဟုတ် အုပ်ချုပ်မှုစနစ်တွင် မှတ်တမ်းတင်ပါ
+   လက်မှတ်) နှင့် အတည်ပြုသူကို ခန့်အပ်ပါ။
+3. ကြိုတင်လိုအပ်ချက်များကို အတည်ပြုပါ-
+   - CLA / ပံ့ပိုးကူညီသူသဘောတူညီချက် (သို့မဟုတ်မိတ်ဖက်စာချုပ်ရည်ညွှန်းချက်) ဖိုင်ပေါ်တွင်။
+   - တောင်းဆိုမှုတွင် သိမ်းဆည်းထားသော လက်ခံအသုံးပြုနိုင်သည့် အသိအမှတ်ပြုမှု။
+   - စွန့်စားအကဲဖြတ်ခြင်း ပြီးမြောက်သည် (ဥပမာ၊ မိတ်ဖက်ပြန်လည်သုံးသပ်သူများ၊ တရားဝင်ခွင့်ပြုထားသော)။
+4. အတည်ပြုသူသည် တောင်းဆိုချက်တွင် ဆိုင်းဘုတ်ပိတ်ပြီး ခြေရာခံခြင်းပြဿနာကို မည်သည့်အရာနှင့်မဆို ချိတ်ဆက်ပေးသည်။
+   အပြောင်းအလဲ-စီမံခန့်ခွဲမှု ဝင်ခွင့် (ဥပမာ- `DOCS-SORA-Preview-####`)။
 
-## Provisioning & tooling
+## စီစဉ်ပေးခြင်းနှင့် ကိရိယာတန်ဆာပလာများ
 
-1. **Share artefacts** — Provide the latest preview descriptor + archive from
-   the CI workflow or SoraFS pin (`docs-portal-preview` artefact). Remind
-   reviewers to run:
+1. **ရှေးဟောင်းပစ္စည်းများကို မျှဝေပါ** — နောက်ဆုံးအစမ်းကြည့်ရှုမှုဖော်ပြချက် + မော်ကွန်းကို ပေးဆောင်ပါ။
+   CI အလုပ်အသွားအလာ သို့မဟုတ် SoraFS ပင်နံပါတ် (`docs-portal-preview` လက်ရာ)။ သတိပေးပါ။
+   လုပ်ဆောင်ရန် သုံးသပ်သူများ
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -77,65 +78,65 @@ All reviewer types must:
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Serve with checksum enforcement** — Point reviewers at the checksum-gated
-   command:
+2. **checksum စည်းကြပ်မှုဖြင့် ဆောင်ရွက်ပါ** — checksum-gated တွင် ပြန်လည်သုံးသပ်သူများကို ထောက်ပြပါ။
+   အမိန့်-
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-   This reuses `scripts/serve-verified-preview.mjs` so no unverified build can be
-   launched accidentally.
+   ၎င်းသည် `scripts/serve-verified-preview.mjs` ကို ပြန်လည်အသုံးပြုသောကြောင့် အတည်မပြုရသေးသော တည်ဆောက်မှုမျိုး မဖြစ်နိုင်ပါ။
+   မတော်တဆ လွှင့်တင်ခဲ့သည်။
 
-3. **Grant GitHub access (optional)** — If reviewers need unpublished branches,
-   add them to the `docs-preview` GitHub team for the duration of the review and
-   record the membership change in the request.
+3. **GitHub ဝင်ရောက်ခွင့် (ချန်လှပ်ထားနိုင်သည်)** — ပြန်လည်သုံးသပ်သူများသည် မထုတ်ဝေရသေးသော အကိုင်းအခက်များ လိုအပ်ပါက၊
+   ပြန်လည်သုံးသပ်မှုကြာချိန်အတွက် ၎င်းတို့ကို `docs-preview` GitHub အဖွဲ့သို့ ပေါင်းထည့်ပါ။
+   တောင်းဆိုချက်တွင် အဖွဲ့ဝင်အပြောင်းအလဲကို မှတ်တမ်းတင်ပါ။
 
-4. **Communicate support channels** — Share the on-call contact (Matrix/Slack)
-   and incident procedure from [`incident-runbooks`](./incident-runbooks.md).
+4. **ပံ့ပိုးမှုချန်နယ်များ ဆက်သွယ်ပါ** — ဖုန်းခေါ်ဆိုမှုဆိုင်ရာ အဆက်အသွယ်ကို မျှဝေပါ (Matrix/Slack)
+   [`incident-runbooks`](./incident-runbooks.md).
 
-5. **Telemetry + feedback** — Remind reviewers that anonymised analytics are
-  collected (see [`observability`](./observability.md)). Provide the feedback
-  form or issue template referenced in the invite and log the event with the
-  [`preview-feedback-log`](./preview-feedback-log) helper so the wave summary
-  stays current.
+5. **Telemetry + တုံ့ပြန်ချက်** — အမည်မဖော်လိုသော ခွဲခြမ်းစိတ်ဖြာချက်များအား ပြန်လည်သုံးသပ်သူများကို သတိပေးပါ။
+  စုဆောင်းထားသည် ([`observability`](./observability.md ကိုကြည့်ပါ)။ တုံ့ပြန်ချက်ပေးပါ။
+  ဖိတ်ခေါ်မှုတွင် ကိုးကားထားသော ပုံစံ သို့မဟုတ် ထုတ်ပေးသည့်ပုံစံပုံစံနှင့် အဖြစ်အပျက်ကို မှတ်တမ်းတင်ပါ။
+  [`preview-feedback-log`](./preview-feedback-log) အကူအညီပေးသူ ထို့ကြောင့် လှိုင်းအနှစ်ချုပ်
+  လက်ရှိနေပါ။
 
-## Reviewer checklist
+## သုံးသပ်သူစာရင်း
 
-Before accessing the preview, reviewers must complete the following:
+အစမ်းကြည့်ရှုခြင်းကို မဝင်ရောက်မီ၊ သုံးသပ်သူများသည် အောက်ပါတို့ကို ဖြည့်သွင်းရပါမည်-
 
-1. Verify the downloaded artefacts (`preview_verify.sh`).
-2. Launch the portal via `npm run serve` (or `serve:verified`) to ensure the
-   checksum guard is active.
-3. Read the security and observability notes linked above.
-4. Test the OAuth/Try it console using device-code login (if applicable) and
-   avoid reusing production tokens.
-5. File findings in the agreed tracker (issue, shared doc, or form) and tag
-   them with the preview release tag.
+1. ဒေါင်းလုဒ်လုပ်ထားသော ပစ္စည်းများ (`preview_verify.sh`) ကို အတည်ပြုပါ။
+2. ပေါ်တယ်ကိုသေချာစေရန် `npm run serve` (သို့မဟုတ် `serve:verified`) ကိုဖွင့်ပါ။
+   checksum guard သည် အသက်ဝင်ပါသည်။
+3. အထက်တွင်ဖော်ပြထားသော လုံခြုံရေးနှင့် စောင့်ကြည့်နိုင်မှုမှတ်စုများကို ဖတ်ပါ။
+4. OAuth/Try it console ကို စက်ပစ္စည်း-ကုဒ်ဝင်ရောက်ခြင်း (အသုံးပြုနိုင်ပါက) နှင့် အသုံးပြု၍ စမ်းသပ်ပါ။
+   ထုတ်လုပ်မှုတိုကင်များကို ပြန်လည်အသုံးပြုခြင်းကို ရှောင်ကြဉ်ပါ။
+5. သဘောတူထားသော ခြေရာခံကိရိယာ (ပြဿနာ၊ မျှဝေထားသော doc သို့မဟုတ် ဖောင်) နှင့် tag တွင် ဖိုင်တွေ့ရှိချက်
+   ၎င်းတို့ကို အစမ်းထုတ်ခြင်း tag နှင့်အတူ။
 
-## Maintainer responsibilities & offboarding
+## ထိန်းသိမ်းသူ၏ တာဝန်များ
 
-| Phase | Actions |
-| --- | --- |
-| Kickoff | Confirm intake checklist is attached to the request, share artefacts + instructions, append an `invite-sent` entry via [`preview-feedback-log`](./preview-feedback-log), and schedule a midpoint sync if the review lasts longer than one week. |
-| Monitoring | Track preview telemetry (look for unusual Try it traffic, probe failures) and follow the incident runbook if anything suspicious occurs. Log `feedback-submitted`/`issue-opened` events as findings arrive so the wave metrics stay accurate. |
-| Offboarding | Revoke temporary GitHub or SoraFS access, record `access-revoked`, archive the request (include feedback summary + outstanding actions), and update the reviewer registry. Ask the reviewer to purge local builds and attach the digest generated from [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+| အဆင့် | လုပ်ဆောင်ချက်များ |
+| ---| ---|
+| Kickoff | စားသုံးမှုစစ်ဆေးခြင်းစာရင်းကို အတည်ပြုရန် တောင်းဆိုချက်တွင် ပူးတွဲပါရှိပြီး၊ အနုပညာပစ္စည်းများ + ညွှန်ကြားချက်များကို မျှဝေပါ၊ [`invite-sent`](`preview-feedback-log`](./preview-feedback-log) မှတဆင့် အလယ်အလတ်တန်းတူချိန်ကိုက်မှုကို အချိန်ဇယားဆွဲပြီး သုံးသပ်ချက်သည် တစ်ပတ်ထက်ပိုကြာပါက အလယ်တန်းစင့်ခ်လုပ်ရန် အချိန်ဇယားဆွဲပါ။ |
+| စောင့်ကြည့်ရေး | အကြိုကြည့်ရှုခြင်း တယ်လီမီတာကို ခြေရာခံပါ (ပုံမှန်မဟုတ်သော အသွားအလာကို စမ်းကြည့်ပါ၊ စုံစမ်းစစ်ဆေးခြင်း မအောင်မြင်မှုများ) နှင့် သံသယဖြစ်ဖွယ်တစ်စုံတစ်ရာ ဖြစ်ပေါ်ပါက အဖြစ်အပျက်ဆိုင်ရာ စာအုပ်ကို လိုက်နာပါ။ မှတ်တမ်း `feedback-submitted`/`issue-opened` ဖြစ်ရပ်များကို ရှာဖွေတွေ့ရှိထားသောကြောင့် လှိုင်းတိုင်းတာမှုများသည် တိကျနေမည်ဖြစ်သည်။ |
+| Offboarding | ယာယီ GitHub သို့မဟုတ် SoraFS အသုံးပြုခွင့်ကို ရုတ်သိမ်းပါ၊ `access-revoked` ကို မှတ်တမ်းတင်ပါ၊ တောင်းဆိုချက်ကို သိမ်းဆည်းပါ၊ (အကြံပြုချက် အကျဉ်းချုပ် + ထင်ရှားသော လုပ်ဆောင်ချက်များ အပါအဝင်) နှင့် ပြန်လည်သုံးသပ်သူ မှတ်ပုံတင်ခြင်းအား အပ်ဒိတ်လုပ်ပါ။ ဒေသန္တရတည်ဆောက်မှုများကို ဖယ်ရှားပြီး [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md) မှ ထုတ်ပေးသော အချေအတင်ကို ပူးတွဲတင်ပြရန် တောင်းဆိုပါ။ |
 
-Use the same process when rotating reviewers between waves. Keeping the
-paper trail in the repo (issue + templates) helps DOCS-SORA remain auditable and
-lets governance confirm that preview access followed the documented controls.
+လှိုင်းများကြားတွင် ဝေဖန်သုံးသပ်သူများကို လှည့်သည့်အခါ တူညီသောလုပ်ငန်းစဉ်ကို အသုံးပြုပါ။ စောင့်ရှောက်ခြင်း။
+repo ရှိ စာရွက်လမ်းကြောင်း (စာစောင် + နမူနာများ) သည် DOCS-SORA ကို စာရင်းစစ်အဖြစ် ဆက်လက်ထားရှိရန် ကူညီပေးသည်၊
+မှတ်တမ်းပြုစုထားသော ထိန်းချုပ်မှုများကို လိုက်နာခြင်းဖြင့် အကြိုကြည့်ရှုခွင့်ကို အုပ်ချုပ်မှုအား အတည်ပြုခွင့်ပြုပါ။
 
-## Invite templates & tracking
+## နမူနာပုံစံများနှင့် ခြေရာခံခြင်းကို ဖိတ်ခေါ်ပါ။
 
-- Start every outreach with the
+- ဖြန့်ဝေမှုတိုင်းကို စတင်ပါ။
   [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  file. It captures the minimum legal language, preview checksum instructions,
-  and the expectation that reviewers acknowledge the acceptable-use policy.
-- When editing the template, replace the placeholders for `<preview_tag>`,
-  `<request_ticket>`, and contact channels. Store a copy of the final message in
-  the intake ticket so reviewers, approvers, and auditors can reference the
-  exact wording that was sent.
-- After dispatching the invite, update the tracking spreadsheet or issue with
-  the `invite_sent_at` timestamp and expected end date so the
-  [preview invite flow](./preview-invite-flow.md) report can pick up the cohort
-  automatically.
+  ဖိုင်။ ၎င်းသည် အနိမ့်ဆုံးတရားဝင်ဘာသာစကားကို ဖမ်းယူထားပြီး checksum ညွှန်ကြားချက်များကို အစမ်းကြည့်ရှုခြင်း၊
+  နှင့် ပြန်လည်သုံးသပ်သူများသည် လက်ခံနိုင်သော-အသုံးပြုမှုမူဝါဒကို အသိအမှတ်ပြုကြောင်းမျှော်လင့်ချက်။
+- ပုံစံပလိတ်ကို တည်းဖြတ်သည့်အခါ `<preview_tag>` အတွက် နေရာချထားသူများကို အစားထိုးပါ။
+  `<request_ticket>` နှင့် ဆက်သွယ်ရန် ချန်နယ်များ။ နောက်ဆုံးစာတစ်စောင်ကို သိမ်းဆည်းပါ။
+  သုံးသပ်သူများ၊ အတည်ပြုသူများနှင့် စာရင်းစစ်သူများ ကိုးကားနိုင်စေရန် စားသုံးခွင့်လက်မှတ်
+  ပေးပို့ထားသော စကားလုံးအတိအကျ။
+- ဖိတ်ကြားချက်ကို ပေးပို့ပြီးနောက်၊ ခြေရာခံခြင်းစာရွက် သို့မဟုတ် ပြဿနာကို အပ်ဒိတ်လုပ်ပါ။
+  `invite_sent_at` ကြိမ်တံဆိပ်နှင့် မျှော်မှန်းထားသည့် ကုန်ဆုံးရက်စွဲ
+  [အကြိုကြည့်ရှုရန် ဖိတ်ကြားချက်စီးဆင်းမှု](./preview-invite-flow.md) အစီရင်ခံစာသည် အတွဲလိုက်ကို ကောက်ယူနိုင်သည်
+  အလိုအလျောက်။

@@ -7,29 +7,31 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Priority Snapshot — March 2025 (Beta)
 description: Mirror of the 2025-03 Nexus steering snapshot; pending ACKs before public rollout.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Canonical source: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> Канондық көз: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Status: **Beta / awaiting steering ACKs** (Networking, Storage, Docs leads).
+> Күй: **Бета / басқару ACKs күтілуде** (Желі, Сақтау, Docs мүмкіндіктер).
 
-## Overview
+## Шолу
 
-The March snapshot keeps the docs/content-network initiatives aligned with the
-SoraFS delivery tracks (SF‑3, SF‑6b, SF‑9). Once all leads acknowledge the
-snapshot in the Nexus steering channel, remove the “Beta” note above.
+Наурыз суреті құжаттар/мазмұн-желі бастамаларын келесімен сәйкестендіреді
+SoraFS жеткізу жолдары (SF‑3, SF‑6b, SF‑9). Бірде барлық жетекшілер мойындайды
+Nexus басқару арнасындағы сурет, жоғарыдағы «Бета» жазбасын алып тастаңыз.
 
-### Focus threads
+### Жіптерге назар аударыңыз
 
-1. **Circulate priority snapshot** — collect acknowledgements and log them in the
-   2025-03-05 council minutes.
-2. **Gateway/DNS kickoff close-out** — rehearse the new facilitation kit (Section 6
-   in the runbook) before the 2025-03-03 workshop.
-3. **Operator runbook migration** — portal `Runbook Index` is live; expose the beta
-   preview URL after reviewer onboarding sign-off.
-4. **SoraFS delivery threads** — align SF‑3/6b/9 remaining work with the plan/roadmap:
-   - `sorafs-node` PoR ingestion worker + status endpoint.
-   - CLI/SDK binding polish across Rust/JS/Swift orchestrator integrations.
-   - PoR coordinator runtime wiring and GovernanceLog events.
+1. **Circulate priority snapshot** — растауларды жинап, оларды жүйеге енгізіңіз.
+   03.05.2025 кеңес хаттамасы.
+2. **Шлюз/DNS басталуын жабу** — жаңа жеңілдету жинағын қайталаңыз (6-бөлім
+   runbook) 2025-03-03 семинарға дейін.
+3. **Оператордың runbook тасымалдауы** — `Runbook Index` порталы тікелей жұмыс істейді; бета нұсқасын ашыңыз
+   шолушы кіргеннен кейін URL мекенжайын алдын ала қарау.
+4. **SoraFS жеткізу ағындары** — SF‑3/6b/9 қалған жұмысты жоспармен/жол картасымен туралаңыз:
+   - `sorafs-node` PoR қабылдау жұмысшысы + күйдің соңғы нүктесі.
+   - Rust/JS/Swift оркестрінің интеграциялары бойынша CLI/SDK байланыстыруды жылтырату.
+   - PoR координаторының орындалу уақытының сымдары және GovernanceLog оқиғалары.
 
-See the source file for the full table, distribution checklist, and log entries.
+Толық кесте, таратуды тексеру тізімі және журнал жазбалары үшін бастапқы файлды қараңыз.

@@ -10,25 +10,26 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
 slug: /sdks/recipes/javascript-governance-iso
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+從“@site/src/components/SampleDownload”導入 SampleDownload；
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
-`docs/source/sdk/js/governance_iso_examples.md`.
+本配方捆綁了 JS5 路線圖中提到的兩個高級工作流程
+項目：端到端治理助手（提案、選票、理事會快照）
+以及 ISO 20022 橋樑演練 (pacs.008/pacs.009)。每個樣本運行
+針對已發布的 `@iroha/iroha-js` 包並鏡像其中的片段
+`docs/source/sdk/js/governance_iso_examples.md`。
 
-## Governance helper sample
+## 治理助手示例
 
-<SampleDownload
+<樣本下載
   href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
+  文件名=“治理.mjs”
+  描述=“下載本節中引用的可運行的治理助手。”
 />
 
-### Prerequisites
+### 先決條件
 
 ```bash
 npm install @iroha/iroha-js
@@ -42,10 +43,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+設置 `GOV_SUBMIT=1` 將簽名交易提交到 Torii 並
+`GOV_FETCH=1` 提交後檢查最終的治理狀態。
 
-### Example script
+### 示例腳本
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -225,26 +226,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### 運行和監控
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
-  `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- 執行 `node governance.mjs` 僅生成哈希值。添加 `GOV_SUBMIT=1` 到
+  將交易發佈到 Torii 和 `GOV_FETCH=1` 以記錄實時治理狀態
+  （`getGovernanceProposal*`、`getGovernanceReferendum`、`getGovernanceLocks` 和
+  `getGovernanceCouncilCurrent`）。
+- 捕獲 CI 日誌中的確定性哈希值；每一步都會打印有符號的字節
+  當可選的本機助手可用時，長度加上重新計算的哈希值。
+- 將控制台輸出附加到治理審查數據包中，以便審計員可以跟踪
+  提案/公投 ID 返回可複制的 CLI 證據。
 
-## ISO bridge sample
+## ISO 橋示例
 
-<SampleDownload
+<樣本下載
   href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
+  文件名=“iso-bridge.mjs”
+  description="下載本節中引用的可運行的 ISO 20022 幫助程序。"
 />
 
-### Prerequisites
+### 先決條件
 
 ```bash
 npm install @iroha/iroha-js
@@ -256,11 +257,11 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+當您想要跳過提交並僅輪詢已知的情況時，請設置 `ISO_MESSAGE_ID`
+標識符。使用 `ISO_RESOLVE_ON_ACCEPTED=1` 橋標記後立即退出
+條目 `Accepted`，即使交易哈希尚未最終確定。
 
-### Example script
+### 示例腳本
 
 ```ts title="iso-bridge.mjs"
 #!/usr/bin/env node
@@ -360,22 +361,22 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### 運行和監控
 
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
+- 執行 `node iso-bridge.mjs` 以提交示例有效負載。套裝
+  `ISO_MESSAGE_KIND=pacs.009` 執行 PvP 流程或 `ISO_MESSAGE_ID` 執行 PvP 流程
+  輪詢現有提交內容而不重新發布它。
+- 幫助程序通過 `wait.onPoll` 記錄每次輪詢嘗試，從而輕鬆
+  捕獲 CI 日誌中的接受時間表。
+- 將最終狀態 + 交易哈希值附加到 ISO 橋操作手冊，以便審核員
+  可以追踪 pacs.008/pacs.009 傳送回可重現的有效負載，如
+  JS5 路線圖可交付成果所要求的。
 
-## Offline allowances & transfers
+## 線下津貼和轉賬
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
+`@iroha/iroha-js` 運送與
+離線路線圖行。使用它們來檢查完整性策略（標記密鑰、播放
+完整性、HMS 安全檢測、已配置），無需解析原始元數據：
 
 ```bash
 # List recent allowances and log their integrity policies
@@ -403,19 +404,19 @@ node -e '
 '
 ```
 
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+當 Torii 報告預配置津貼時，檢查員公鑰、清單
+架構、可選版本、TTL 和摘要如下
+`integrity_metadata.provisioned`，因此可以輕鬆附加所需的
+OA10.3 證據數據包的元數據。
 
-## Next steps
+## 後續步驟
 
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+- 探索 `javascript/iroha_js/recipes/governance.mjs` 和
+  `javascript/iroha_js/recipes/iso_bridge.mjs` 用於擴展示例（多重簽名
+  選票、理事會 VRF 推導、重試政策）。
+- 查看 Norito 側文檔
+  `docs/source/sdk/js/governance_iso_examples.md` 和
+  `docs/source/finance/settlement_iso_mapping.md` 用於規範字段
+  這些助手引用的映射。
+- 捕獲運行日誌並將其附加到治理/ISO 批准中，以滿足
+  `roadmap.md` 中引用的 JS5“文檔+發布”要求。

@@ -10,40 +10,41 @@ translation_last_reviewed: 2026-02-07
 title: Governance & ISO bridge examples
 description: Drive advanced Torii workflows with `@iroha/iroha-js`.
 slug: /sdks/javascript/governance-iso-examples
+translator: machine-google-reviewed
 ---
 
-This field guide expands on the quickstart by demonstrating governance and
-ISO&nbsp;20022 bridge flows with `@iroha/iroha-js`. The snippets reuse the same
-runtime helpers that ship with `ToriiClient`, so you can copy them directly into
-CLI tooling, CI harnesses, or long-running services.
+本現場指南通過展示治理和
+ISO 20022 橋接流程為 `@iroha/iroha-js`。片段重複使用相同的內容
+`ToriiClient` 附帶的運行時助手，因此您可以將它們直接複製到
+CLI 工具、CI 工具或長期運行的服務。
 
-Additional resources:
+其他資源：
 
-- `javascript/iroha_js/recipes/governance.mjs` — runnable end-to-end script for
-  proposals, ballots, and council rotations.
-- `javascript/iroha_js/recipes/iso_bridge.mjs` — CLI helper for submitting
-  pacs.008/pacs.009 payloads and polling deterministic status.
-- `docs/source/finance/settlement_iso_mapping.md` — canonical ISO field mapping.
+- `javascript/iroha_js/recipes/governance.mjs` — 可運行的端到端腳本
+  提案、投票和理事會輪換。
+- `javascript/iroha_js/recipes/iso_bridge.mjs` — 用於提交的 CLI 幫助程序
+  pacs.008/pacs.009 有效負載和輪詢確定性狀態。
+- `docs/source/finance/settlement_iso_mapping.md` — 規範 ISO 字段映射。
 
-## Running the bundled recipes
+## 運行捆綁的食譜
 
-These examples depend on the scripts in `javascript/iroha_js/recipes/`. Run
-`npm install && npm run build:native` beforehand so the generated bindings are
-available.
+這些示例取決於 `javascript/iroha_js/recipes/` 中的腳本。運行
+事先 `npm install && npm run build:native` 所以生成的綁定是
+可用。
 
-### Governance helper walkthrough
+### 治理助手演練
 
-Configure the following environment variables before invoking
-`recipes/governance.mjs`:
+調用前配置以下環境變量
+`recipes/governance.mjs`：
 
-- `TORII_URL` — Torii endpoint.
-- `AUTHORITY` / `PRIVATE_KEY_HEX` — signer account and key (hex). Keep keys in a
-  secure secret store.
-- `CHAIN_ID` — optional network identifier.
-- `GOV_SUBMIT=1` — push the generated transactions to Torii.
-- `GOV_FETCH=1` — fetch proposals/locks after submission.
-- `GOV_PROPOSAL_ID`, `GOV_REFERENDUM_ID`, `GOV_LOCKS_ID` — optional lookups used
-  when `GOV_FETCH=1`.
+- `TORII_URL` — Torii 端點。
+- `AUTHORITY` / `PRIVATE_KEY_HEX` — 簽名者帳戶和密鑰（十六進制）。將鑰匙存放在
+  安全的秘密商店。
+- `CHAIN_ID` — 可選網絡標識符。
+- `GOV_SUBMIT=1` — 將生成的交易推送到 Torii。
+- `GOV_FETCH=1` — 提交後獲取提案/鎖定。
+- `GOV_PROPOSAL_ID`、`GOV_REFERENDUM_ID`、`GOV_LOCKS_ID` — 使用的可選查找
+  當 `GOV_FETCH=1` 時。
 
 ```bash
 npm run build:native
@@ -62,30 +63,30 @@ GOV_PROPOSAL_ID=calc.v1 \
 node javascript/iroha_js/recipes/governance.mjs
 ```
 
-Hashes are logged for every step, and Torii responses are surfaced when
-`GOV_SUBMIT=1` so CI jobs can fail fast on submission errors.
+每個步驟都會記錄哈希值，並且在以下情況下會顯示 Torii 響應：
+`GOV_SUBMIT=1`，因此 CI 作業可能會因提交錯誤而快速失敗。
 
-### ISO bridge helper
+### ISO 橋接助手
 
-`recipes/iso_bridge.mjs` submits either a pacs.008 or pacs.009 message and polls
-the ISO bridge until the status settles. Configure it with:
+`recipes/iso_bridge.mjs` 提交 pacs.008 或 pacs.009 消息並進行輪詢
+ISO 橋接，直到狀態穩定。配置它：
 
-- `TORII_URL` — Torii endpoint exposing the ISO bridge APIs.
-- `ISO_MESSAGE_KIND` — `pacs.008` (default) or `pacs.009`. The helper uses the
-  matching sample builder (`buildSamplePacs008Message` / `buildSamplePacs009Message`)
-  when you do not supply your own XML.
-- `ISO_MESSAGE_SUFFIX` — optional suffix appended to the sample payload IDs to
-  keep repeated rehearsals unique (defaults to the current epoch seconds in hex).
-- `ISO_CONTENT_TYPE` — override the `Content-Type` header for submissions
-  (for example `application/pacs009+xml`); ignored when you only poll an
-  existing message id.
-- `ISO_MESSAGE_ID` — skip submission altogether and only poll the supplied
-  identifier via `waitForIsoMessageStatus`.
-- `ISO_POLL_ATTEMPTS` / `ISO_POLL_INTERVAL_MS` — tune the wait strategy for
-  noisy or slow bridge deployments.
-- `ISO_RESOLVE_ON_ACCEPTED=1` — exit as soon as Torii returns `Accepted`,
-  even if the transaction hash is still pending (handy during bridge maintenance
-  when the ledger commit is delayed).
+- `TORII_URL` — Torii 端點公開 ISO 橋 API。
+- `ISO_MESSAGE_KIND` — `pacs.008`（默認）或 `pacs.009`。助手使用
+  匹配樣本構建器（`buildSamplePacs008Message` / `buildSamplePacs009Message`）
+  當您不提供自己的 XML 時。
+- `ISO_MESSAGE_SUFFIX` — 附加到示例有效負載 ID 的可選後綴
+  保持重複排練的唯一性（默認為十六進制的當前紀元秒）。
+- `ISO_CONTENT_TYPE` — 覆蓋提交的 `Content-Type` 標頭
+  （例如 `application/pacs009+xml`）；當您只輪詢時被忽略
+  現有消息 ID。
+- `ISO_MESSAGE_ID` — 完全跳過提交，僅輪詢提供的
+  通過 `waitForIsoMessageStatus` 進行識別。
+- `ISO_POLL_ATTEMPTS` / `ISO_POLL_INTERVAL_MS` — 調整等待策略
+  嘈雜或緩慢的網橋部署。
+- `ISO_RESOLVE_ON_ACCEPTED=1` — 一旦 Torii 返回 `Accepted` 就退出，
+  即使交易哈希仍然處於待處理狀態（在橋維護期間很方便）
+  當分類帳提交被延遲時）。
 
 ```bash
 # Submit a pacs.009 message and wait for completion.
@@ -101,25 +102,25 @@ ISO_MESSAGE_ID=iso-demo-1 \
 node javascript/iroha_js/recipes/iso_bridge.mjs
 ```
 
-Both scripts exit with status code `1` if Torii never reports a terminal
-transition, making them suitable for CI gate jobs.
+如果 Torii 從未報告終端，則兩個腳本都會退出並顯示狀態代碼 `1`
+過渡，使它們適合 CI 門工作。
 
-### ISO alias helper
+### ISO 別名助手
 
-`recipes/iso_alias.mjs` targets the ISO alias endpoints so rehearsals can cover
-blinded-element hashing and alias lookups without writing bespoke tooling. It
-calls `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-and prints the backend, digest, account binding, source, and deterministic index
-returned by Torii.
+`recipes/iso_alias.mjs` 以 ISO 別名端點為目標，以便排練可以覆蓋
+盲元素散列和別名查找，無需編寫定制工具。它
+調用 `ToriiClient.evaluateAliasVoprf` 加 `resolveAlias` / `resolveAliasByIndex`
+並打印後端、摘要、帳戶綁定、源和確定性索引
+由 Torii 返回。
 
-Environment variables:
+環境變量：
 
-- `TORII_URL` — Torii endpoint exposing the alias helpers.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (defaults to `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — skip the VOPRF call when only testing lookups.
-- `ISO_ALIAS_LABEL` — literal alias to resolve (e.g., IBAN-style strings).
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index passed to `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for secured Torii deployments.
+- `TORII_URL` — Torii 端點公開別名助手。
+- `ISO_VOPRF_INPUT` — 十六進制編碼的盲元素（默認為 `deadbeef`）。
+- `ISO_SKIP_VOPRF=1` — 僅測試查找時跳過 VOPRF 調用。
+- `ISO_ALIAS_LABEL` — 要解析的文字別名（例如 IBAN 樣式字符串）。
+- `ISO_ALIAS_INDEX` — 十進製或傳遞給 `resolveAliasByIndex` 的 `0x` 前綴索引。
+- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — 用於安全 Torii 部署的可選標頭。
 
 ```bash
 # Evaluate a blinded element and resolve an alias literal + deterministic index.
@@ -136,13 +137,13 @@ ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The helper mirrors Torii’s behaviour: it surfaces 404s when aliases are missing
-and treats runtime-disabled errors as soft skips so CI flows can tolerate bridge
-maintenance windows.
+幫助器反映了 Torii 的行為：當別名丟失時，它會顯示 404
+並將運行時禁用的錯誤視為軟跳過，以便 CI 流程可以容忍橋接
+維護窗口。
 
-## Governance workflows
+## 治理工作流程
 
-### Inspect contract instances and proposals
+### 檢查合同實例和提案
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -166,10 +167,10 @@ const proposal = await torii.getGovernanceProposal("proposal-001", {
 console.log(proposal?.kind, proposal?.status);
 ```
 
-### Submit proposals and ballots
+### 提交提案和選票
 
-Use an `AbortController` when you need to cancel or time-bound governance submissions—the SDK
-accepts an optional `{ signal }` object for every POST helper shown below.
+當您需要取消或有時限的治理提交時，請使用 `AbortController` - SDK
+如下所示，每個 POST 幫助程序接受一個可選的 `{ signal }` 對象。
 
 ```ts
 const authority = "ih58...";
@@ -216,7 +217,7 @@ await torii.governanceSubmitZkBallot({
 }, { signal: writeController.signal });
 ```
 
-### Council VRF and enactment
+### 理事會 VRF 和頒布
 
 ```ts
 const validatorPk = Buffer.alloc(48, 0xdd);
@@ -261,9 +262,9 @@ const enactDraft = await torii.governanceEnactProposalTyped({
 console.log("enact tx count", enactDraft.tx_instructions.length);
 ```
 
-## ISO&nbsp;20022 bridge recipes
+## ISO 20022 橋樑配方
 
-### Build pacs.008 / pacs.009 payloads
+### 構建 pacs.008 / pacs.009 有效負載
 
 ```ts
 import { buildPacs008Message } from "@iroha/iroha-js";
@@ -282,11 +283,11 @@ const settlement = buildPacs008Message({
 });
 ```
 
-All identifiers (BIC, LEI, IBAN, ISO amount) are validated before XML is
-generated. Swap `buildPacs008Message` for `buildPacs009Message` to emit PvP
-funding payloads.
+所有標識符（BIC、LEI、IBAN、ISO 金額）在 XML 之前均經過驗證
+生成的。將 `buildPacs008Message` 交換為 `buildPacs009Message` 以發出 PvP
+資金有效負載。
 
-### Submit and poll ISO messages
+### 提交並輪詢 ISO 消息
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -325,17 +326,17 @@ await torii.submitIsoMessage(
 );
 ```
 
-Both `resolveOnAccepted` and `resolveOnAcceptedWithoutTransaction` are valid; use either flag
-to treat `Accepted` statuses (without a transaction hash) as terminal when orchestrating polls.
+`resolveOnAccepted` 和 `resolveOnAcceptedWithoutTransaction` 均有效；使用任一標誌
+在編排輪詢時將 `Accepted` 狀態（沒有事務哈希）視為終端。
 
-The helpers throw `IsoMessageTimeoutError` if the bridge never reports a
-terminal state. Use the lower-level `submitIsoPacs008` / `submitIsoPacs009`
-calls when you need to orchestrate custom polling logic; `getIsoMessageStatus`
-exposes a single-shot lookup.
+如果橋從未報告過，助手會拋出 `IsoMessageTimeoutError`
+終端狀態。使用較低級別的 `submitIsoPacs008` / `submitIsoPacs009`
+當您需要編排自定義輪詢邏輯時調用； `getIsoMessageStatus`
+公開單次查找。
 
-### Related surfaces
+### 相關表面
 
-- `torii.getSorafsPorWeeklyReport("2026-W05")` fetches the ISO-week PoR bundle
-  referenced in the roadmap and can reuse the wait helpers for alerts.
-- `resolveAlias` / `resolveAliasByIndex` expose ISO bridge alias bindings so
-  reconciliation tools can prove account ownership before issuing a payment.
+- `torii.getSorafsPorWeeklyReport("2026-W05")` 獲取 ISO 週 PoR 包
+  在路線圖中引用，並且可以重用警報的等待助手。
+- `resolveAlias` / `resolveAliasByIndex` 公開 ISO 橋別名綁定，以便
+  對賬工具可以在付款前證明賬戶所有權。

@@ -8,12 +8,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Developer Guides
 description: Landing page for SoraFS developer documentation, samples, and automation references.
 sidebar_label: Developer Overview
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-# SoraFS Developer Guides
+# SoraFS Хөгжүүлэгчийн гарын авлага
 
 ```{toctree}
 :caption: Getting Started

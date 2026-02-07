@@ -4,42 +4,44 @@ direction: rtl
 source: docs/portal/docs/norito/overview.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# نظرة عامة على Norito
+# Norito جائزہ
 
-Norito هي طبقة التسلسل الثنائي المستخدمة عبر Iroha: فهي تحدد كيف تُشفَّر هياكل البيانات على الشبكة، وتُحفظ على القرص، وتتبادل بين العقود والمضيفين. تعتمد كل crate في مساحة العمل على Norito بدلا من `serde` حتى تنتج العقد على عتاد مختلف بايتات متطابقة.
+Norito بائنری سیریلائزیشن پرت ہے جو Iroha پر استعمال ہوتی ہے: اس کی وضاحت کرتی ہے کہ کس طرح ڈیٹا کے ڈھانچے کو نیٹ ورک پر خفیہ کیا جاتا ہے ، ڈسک میں محفوظ کیا جاتا ہے ، اور معاہدوں اور میزبانوں کے مابین تبادلہ ہوتا ہے۔ ورک اسپیس میں ہر کریٹ `serde` کے بجائے Norito پر انحصار کرتا ہے تاکہ مختلف ہارڈ ویئر پر نوڈس ایک جیسے بائٹس تیار کریں۔
 
-تلخص هذه النظرة العامة المكونات الاساسية وتربط بالمراجع القياسية.
+اس جائزہ میں بنیادی اجزاء اور معیاری حوالوں کے لنکس کا خلاصہ کیا گیا ہے۔
 
-## لمحة عن البنية
+## ڈھانچے کا جائزہ
 
-- **الرأس + الحمولة** – يبدأ كل message Norito برأس تفاوض للميزات (flags, checksum) يتبعه payload خام. تُتفاوض التخطيطات المعبأة والضغط عبر بتات الرأس.
-- **الترميز الحتمي** – `norito::codec::{Encode, Decode}` تنفذ الترميز العاري. يعاد استخدام التخطيط نفسه عند تغليف payloads في الرؤوس حتى يبقى التجزئة والتوقيع حتميين.
-- **المخطط + derives** – `norito_derive` يولد تطبيقات `Encode` و`Decode` و`IntoSchema`. تُفعَّل البنى/السلاسل المعبأة افتراضيا ومذكورة في `norito.md`.
-- **سجل multicodec** – معرّفات الهاش وأنواع المفاتيح ووصفات payload موجودة في `norito::multicodec`. يتم الحفاظ على الجدول المعتمد في `multicodec.md`.
+۔ بھری ہوئی ترتیب اور کمپریشن پر ہیڈر بٹس کے ذریعے بات چیت کی جاتی ہے۔
+- ** عزم انکوڈنگ ** - `norito::codec::{Encode, Decode}` ننگے انکوڈنگ کو نافذ کرتا ہے۔ ہیڈر میں پے لوڈ کو لپیٹتے وقت اسی ترتیب کو دوبارہ استعمال کیا جاتا ہے تاکہ ہیش اور دستخط متضاد رہیں۔
+۔ پیکیجڈ ڈھانچے/ڈور کو بطور ڈیفالٹ فعال کیا جاتا ہے اور `norito.md` پر درج ہیں۔
+- ** ملٹی کوڈیک ریکارڈ ** - ہیش آئی ڈی ، کلیدی اقسام اور پے لوڈ کی ترکیبیں `norito::multicodec` میں ہیں۔ منظور شدہ ٹیبل کو `multicodec.md` پر برقرار رکھا گیا ہے۔
 
-## الادوات
+## ٹولز
 
-| المهمة | الامر / API | ملاحظات |
+| ٹاسک | کمانڈ /API | نوٹ |
 | --- | --- | --- |
-| فحص الرأس/الاقسام | `ivm_tool inspect <file>.to` | يعرض نسخة ABI و flags و entrypoints. |
-| الترميز/فك الترميز في Rust | `norito::codec::{Encode, Decode}` | منفذة لكل الانواع الاساسية في data model. |
-| interop JSON | `norito::json::{to_json_pretty, from_json}` | JSON حتمي مدعوم بقيم Norito. |
-| توليد docs/specs | `norito.md`, `multicodec.md` | توثيق مصدر الحقيقة في جذر المستودع. |
+| ہیڈ/سیکشن `ivm_tool inspect <file>.to` | کی جانچ پڑتال ABI ورژن ، جھنڈے اور انٹری پوائنٹس دکھاتا ہے۔ |
+| زنگ میں انکوڈنگ/ڈیکوڈنگ | `norito::codec::{Encode, Decode}` | ڈیٹا ماڈل میں تمام بنیادی اقسام کے لئے نافذ کیا گیا ہے۔ |
+| انٹرپ json | `norito::json::{to_json_pretty, from_json}` | لازمی JSON اقدار Norito کے ذریعہ تعاون یافتہ ہے۔ |
+| دستاویزات/چشمی تیار کریں | `norito.md` ، `multicodec.md` | ذخیرے کی جڑ میں سچائی کے ماخذ کو دستاویز کریں۔ |
 
-## سير عمل التطوير
+## ترقیاتی ورک فلو
 
-1. **اضافة derives** – فضل `#[derive(Encode, Decode, IntoSchema)]` للهياكل الجديدة. تجنب المسلسلات اليدوية الا عند الضرورة القصوى.
-2. **التحقق من التخطيطات المعبأة** – استخدم `cargo test -p norito` (ومصفوفة packed features في `scripts/run_norito_feature_matrix.sh`) للتأكد من ان التخطيطات الجديدة تبقى مستقرة.
-3. **اعادة توليد docs** – عند تغير الترميز، حدّث `norito.md` وجدول multicodec، ثم حدّث صفحات البوابة (`/reference/norito-codec` وهذا الملخص).
-4. **ابقاء الاختبارات Norito-first** – يجب ان تستخدم اختبارات التكامل مساعدات JSON من Norito بدلا من `serde_json` حتى تمر عبر المسارات نفسها في الانتاج.
+1. ** اخذ کریں دستی سیریل سے پرہیز کریں جب تک کہ بالکل ضروری نہ ہو۔
+2.
+3. ** دستاویزات کو دوبارہ تخلیق کریں ** - جب انکوڈنگ میں تبدیلی آتی ہے تو ، `norito.md` اور ملٹی کوڈیک ٹیبل کو اپ ڈیٹ کریں ، پھر پورٹل صفحات (`/reference/norito-codec` اور اس خلاصہ) کو اپ ڈیٹ کریں۔
+4. ** ٹیسٹ Norito فرسٹ ** رکھیں-انضمام کے ٹیسٹوں میں پیداوار میں اسی راستوں سے گزرنے کے ل I `serde_json` کے بجائے Norito کے JSON مددگاروں کا استعمال کرنا چاہئے۔
 
-## روابط سريعة
+## فوری لنکس
 
-- المواصفة: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- تعيينات multicodec: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- سكربت مصفوفة features: `scripts/run_norito_feature_matrix.sh`
-- امثلة التخطيطات المعبأة: `crates/norito/tests/`
+- تفصیلات: [`norito.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- ملٹی کوڈیک میپنگز: [`multicodec.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- میٹرکس اسکرپٹ کی خصوصیات: `scripts/run_norito_feature_matrix.sh`
+- بھری ہوئی ترتیب کی مثالیں: `crates/norito/tests/`
 
-اربط هذه النظرة العامة مع دليل البدء السريع (`/norito/getting-started`) للحصول على جولة عملية لتجميع وتشغيل bytecode الذي يستخدم payloads من Norito.
+اس جائزہ کو کوئیک اسٹارٹ گائیڈ (`/norito/getting-started`) کے ساتھ لنک کریں جس میں مرتب اور چلانے والے بائیک کوڈ کے لئے ٹور کے لئے Norito کے پے لوڈ کا استعمال کیا جائے۔

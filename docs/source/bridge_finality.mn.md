@@ -7,119 +7,118 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
 source_last_modified: "2026-01-08T21:52:45.509525+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Bridge finality proofs
+# Гүүрний эцсийн баталгаа
 
-This document describes the initial bridge finality proof surface for Iroha.
-The goal is to let external chains or light clients verify that an Iroha block
-is finalized without off‑chain computation or trusted relays.
+Энэхүү баримт бичигт Iroha-ийн анхны гүүрний эцсийн чанарыг баталгаажуулсан гадаргууг тайлбарласан болно.
+Зорилго нь Iroha блок байгаа эсэхийг гадны сүлжээ эсвэл хөнгөн үйлчлүүлэгчдэд баталгаажуулах явдал юм.
+гинжин хэлхээнээс гадуурх тооцоолол эсвэл итгэмжлэгдсэн релегүйгээр эцэслэнэ.
 
-## Proof format
+## Баталгаажуулах формат
 
-`BridgeFinalityProof` (Norito/JSON) contains:
+`BridgeFinalityProof` (Norito/JSON) дараахь зүйлийг агуулна.
 
-- `height`: block height.
-- `chain_id`: Iroha chain identifier to prevent cross-chain replay.
-- `block_header`: canonical `BlockHeader`.
-- `block_hash`: hash of the header (clients recompute to validate).
-- `commit_certificate`: validator set + signatures that finalized the block.
-- `validator_set_pops`: Proof-of-Possession bytes aligned with the validator set
-  order (required for BLS aggregate verification).
+- `height`: блокны өндөр.
+- `chain_id`: Iroha гинжин хэлхээний давталтаас урьдчилан сэргийлэх гинжин танигч.
+- `block_header`: каноник `BlockHeader`.
+- `block_hash`: толгой хэсгийн хэш (үйлчлүүлэгчид баталгаажуулахын тулд дахин тооцоолдог).
+- `commit_certificate`: баталгаажуулагчийн багц + блокийг дуусгасан гарын үсэг.
+- `validator_set_pops`: Баталгаажуулагчийн багцтай нийцүүлсэн эзэмшлийн нотлох байт
+  захиалга (BLS нийлбэр баталгаажуулалтад шаардлагатай).
 
-The proof is self‑contained; no external manifests or opaque blobs are required.
-Retention: Torii serves finality proofs for the recent commit-certificate window
-(bounded by the configured history cap; defaults to 512 entries via
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Clients
-should cache or anchor proofs if they need longer horizons.
-The canonical tuple is `(block_header, block_hash, commit_certificate)`: the
-hash of the header must match the hash inside the commit certificate, and the
-chain id binds the proof to a single ledger. Servers reject and log a
-`CommitCertificateHashMismatch` when the certificate points to a different block
-hash.
+Нотлох баримт нь бие даасан; ямар ч гадаад манифест эсвэл тунгалаг бус толбо шаардлагагүй.
+Хадгалах: Torii нь сүүлийн үеийн гэрчилгээ олгох цонхонд эцсийн баталгааг өгдөг.
+(тохируулсан түүхийн хязгаараар хязгаарлагдсан; анхдагчаар дамжуулан 512 оруулгатай
+`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Үйлчлүүлэгчид
+Хэрэв тэдгээрт илүү урт зай шаардлагатай бол нотлох баримтуудыг кэшлэх эсвэл бэхлэх ёстой.
+Каноник залгуур нь `(block_header, block_hash, commit_certificate)`: the
+Толгой хэсгийн хэш нь амлалтын гэрчилгээний доторх хэштэй тохирч байх ёстой
+chain id нь нотлох баримтыг нэг дэвтэрт холбодог. Серверүүд татгалзаж, бүртгүүлэх a
+Сертификат өөр блок руу зааж өгөх үед `CommitCertificateHashMismatch`
+хэш.
 
-## Commitment bundle
+## Амлалтын багц
 
-`BridgeFinalityBundle` (Norito/JSON) extends the basic proof with an explicit
-commitment and justification:
+`BridgeFinalityBundle` (Norito/JSON) нь үндсэн нотолгоог тодорхой нотолгоогоор өргөжүүлдэг.
+амлалт ба үндэслэл:
 
 - `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: signatures from the authority set over the commitment
-  payload (reuses the commit-certificate signatures).
-- `block_header`, `commit_certificate`: same as the basic proof.
+- `justification`: амлалтад заасан эрх мэдлийн гарын үсэг
+  ачаалал (гэрчилгээний гарын үсгийг дахин ашигладаг).
+- `block_header`, `commit_certificate`: үндсэн нотолгоотой ижил.
 
-Current placeholder: `mmr_root`/`mmr_peaks` are derived by recomputing a
-block-hash MMR in memory; inclusion proofs are not yet returned. Clients can
-still verify the same hash via the commitment payload today.
+Одоогийн орлуулагч: `mmr_root`/`mmr_peaks`-г дахин тооцоолох замаар гаргаж авсан.
+санах ой дахь блок-хэш MMR; оруулах нотлох баримтуудыг хараахан буцааж өгөөгүй байна. Үйлчлүүлэгчид боломжтой
+өнөөдрийг хүртэл үүргийн ачааллаар ижил хэшийг баталгаажуулсан хэвээр байна.
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+MMR оргилуудыг зүүнээс баруун тийш эрэмбэлсэн. Оргилуудыг уутлах замаар `mmr_root`-г дахин тооцоол
+баруунаас зүүн тийш: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
 API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
-Verification is analogous to the basic proof: recompute `block_hash` from the
-header, verify the commit-certificate signatures, and check the commitment
-fields match the certificate and block hash. The bundle adds a commitment/
-justification wrapper for bridge protocols that prefer the separation.
+Баталгаажуулалт нь үндсэн нотолгоотой адил юм: `block_hash`-г дахин тооцоол.
+толгой, амлалт-гэрчилгээний гарын үсгийг шалгаж, амлалтаа шалгана уу
+талбарууд нь сертификат болон блок хэштэй таарч байна. Багц нь амлалт нэмдэг/
+тусгаарлахыг илүүд үздэг гүүр протоколуудын үндэслэлийн боодол.
 
-## Verification steps
+## Баталгаажуулах алхамууд1. `block_header`-аас `block_hash`-г дахин тооцоолох; таарахгүй байгаа тохиолдолд татгалзах.
+2. `commit_certificate.block_hash` нь дахин тооцоолсон `block_hash`-тэй таарч байгаа эсэхийг шалгах;
+   тохирохгүй толгой/сертификат хосоос татгалзах.
+3. `chain_id` нь хүлээгдэж буй Iroha хэлхээтэй таарч байгаа эсэхийг шалгана уу.
+4. `commit_certificate.validator_set`-с `validator_set_hash` болон дахин тооцоол.
+   бүртгэгдсэн хэш/хувилбартай таарч байгаа эсэхийг шалгана уу.
+5. `validator_set_pops` урт нь баталгаажуулагчийн багцтай тохирч байгаа эсэхийг шалгаад баталгаажуулна уу
+   PoP бүр өөрийн BLS нийтийн түлхүүрийн эсрэг.
+6. Гарчигны хэшийн эсрэг амлалтын гэрчилгээнд гарын үсгийг баталгаажуулна уу
+   лавласан баталгаажуулагчийн нийтийн түлхүүрүүд болон индексүүд; чуулгыг хэрэгжүүлэх
+   (`2f+1` үед `n>3`, өөр `n`) ба давхардсан/хүрээний гадуурх индексийг татгалзана.
+7. Сонголтоор баталгаажуулагчийн багц хэшийг харьцуулж итгэмжлэгдсэн хяналтын цэг рүү холбоно уу
+   зангуу утга руу (сул субьектив зангуу).
+8. Сонголтоор хүлээгдэж буй эрин үеийн зангуугаар холбосноор хуучин/шинэ
+   зангууг зориудаар эргүүлэх хүртэл эрин үеийг үгүйсгэдэг.
 
-1. Recompute `block_hash` from `block_header`; reject on mismatch.
-2. Check `commit_certificate.block_hash` matches the recomputed `block_hash`;
-   reject mismatched header/commit certificate pairs.
-3. Check `chain_id` matches the expected Iroha chain.
-4. Recompute `validator_set_hash` from `commit_certificate.validator_set` and
-   check it matches the recorded hash/version.
-5. Ensure `validator_set_pops` length matches the validator set and validate
-   each PoP against its BLS public key.
-6. Verify signatures in the commit certificate against the header hash using
-   the referenced validator public keys and indices; enforce quorum
-   (`2f+1` when `n>3`, else `n`) and reject duplicate/out‑of‑range indices.
-7. Optionally bind to a trusted checkpoint by comparing the validator set hash
-   to an anchored value (weak‑subjectivity anchor).
-8. Optionally bind to an expected epoch anchor so proofs from older/newer
-   epochs are rejected until the anchor is rotated intentionally.
+`BridgeFinalityVerifier` (`iroha_data_model::bridge` хэлээр) эдгээр шалгалтыг хэрэгжүүлдэг.
+гинжин хэлхээний дугаар/өндөрийн зөрүү, баталгаажуулагчийн багц хэш/хувилбар таарахгүй, алга
+эсвэл хүчингүй PoP, давхардсан/хүрээнээс гадуурх гарын үсэг, хүчингүй гарын үсэг, болон
+чуулгыг тоолохын өмнөх гэнэтийн эрин үе тул хөнгөн үйлчлүүлэгчид нэгийг дахин ашиглах боломжтой
+баталгаажуулагч.
 
-`BridgeFinalityVerifier` (in `iroha_data_model::bridge`) applies these checks,
-rejecting chain-id/height drift, validator-set hash/version mismatches, missing
-or invalid PoPs, duplicate/out-of-range signers, invalid signatures, and
-unexpected epochs before counting quorum so light clients can reuse a single
-verifier.
+## Лавлагаа баталгаажуулагч
 
-## Reference verifier
-
-`BridgeFinalityVerifier` accepts an expected `chain_id` plus optional trusted
-validator-set and epoch anchors. It enforces the header/block-hash/
+`BridgeFinalityVerifier` нь хүлээгдэж буй `chain_id` болон нэмэлт итгэмжлэгдсэн хувилбаруудыг хүлээн авдаг.
+validator-set болон epoch anchors. Энэ нь толгой/блок-хэш/-ийг хэрэгжүүлдэг.
 commit-certificate tuple, validates validator-set hash/version, checks
-signatures/quorum against the advertised validator roster, and tracks the latest
-height to reject stale/skipped proofs. When anchors are supplied it rejects
-replays across epochs/rosters with explicit `UnexpectedEpoch`/
-`UnexpectedValidatorSet` errors; without anchors it adopts the first proof's
-validator-set hash and epoch before continuing to enforce duplicate/out-of-
-range/insufficient signatures with deterministic errors.
+сурталчилсан баталгаажуулагчийн жагсаалтын эсрэг гарын үсэг/чуулга, хамгийн сүүлийн үеийн мэдээллийг хянадаг
+хуучирсан/алгасан нотлох баримтаас татгалзах өндөр. Зангуу нийлүүлэх үед энэ нь татгалздаг
+тодорхой `UnexpectedEpoch` бүхий эрин үе/жагсаалтууд/
+`UnexpectedValidatorSet` алдаа; зангуугүйгээр энэ нь эхний нотолгоог хүлээн авдаг
+Давхардсан/гасарсан-г үргэлжлүүлэн хэрэгжүүлэхээс өмнө баталгаажуулагчаар тохируулсан хэш болон эрин үеийг тохируулна уу.
+тодорхойлогч алдаатай хүрээ/хангалтгүй гарын үсэг.
 
-## API surface
+## API гадаргуу
 
-- `GET /v1/bridge/finality/{height}` – returns `BridgeFinalityProof` for the
-  requested block height. Content negotiation via `Accept` supports Norito or
+- `GET /v1/bridge/finality/{height}` – `BridgeFinalityProof`-г буцаана
+  хүссэн блокны өндөр. `Accept`-ээр дамжуулан контентын хэлэлцээр нь Norito эсвэл дэмждэг
   JSON.
-- `GET /v1/bridge/finality/bundle/{height}` – returns `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) for the requested height.
+- `GET /v1/bridge/finality/bundle/{height}` – `BridgeFinalityBundle`-г буцаана
+  (амлалт + үндэслэл + толгой/сертификат) хүссэн өндрийн хувьд.
 
-## Notes and follow‑ups
+## Тэмдэглэл болон дагаж мөрдөх
 
-- Proofs are currently derived from stored commit certificates. The bounded
-  history follows the commit certificate retention window; clients should cache
-  anchor proofs if they need longer horizons. Requests outside the window return
-  `CommitCertificateNotFound(height)`; surface the error and fall back to an
-  anchored checkpoint.
-- A replayed or forged proof with mismatched `block_hash` (header vs.
-  certificate) is rejected with `CommitCertificateHashMismatch`; clients should
-  perform the same tuple check before signature verification and discard
-  mismatched payloads.
-- Future work can add MMR/authority‑set commitment chains to reduce proof size
-  the commit certificate inside richer commitment envelopes.
+- Нотлох баримтыг одоогоор хадгалсан баталгааны гэрчилгээнээс гаргаж авсан. Хязгаарлагдмал
+  түүх нь гэрчилгээ хадгалах цонхыг дагаж мөрддөг; үйлчлүүлэгчид кэш хийх ёстой
+  урт давхрага шаардлагатай бол зангуу баталгаа. Цонхны гаднах хүсэлтийг буцаана
+  `CommitCertificateNotFound(height)`; алдаагаа гаргаж, буцаад a
+  зангуутай хяналтын цэг.
+- `block_hash` (толгой vs.) таарахгүй байгаа дахин тоглуулсан эсвэл хуурамч нотолгоо.
+  гэрчилгээ) `CommitCertificateHashMismatch`-ээр татгалзсан; үйлчлүүлэгчид байх ёстой
+  гарын үсгийн баталгаажуулалтаас өмнө ижил tuple шалгалтыг хийж, устгана
+  таарахгүй ачаалал.
+- Цаашдын ажил нь нотлох баримтын хэмжээг багасгахын тулд MMR/эрх бүхий байгууллагаас тогтоосон амлалтын хэлхээг нэмж болно.
+  илүү баялаг амлалтын дугтуйн доторх амлалтын гэрчилгээ.

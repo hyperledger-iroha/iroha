@@ -10,28 +10,29 @@ translation_last_reviewed: 2026-02-07
 title: Java ledger flow recipe
 description: Drive the register → mint → transfer demo using the IrohaAndroid JVM library.
 slug: /sdks/recipes/java-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+импорт SapleDownload '@site/src/компоненттар/SampleDownload';
 
-This recipe targets the desktop/JVM variant of the `java/iroha_android` module.
-It mirrors the CLI walkthrough by registering an asset definition, minting into
-the admin account, transferring to a second account, and printing the resulting
-balance.
+Был рецепт өҫтәл/JVM варианты I18NI000000007X модуленә йүнәлтелгән.
+Ул көҙгө CLI проходка теркәү активтар билдәләмәһе, һуғыу .
+админ иҫәбенә, икенсе иҫәп яҙмаһына күсереп, һөҙөмтәлә баҫтырыу
+тигеҙлек.
 
-<SampleDownload
-  href="/sdk-recipes/java/src/main/java/ledger/LedgerFlow.java"
-  filename="src/main/java/ledger/LedgerFlow.java"
-  description="Download the complete Java example to import into your IDE or project template."
+<СэмплДау-лог
+  href="/sdk-рецепттары/жава/срк/төп/java/миля/ЛеджерФло.java".
+  файл исеме="срк/төп/java/алгес/ЛеджерФлоу.джава".
+  тасуирлама="Скачать тулы Java миҫал импортлау өсөн һеҙҙең IDE йәки проект шаблон."
 />
 
-## 1. Register the asset definition (CLI)
+## 1. актив билдәләмәһен теркәү (CLI)
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Export credentials
+## 2. Экспорт ышаныс ҡағыҙҙары
 
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
@@ -40,10 +41,10 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-> Use `iroha_cli tools crypto private-key export --raw --private-key <multihash>` if you
-> need to strip the multihash prefix from the default config.
+> Ҡулланыу I18NI0000000008X, әгәр һеҙ
+> кәрәк, тип сисергә мультихаш префикс ғәҙәттәге конфиг.
 
-## 3. Add dependencies
+## 3.
 
 ```kts title="build.gradle.kts"
 dependencies {
@@ -52,7 +53,7 @@ dependencies {
 }
 ```
 
-## 4. Example program
+## 4. Миҫал программаһы
 
 ```java title="src/main/java/ledger/LedgerFlow.java"
 package ledger;
@@ -178,10 +179,10 @@ public final class LedgerFlow {
 }
 ```
 
-Compile with your preferred build tool (`./gradlew :java:iroha_android:assemble && ./gradlew run`).
+Һеҙҙең өҫтөнлөк төҙөү ҡоралы менән төҙөү (I18NI000000009X).
 
-## 5. Verify parity
+## 5. Паритетты раҫлау
 
-- Inspect the transaction hashes via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Fetch balances with the CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
-- Compare results with the Rust/Python/JavaScript/Swift recipes to ensure every SDK produces identical Norito payloads for the demo flow.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` аша операция хештарын тикшерергә.
+- CLI менән баланслаштырыу (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
+- Һөҙөмтәләрҙе сағыштырыу менән сағыштырырға Rust/Python/JavaScript/Swift рецептары тәьмин итеү өсөн һәр SDK етештереү бер үк I18NT0000000001X файҙалы йөкләмәләр өсөн демо ағымы.

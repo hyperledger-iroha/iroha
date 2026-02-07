@@ -7,94 +7,93 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
 source_last_modified: "2025-12-29T18:16:35.969398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISI Extension Plan (v1)
+# የISI የኤክስቴንሽን እቅድ (v1)
 
-This note signs off on the priority order for the new Iroha Special Instructions and captures
-non-negotiable invariants for each instruction ahead of implementation. The ordering matches
-security and operability risk first, UX throughput second.
+ይህ ማስታወሻ ለአዲሱ Iroha ልዩ መመሪያዎች እና ቀረጻዎች ቅድሚያ የሚሰጠውን ትዕዛዝ ይፈርማል
+ከመተግበሩ በፊት ለእያንዳንዱ መመሪያ የማይደራደሩ ተለዋዋጮች። ማዘዙ ይዛመዳል
+የደህንነት እና የተግባር አደጋ በመጀመሪያ ፣ የ UX ፍሰት ሁለተኛ።
 
-## Priority Stack
+## የቅድሚያ ቁልል
 
-1. **RotateAccountSignatory** – Required for hygienic key rotation without destructive migrations.
-2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Provide deterministic contract
-   kill switches and storage reclamation for compromised deployments.
-3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Extend metadata parity to concrete asset
-   balances so observability tooling can tag holdings.
-4. **BatchMintAsset** / **BatchTransferAsset** – Deterministic fan-out helpers to keep payload size
-   and VM fallback pressure manageable.
+1. **አካውንት ማሽከርከር** - አጥፊ ፍልሰቶች ሳይኖሩበት ለንፅህና ቁልፍ መዞር ያስፈልጋል።
+2. **የኮንትራት ሁኔታን አቦዝን** / **ብልጥ ኮንትራት ባይትስ አስወግድ** - የሚወስን ውል ያቅርቡ።
+   ማብሪያና ማጥፊያዎችን መግደል እና የማከማቻ መልሶ ማቋቋም ለተበላሹ ማሰማራት።
+3. **AssetKeyValue** / **የቁልፍ እሴትን አስወግድ** - የሜታዳታ እኩልነትን ወደ ተጨባጭ ንብረት ያራዝሙ።
+   ሚዛኖች ስለዚህ ታዛቢነት ያለው መሣሪያ ለይዞታዎች መለያ መስጠት ይችላል።
+4. **BatchMintAsset** / ** ባች ማስተላለፍ ንብረት** - የመጫኛ መጠንን ለመጠበቅ ቆራጥ ደጋፊ ረዳቶች
+   እና VM ውድቀት ግፊት ማስተዳደር ይቻላል.
 
-## Instruction Invariants
+## መመሪያ Invariants
 
-### SetAssetKeyValue / RemoveAssetKeyValue
-- Reuse the `AssetMetadataKey` namespace (`state.rs`) so canonical WSV keys stay stable.
-- Enforce JSON size and schema limits identically to account metadata helpers.
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` with the affected `AssetId`.
-- Require the same permission tokens as existing asset metadata edits (definition owner OR
-  `CanModifyAssetMetadata`-style grants).
-- Abort if the asset record is missing (no implicit creation).
+### የቁልፍ እሴት አዘጋጅ/የቁልፍ እሴትን አስወግድ
+- የ `AssetMetadataKey` የስም ቦታ (`state.rs`) እንደገና ተጠቀም ስለዚህ ቀኖናዊ WSV ቁልፎች ተረጋግተው ይቆያሉ።
+- የ JSON መጠንን እና የመርሃግብር ገደቦችን ከሜታዳታ ረዳቶች ጋር በተመሳሳይ መልኩ ያስፈጽሙ።
+- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` ከተጎዳው `AssetId` ጋር።
+- እንደ ነባር የንብረት ሜታዳታ አርትዖቶች ተመሳሳይ የፍቃድ ማስመሰያዎች ያስፈልጉ (የፍቺ ባለቤት ወይም
+  `CanModifyAssetMetadata`-style ስጦታዎች)።
+- የንብረቱ መዝገብ ከጠፋ ማቋረጥ (የተዘዋዋሪ ፈጠራ የለም)።
 
-### RotateAccountSignatory
-- Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
-  resources (assets, triggers, roles, permissions, pending events).
-- Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
-- Update all canonical keys that embed the account ID and invalidate caches before commit.
-- Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+### አሽከርክር መለያ ፈራሚ
+- የመለያ ሜታዳታ እና ተያያዥነት ባለው መልኩ በ `AccountId` ውስጥ የፈራሚውን አቶሚክ መለዋወጥ
+  ግብዓቶች (ንብረት፣ ቀስቅሴዎች፣ ሚናዎች፣ ፈቃዶች፣ በመጠባበቅ ላይ ያሉ ክስተቶች)።
+- አሁን ያለው ፈራሚ ከደዋዩ (ወይንም የተወከለው ባለስልጣን በግልፅ ማስመሰያ) የሚዛመድ መሆኑን ያረጋግጡ።
+- አዲሱ የአደባባይ ቁልፍ አስቀድሞ በተመሳሳይ ጎራ ውስጥ ያለ ሌላ መለያ የሚደግፍ ከሆነ ውድቅ ያድርጉ።
+- ከመግባትዎ በፊት የመለያ መታወቂያውን ያካተቱ ሁሉንም ቀኖናዊ ቁልፎች ያዘምኑ እና መሸጎጫዎችን ያበላሹ።
+- የተወሰነ `AccountEvent::SignatoryRotated` ለኦዲት መንገዶች ከአሮጌ/አዲስ ቁልፎች ጋር ያውጡ።
+- የስደት ስካፎል፡ `AccountLabel` + `AccountRekeyRecord` ያስተዋውቁ (`account::rekey` ይመልከቱ) ስለዚህ
+  ያለ ሃሽ መግቻዎች በሚሽከረከርበት ጊዜ ነባር መለያዎች በተረጋጋ መለያዎች ሊቀረጹ ይችላሉ።
 
-### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
-- Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
+### የኮንትራት ሁኔታን አቦዝን
+- የፕሮቬንቴንስ መረጃን በሚቀጥልበት ጊዜ የ `(namespace, contract_id)` ማሰሪያውን ያስወግዱ ወይም ይቀብሩ
+  (ማን, መቼ, ምክንያት ኮድ) ለመላ ፍለጋ.
+- እንደ ገቢር የተቀናበረ ተመሳሳይ የአስተዳደር ፈቃድ ጠይቅ፣ ላለመፍቀድ ከፖሊሲ መንጠቆዎች ጋር
+  ከፍ ያለ ፈቃድ ሳይኖር የዋና ስርዓት ስም ቦታዎችን ማቦዘን።
+- የክስተት ምዝግብ ማስታወሻዎችን ለመወሰን ምሳሌው የቦዘነ ከሆነ ውድቅ ያድርጉ።
+- የታችኛው ተፋሰስ ተመልካቾች ሊፈጁ የሚችሉትን `ContractInstanceEvent::Deactivated` ያውጡ።### SmartContractBytesን ያስወግዱ
+- ምንም ግልጽ ወይም ንቁ አጋጣሚዎች በሌሉበት ጊዜ ብቻ በ `code_hash` የተከማቸ ባይት ኮድ መቁረጥን ይፍቀዱ
+  ቅርሱን ማጣቀስ; አለበለዚያ በማብራሪያ ስህተት አይሳካም.
+- የፍቃድ በር መስተዋቶች ምዝገባ (`CanRegisterSmartContractCode`) እና ከዋኝ-ደረጃ ጋር
+  ጠባቂ (ለምሳሌ `CanManageSmartContractStorage`)።
+- ለማስቀረት የቀረበው `code_hash` ከተከማቸ የሰውነት መፈጨት ጋር የሚዛመድ መሆኑን ያረጋግጡ።
+  የቆዩ እጀታዎች.
+- ኢሚት `ContractCodeEvent::Removed` በሃሽ እና የደዋይ ዲበ ዳታ።
 
-### RemoveSmartContractBytes
-- Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
-  reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
-- Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
-  stale handles.
-- Emit `ContractCodeEvent::Removed` with hash and caller metadata.
+### BatchMintAsset / Batch TransferAsset
+- ሁሉም-ወይም-ምንም የትርጓሜዎች-እያንዳንዱ ቱፕል ይሳካል ወይም መመሪያው ያለ ወገን ይቋረጣል
+  ተፅዕኖዎች.
+- የግቤት ቬክተሮች በወሰነው ቅደም ተከተል (የተዘዋዋሪ መደርደር የለም) እና በማዋቀር የታሰሩ መሆን አለባቸው
+  (`max_batch_isi_items`)።
+- የታችኛው ተፋሰስ የሂሳብ አያያዝ ወጥነት ያለው ሆኖ እንዲቆይ በንብረት ንብረት ክስተቶችን ያስወጣል; የምድብ አውድ ተጨማሪ ነው፣
+  ምትክ አይደለም.
+- የፈቃድ ፍተሻዎች በአንድ ኢላማ ነባር ነጠላ-ንጥል አመክንዮ እንደገና ጥቅም ላይ ይውላሉ (ንብረት ባለቤት፣ የፍቺ ባለቤት፣
+  ወይም የተሰጠው ችሎታ) ከስቴት ሚውቴሽን በፊት.
+- የአማካሪ መዳረሻ ስብስቦች ብሩህ ተስፋን ለመጠበቅ ሁሉንም የተነበበ/የመፃፍ ቁልፎችን አንድ ማድረግ አለባቸው።
 
-### BatchMintAsset / BatchTransferAsset
-- All-or-nothing semantics: either every tuple succeeds or the instruction aborts without side
-  effects.
-- Input vectors must be deterministically ordered (no implicit sorting) and bounded by config
-  (`max_batch_isi_items`).
-- Emit per-item asset events so downstream accounting stays consistent; batch context is additive,
-  not a replacement.
-- Permission checks reuse existing single-item logic per target (asset owner, definition owner,
-  or granted capability) before state mutation.
-- Advisory access sets must union all read/write keys to keep optimistic concurrency correct.
+## የትግበራ ስካፎልዲንግ
 
-## Implementation Scaffolding
+- የውሂብ ሞዴል አሁን `SetAssetKeyValue` / `RemoveAssetKeyValue` ስካፎልዶችን ለተመጣጣኝ ሜታዳታ ይይዛል
+  አርትዖቶች (`transparent.rs`)።
+- አስፈፃሚ ጎብኝዎች የወልና መሬቶችን አንዴ ካስተናገዱ ፈቃዶችን የሚከፍሉ ቦታ ያዥዎችን ያጋልጣሉ
+  (`default/mod.rs`)።
+- የሪኪ ፕሮቶታይፕ አይነቶች (`account::rekey`) ለሚሽከረከሩ ፍልሰቶች የማረፊያ ዞን ይሰጣሉ።
+- የአለም ግዛት `account_rekey_records` በ `AccountLabel` የተቆለፈውን ያካትታል ስለዚህ የመድረክ መለያ →
+  ታሪካዊውን `AccountId` ኢንኮዲንግ ሳይነኩ የፈራሚ ፍልሰት።
 
-- Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
-  edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
-  (`default/mod.rs`).
-- Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
-  signatory migrations without touching the historical `AccountId` encoding.
+## IVM Syscall ረቂቅ
 
-## IVM Syscall Drafting
+- ለ`DeactivateContractInstance` / `RemoveSmartContractBytes` መርከብ አስተናጋጅ shims እንደ
+  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) እና
+  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44)፣ ሁለቱም Norito TLVዎችን የሚያንፀባርቁ ይበላሉ
+  ቀኖናዊ ISI መዋቅሮች.
+- የአስተናጋጅ ተቆጣጣሪዎች `iroha_core` የማስፈጸሚያ መንገዶችን ካስተዋሉ በኋላ `abi_syscall_list()` ያራዝሙ
+  ABI hashes በልማት ጊዜ የተረጋጋ።
+- syscall ቁጥሮች ሲረጋጉ Kotodama ዝቅ በማድረግ ያዘምኑ። ለተስፋፋው ወርቃማ ሽፋን ይጨምሩ
+  በተመሳሳይ ጊዜ ላይ ላዩን.
 
-- Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
-  canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+#ሁኔታ
 
-## Status
-
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+ከላይ ያሉት ቅደም ተከተሎች እና ተለዋዋጭዎች ለትግበራ ዝግጁ ናቸው. የክትትል ቅርንጫፎች መጠቀስ አለባቸው
+ይህ ሰነድ የማስፈጸሚያ መንገዶችን እና የ sscall መጋለጥን ሲገጣጠም.

@@ -7,152 +7,153 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e0cdd8242b45628e688d94ebec08e2d9900787ec93a81417e6683d399d43be2d
 source_last_modified: "2026-01-22T14:35:36.781385+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Node ↔ Client Protocol
+# SoraFS མཛུབ་གནོན་↔ མཁོ་མངགས་མཐུན་སྒྲིལ།
 
-This guide summarises the canonical protocol definition in
-[`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
-Use the upstream spec for byte-level Norito layouts and changelogs; the portal
-copy keeps the operational highlights close to the rest of the SoraFS runbooks.
+ལམ་སྟོན་འདི་གིས་ ༢༠༠༨ ལུ་ ཁྲིམས་ལུགས་མཐུན་གྲོས་ངེས་ཚིག་འདི་ བཅུད་བསྡུས་འབདཝ་ཨིན།
+[I18NI0000016X](I18NU0000014X).
+བཱའིཊི་གནས་རིམ་ I18NT0000000X བཀོད་སྒྲིག་དང་ བསྒྱུར་བཅོས་དྲན་དེབ་ཚུ་གི་དོན་ལུ་ ཡར་འཕེལ་གྱི་ཚད་གཞི་ལག་ལེན་འཐབ། དྲྭ་ཁ།
+འདྲ་བཤུས་འདི་གིས་ SoraFS རན་དེབ་ཚུ་དང་ ཉེ་འདབས་ལུ་ཡོད་པའི་ བཀོལ་སྤྱོད་ཀྱི་འོད་རྟགས་ཚུ་བཞགཔ་ཨིན།
 
-## Provider Adverts & Validation
+## བྱིན་མི་བརྡ་ཁྱབ་དང་བདེན་དཔྱད་འབད་ནི།
 
-SoraFS providers gossip `ProviderAdvertV1` payloads (see
-`crates/sorafs_manifest::provider_advert`) signed by the governed operator.
-The adverts pin discovery metadata and the guardrails the multi-source
-orchestrator enforces at runtime.
+SoraFS གིས་ I18NI0000000017X གླ་ཆ་ཚུ་ འཆམ་འཆམ་འབདཝ་ཨིན།
+`crates/sorafs_manifest::provider_advert`) གཞུང་སྐྱོང་བཀོལ་སྤྱོད་པ་གིས་ མཚན་རྟགས་བཀོད་ཡོདཔ།
+ཁྱབ་བསྒྲགས་པིན་ འཚོལ་ཞིབ་ཀྱི་ མེ་ཊ་ཌེ་ཊ་ དང་ སྲུང་སྐྱོབས་ཚུ་གིས་ སྣ་མང་འབྱུང་ཁུངས་འདི་ཨིན།
+གཡོག་བཀོལ་བའི་དུས་ཚོད་ལུ་ orchetrator ཚུ།
 
-- **Lifetime** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Providers
-  should refresh every 12 hours.
-- **Capability TLVs** — the TLV list advertises transport features (Torii,
-  QUIC+Noise, SoraNet relays, vendor extensions). Unknown codes may be skipped
-  when `allow_unknown_capabilities = true`, following GREASE guidance.
-- **QoS hints** — `availability` tier (Hot/Warm/Cold), maximum retrieval
-  latency, concurrency limit, and optional stream budget. QoS must align with
-  observed telemetry and is audited by admission.
-- **Endpoints & rendezvous topics** — concrete service URLs with TLS/ALPN
-  metadata plus the discovery topics clients should subscribe to when building
-  guard sets.
-- **Path diversity policy** — `min_guard_weight`, AS/pool fan-out caps, and
-  `provider_failure_threshold` make deterministic multi-peer fetches possible.
-- **Profile identifiers** — providers must expose the canonical handle (e.g.
-  `sorafs.sf1@1.0.0`); optional `profile_aliases` help older clients migrate.
+- **མི་ཚེ་** — `issued_at < expires_at ≤ issued_at + 86 400 s`. མཁོ་སྤྲོད་པ།
+  ཆུ་ཚོད་༡༢ རེ་ལུ་ གསར་བསྐྲུན་འབད་དགོ།
+- **ལྕོགས་གྲུབ་ཅན་གྱི་ TLVs** — TLV ཐོ་ཡིག་འདི་གིས་ སྐྱེལ་འདྲེན་ཁྱད་རྣམ་ཚུ་ ཁྱབ་བསྒྲགས་འབདཝ་ཨིན། (Torii,
+  QUIC+Noise, སོ་ར་ནེཊ་ རི་ལེ་ ཚོང་པ་རྒྱ་བསྐྱེད་ ). མ་ཤེས་པའི་ཨང་རྟགས་ཚུ་ གོམ་འགྱོ་འོང་།
+  སྐབས་ I18NI000000020X, GREASE ལམ་སྟོན་གྱི་རྗེས་སུ་འབྲང་།
+- **QoS བརྡ་སྟོན་** — `availability` རིམ་པ་ (Hot/Warm/Cold), མཐོ་ཤོས་སླར་གསོ་འབད་ནི།
+  འཕྲོ་མཐུད་དང་ དུས་མཉམ་ཚད་གཞི་ དེ་ལས་ གདམ་ཁའི་རྒྱུན་རིམ་གྱི་འཆར་དངུལ་ཚུ། ཀིའོ་ཨེསི་དང་གཅིག་ཁར་ཕྲང་སྒྲིག་འབད་དགོ།
+  བལྟ་རྟོག་འབད་མི་ བརྡ་འཕྲིན་དང་ འཛུལ་ཞུགས་ཐོག་ལས་ རྩིས་ཞིབ་འབདཝ་ཨིན།
+- **Endpoints & rendezvous དོན་ཚན་** — TLS/ALPN དང་བཅས་པའི་ ངེས་གཏན་ཞབས་ཏོག་ཡུ་ཨར་ཨེལ་ཚུ།
+  མེ་ཊ་ཌེ་ཊ་ དང་ གསར་འཚོལ་གྱི་དོན་ཚན་ཚུ་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ བཟོ་བསྐྲུན་འབད་བའི་སྐབས་ མཐུད་དགོཔ་ཨིན།
+  བཀག་འཛིན་ཆ་ཚན་ཚུ།
+- **པཏ་སྣ་མང་སྲིད་བྱུས་** — `min_guard_weight`, AS/pool གི་དགའ་མོས་ཅན་གྱི་མགོ་ཡིག་ཚུ་, དང་།
+  I18NI000000023X གིས་ གཏན་འཁེལ་གྱི་ མང་པོའི་ ཕིར་གྱི་ ཕིཊི་ཆི་ཚུ་ འབད་ཚུགསཔ་ཨིན།
+- **གསལ་སྡུད་ངོས་འཛིན་པ་ཚུ་** — བྱིན་མི་ཚུ་གིས་ ཀེ་ནོ་ནིག་ལག་ལེན་འཐབ་ (དཔེར་ན་.
+  `sorafs.sf1@1.0.0`); གདམ་ཁ་ཅན་ `profile_aliases` གིས་ མཁོ་མངགས་རྙིངམ་ཚུ་ གནས་སྤོ་འབད་ནི་ལུ་ གྲོགས་རམ་འབདཝ་ཨིན།
 
-Validation rules reject zero stake, empty capability/endpoints/topic lists,
-misordered lifetimes, or missing QoS targets. Admission envelopes compare the
-advert and proposal bodies (`compare_core_fields`) before gossiping updates.
+བདེན་དཔྱད་ལམ་ལུགས་ཚུ་གིས་ ཀླད་ཀོར་དང་ སྟོང་པའི་ལྕོགས་གྲུབ་/མཇུག་སྣོན་ཚུ་/བརྗོད་དོན་ཐོ་ཡིག་ཚུ་ ངོས་ལེན་མ་འབད་བས།
+མི་ཚེ་དུས་ཡུན་ཚུ་ མ་ཚངམ་སྦེ་ ཡང་ན་ QoS དམིགས་ཚད་ཚུ་ མ་ཐོབ། འཛུལ་ཞུགས་ཡིག་ཤུབས་ཚུ་གིས་ ག་བསྡུར་རྐྱབ་ནི།
+ཁྱབ་བསྒྲགས་དང་གྲོས་འཆར་གྱི་ཕུང་པོ་ (`compare_core_fields`) དུས་མཐུན་དུས་མཐུན་མ་བཟོ་བའི་ཧེ་མ།
 
-### Range Fetch Extensions
+### ཁྱབ་ཚད་ཕེཆ་རྒྱ་བསྐྱེད་པ།
 
-Range-capable providers include the following metadata:
+ཁྱབ་ཚད་-ལྕོགས་ཅན་བྱིན་མི་ཚུ་གིས་ འོག་གི་མེ་ཊ་ཌེ་ཊ་ཚུ་ཚུདཔ་ཨིན།
 
-| Field | Purpose |
-|-------|---------|
-| `CapabilityType::ChunkRangeFetch` | Declares `max_chunk_span`, `min_granularity`, and alignment/proof flags. |
-| `StreamBudgetV1` | Optional concurrency/throughput envelope (`max_in_flight`, `max_bytes_per_sec`, optional `burst`). Requires a range capability. |
-| `TransportHintV1` | Ordered transport preferences (e.g., `torii_http_range`, `quic_stream`, `soranet_relay`). Priorities are `0–15` and duplicates are rejected. |
+| ཕིལཌ་ | དམིགས་ཡུལ། |
+|--------|--------------------------------------------------------
+| I18NI0000027X | `max_chunk_span` གསལ་བསྒྲགས་ I18NI000000029X, དང་ ཕྲང་སྒྲིག་/འགོག་པའི་དར་ཆ་ཚུ། |
+| `StreamBudgetV1` | གདམ་ཁའི་དུས་མཉམ་/བརྒྱུད་དེ་ཐོན་འབྲས་ཡིག་ཤུབས་ (I18NI0000031X, I18NI0000000032X, གདམ་ཁའི་I18NI000000033X). ཁྱབ་ཚད་ཀྱི་ལྕོགས་གྲུབ་དགོཔ་ཨིན། |
+| I18NI0000034X | སྐྱེལ་འདྲེན་གྱི་དགའ་གདམ་ (དཔེར་ན་ I18NI000000035X, I18NI000000036X, I18NI000000037X) གཙོ་རིམ་ཚུ་ `0–15` དང་ འདྲ་བཤུས་ཚུ་ ངོས་ལེན་མ་འབད་བས། |
 
-Tooling support:
+ལག་ཆས་རྒྱབ་སྐྱོར།
 
-- Provider advert pipelines must validate range capability, stream budget, and
-  transport hints before emitting deterministic payloads for audits.
-- `cargo xtask sorafs-admission-fixtures` bundles canonical multi-source
-  adverts alongside downgrade fixtures under
+- བྱིན་པའི་ཁྱབ་བསྒྲགས་མདོང་ལམ་ཚུ་གིས་ ཁྱབ་ཚད་ཀྱི་ནུས་པ་འདི་ བདེན་དཔྱད་འབད་དགོཔ་དང་ རྒྱུན་ལམ་འཆར་དངུལ་ དེ་ལས་ དང་།
+  རྩིས་ཞིབ་ཀྱི་དོན་ལུ་ ཐག་མ་བཅད་པའི་ཧེ་མ་ སྐྱེལ་འདྲེན་གྱི་ བརྡ་སྟོན་ཚུ།
+- I18NI000000039X བུནཌལ་ཚུ་ ཀེ་ནོ་ནིག་སྣ་མང་འབྱུང་ཁུངས།
+  འོག་ལུ་ མར་ཕབ་ཀྱི་ མཐུད་མཚམས་མཉམ་པའི་ བརྡ་ཁྱབ་ཚུ་ འོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
   `fixtures/sorafs_manifest/provider_admission/`.
-- Range-capable adverts that omit `stream_budget` or `transport_hints` are
-  rejected by the CLI/SDK loaders before scheduling, keeping the multi-source
-  harness aligned with Torii admission expectations.
+- `stream_budget` བཏོན་བཏང་མི་ ཁྱབ་ཚད་ཀྱི་ཁྱབ་བསྒྲགས་ཚུ་ ཡང་ན་ `transport_hints` ཚུ་ཨིན།
+  དུས་ཚོད་མ་བཟོ་བའི་ཧེ་མ་ སི་ཨེལ་ཨའི་/ཨེསི་ཌི་ཀེ་མངོན་གསལ་འབད་མི་ཚུ་གིས་ ངོས་ལེན་མ་འབད་བས།
+  harness དང་ Torii འཛུལ་ཞུགས་ཀྱི་རེ་བ་ཡོད།
 
-## Gateway Range Endpoints
+## སྒོ་ཁའི་ཁྱབ་ཚད་མཇུག་བསྡུ།
 
-Gateways accept deterministic HTTP requests that mirror the advert metadata.
+སྒོ་སྒྲིག་ཚུ་གིས་ མེ་ལོང་དེ་ མེ་ལོང་ མེ་ཊ་ཌེ་ཊ་ ཆ་འཇོག་འབདཝ་ཨིན།
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### I18NI0000043X
 
-| Requirement | Details |
-|-------------|---------|
-| **Headers** | `Range` (single window aligned to chunk offsets), `dag-scope: block`, `X-SoraFS-Chunker`, optional `X-SoraFS-Nonce`, and mandatory base64 `X-SoraFS-Stream-Token`. |
-| **Responses** | `206` with `Content-Type: application/vnd.ipld.car`, `Content-Range` describing the served window, `X-Sora-Chunk-Range` metadata, and echoed chunker/token headers. |
-| **Failure modes** | `416` for misaligned ranges, `401` for missing/invalid tokens, `429` when stream/byte budgets are exceeded. |
+| དགོས་མཁོ། | ཁ་གསལ་ |
+|-------------------------------------------------------------------------------
+| **མགོ་ཡིག་** | `Range` (སྒོ་སྒྲིག་གཅིག་རྐྱངམ་ཅིག་ ཅཱན་ཨོཕ་སེཊི་ཚུ་) `dag-scope: block`, I18NI000000046X, གདམ་ཁ་ཅན་གྱི་ I18NI0000004X, དང་ མན་ཌི་ཊི་རི་ ཨའི་༡༨NI000004X, དང་ མན་ཌི་ཊི་རི་ ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༤༨ཨེགསི་. |
+| **ལན་འདེབས་** | I18NI0000000000049 དང་ I18NI000000050X, I18NI0000000051X གིས་ ཞབས་ཏོག་བྱིན་མི་ སྒོ་སྒྲིག་འདི་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ I18NI000000052X མེ་ཊ་ཌེ་ཊ་, དང་ ཨེ་ཅོ་ཡིཌི་ཅར་ཀར་/ཊོ་ཀེན་མགོ་ཡིག་ཚུ་ བཀྲམ་སྟོན་འབདཝ་ཨིན། |
+| **འཐུས་ཤོར་གྱི་ཐབས་ལམ་ཚུ་** | I18NI000000053X མ་འདྲ་བའི་ཁྱབ་ཚད་ཀྱི་དོན་ལུ་ Norito བརླག་སྟོར་ཞུགས་མི་/ནུས་མེད་ཊོ་ཀེན་ཚུ་གི་དོན་ལུ་ I18NI000000005X འདི་ རྒྱུན་ལམ་/བཱའི་ཊི་འཆར་དངུལ་ལས་བརྒལ་བའི་སྐབས་ SoraFS ཨིན། |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### I18NI0000056X
 
-Single-chunk fetch with the same headers plus the deterministic chunk digest.
-Useful for retries or forensic downloads when CAR slices are unnecessary.
+མགོ་ཡིག་གཅིགཔོ་དང་གཅིག་ཁར་ གཅིག་རྐྱང་པའི་ཆང་འཐུང།
+CAR slices ཚུ་ དགོས་མཁོ་མེད་པའི་སྐབས་ འབད་རྩོལ་དང་ ཡང་ན་ ཁྲིམས་ལུགས་ཀྱི་ ཕབ་ལེན་འབད་ནི་ལུ་ ཕན་ཐོགས་ཡོདཔ་ཨིན།
 
-## Multi-Source Orchestrator Workflow
+## སྣ་མང་སྒྲིག ཨོར་ཀེཊ་ ལས་ཀའི་རྒྱུན་རིམ།
 
-When SF-6 multi-source fetch is enabled (Rust CLI via `sorafs_fetch`,
-SDKs via `sorafs_orchestrator`):
+ཨེསི་ཨེཕ་-༦ སྣ་མང་འབྱུང་ཁུངས་ཕིཆ་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ (I18NI000000057X བརྒྱུད་དེ་ CLI རྒྱུག
+SDKs I18NI000000058X བརྒྱུད་དེ་):
 
-1. **Collect inputs** — decode the manifest chunk plan, pull the latest adverts,
-   and optionally pass a telemetry snapshot (`--telemetry-json` or
+1. ** ཨིན་པུཊི་** ཚུ་བསྡུ་སྒྲིག་འབད།
+   དང་ གདམ་ཁ་ཅན་སྦེ་ ཊེ་ལི་མི་ཊི་པར་ཆས་ (I18NI000000059X ཡང་ན་ ཡང་ཅིན།
    `TelemetrySnapshot`).
-2. **Build a scoreboard** — `Orchestrator::build_scoreboard` evaluates
-   eligibility and records rejection reasons; `sorafs_fetch --scoreboard-out`
-   persists the JSON.
-3. **Schedule chunks** — `fetch_with_scoreboard` (or `--plan`) enforces range
-   constraints, stream budgets, retry/peer caps (`--retry-budget`,
-   `--max-peers`), and emits a manifest-scoped stream token for each request.
-4. **Verify receipts** — outputs include `chunk_receipts` and
-   `provider_reports`; CLI summaries persist `provider_reports`,
-   `chunk_receipts`, and `ineligible_providers` for evidence bundles.
+2. **སྐུགས་བསྐུར་** — `Orchestrator::build_scoreboard` དབྱེ་ཞིབ་འབདཝ་ཨིན།
+   འོས་འབབ་དང་ཐོ་བཀོད་ཚུ་ ངོས་ལེན་མེད་པའི་རྒྱུ་མཚན་ཚུ། `sorafs_fetch --scoreboard-out`
+   གནས་ཏེ་ཡོད་མི་ JSON འདི་ཨིན།
+3. **Schinule chunks** — `fetch_with_scoreboard` (ཡང་ན་ I18NI000000064X) གིས་ ཁྱབ་ཁོངས།
+   བཀག་ཆ་ཚུ་ རྒྱུན་ལམ་འཆར་དངུལ་ ལོག་འབད་རྩོལ་/མཉམ་རོགས་ཀྱི་མགུ་ཏོག་ (`--retry-budget`,
+   I18NI0000006X), དང་ ཞུ་བ་རེ་རེ་གི་དོན་ལུ་ གསལ་སྟོན་ཁྱབ་ཁོངས་འབད་ཡོད་པའི་ རྒྱུན་ལམ་བརྡ་མཚོན་ཅིག་ བཏོནམ་ཨིན།
+4. **འོང་འབབ་ཚུ་བདེན་སྦྱོར་འབད་** — ཐོན་འབྲས་ཚུ་ནང་ I18NI0000000067X དང་།
+   `provider_reports`; CLI བཅུད་བསྡུས་ `provider_reports`,
+   I18NI000000070X, དང་ I18NI000000071X སྒྲུབ་བྱེད་བང་སྒྲིག་ཚུ་གི་དོན་ལུ་ཨིན།
 
-Common errors raised to operators/SDKs:
+བཀོལ་སྤྱོད་པ་/ཨེསི་ཌི་ཀེ་ཚུ་ལུ་ ཡར་སྐྱེད་འབད་མི་སྤྱིར་བཏང་གི་འཛོལ་བ་ཚུ།
 
-| Error | Description |
-|-------|-------------|
-| `no providers were supplied` | No eligible entries after filtering. |
-| `no compatible providers available for chunk {index}` | Range or budget mismatch for a specific chunk. |
-| `retry budget exhausted after {attempts}` | Increase `--retry-budget` or evict failing peers. |
-| `no healthy providers remaining` | All providers disabled after repeated failures. |
-| `streaming observer failed` | Downstream CAR writer aborted. |
-| `orchestrator invariant violated` | Capture manifest, scoreboard, telemetry snapshot, and CLI JSON for triage. |
+| འཛོལ་བ། | འགྲེལ་བཤད་ |
+|----------------------------------------------------------------------------------------------
+| `no providers were supplied` | ཚགས་མ་བཙུགས་ཚར་བའི་ཤུལ་ལས་ འོས་འབབ་ཅན་གྱི་ཐོ་བཀོད་ཚུ་མེད། |
+| `no compatible providers available for chunk {index}` | དམིགས་བསལ་གྱི་ཆ་ཤས་ཚུ་གི་དོན་ལུ་ ཁྱབ་ཚད་ཡང་ན་ འཆར་དངུལ་མཐུན་སྒྲིག་མེདཔ་ཨིན། |
+| `retry budget exhausted after {attempts}` | `--retry-budget` ཡར་སེང་ཡང་ན་ ཕྱིར་འབུད་མ་འབད་མི་ མཉམ་རོགས་ ཡར་སེང་། |
+| `no healthy providers remaining` | བསྐྱར་ལོག་འཐུས་ཤོར་བྱུང་པའི་ཤུལ་ལས་ བྱིན་མི་ཆ་མཉམ་ ལྕོགས་མིན་བཟོ་ཡོདཔ། |
+| I18NI0000007X | Downstream CAR རྩོམ་པ་པོ། |
+| `orchestrator invariant violated` | བདེན་དཔང་དང་ སྐུགས་ཤོག་ དེ་ལས་ ཊེ་ལི་མི་ཊི་པར་ལེན་དང་ ཚོད་བརྟག་གི་དོན་ལུ་ སི་ཨེལ་ཨའི་ཇེ་ཨེསི་ཨོན་ཚུ་ བཟུང་དགོ། |
 
-## Telemetry & Evidence
+## བརྒྱུད་འཕྲིན་དང་སྒྲུབ་བྱེད།
 
-- Metrics emitted by the orchestrator:  
+- རོལ་དབྱངས་ཚོགས་པ་གིས་ མེ་ཊིག་སི།  
   `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
-  `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (tagged by manifest/region/provider). Set `telemetry_region` in config or via
-  CLI flags so dashboards partition by fleet.
-- CLI/SDK fetch summaries include persisted scoreboard JSON, chunk receipts,
-  and provider reports which must ship in rollout bundles for SF-6/SF-7 gates.
-- Gateway handlers expose `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
-  so SRE dashboards can correlate orchestrator decisions with server behaviour.
+  I18NI0000081X, I18NI0000082X
+  (རྟགས་བཀོད་ཡོདཔ་ གསལ་སྟོན་/ལུང་ཕྱོགས་/བྱིན་མི་)། རིམ་སྒྲིག་ནང་ `telemetry_region` གཞི་སྒྲིག་འབད།
+  CLI གིས་ གྲུ་གཟིངས་ཐོག་ལས་ ཌེཤ་བོརཌི་ཚུ་ བར་བཅད་འབདཝ་ཨིན།
+- CLI/SDK ཕེཆ་གི་བཅུད་བསྡུས་ཚུ་ འཕྲོ་མཐུད་དེ་ཡོད་པའི་སྐུགས་ཤོག་ JSON, ཆ་ཤས་འོང་འབབ་ཚུ་ཚུདཔ་ཨིན།
+  དང་ བྱིན་མི་སྙན་ཞུ་ཚུ་གིས་ SF-6/SF-7 གཱེཊ་གི་དོན་ལུ་ འབབ་རྒྱུན་གྱི་ བང་རིམ་ནང་ བཏང་དགོཔ་ཨིན།
+- གཱེཊི་ཝེ་འཛིན་སྐྱོང་ཚུ་གིས་ I18NI0000084X ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  དེ་འབདཝ་ལས་ SRE dashboards ཚུ་གིས་ རོལ་དབྱངས་ཀྱི་གྲོས་ཐག་ཚུ་ སར་བར་གྱི་སྤྱོད་ལམ་དང་གཅིག་ཁར་ འབྲེལ་བ་འཐབ་ཚུགས།
 
-## CLI & REST Helpers
+## CLI & REST རོགས་སྐྱོར།
 
-- `iroha app sorafs pin list|show`, `alias list`, and `replication list` wrap the
-  pin-registry REST endpoints and print raw Norito JSON with attestation blocks
-  for audit evidence.
-- `iroha app sorafs storage pin` and `torii /v1/sorafs/pin/register` accept Norito
-  or JSON manifests plus optional alias proofs and successors; malformed proofs
-  raise `400`, stale proofs surface `503` with `Warning: 110`, and
-  hard-expired proofs return `412`.
-- `iroha app sorafs repair list` mirrors repair queue filters, while
-  `repair claim|complete|fail|escalate` submit signed worker actions or slash
-  proposals to Torii. Slash proposals may include a governance approval summary
-  (approve/reject/abstain vote counts plus approved_at/finalized_at
-  timestamps); when present it must satisfy quorum and dispute/appeal windows,
-  otherwise the proposal stays in dispute until votes resolve at the deadline.
-- Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
-- Repair status responses include an `events` array containing base64 Norito
-  `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
-  is capped to the most recent transitions.
-- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
-  retention reports from the local manifest store for audit evidence.
-- REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) include attestation structures so clients can
-  verify data against the latest block headers before taking action.
+- `iroha app sorafs pin list|show`, དང་ I18NI0000086X དང་ I18NI000000087X
+  pin-ཐོ་བཀོད་ REST མཐའ་མཚམས་དང་ དཔར་བསྐྲུན་ I18NT0000001X JSON འདི་ བདེན་ཁུངས་བཀག་ཆ་ཚུ་དང་གཅིག་ཁར་
+  རྩིས་ཞིབ་སྒྲུབ་བྱེད་ཀྱི་དོན་ལུ།
+- I18NI0000008X དང་ `torii /v1/sorafs/pin/register` གིས་ Norito དང་ལེན་འབདཝ་ཨིན།
+  ཡང་ན་ JSON གིས་ གདམ་ཁ་ཅན་གྱི་བདེན་ཁུངས་དང་ ཤུལ་འཛིན་ཚུ་ མངོན་གསལ་འབདཝ་ཨིན། གནོདཔ་ཅན་གྱི་བདེན་དཔང་ཚུ།
+  I18NI000000090X བསྡུ་སྒྲིག་དང་ བརྟན་པོའི་བདེན་ཁུངས་ཚུ་ I18NI000000091X དང་ I18NI000000092X, དང་།
+  ཧརཌ་-ཐོན་པའི་བདེན་ཁུངས་ཚུ་ ལོག་ `412`.
+- `iroha app sorafs repair list` ཉམས་བཅོས་བང་རིམ་ཚགས་མ་ཚུ་ མེ་ལོང་ཚུ་ ཨིན།
+  `repair claim|complete|fail|escalate` མཚན་རྟགས་བཀོད་པའི་ལས་བྱེད་པའི་བྱ་བ་ཡང་ན་གཡོ་ཤས།
+  གྲོས་འཆར་ Torii. གཡོ་སྒྱུའི་གྲོས་འཆར་ནང་ གཞུང་སྐྱོང་གནང་བ་བཅུད་བསྡུས་ཚུད་ཆོག།
+  (ཆ་འཇོག་/བཀག་ཆ་/ཚོགས་རྒྱན་གྱངས་ཁ་ཚུ་དང་ ཆ་འཇོག་_ཨེཊ་/མཇུག་བསྡུའི་_ཨེཊ།
+  timetamps); ད་ལྟོ་འབད་བ་ཅིན་ ཀོན་རམ་དང་ རྩོད་རྙོགས་/མཐོ་གཏུགས་སྒོ་སྒྲིག་ཚུ་ བསྒྲུབ་དགོཔ་ཨིན།
+  དེ་མེན་པ་ཅིན་ གྲོས་འཆར་འདི་ དུས་ཚོད་ཁར་ ཚོགས་རྒྱན་ཚུ་ བསལ་མ་ཚུགས་ཚུན་ཚོད་ རྩོད་བསྡུར་ནང་ སྡོདཔ་ཨིན།
+- བཅོ་ཁ་རྐྱབ་ནི་དང་ ལས་མི་བང་རིམ་སེལ་འཐུ་ཚུ་ ཨེསི་ཨེལ་ཨེ་གི་དུས་ཚོད་དང་ འཐུས་ཤོར་གྱི་ཚབས་ཆེ་ཧིང་ དེ་ལས་ གཏན་འབེབས་མཐུད་འབྲེལ་བཀག་ཆ་འབད་མི་ཚུ་དང་གཅིག་ཁར་ བཀྲམ་སྤེལ་འབད་མི་རྒྱབ་ལོག་ཚུ་གིས་ བཀོད་སྒྲིག་འབདཝ་ཨིན།
+- ཉམས་བཅོས་གནས་རིམ་གྱི་ལན་ཚུ་ནང་ གཞི་རྟེན་༦༤ I18NT0000003X ཡོད་པའི་ I18NI0000096X ཨེ་རེ་ཅིག་ཚུདཔ་ཨིན།
+  རྩིས་ཞིབ་ལམ་གྱི་དོན་ལུ་ བྱུང་རིམ་གྱིས་ བཀོད་སྒྲིག་འབད་མི་ `RepairTaskEventV1` ཐོ་བཀོད་ཚུ། ཐོ་ཡིག་འདི།
+  འདི་ འཕྲལ་ཁམས་ཀྱི་ འགྱུར་བ་ཚུ་ལུ་ ཀེབ་ཡོདཔ་ཨིན།
+- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` ལྷག་ཙམ་བཏོན།
+  རྩིས་ཞིབ་སྒྲུབ་བྱེད་ཀྱི་དོན་ལུ་ ས་གནས་ཀྱི་གསལ་སྟོན་ཚོང་ཁང་ལས་ བཀག་བཞག་པའི་སྙན་ཞུ།
+- རེསི་ཊི་ (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
+  I18NI0000010101X) གིས་ བདེན་ཁུངས་བཀལ་ནིའི་གཞི་བཀོད་ཚུ་ཚུདཔ་ལས་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ འབད་ཚུགས།
+  བྱ་བ་མ་འབད་བའི་ཧེ་མ་ སྡེབ་ཚན་མགོ་ཡིག་གསརཔ་ཚུ་ལུ་ གནད་སྡུད་བདེན་དཔྱད་འབད།
 
-## References
+## དཔྱད་གཞི།
 
-- Canonical spec:
-  [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- Norito types: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
-- CLI helpers: `crates/iroha_cli/src/commands/sorafs.rs`,
+- ཁྲིམས་ལུགས་ཀྱི་ཁྱད་ཚད།
+  [`docs/source/sorafs_node_client_protocol.md`](I18NU0000015X)
+- Norito དབྱེ་བ་: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- སི་ཨེལ་ཨའི་གྲོགས་རམ་པ་: `crates/iroha_cli/src/commands/sorafs.rs`,
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- Orchestrator crate: `crates/sorafs_orchestrator`
-- Dashboard pack: `dashboards/grafana/sorafs_fetch_observability.json`
+- ཨོར་ཀེཊ་ཊོར་ ཀེརེཊ་: `crates/sorafs_orchestrator`
+- ཌེཤ་བོརཌ་ཐུམ་སྒྲིལ་: `dashboards/grafana/sorafs_fetch_observability.json`

@@ -8,203 +8,203 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Observability & SLO Plan
 sidebar_label: Observability & SLOs
 description: Telemetry schema, dashboards, and error-budget policy for SoraFS gateways, nodes, and the multi-source orchestrator.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-## Objectives
-- Define metrics and structured events for gateways, nodes, and the multi-source orchestrator.
-- Provide Grafana dashboards, alert thresholds, and validation hooks.
-- Establish SLO targets alongside error-budget and chaos-drill policies.
+## དམིགས་ཡུལ།
+- འཛུལ་སྒོ་ཚུ་དང་ མཐུད་མཚམས་ དེ་ལས་ སྣ་མང་འབྱུང་ཁུངས་ཀྱི་ རོལ་དབྱངས་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ མེ་ཊིགསི་དང་ གཞི་བཀོད་འབད་ཡོད་པའི་བྱུང་ལས་ཚུ་ ངེས་འཛིན་འབད།
+- I18NT0000018X བརྡ་བཀོད་དང་ དྲན་སྐུལ་ཚད་གཞི་ དེ་ལས་ བདེན་དཔྱད་ཀྱི་ ཧུཀ་ཚུ་བྱིན།
+- འཛོལ་བ་ཅན་གྱི་འཆར་དངུལ་དང་ ཟང་ཟིང་-ཆུ་གཡུར་གྱི་སྲིད་བྱུས་ཚུ་དང་གཅིག་ཁར་ ཨེསི་ཨེལ་ཨོ་དམིགས་གཏད་ཚུ་གཞི་བཙུགས་འབད།
 
-## Metric Catalogue
+## མེཊིག་ཐོ་གཞུང་།
 
-### Gateway surfaces
+### སྒོ་ཁའི་ངོས་འཛིན།
 
-| Metric | Type | Labels | Notes |
-|--------|------|--------|-------|
-| `sorafs_gateway_active` | Gauge (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | Emitted via `SorafsGatewayOtel`; tracks in-flight HTTP operations per endpoint/method combination. |
-| `sorafs_gateway_responses_total` | Counter | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Every completed gateway request increments once; `result` ∈ {`success`,`error`,`dropped`}. |
-| `sorafs_gateway_ttfb_ms_bucket` | Histogram | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Time-to-first-byte latency for gateway responses; exported as Prometheus `_bucket/_sum/_count`. |
-| `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | Proof verification outcomes captured at request time (`result` ∈ {`success`,`failure`}). |
-| `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | Verification latency distribution for PoR receipts. |
-| `telemetry::sorafs.gateway.request` | Structured event | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Structured log emitted on every request completion for Loki/Tempo correlation. |
+| མེ་ཊིག་ | དབྱེ་བ་ | ཁ་ཡིག་ཚུ། | དྲན་ཐོ། |
+|--------------------------------------------- |
+| I18NI0000027X | གཱའུ་གྷི་ (ཨཔ་ཌཱོན་ཀོའུན་ཊར་) | I18NI000000028X, `method`, I18NI0000000030X, I18NI0000000031X, I18NI00000000032X | I18NI000000033X བརྒྱུད་དེ་བཏང་ཡོདཔ།; མཐའ་མའི་ས་ཚིགས་/ཐབས་ལམ་མཉམ་སྡེབ་རེ་ལུ་ འཕུར་འགྲུལ་ནང་ ཨེཆ་ཊི་ཊི་པི་བཀོལ་སྤྱོད་ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན། |
+| I18NI0000034X | ཀའུན་ཊར་ | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, I18NI0000042X | མཇུག་བསྡུ་བའི་ འཛུལ་སྒོ་ཞུ་བ་རེ་རེ་བཞིན་ ཚར་གཅིག་ ཡར་སེང་འབདཝ་ཨིན། I18NI000000043X ∈ {`success`,I18NI000000045X,I18NI000000046X}. |
+| I18NI0000047X | ཧིསི་ཊོ་གཱརམ་ | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, I18NI0000005X | འཛུལ་སྒོ་གི་ལན་ཚུ་གི་དོན་ལུ་ དུས་ཚོད་དང་པ་ བཱའི་ཊི་གི་ འཕྲོ་མཐུད། ཕྱིར་གཏོང་ Prometheus `_bucket/_sum/_count` དུ་ཕྱིར་གཏོང་། |
+| I18NI0000007X | ཀའུན་ཊར་ | `profile_version`, `result`, I18NI000000060X, ཞུ་བ་འབད་བའི་དུས་ཚོད་ནང་ བདེན་དཔྱད་བདེན་དཔྱད་གྲུབ་འབྲས་ཚུ་ (`result` ∈ {`success`,`failure`)). |
+| `sorafs_gateway_proof_duration_ms_bucket` | ཧིསི་ཊོ་གཱརམ་ | I18NI000000065X, Prometheus, I18NI000000067X, བདེན་དཔྱད་ཀྱི་ འཕྲོ་མཐུད་བགོ་འགྲེམས་འབད་ནི། |
+| `telemetry::sorafs.gateway.request` | བཀོད་སྒྲིག་འབད་ཡོད་པའི་བྱུང་ལས་ | I18NI000000070X, I18NI00000000071X, I18NI0000000000072X, I18NI00000000000000074X, I18NI000000000000000000000000000000000000000074X, I18NI000000000000000000000000000000000000000000000000000000000X | ལོ་ཀི་/ཊེམ་པོ་འབྲེལ་མཐུན་གྱི་དོན་ལུ་ ཞུ་བ་མཇུག་བསྡུ་མི་རེ་རེ་ལུ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་དྲན་ཐོ་བཏོན་ཡོདཔ། |
 
-`telemetry::sorafs.gateway.request` events mirror the OTEL counters with structured payloads, surfacing `endpoint`, `method`, `variant`, `status`, `error_code`, and `duration_ms` for Loki/Tempo correlation while dashboards consume the OTLP series for SLO tracking.
+I18NI000000000000076X བྱུང་རིམ་ཚུ་གིས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ པེ་ལོཌ་ཚུ་དང་གཅིག་ཁར་ ཨོ་ཊི་ཨེལ་གྱི་ གྱངས་ཁ་བརྐྱབ་སྟེ་ I18NI000000077X, I18NI000000000078X, I18NI00000000000008X, I18NI0000008X, I18NI0000081X, དང་ གཉིས་ལྡན་ཚུ་ I18NI0000081X, དང་ གཉིས་ཨིན། I18NI000000082X གིས་ ལོ་ཀི་/ཊེམ་པོ་འབྲེལ་མཐུན་གྱི་དོན་ལུ་ ཌེཤ་བོརཌི་ཚུ་གིས་ ཨེསི་ཨེལ་ཨོ་རྗེས་འདེད་ཀྱི་དོན་ལུ་ ཨོ་ཊི་ཨེལ་པི་རིམ་སྒྲིག་འདི་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
 
-### Proof-health telemetry
+### བདེན་དཔང་འཕྲོད་བསྟེན་གྱི་བརྡ་སྟོན།
 
-| Metric | Type | Labels | Notes |
-|--------|------|--------|-------|
-| `torii_sorafs_proof_health_alerts_total` | Counter | `provider_id`, `trigger`, `penalty` | Increments every time `RecordCapacityTelemetry` emits a `SorafsProofHealthAlert`. `trigger` distinguishes PDP/PoTR/Both failures, while `penalty` captures whether collateral was actually slashed or suppressed by cooldown. |
-| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | Gauge | `provider_id` | Latest PDP/PoTR counts reported inside the offending telemetry window so teams can quantify how far providers overshot policy. |
-| `torii_sorafs_proof_health_penalty_nano` | Gauge | `provider_id` | Nano-XOR amount slashed on the last alert (zero when cooldown suppressed enforcement). |
-| `torii_sorafs_proof_health_cooldown` | Gauge | `provider_id` | Boolean gauge (`1` = alert suppressed by cooldown) to surface when follow-up alerts are temporarily muted. |
-| `torii_sorafs_proof_health_window_end_epoch` | Gauge | `provider_id` | Epoch recorded for the telemetry window tied to the alert so operators can correlate against Norito artefacts. |
+| མེ་ཊིག་ | དབྱེ་བ་ | ཁ་ཡིག་ཚུ། | དྲན་ཐོ། |
+|--------------------------------------------- |
+| I18NI0000083X | ཀའུན་ཊར་ | `provider_id`, `trigger`, `penalty` | I18NI000000087X གིས་ Prometheus ཅིག་བཏོནམ་ཨིན། I18NI0000000089X གིས་ PDP/PoTR/གཉིས་ཆ་ར་ འཐུས་ཤོར་བྱུང་མི་ཚུ་ དབྱེ་བ་ཕྱེ་ཚུགསཔ་ཨིན་རུང་ I18NI0000000090X གིས་ བརྟན་བཞུགས་འདི་ ངོ་མ་སྦེ་ བཏོག་བཏོགཔ་ཨིན་ན་ ཡང་ན་ བསིལ་དྲོད་ཀྱིས་ མར་ཕབ་འབདཝ་ཨིན་ན་ འཛིན་བཟུང་འབདཝ་ཨིན། |
+| `torii_sorafs_proof_health_pdp_failures`, I18NI0000092X | སྤྱི་ཟླ་༢ པ། `provider_id` | མཐའ་མའི་ PDP/PoTR གྱངས་ཁ་ཚུ་ ཉེས་འཛུགས་ཅན་གྱི་ ཊེ་ལི་མི་ཊི་སྒོ་སྒྲིག་ནང་ལུ་ སྙན་ཞུ་འབད་ཡོདཔ་ལས་ སྡེ་ཚན་ཚུ་གིས་ ཞབས་ཏོག་བྱིན་མི་ཚུ་གིས་ སྲིད་བྱུས་ག་དེ་ཅིག་ ཐག་རིང་སར་ བཀལ་ཚུགས། |
+| I18NI0000094X | སྤྱི་ཟླ་༢ པ། I18NI0000095X | Nano-XOR འདི་ མཐའ་མའི་ཉེན་བརྡ་ལུ་ བཏོག་བཏང་ཡོདཔ་ཨིན། ༼བསིལ་དྲོད་ཀྱིས་ བཀག་ཆ་འབད་བའི་སྐབས་ ཀླད་ཀོར་༽ |
+| I18NI0000096X | སྤྱི་ཟླ་༢ པ། `provider_id` | Boolean gauge (I18NI0000098X = དྲན་སྐུལ་འདི་ བསིལ་དྲོད་ལས་བརྟེན་ཏེ་ མར་ཕབ་འབདཝ་ཨིན།) ཁ་ཐོག་ལུ་ བརྟག་དཔྱད་ཀྱི་ཉེན་བརྡ་ཚུ་ གནས་སྐབས་ཅིག་གི་དོན་ལུ་ སྒྲ་མེདཔ་བཟོཝ་ཨིན། |
+| I18NI000009X | སྤྱི་ཟླ་༢ པ། `provider_id` | Epoch གིས་ དྲན་སྐུལ་ལུ་བསྡམ་བཞག་མི་ ཊེ་ལི་མི་ཊི་སྒོ་སྒྲིག་གི་དོན་ལུ་ ཐོ་བཀོད་འབད་དེ་ཡོདཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ Norito ཅ་རྙིང་ཚུ་དང་ འབྲེལ་འཐུད་འབད་ཚུགས། |
 
-These feeds now power the Taikai viewer dashboard’s proof-health row
-(`dashboards/grafana/taikai_viewer.json`), giving CDN operators live visibility
-into alert volumes, PDP/PoTR trigger mix, penalties, and cooldown state per
-provider.
+ད་ལྟ་འདི་ཚུ་གིས་ ཐའི་ཀཱའི་བལྟ་མི་ ཌེཤ་བོརཌ་གི་ བདེན་ཁུངས་གསོ་བའི་གྲལ་ཐིག་ལུ་ ནུས་ཤུགས་བྱིནམ་ཨིན།
+(I18NI00000101010), སི་ཌི་ཨེན་བཀོལ་སྤྱོད་པ་ཚུ་ མཐོང་གསལ་ཅན་སྦེ་བྱིན་ནི།
+ཉེན་བརྡ་འབོར་ཚད་ནང་ PDP/PoTR གི་ འཕྲུལ་ལྟོ་སླ་བསྲེ་ ཉེས་ཆད་ དེ་ལས་ བསིལ་དྲོད་གནས་སྟངས་ དེ་ གཅིག་ལུ་ བཞག་སྟེ་ཡོདཔ་ཨིན།
+སྤྲོད་ནི
 
-The same metrics now back two Taikai viewer alert rules:
-`SorafsProofHealthPenalty` fires whenever
-`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` increases in
-the last 15 minutes, while `SorafsProofHealthCooldown` raises a warning if a
-provider remains in cooldown for five minutes. Both alerts live in
-`dashboards/alerts/taikai_viewer_rules.yml` so SREs receive immediate context
-whenever PoR/PoTR enforcement escalates.
+ད་ལྟོ་ ཐའི་ཀཱའི་ལྟ་མི་ དྲན་སྐུལ་ལམ་ལུགས་གཉིས་ལུ་ དེ་བཟུམ་མའི་ མེ་ཊིག་ཚུ་:
+`SorafsProofHealthPenalty` ག་དུས་ཡང༌།
+`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` 2012
+མཐའ་མའི་སྐར་མ་ ༡༥ དང་ `SorafsProofHealthCooldown` གིས་ ཉེན་བརྡ་ཅིག་ཨིན་པ་ཅིན་ ཉེན་བརྡ་ཅིག་ ཡར་སེང་འབདཝ་ཨིན།
+བྱིན་མི་འདི་ སྐར་མ་ལྔ་གི་རིང་ལུ་ བསིལ་དྲོད་ཀྱི་དཀའ་ངལ་ནང་ལུས་ཡོདཔ་ཨིན། ཉེན་བརྡ་གཉིས་ཆ་ར་ ༢༠༠༨ ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+`dashboards/alerts/taikai_viewer_rules.yml` དེ་འབདཝ་ལས་ SREs གིས་ འཕྲལ་མགྱོགས་སྐབས་དོན་ཐོབ་ཨིན།
+PoR/PoTR བཀག་ཆ་འབད་མི་འདི་ ག་དུས་ལུ་ཡར་སེང་འགྱོཝ་ཨིན་ན།
 
-### Orchestrator surfaces
+###
 
-| Metric / Event | Type | Labels | Producer | Notes |
-|----------------|------|--------|----------|-------|
-| `sorafs_orchestrator_active_fetches` | Gauge | `manifest_id`, `region` | `FetchMetricsCtx` | Sessions currently in-flight. |
-| `sorafs_orchestrator_fetch_duration_ms` | Histogram | `manifest_id`, `region` | `FetchMetricsCtx` | Duration histogram in milliseconds; 1 ms→30 s buckets. |
-| `sorafs_orchestrator_fetch_failures_total` | Counter | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | Reasons: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
-| `sorafs_orchestrator_retries_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Distinguishes retry causes (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
-| `sorafs_orchestrator_provider_failures_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Captures session-level disablement / failure tallies. |
-| `sorafs_orchestrator_chunk_latency_ms` | Histogram | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Per-chunk fetch latency distribution (ms) for throughput/SLO analysis. |
-| `sorafs_orchestrator_bytes_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Bytes delivered per manifest/provider; derive throughput via `rate()` in PromQL. |
-| `sorafs_orchestrator_stalls_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Counts chunks exceeding `ScoreboardConfig::latency_cap_ms`. |
-| `telemetry::sorafs.fetch.lifecycle` | Structured event | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, `total_bytes`, `provider_candidates`, `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | Mirrors job lifecycle (start/complete) with Norito JSON payload. |
-| `telemetry::sorafs.fetch.retry` | Structured event | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | Emitted per provider retry streak; `attempts` counts incremental retries (≥ 1). |
-| `telemetry::sorafs.fetch.provider_failure` | Structured event | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | Surfaced when a provider crosses the failure threshold. |
-| `telemetry::sorafs.fetch.error` | Structured event | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | Terminal failure record, friendly to Loki/Splunk ingestion. |
-| `telemetry::sorafs.fetch.stall` | Structured event | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | Raised when chunk latency breaches the configured cap (mirrors stall counters). |
+| མེ་ཊིག་ / བྱུང་ལས་ | དབྱེ་བ་ | ཁ་ཡིག་ཚུ། | བཟོ་སྐྲུན་པ་ | དྲན་ཐོ། |
+|----------------------------------------------------------- -|
+| `sorafs_orchestrator_active_fetches` | སྤྱི་ཟླ་༢ པ། `manifest_id`, `region` | `FetchMetricsCtx` | ད་ལྟ་འཕུར་སྐྱོད་ཀྱི་ལས་རིམ། |
+| `sorafs_orchestrator_fetch_duration_ms` | ཧིསི་ཊོ་གཱརམ་ | `manifest_id`, `region` | `FetchMetricsCtx` | མི་ལི་སྐར་ཆ་ནང་ དུས་ཡུན་ ཧིསི་ཊོ་གཱརམ། 1ms→30s བག་ལེབ། |
+| `sorafs_orchestrator_fetch_failures_total` | ཀའུན་ཊར་ | `manifest_id`, `region`, `reason`, `FetchMetricsCtx` | རྒྱུ་མཚན་: `no_providers`, I18NI000000120X, I18NI00000000121X, I18NI00000000122X, I18NI000000123X, I18NI000000000000000000000000000X. |
+| `sorafs_orchestrator_retries_total` | ཀའུན་ཊར་ | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | དབྱེ་བ་ཕྱེ་བའི་རྒྱུ་རྐྱེན་ཚུ་ (`retry`, I18NI0000000131X, `length_mismatch`, I18NI000000133X). |
+| `sorafs_orchestrator_provider_failures_total` | ཀའུན་ཊར་ | `manifest_id`, `provider_id`, I18NI000000137X | `FetchMetricsCtx` | ལཱ་ཡུན་-གནས་རིམ་ལྕོགས་མིན་བཟོ་ནི་ / འཐུས་ཤོར་གྱི་ཐོ་ཡིག་ཚུ་ བཟུང་དོ་ཡོདཔ་ཨིན། |
+| `sorafs_orchestrator_chunk_latency_ms` | ཧིསི་ཊོ་གཱརམ་ | `manifest_id`, `provider_id` | `FetchMetricsCtx` | ཐོན་འབྲས་/ཨེསི་ཨེལ་ཨོ་དབྱེ་དཔྱད་ཀྱི་དོན་ལུ་ Per-chunk ཕེཆ་གི་བར་ཆད་བཀྲམ་སྤེལ་ (ms)། |
+| `sorafs_orchestrator_bytes_total` | ཀའུན་ཊར་ | `manifest_id`, `provider_id` | `FetchMetricsCtx` | བཱའིཊ་ཚུ་ གསལ་སྟོན་/བྱིན་མི་རེ་ལུ་ བཀྲམ་སྤེལ་འབདཝ་ཨིན། PromQL ནང་ `rate()` བརྒྱུད་དེ་ ཐོན་འབྲས་ཐོན་ཡོདཔ། |
+| `sorafs_orchestrator_stalls_total` | ཀའུན་ཊར་ | `manifest_id`, `provider_id` | `FetchMetricsCtx` | I18NI0000152X ལས་ལྷག་པའི་གྲངས་འབོར། |
+| `telemetry::sorafs.fetch.lifecycle` | བཀོད་སྒྲིག་འབད་ཡོད་པའི་བྱུང་ལས་ | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, `total_bytes`, `provider_candidates`, `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | མེ་ལོང་ལཱ་གཡོག་གི་མི་ཚེ་འཁོར་རིམ་ (འགོ་བཙུགས་/ཆ་ཚང་) དང་གཅིག་ཁར་ Norito JSON pappabod ཨིན། |
+| `telemetry::sorafs.fetch.retry` | བཀོད་སྒྲིག་འབད་ཡོད་པའི་བྱུང་ལས་ | I18NI00000000000166X, I18NI000000167X, I18NI000000000168X, I18NI0000000169X, I18NI000000170X, I18NI000000170X, I18NI000000000000000000000000000000000171X | `FetchTelemetryCtx` | བྱིན་མི་རེ་རེ་གིས་ ལོག་འབད་རྩོལ་བསྐྱེད་དོ་ཡོདཔ། `attempts` ཡར་འཕར་གྱི་བསྐྱར་ཚོད་ (≥1) རྩིས་རྐྱབ་ཨིན། |
+| `telemetry::sorafs.fetch.provider_failure` | བཀོད་སྒྲིག་འབད་ཡོད་པའི་བྱུང་ལས་ | `region`, I18NI00000000177X, I18NI0000000000000000178X, I18NI000000179X, I18NI00000000180X | `FetchTelemetryCtx` | བྱིན་མི་ཅིག་གིས་ འཐུས་ཤོར་གྱི་ཚད་གཞི་བརྒལ་བའི་སྐབས་ ཁ་ཐོག་ལུ་ཡོདཔ་ཨིན། |
+| `telemetry::sorafs.fetch.error` | བཀོད་སྒྲིག་འབད་ཡོད་པའི་བྱུང་ལས་ | I18NI0000000000183X, `region`, I18NI000000185X, I18NI000000186X, I18NI0000000187X, I18NI000000188X, I18NI000000188X, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | ཊར་མི་ནཱལ་འཐུས་ཤོར་དྲན་ཐོ་ ལོ་ཀི་/སི་པ་ལུནཀ་ ཟ་སྤྱོད་ལུ་ མཐུན་སྒྲིག་ཡོདཔ་ཨིན། |
+| `telemetry::sorafs.fetch.stall` | བཀོད་སྒྲིག་འབད་ཡོད་པའི་བྱུང་ལས་ | I18NI00000000192X, `region`, I18NI000000194X, I18NI0000000195X, I18NI000000196X, I18NI00000000197X | `FetchTelemetryCtx` | ཆ་ཤས་ཚུ་ རིམ་འབྱུང་གིས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ མགུ་ཏོག་འདི་ བརྡལ་བཤིག་གཏང་པའི་སྐབས་ ཡར་འཛེགས་ཡོདཔ་ཨིན། |
 
-### Node / replication surfaces
+### ནའུཊི་ / འདྲ་བཤུས་ཀྱི་ངོས་འཛིན།
 
-| Metric | Type | Labels | Notes |
-|--------|------|--------|-------|
-| `sorafs_node_capacity_utilisation_pct` | Histogram | `provider_id` | OTEL histogram of storage utilisation percentage (exported as `_bucket/_sum/_count`). |
-| `sorafs_node_por_success_total` | Counter | `provider_id` | Monotonic counter for successful PoR samples, derived from scheduler snapshots. |
-| `sorafs_node_por_failure_total` | Counter | `provider_id` | Monotonic counter for failed PoR samples. |
-| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | Existing Prometheus gauges for bytes used, queue depth, PoR inflight counts. |
-| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Provider capacity/uptime success data surfaced in the capacity dashboard. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Backlog depth plus the cumulative failure counters exported whenever `/v1/sorafs/por/ingestion/{manifest}` is polled, feeding the “PoR Stalls” panel/alert. |
+| མེ་ཊིག་ | དབྱེ་བ་ | ཁ་ཡིག་ཚུ། | དྲན་ཐོ། |
+|--------------------------------------------- |
+| `sorafs_node_capacity_utilisation_pct` | ཧིསི་ཊོ་གཱརམ་ | I18NI0000200X | གསོག་འཇོག་ལག་ལེན་བརྒྱ་ཆ་གི་ OTEL ཧིསི་ཊོ་གཱརམ་ (`_bucket/_sum/_count` བཟུམ་སྦེ་ཕྱིར་འདྲེན་འབད་ཡོདཔ།) |
+| I18NI0000020202 | ཀའུན་ཊར་ | `provider_id` | ལས་རིམ་བཟོ་མི་གི་པར་ཚུ་ནང་ལས་ཐོན་མི་ PoR དཔེ་ཚད་མཐར་འཁྱོལ་ཅན་ཚུ་གི་དོན་ལུ་ Monotonic cored. |
+| `sorafs_node_por_failure_total` | ཀའུན་ཊར་ | `provider_id` | འཐུས་ཤོར་བྱུང་མི་ PoR དཔེ་ཚད་ཚུ་གི་དོན་ལུ་ Monotonic གྱངས་ཁ། |
+| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | སྤྱི་ཟླ་༢ པ། `provider` | ད་ལྟོ་ཡོད་པའི་ Prometheus ལག་ལེན་འཐབ་ཡོད་པའི་ བཱའིཊི་ཚུ་གི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་ བཱའིཊི་དང་ གྱལ་གཏིང་ པོ་རའི་ཨིན་ཊི་ འཕུར་འགྲུལ་གྱི་གྱངས་ཁ་ཚུ། |
+| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, I18NI0000021110 | སྤྱི་ཟླ་༢ པ། `provider` | ལྕོགས་གྲུབ་ཀྱི་ཌེཤ་བོརཌི་ནང་ བྱིན་ཚུགས་པའི་ ལྕོགས་གྲུབ་/ཡར་འཕར་གནས་སྡུད་ཐོན་ཡོདཔ། |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | སྤྱི་ཟླ་༢ པ། `provider`, `manifest` | རྒྱབ་ལོག་གི་གཏིང་ཚད་དང་ བསྡོམས་རྩིས་འཐུས་ཤོར་གྱི་ གྱངས་ཁ་ཚུ་ `/v1/sorafs/por/ingestion/{manifest}` འདི་ འོས་འདེམས་འཐབ་པའི་སྐབས་ ཕྱིར་ཚོང་འཐབ་སྟེ་ “PoR Stalls” པེ་ནཱལ་/ཉེན་བརྡ་ལུ་ ལྟོ་བྱིནམ་ཨིན། |
 
-### Repair & SLA
+### ཉམས་བཅོས་དང་SLA
 
-| Metric | Type | Labels | Notes |
-|--------|------|--------|-------|
-| `sorafs_repair_tasks_total` | Counter | `status` | OTEL counter for repair task transitions. |
-| `sorafs_repair_latency_minutes` | Histogram | `outcome` | OTEL histogram for repair lifecycle latency. |
-| `sorafs_repair_queue_depth` | Histogram | `provider` | OTEL histogram of queued tasks per provider (snapshot-style). |
-| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | OTEL histogram of the oldest queued task age (seconds). |
-| `sorafs_repair_lease_expired_total` | Counter | `outcome` | OTEL counter for lease expiries (`requeued`/`escalated`). |
-| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | OTEL counter for slash proposal transitions. |
-| `torii_sorafs_repair_tasks_total` | Counter | `status` | Prometheus counter for task transitions. |
-| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | Prometheus histogram for repair lifecycle latency. |
-| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | Prometheus gauge for queued tasks per provider. |
-| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | Prometheus gauge for the oldest queued task age (seconds). |
-| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | Prometheus counter for lease expiries. |
-| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | Prometheus counter for slash proposal transitions. |
+| མེ་ཊིག་ | དབྱེ་བ་ | ཁ་ཡིག་ཚུ། | དྲན་ཐོ། |
+|--------------------------------------------- |
+| `sorafs_repair_tasks_total` | ཀའུན་ཊར་ | `status` | ལས་འགན་བསྒྱུར་བཅོས་ཚུ་གི་དོན་ལུ་ OTEL གྱངས་ཁ་རྐྱབ། |
+| `sorafs_repair_latency_minutes` | ཧིསི་ཊོ་གཱརམ་ | `outcome` | ཉམས་བཅོས་ཀྱི་མི་ཚེ་འཁོར་རིམ་གྱི་དོན་ལུ་ OTEL histogram. |
+| I18NI000002222X | ཧིསི་ཊོ་གཱརམ་ | `provider` | བྱིན་མི་རེ་ལུ་ ཀིའུ་ཨི་ཌི་ལས་འགན་ཚུ་གི་ ཨོ་ཊི་ཨེལ་ ཧིསི་ཊོ་གཱརམ། |
+| I18NI0000024X | ཧིསི་ཊོ་གཱརམ་ | — | གྱལ་རིམ་ལས་འགན་གྱི་ལོ་ཚད་རྙིང་ཤོས་ཀྱི་ OTEL histogram (སྐར་ཆ)། |
+| `sorafs_repair_lease_expired_total` | ཀའུན་ཊར་ | `outcome` | གླ་ཁར་ལེན་པའི་དུས་ཚོད་ལུ་ OTEL གྱངས་ཁ་རྐྱབ། (`requeued`/`escalated`). |
+| `sorafs_repair_slash_proposals_total` | ཀའུན་ཊར་ | I18NI0000230X | གྲོས་འཆར་གྱི་བསྒྱུར་བཅོས་ཚུ་ བཏོག་ནིའི་དོན་ལུ་ OTEL གྱངས་ཁ་རྐྱབ། |
+| I18NI0000231X | ཀའུན་ཊར་ | I18NI0000232X | ལས་འགན་བསྒྱུར་བཅོས་ཚུ་གི་དོན་ལུ་ Prometheus གྱངས་ཁ་རྐྱབ། |
+| `torii_sorafs_repair_latency_minutes_bucket` | ཧིསི་ཊོ་གཱརམ་ | `outcome` | Prometheus ཉམས་བཅོས་མི་ཚེ་འཁོར་རིམ་གྱི་དོན་ལུ་ ཧིསི་ཊོ་གཱརམ། |
+| `torii_sorafs_repair_queue_depth` | སྤྱི་ཟླ་༢ པ། `provider` | Prometheus གིས་ བང་རིམ་བྱིན་མི་རེ་ལུ་ གྱལ་རིམ་ལས་འགན་ཚུ་གི་དོན་ལུ་ཨིན། |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | སྤྱི་ཟླ་༢ པ། — | Prometheus གིས་ བང་རིམ་རྙིང་ཤོས་ལས་འགན་གྱི་ལོ་ཚད་ཀྱི་དོན་ལུ་ (སྐར་ཆ) |
+| `torii_sorafs_repair_lease_expired_total` | ཀའུན་ཊར་ | `outcome` | Prometheus གླ་ཆ་སྤྲོད་པའི་དུས་ཚོད་ལུ་ གྱངས་ཁ་རྐྱབ། |
+| `torii_sorafs_slash_proposals_total` | ཀའུན་ཊར་ | I18NI0000241X | I18NT000000007X གྲོས་འཆར་གྱི་གྲོས་འཆར་བསྒྱུར་བཅོས་ཀྱི་དོན་ལུ་ གྱངས་ཁ་བཀོད། |
 
-Governance audit JSON metadata mirrors the repair telemetry labels (`status`, `ticket_id`, `manifest`, `provider` on repair events; `outcome` on slash proposals) so metrics and audit artefacts can be correlated deterministically.
+གཞུང་སྐྱོང་རྩིས་ཞིབ་ JSON མེ་ཊ་ཌེ་ཊ་གིས་ ཉམས་བཅོས་འབད་བའི་ བརྒྱུད་འཕྲིན་གྱི་ ཁ་ཡིག་ (`status`, `ticket_id`, `manifest`, `provider`, ཉམས་བཅོས་ཀྱི་བྱུང་རིམ་ཚུ་གུ་ `provider`, འདི་ བཤུད་བརྙན་གྱི་གྲོས་འཆར་གུ་ `outcome`, མེཊིཀ་དང་ རྩིས་ཞིབ་ཚུ་ འབྲེལ་མཐུད་འབད་ཚུགས། གཏན་འབེབས་བཟོ་ནི།
 
-### Retention & GC
+### ཉེར་མཁོ།| མེ་ཊིག་ | དབྱེ་བ་ | ཁ་ཡིག་ཚུ། | དྲན་ཐོ། |
+|--------------------------------------------- |
+| `sorafs_gc_runs_total` | ཀའུན་ཊར་ | `result` | བཙུགས་ཡོད་པའི་མཐུད་མཚམས་ཀྱིས་བཏོན་མི་ GC ཕྱགས་བརྡར་གྱི་དོན་ལུ་ OTEL གྱངས་ཁ་རྐྱབ། |
+| `sorafs_gc_evictions_total` | ཀའུན་ཊར་ | `reason` | ཕྱིར་འབུད་འབད་ནི་གི་དོན་ལུ་ OTE གྱངས་ཁ་འདི་ རྒྱུ་མཚན་དང་འཁྲིལ་ཏེ་ སྡེ་ཚན་བཟོཝ་ཨིན་མས། |
+| I18NI0000251X | ཀའུན་ཊར་ | I18NI0000252X | རྒྱུ་མཚན་དང་འཁྲིལ་ཏེ་ སྡེ་ཚན་བཟོ་ཡོད་པའི་ བཱའིཊི་གི་དོན་ལུ་ OTEL གྱངས་ཁ་རྐྱབ། |
+| I18NI0000253X | ཀའུན་ཊར་ | `reason` | ཤུགས་ལྡན་བཟོ་བཅོས་ཡང་ན་སྲིད་བྱུས་ཀྱིས་བཀག་བཞག་མི་ བཏོན་བཏང་མི་ཚུ་གི་དོན་ལུ་ ITEL གྱངས་ཁ་རྐྱབ། |
+| `torii_sorafs_gc_runs_total` | ཀའུན་ཊར་ | I18NI0000256X | I18NT000000008X གི་ ཇི་སི་ ཕྱགས་བརྡར་ (མཐར་འཁྱོལ་/འཛོལ་བ་) གི་དོན་ལུ་ གྱངས་ཁ་རྐྱབ། |
+| I18NI0000257X | ཀའུན་ཊར་ | `reason` | Prometheus གིས་ ཕྱིར་འབུད་འབད་ནིའི་དོན་ལུ་ རྒྱུ་མཚན་གྱིས་ གསལ་སྟོན་འབདཝ་ཨིན། |
+| I18NI0000259X | ཀའུན་ཊར་ | I18NI0000260X | Prometheus རྒྱུ་མཚན་གྱིས་སྡེ་ཚན་བཟོ་ཡོད་པའི་བཱའིཊིསི་ཚུ་གི་དོན་ལུ་ གྱངས་ཁ་བརྐྱབ། |
+| `torii_sorafs_gc_blocked_total` | ཀའུན་ཊར་ | `reason` | Prometheus རྒྱུ་མཚན་གྱིས་སྡེ་ཚན་བཟོ་ཡོད་པའི་བཀག་ཆ་འབད་མི་ཕྱིར་འབུད་ཚུ་གི་དོན་ལུ་ གྱངས་ཁ་བརྐྱབ་ཡོདཔ། |
+| `torii_sorafs_gc_expired_manifests` | སྤྱི་ཟླ་༢ པ། — | ད་ལྟའི་དུས་ཚོད་རྫོགས་པའི་མངོན་རྟགས་འདི་ GC གིས་བལྟ་རྟོག་འབད་ཡོདཔ་ཨིན། |
+| `torii_sorafs_gc_oldest_expired_age_seconds` | སྤྱི་ཟླ་༢ པ། — | ལོ་ཚད་རྙིང་པའི་སྐར་ཆ་ནང་ དུས་ཡུན་ཚང་བའི་མངོན་རྟགས་ (བདག་འཛིན་གྱི་ཤུལ་ལས་)། |
 
-| Metric | Type | Labels | Notes |
-|--------|------|--------|-------|
-| `sorafs_gc_runs_total` | Counter | `result` | OTEL counter for GC sweeps, emitted by the embedded node. |
-| `sorafs_gc_evictions_total` | Counter | `reason` | OTEL counter for evicted manifests grouped by reason. |
-| `sorafs_gc_bytes_freed_total` | Counter | `reason` | OTEL counter for bytes freed grouped by reason. |
-| `sorafs_gc_blocked_total` | Counter | `reason` | OTEL counter for evictions blocked by active repairs or policy. |
-| `torii_sorafs_gc_runs_total` | Counter | `result` | Prometheus counter for GC sweeps (success/error). |
-| `torii_sorafs_gc_evictions_total` | Counter | `reason` | Prometheus counter for evicted manifests grouped by reason. |
-| `torii_sorafs_gc_bytes_freed_total` | Counter | `reason` | Prometheus counter for bytes freed grouped by reason. |
-| `torii_sorafs_gc_blocked_total` | Counter | `reason` | Prometheus counter for blocked evictions grouped by reason. |
-| `torii_sorafs_gc_expired_manifests` | Gauge | — | Current count of expired manifests observed by GC sweeps. |
-| `torii_sorafs_gc_oldest_expired_age_seconds` | Gauge | — | Age in seconds of the oldest expired manifest (after retention grace). |
+### མཐུན་སྒྲིལ།
 
-### Reconciliation
+| མེ་ཊིག་ | དབྱེ་བ་ | ཁ་ཡིག་ཚུ། | དྲན་ཐོ། |
+|--------------------------------------------- |
+| `sorafs.reconciliation.runs_total` | ཀའུན་ཊར་ | `result` | མཐུན་སྒྲིག་པར་རིས་ཚུ་གི་དོན་ལུ་ OTE གྱངས་ཁ་རྐྱབ། |
+| `sorafs.reconciliation.divergence_total` | ཀའུན་ཊར་ | — | གཡོག་བཀོལ་མི་རེ་ལུ་ ཁ་སྟོར་གྱི་གྱངས་ཁ་གི་ OTEL གྱངས་ཁ་རྐྱབ། |
+| `torii_sorafs_reconciliation_runs_total` | ཀའུན་ཊར་ | `result` | མཐུན་སྒྲིག་འབད་ནིའི་དོན་ལུ་ I18NT0000012X གྱངས་ཁ་བརྐྱབ་ཨིན། |
+| `torii_sorafs_reconciliation_divergence_count` | སྤྱི་ཟླ་༢ པ། — | མཐུན་སྒྲིག་སྙན་ཞུ་ནང་ ཐིག་ལེ་གི་གྲངས་ཚད་བལྟ་ཡོདཔ་ཨིན། |
 
-| Metric | Type | Labels | Notes |
-|--------|------|--------|-------|
-| `sorafs.reconciliation.runs_total` | Counter | `result` | OTEL counter for reconciliation snapshots. |
-| `sorafs.reconciliation.divergence_total` | Counter | — | OTEL counter of divergence counts per run. |
-| `torii_sorafs_reconciliation_runs_total` | Counter | `result` | Prometheus counter for reconciliation runs. |
-| `torii_sorafs_reconciliation_divergence_count` | Gauge | — | Latest divergence count observed in a reconciliation report. |
+### དུས་ཚོད་ལྡན་པའི་བསྐྱར་ཐོབ་ (PoTR) & ཆུངཀ་ཨེས་ཨེ།
 
-### Proof of Timely Retrieval (PoTR) & chunk SLA
+| མེ་ཊིག་ | དབྱེ་བ་ | ཁ་ཡིག་ཚུ། | བཟོ་སྐྲུན་པ་ | དྲན་ཐོ། |
+|-------------------------------------------------------- |
+| I18NI0000271X | ཧིསི་ཊོ་གཱརམ་ | `tier`, `provider` | PoTR མཉམ་འབྲེལ་པ་ | མི་ལི་སྐར་ཆ་ནང་ དུས་ཚོད་ཀྱི་ གོམ་པ་ (ལེགས་ཤོམ་ = word). |
+| `sorafs_potr_failures_total` | ཀའུན་ཊར་ | `tier`, `provider`, `reason` | PoTR མཉམ་འབྲེལ་པ་ | རྒྱུ་མཚན་: `expired`, `missing_proof`, `corrupt_proof`. |
+| I18NI0000281X | ཀའུན་ཊར་ | `provider`, `manifest_id`, `reason` | SLA བལྟ་རྟོག་པ་ | ཆ་ཤས་ཚུ་སྤྲོད་པའི་སྐབས་ ཨེསི་ཨེལ་ཨོ་ལུ་ བརླག་སྟོར་ཞུགས་པའི་སྐབས་ མེ་རྐྱེན་བྱུང་ཡོདཔ། |
+| I18NI0000285X | སྤྱི་ཟླ་༢ པ། `provider`, `manifest_id` | SLA བལྟ་རྟོག་པ་ | བུ་ལིན་གཱའུན་ (༠/༡) འདི་ ཤུགས་ལྡན་བརྡབ་གསིག་སྒོ་སྒྲིག་སྐབས་ སོར་བསྒྱུར་འབད་ཡོདཔ་ཨིན། |
 
-| Metric | Type | Labels | Producer | Notes |
-|--------|------|--------|----------|-------|
-| `sorafs_potr_deadline_ms` | Histogram | `tier`, `provider` | PoTR coordinator | Deadline slack in milliseconds (positive = met). |
-| `sorafs_potr_failures_total` | Counter | `tier`, `provider`, `reason` | PoTR coordinator | Reasons: `expired`, `missing_proof`, `corrupt_proof`. |
-| `sorafs_chunk_sla_violation_total` | Counter | `provider`, `manifest_id`, `reason` | SLA monitor | Fired when chunk delivery misses SLO (latency, success rate). |
-| `sorafs_chunk_sla_violation_active` | Gauge | `provider`, `manifest_id` | SLA monitor | Boolean gauge (0/1) toggled during active breach window. |
+## SLO དམིགས་ཚད།
 
-## SLO Targets
+- སྒོ་སྒྲིག་བློ་གཏད་མེད་པའི་ཐོབ་ཚུགསཔ་: **99.9%** (HTTP 2xx/304 ལན་ཚུ།)
+- ཡིད་ཆེས་མེད་པའི་ TTFB P95: ཚ་དྲོད་ཀྱི་རིམ་པ་ ≤120ms, ཚ་དྲོད་རིམ་པ་ ≤300ms.
+- བདེན་དཔང་ཚད་གཞི། ཉིནམ་རེ་ལུ་ ≥99.5%.
+- ཨོར་ཀེཊ་ཊར་གྱི་མཐར་འཁྱོལ་ (ཆ་ཤས་མཇུག་བསྡུ): ≥99%.
 
-- Gateway trustless availability: **99.9 %** (HTTP 2xx/304 responses).
-- Trustless TTFB P95: hot tier ≤ 120 ms, warm tier ≤ 300 ms.
-- Proof success rate: ≥ 99.5 % per day.
-- Orchestrator success (chunk completion): ≥ 99 %.
+## ཌེཤ་བོརཌི་དང་ ཉེན་བརྡ་འབད་དོ།
 
-## Dashboards & Alerting
+1. **Gateway བལྟ་བཤལ་** (`dashboards/grafana/sorafs_gateway_observability.json`) — བློ་གཏད་མེད་པའི་ཐོབ་ཚུལ་དང་ TTFB P95 དང་ ངོས་ལེན་མ་འབད་བའི་ བརྡལ་བཤིག་ དེ་ལས་ OTEL མེ་ཊིག་ཚུ་བརྒྱུད་དེ་ PoR/PoTR འཐུས་ཤོར་ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+2. **འགོ་འཁྲིདཔ་གསོ་བའི་** (`dashboards/grafana/sorafs_fetch_observability.json`) — ཐོན་ཁུངས་སྣ་ཚོགས་ཀྱི་འབག་ཤུགས་དང་ བསྐྱར་ལོག་ བྱིན་མི་གི་འཐུས་ཤོར་ དེ་ལས་ ཚོང་ཁང་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
+3. **སོ་ར་ནེཊ་སྒེར་དོན་མེ་ཊིག་** (`dashboards/grafana/soranet_privacy_metrics.json`) — ཐིག་ཁྲམ་ཚུ་ མིང་མ་བཀོད་པའི་ རི་ལེ་བཱ་ཀེཊ་དང་ བཀག་འཛིན་སྒོ་སྒྲིག་ དེ་ལས་ བསྡུ་སྒྲིག་འབད་མི་གསོ་བའི་ I18NI000000292X, དང་ `soranet_privacy_poll_errors_total{provider}`.
+4. **Capacity Health** (I18NI0000294X) — མགོ་ཁང་མིག་དང་ ཉམས་བཅོས་འབད་ཐངས་དང་ ཉམས་བཅོས་འབད་མི་ SLA ཡར་འཕར་ ཉམས་བཅོས་འབད་མི་ཚུ་གིས་ ཉམས་བཅོས་འབད་མི་དང་ ཇི་སི་ ཕྱགས་བརྡར་ཚུ་ རིན་མེད་སྟོང་པ་སྦེ་ འབད་ཡོདཔ།
 
-1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`) — tracks trustless availability, TTFB P95, refusal breakdown, and PoR/PoTR failures via the OTEL metrics.
-2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — covers multi-source load, retries, provider failures, and stall bursts.
-3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — charts anonymised relay buckets, suppression windows, and collector health via `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and `soranet_privacy_poll_errors_total{provider}`.
-4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom plus repair SLA escalations, repair queue depth by provider, and GC sweeps/evictions/bytes freed/blocked reasons/expired-manifest age and reconciliation divergence snapshots.
+དྲན་སྐུལ་གྱི་བང་སྒྲིག:
 
-Alert bundles:
+- `dashboards/alerts/sorafs_gateway_rules.yml` — གཱེཊ་ཝེ་ཐོབ་ཚུལ། ཊི་ཊི་ཨེཕ་བི་ བདེན་ཁུངས་འཐུས་ཤོར་འབྱུང་ནི།
+- `dashboards/alerts/sorafs_fetch_rules.yml` — ཨོར་ཀེཊ་ཊར་གྱི་ འཐུས་ཤོར་/ ཤོག་འཛིན་/ཚོང་ཁང་ཚུ། I18NI000000297X དང་ `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, I18NI000000299X, དང་ I18NI000000300X བརྒྱུད་དེ་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
+- `dashboards/alerts/sorafs_capacity_rules.yml` — ལྕོགས་གྲུབ་ཀྱི་གནོན་ཤུགས་དང་ ཉམས་བཅོས་ SLA/backlog/གླ་ཁར་ལེན་མི་ ཉེན་བརྡ་དང་ ཇི་སི་བཀག་བཞག་/བཀག་ཆ་/འཛོལ་བ་ཚུ་ བཀག་བཞག་ནིའི་དོན་ལུ་ གཤག་བཅོས།
+- I18NI0000000302X — སྒེར་གསང་མར་ཕབ་ཀྱི་ འཕར་ཚད་དང་ མནར་གཅོད་ཀྱི་ཉེན་བརྡ་ བསྡུ་སྒྲིག་ལས་མེད་བརྟག་དཔྱད་ དེ་ལས་ ལྕོགས་མིན་བཟོ་ཡོད་པའི་-བསྡུ་སྒྲིག་ཉེན་བརྡ་ (I18NI000000303X, I18NI000000004X)
+- I18NI000000305X — མིང་མ་བཀོད་པའི་ བཱ་རཱོན་ཨའུཊ་ཉེན་བརྡ་ `sorafs_orchestrator_brownouts_total` ལུ་ གློག་ཐག་བཏང་ཡོདཔ།
+- I18NI000000307X — ཊའི་ཀའི་ལྟ་མཁན་གྱི་ ཌིརཕཊ་/ཨིང་སི་ཊི་/སི་ཀེཊ་ ལག་གདུབ་ཀྱི་ཉེན་བརྡ་དང་ SoraFS བདེན་དཔང་-གསོ་བའི་ཉེས་ཆད་/བསིལ་དྲོད་ཀྱི་ཉེན་བརྡ་ I18NI0000000308X གིས་ ནུས་ཤུགས་སྤྲོད་ཡོདཔ།
 
-- `dashboards/alerts/sorafs_gateway_rules.yml` — gateway availability, TTFB, proof failure spikes.
-- `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failures/retries/stalls; validated via `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, and `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
-- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus repair SLA/backlog/lease-expiry alerts and GC stall/blocked/error alerts for retention sweeps.
-- `dashboards/alerts/soranet_privacy_rules.yml` — privacy downgrade spikes, suppression alarms, collector-idle detection, and disabled-collector alerts (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
-- `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms wired to `sorafs_orchestrator_brownouts_total`.
-- `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts powered by `torii_sorafs_proof_health_*`.
+## བརྟག ཐབས་ལམ།
 
-## Tracing Strategy
+- མཇུག་ལས་མཇུག་ལུ་ OpenTelemetry ཆ་འཇོག་འབད།
+  - གཱེཊི་ཝེ་གིས་ ཞུ་བ་ཨའི་ཌི་ཚུ་དང་གཅིག་ཁར་ བཀྲམ་སྟོན་འབད་ཡོད་མི་ OTLP spans (HTTP) འདི་བཏོན་ཞིནམ་ལས་ བཞུ་ནི་ཚུ་གསལ་སྟོན་འབདཝ་ཨིནམ་དང་ ཊོ་ཀེན་ཧ་ཤེ་ཚུ་ བཏོནམ་ཨིན།
+  - སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ `tracing` + I18NI0000000310X གིས་ ཕེཆ་དཔའ་བཅམ་ནིའི་དོན་ལུ་ བརྡ་བཀོད་ཚུ་ཕྱིར་འདྲེན་འབད་ནི་ལུ་ལག་ལེན་འཐབ་ཨིན།
+  - པོ་ཨར་ གདོང་ལེན་དང་ གསོག་འཇོག་བཀོལ་སྤྱོད་ཚུ་གི་དོན་ལུ་ SoraFS མཐུད་མཚམས་ཚུ་ བཙུགས་ཡོདཔ་ཨིན། ཆ་ཤས་ཆ་མཉམ་གྱིས་ `x-sorafs-trace` བརྒྱུད་དེ་ སྤྱིར་བཏང་གི་ འཚོལ་ཞིབ་ཀྱི་ ID བརྗེ་སོར་འབདཝ་ཨིན།
+- I18NI000000312X ཟམ་གྱི་སྡེ་ཚན་ཚུ་ OTLP histgrams ནང་ལུ་ཡོདཔ་ད་ `telemetry::sorafs.fetch.*` བྱུང་རིམ་ཚུ་གིས་ ལོག་ལྟེ་བའི་རྒྱབ་ལོག་ཚུ་གི་དོན་ལུ་ JSON པེ་ལོཌ་ཚུ་ ལྗིད་ཚད་མར་ཕབ་འབད་ཚུགསཔ་ཨིན།
+- བསྡུ་སྒྲིག་འབད་མི་ཚུ་: I18NT000000013X/Loki/Tempo (ཊེམ་པོ་དགའ་གདམ་) དང་ཅིག་ཁར་ OTEL བསྡུ་ལེན་འབད་མི་ཚུ་གཡོག་བཀོལ། ཇེ་གར་ཨེ་པི་ཨའི་ཕྱིར་འདྲེན་འབད་མི་ཚུ་གདམ་ཁ་ཅན་སྦེ་རང་ལུསཔ་ཨིན།
+- ཀར་ཌི་ན་ལི་བཀོལ་སྤྱོད་ཚུ་ དཔེ་ཚད་བཟོ་དགོཔ་ཨིན་ (མཐར་འཁྱོལ་འགྲུལ་ལམ་ཚུ་གི་དོན་ལུ་ བརྒྱ་ཆ་༡༠, འཐུས་ཤོར་གྱི་དོན་ལུ་ བརྒྱ་ཆ་༡༠༠)།
 
-- Adopt OpenTelemetry end-to-end:
-  - Gateways emit OTLP spans (HTTP) annotated with request IDs, manifest digests, and token hashes.
-  - The orchestrator uses `tracing` + `opentelemetry` to export spans for fetch attempts.
-  - Embedded SoraFS nodes export spans for PoR challenges and storage operations. All components share a common trace ID propagated via `x-sorafs-trace`.
-- `SorafsFetchOtel` bridges orchestrator metrics into OTLP histograms while `telemetry::sorafs.fetch.*` events provide lightweight JSON payloads for log-centric backends.
-- Collectors: run OTEL collectors alongside Prometheus/Loki/Tempo (Tempo preferred). Jaeger API exporters remain optional.
-- High-cardinality operations should be sampled (10 % for success paths, 100 % for failures).
+## TLS བརྒྱུད་འཕྲིན་མཉམ་འབྲེལ་ (SF-5b)
 
-## TLS Telemetry Coordination (SF-5b)
+- མེ་ཊིག་ཕྲང་ཕྲན།:
+  - TLS འཕྲུལ་ཆས་གྲུ་ `sorafs_gateway_tls_cert_expiry_seconds`, `sorafs_gateway_tls_renewal_total{result}`, དང་ `sorafs_gateway_tls_ech_enabled`.
+  - ཊི་ཨེལ་ཨེསི་/ལག་ཁྱེར་པེ་ནཱལ་གྱི་འོག་ལུ་ གཱེཊི་ཝེ་ སྤྱིར་བཏང་བལྟ་བཤལ་གྱི་ ཌེཤ་བོརཌ་ནང་ ཚད་འཇལ་འདི་ཚུ་ བཙུགས་དགོ།
+- འབྲེལ་ལམ་འཁྲིལ་བ།
+  - ཊི་ཨེལ་ཨེསི་དུས་ཚོད་རྫོགས་པའི་ཉེན་བརྡ་ཚུ་ མེ་ (≤14 days ལྷག་ལུས་) གིས་ བློ་གཏད་མེད་པའི་ཐོབ་ཚུགས་པའི་ ཨེསི་ཨེལ་ཨོ་དང་ འབྲེལ་བ་ཡོདཔ་ཨིན།
+  - ECH ལྕོགས་མིན་བཟོ་མི་འདི་གིས་ ཊི་ཨེལ་ཨེསི་དང་ འཐོབ་ཚུགས་པའི་པེ་ནཱལ་གཉིས་ཆ་ར་ལུ་ གཞི་བསྟུན་འབད་མི་ གལ་གནད་ཅན་གྱི་ཉེན་བརྡ་གཉིས་པ་ཅིག་ བཏོནམ་ཨིན།
+- Pipeline: ཊི་ཨེལ་ཨེསི་རང་བཞིན་ལཱ་གཡོག་ཕྱིར་འདྲེན་ཚུ་ གཱེཊི་མེཊིཀ་སྦེ་ Prometheus བརྩེགས་བརྩེགས་ལུ་ ; SF-5b དང་མཉམ་འབྲེལ་འབད་མི་འདི་གིས་ ཟས་བཅུད་མེད་པའི་ལག་ཆས་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
 
-- Metric alignment:
-  - TLS automation ships `sorafs_gateway_tls_cert_expiry_seconds`, `sorafs_gateway_tls_renewal_total{result}`, and `sorafs_gateway_tls_ech_enabled`.
-  - Include these gauges in the Gateway Overview dashboard under the TLS/Certificates panel.
-- Alert linkage:
-  - When TLS expiry alerts fire (≤ 14 days remaining) correlate with the trustless availability SLO.
-  - ECH disablement emits a secondary alert referencing both TLS and availability panels.
-- Pipeline: the TLS automation job exports to the same Prometheus stack as gateway metrics; coordination with SF-5b ensures deduplicated instrumentation.
+## མེཊིག་མིང་དང་ ཁ་ཡིག་གྲོས་མཐུན།
 
-## Metric Naming & Label Conventions
+- མེ་ཊིག་མིང་ཚུ་གིས་ ད་ལྟོ་ཡོད་པའི་ `torii_sorafs_*` ཡང་ན་ `sorafs_*` གིས་ I18NT0000000024X ལག་ལེན་འཐབ་མི་ སྔོན་སྒྲིག་ཚུ་ རྗེས་སུ་འཇུག་དོ་ཡོདཔ་ཨིན།
+- ཁ་ཡིག་ཆ་ཚན་ཚུ་ ཚད་ལྡན་བཟོ་ཡོདཔ་ཨིན།
+  - `result` → HTTP གྲུབ་འབྲས། (`success`, `refused`, `failed`)
+  - `reason` → ཁས་མ་ལེན་/འཛོལ་བ་ཨང་རྟགས་ (`unsupported_chunker`, I18NI000000325X ལ་སོགས་པ་ཚུ་)།
+  - `status` → ཉམས་བཅོས་ལས་ཀ་གནས་སྟངས་ (`queued`, I18NI000000328X, I18NI000000329X, I18NI000000333X, `escalated`).
+  - I18NI000000332X → ཉམས་བཅོས་ཁང་གླ་ ཡང་ན་ འཕྲོ་མཐུད་གྲུབ་འབྲས་ (`requeued`, `escalated`, I18NI000000335X, I18NI000000336X).
+  - `provider` → ཧེགསི་ཨེན་ཀོཌི་འབད་ཡོད་མི་བྱིན་མི་ངོས་འཛིན་པ།
+  - `manifest` → ཀེ་ནོ་ནིག་མངོན་པའི་ བཞུ་བཅོས་ (ཀར་ཌི་ན་ལི་ཊི་མཐོ་བའི་སྐབས་ བརྡབ་བཏང་ཡོདཔ་)།
+  - I18NI000000339X → གསལ་བསྒྲགས་རིམ་པ་ ཁ་ཡིག་ཚུ་ (`hot`, `warm`, I18NI000000342X).
+- ཊེ་ལི་མི་ཊི་ཐོན་སྐྱེད་ས་ཚིགས།
+  - གཱེཊ་ཝེ་མེ་ཊིགསི་འདི་ I18NI000000343X གི་འོག་ལུ་སྡོད་ཞིནམ་ལས་ `crates/iroha_core/src/telemetry.rs` ལས་ ཆིངས་ཡིག་ཚུ་ ལོག་སྟེ་ལག་ལེན་འཐབ།
+  - སྙན་ཆའི་སྡེ་ཚན་འདི་གིས་ `sorafs_orchestrator_*` metrics དང་ `telemetry::sorafs.fetch.*` བྱུང་ལས་ཚུ་ (ཚེ་སྲོག་དང་ ལོག་འབད་རྩོལ་ བྱིན་མི་ འཐུས་ཤོར་ འཛོལ་བ་ བཀག་ཆ་) གསལ་སྟོན་ ཌའི་ཇེསཊ་ ལཱ་གཡོག་ཨའི་ཌི་ ལུང་ཕྱོགས་ དེ་ལས་ བྱིན་མི་ངོས་འཛིན་འབད་མི་ཚུ་ བཏོནམ་ཨིན།
+  - ནོ་ཌིསི་ཁ་ཐོག་ `torii_sorafs_storage_*`, I18NI000000348X, དང་ I18NI000000349X.
+- བརྗེ་སོར་གྱི་ Prometheus མིང་བཏགས་ནིའི་ཡིག་ཆ་ནང་ མེ་ཊིག་ཐོ་གཞུང་འདི་ ཐོ་བཀོད་འབད་ནི་ལུ་ བལྟ་རྟོག་འབད་ཚུགསཔ་དང་ མཉམ་འབྲེལ་འབད།
 
-- Metric names follow the existing `torii_sorafs_*` or `sorafs_*` prefixes used by Torii and the gateway.
-- Label sets are standardised:
-  - `result` → HTTP outcome (`success`, `refused`, `failed`).
-  - `reason` → refusal/error code (`unsupported_chunker`, `timeout`, etc.).
-  - `status` → repair task state (`queued`, `in_progress`, `completed`, `failed`, `escalated`).
-  - `outcome` → repair lease or latency outcome (`requeued`, `escalated`, `completed`, `failed`).
-  - `provider` → hex-encoded provider identifier.
-  - `manifest` → canonical manifest digest (trimmed when high-cardinality).
-  - `tier` → declarative tier labels (`hot`, `warm`, `archive`).
-- Telemetry emission points:
-  - Gateway metrics live under `torii_sorafs_*` and reuse conventions from `crates/iroha_core/src/telemetry.rs`.
-  - The orchestrator emits `sorafs_orchestrator_*` metrics and `telemetry::sorafs.fetch.*` events (lifecycle, retry, provider failure, error, stall) tagged with manifest digest, job ID, region, and provider identifiers.
-  - Nodes surface `torii_sorafs_storage_*`, `torii_sorafs_capacity_*`, and `torii_sorafs_por_*`.
-- Coordinate with Observability to register the metric catalogue in the shared Prometheus naming doc, including label cardinality expectations (provider/manifests upper bounds).
+## གནད་སྡུད་པའི་སྒྱུ་རྩལ།
 
-## Data Pipeline
+- ཆ་ཤས་རེ་རེ་དང་གཅིག་ཁར་ བསྡུ་སྒྲིག་འབད་མི་ བསྡུ་སྒྲིག་འབད་མི་ཚུ་ Prometheus དང་ Loki/Tempo (དྲན་ཐོ་/རྗེས་ཤུལ་) ལུ་ OTLP ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+- གདམ་ཁ་ཅན་གྱི་ eBPF (Tetragon) གིས་ འཛུལ་སྒོ་/མཛུབ་གནོན་ཚུ་གི་དོན་ལུ་ གནས་རིམ་དམའ་བའི་འཚོལ་ཞིབ་འདི་ མཐོ་དྲགས་བཟོཝ་ཨིན།
+- `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` དང་ Torii དང་ བཙུགས་ཡོད་པའི་མཐུད་མཚམས་ཚུ་ལག་ལེན་འཐབ། སྙན་ཆའི་སྡེ་ཚན་འདི་ `install_sorafs_fetch_otlp_exporter` ལུ་འཕྲོ་མཐུད་དེ་རང་སླབ་ཨིན།
 
-- Collectors deploy alongside each component, exporting OTLP to Prometheus (metrics) and Loki/Tempo (logs/traces).
-- Optional eBPF (Tetragon) enriches low-level tracing for gateways/nodes.
-- Use `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` for Torii and embedded nodes; the orchestrator continues to call `install_sorafs_fetch_otlp_exporter`.
+## བདེན་དཔང་འབད་ནི།
 
-## Validation Hooks
-
-- Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` during CI to ensure Prometheus alert rules remain in lockstep with stall metrics and privacy suppression checks.
-- Keep Grafana dashboards under version control (`dashboards/grafana/`) and update screenshots/links when panels change.
-- Chaos drills log outcomes via `scripts/telemetry/log_sorafs_drill.sh`; validation leverages `scripts/telemetry/validate_drill_log.sh` (see the [Operations Playbook](operations-playbook.md)).
+- CI གི་སྐབས་ལུ་ I18NI000000352X གཡོག་བཀོལ་ནིའི་དོན་ལུ་ Prometheus ཉེན་བརྡའི་ལམ་ལུགས་ཚུ་ stall metrics and Pity dipreck ཞིབ་དཔྱད་ཚུ་དང་གཅིག་ཁར་ ལྡེ་མིག་བརྐྱབ་སྟེ་བཞག་དགོ།
+- ཐོན་རིམ་ཚད་འཛིན་ (`dashboards/grafana/`) དང་ པེ་ནཱལ་ཚུ་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ གསལ་གཞི་པར་རིས་/འབྲེལ་ལམ་ཚུ་ དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ - I1NT00000019X ཌེཤ་བོརཌ་ཚུ་ བཞག་དགོ།
+- མགོ་རྙོག་སྦྱོང་བརྡར་ཚུ་ I18NI000000354X བརྒྱུད་དེ་; བདེན་དཔྱད་ཀྱི་ འཇལ་ཚད་ `scripts/telemetry/validate_drill_log.sh` ( [བཀོལ་སྤྱོད་དེབ་](I18NU0000026X) ལུ་བལྟ།

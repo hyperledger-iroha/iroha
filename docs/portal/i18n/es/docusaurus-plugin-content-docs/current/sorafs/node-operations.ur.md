@@ -4,23 +4,25 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-operations.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-operations
-title: نوڈ آپریشنز رن بک
+id: operaciones de nodo
+título: نوڈ آپریشنز رن بک
 sidebar_label: نوڈ آپریشنز رن بک
-description: Torii کے اندر ایمبیڈڈ `sorafs-node` ڈیپلائمنٹ کی توثیق کریں۔
+descripción: Torii کے اندر ایمبیڈڈ `sorafs-node` ڈیپلائمنٹ کی توثیق کریں۔
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 یہ صفحہ `docs/source/sorafs/runbooks/sorafs_node_ops.md` کی عکاسی کرتا ہے۔ جب تک پرانا Sphinx ڈاکیومنٹیشن سیٹ مکمل طور پر منتقل نہ ہو جائے، دونوں نقول کو ہم آہنگ رکھیں۔
 :::
 
 ## جائزہ
 
 یہ رن بک آپریٹرز کو Torii کے اندر ایمبیڈڈ `sorafs-node` ڈیپلائمنٹ کی توثیق میں
-رہنمائی کرتی ہے۔ ہر سیکشن براہِ راست SF-3 deliverables سے میپ ہوتا ہے: pin/fetch
+رہنمائی کرتی ہے۔ ہر سیکشن براہِ راست Entregables SF-3 سے میپ ہوتا ہے: pin/fetch
 راؤنڈ ٹرپس، ری اسٹارٹ ریکوری، کوٹا ریجیکشن، اور PoR سیمپلنگ۔
 
 ## 1. پیشگی تقاضے
@@ -43,16 +45,16 @@ description: Torii کے اندر ایمبیڈڈ `sorafs-node` ڈیپلائمنٹ
   por_success_alpha = 0.25
   ```
 
-- یقینی بنائیں کہ Torii پروسس کے پاس `data_dir` تک read/write رسائی ہو۔
-- declaration ریکارڈ ہونے کے بعد `GET /v1/sorafs/capacity/state` کے ذریعے تصدیق
+- یقینی بنائیں کہ Torii پروسس کے پاس `data_dir` تک lectura/escritura رسائی ہو۔
+- declaración ریکارڈ ہونے کے بعد `GET /v1/sorafs/capacity/state` کے ذریعے تصدیق
   کریں کہ نوڈ متوقع کپیسٹی اعلان کرتا ہے۔
-- جب smoothing فعال ہو، ڈیش بورڈز raw اور smoothed GiB·hour/PoR کاؤنٹرز دونوں
-  دکھاتے ہیں تاکہ jitter-free رجحانات کو spot values کے ساتھ نمایاں کیا جا سکے۔
+- جب suavizado فعال ہو، ڈیش بورڈز raw اور suavizado GiB·hora/PoR کاؤنٹرز دونوں
+  دکھاتے ہیں تاکہ sin fluctuaciones رجحانات کو valores puntuales کے ساتھ نمایاں کیا جا سکے۔
 
 ### CLI ڈرائی رن (اختیاری)
 
-HTTP endpoints ایکسپوز کرنے سے پہلے آپ bundled CLI کے ذریعے اسٹوریج backend کا
-sanity-check کر سکتے ہیں۔【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+Puntos finales HTTP ایکسپوز کرنے سے پہلے آپ CLI incluido کے ذریعے اسٹوریج backend کا
+control de cordura کر سکتے ہیں۔【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -65,17 +67,15 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --manifest-id <hex> \
   --manifest-out ./out/manifest.to \
   --payload-out ./out/payload.bin
-```
-
-یہ کمانڈز Norito JSON summaries پرنٹ کرتی ہیں اور chunk-profile یا digest mismatch
-کو مسترد کرتی ہیں، جس سے یہ Torii wiring سے پہلے CI smoke checks کے لیے مفید بنتی
+```یہ کمانڈز Norito Resúmenes JSON پرنٹ کرتی ہیں اور fragment-profile یا no coincidencia de resumen
+کو مسترد کرتی ہیں، جس سے یہ Torii cableado سے پہلے Comprobaciones de humo de CI کے لیے مفید بنتی
 ہیں۔【crates/sorafs_node/tests/cli.rs#L1】
 
 ### PoR پروف کی مشق
 
-آپریٹرز اب گورننس کی طرف سے جاری کردہ PoR artifacts کو Torii پر اپ لوڈ کرنے سے
-پہلے لوکل طور پر ری پلے کر سکتے ہیں۔ CLI اسی `sorafs-node` ingestion پاتھ کو reuse
-کرتی ہے، اس لیے لوکل رنز وہی validation errors ظاہر کرتے ہیں جو HTTP API واپس
+آپریٹرز اب گورننس کی طرف سے جاری کردہ PoR artefactos کو Torii پر اپ لوڈ کرنے سے
+پہلے لوکل طور پر ری پلے کر سکتے ہیں۔ CLI اسی `sorafs-node` ingestión y reutilización
+کرتی ہے، اس لیے لوکل رنز وہی errores de validación ظاہر کرتے ہیں جو HTTP API y
 لوٹاتی ہے۔
 
 ```bash
@@ -86,28 +86,26 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
   --verdict ./fixtures/sorafs_manifest/por/verdict_v1.to
 ```
 
-کمانڈ ایک JSON summary emit کرتی ہے (manifest digest، provider id، proof digest،
-sample count، اور optional verdict outcome)۔ `--manifest-id=<hex>` فراہم کریں تاکہ
-اسٹور شدہ manifest چیلنج digest سے میچ کرے، اور `--json-out=<path>` استعمال کریں
-جب آپ summary کو اصل artifacts کے ساتھ audit evidence کے طور پر آرکائیو کرنا
-چاہیں۔ `--verdict` شامل کرنے سے آپ HTTP API کال کرنے سے پہلے آف لائن چیلنج → پروف
-→ verdict لوپ کی پوری مشق کر سکتے ہیں۔
+کمانڈ ایک El resumen JSON emite کرتی ہے (resumen de manifiesto, identificación del proveedor, resumen de prueba,
+recuento de muestras, o resultado del veredicto opcional)۔ `--manifest-id=<hex>` فراہم کریں تاکہ
+اسٹور شدہ manifiesto چیلنج resumen سے میچ کرے، اور `--json-out=<path>` استعمال کریں
+جب آپ resumen کو اصل artefactos کے ساتھ evidencia de auditoría کے طور پر آرکائیو کرنا
+چاہیں۔ `--verdict` Utilice la API HTTP para configurar la configuración de la API → پروف
+→ veredicto لوپ کی پوری مشق کر سکتے ہیں۔
 
-Torii لائیو ہونے کے بعد آپ وہی artifacts HTTP کے ذریعے حاصل کر سکتے ہیں:
+Torii Dispositivos HTTP کے ذریعے حاصل کر سکتے ہیں:
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-دونوں endpoints ایمبیڈڈ اسٹوریج ورکر فراہم کرتا ہے، اس لیے CLI smoke tests اور
-gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+Puntos finales adicionales ایمبیڈڈ اسٹوریج ورکر فراہم کرتا ہے، اس لیے CLI smoke tests اور
+sondas de puerta de enlace ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
 
-## 2. Pin → Fetch راؤنڈ ٹرپ
-
-1. manifest + payload بنڈل تیار کریں (مثلاً
+## 2. Pin → Recuperar راؤنڈ ٹرپ1. manifiesto + carga útil بنڈل تیار کریں (مثلاً
    `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json` کے ذریعے)۔
-2. manifest کو base64 encoding کے ساتھ جمع کریں:
+2. manifiesto con codificación base64:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -115,9 +113,9 @@ gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/a
      -d @pin_request.json
    ```
 
-   request JSON میں `manifest_b64` اور `payload_b64` شامل ہونا چاہیے۔ کامیاب
-   response `manifest_id_hex` اور payload digest واپس کرتی ہے۔
-3. pinned ڈیٹا fetch کریں:
+   solicitud JSON میں `manifest_b64` اور `payload_b64` شامل ہونا چاہیے۔ کامیاب
+   respuesta `manifest_id_hex` اور resumen de carga útil واپس کرتی ہے۔
+3. fijado ڈیٹا buscar کریں:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -129,31 +127,31 @@ gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/a
      }'
    ```
 
-   `data_b64` فیلڈ کو base64 decode کریں اور تصدیق کریں کہ یہ اصل bytes سے میچ کرتی ہے۔
+   `data_b64` فیلڈ کو base64 decodificación کریں اور تصدیق کریں کہ یہ اصل bytes سے میچ کرتی ہے۔
 
 ## 3. ری اسٹارٹ ریکوری ڈرل
 
-1. اوپر دیے گئے طریقے کے مطابق کم از کم ایک manifest pin کریں۔
+1. اوپر دیے گئے طریقے کے مطابق کم از کم ایک pin de manifiesto کریں۔
 2. Torii پروسس (یا پورا نوڈ) ری اسٹارٹ کریں۔
-3. fetch ریکوئسٹ دوبارہ جمع کریں۔ payload بدستور دستیاب رہے اور واپس آنے والا
-   digest ری اسٹارٹ سے پہلے والی قدر کے مطابق ہو۔
+3. buscar ریکوئسٹ دوبارہ جمع کریں۔ carga útil بدستور دستیاب رہے اور واپس آنے والا
+   digerir ری اسٹارٹ سے پہلے والی قدر کے مطابق ہو۔
 4. `GET /v1/sorafs/storage/state` چیک کریں تاکہ تصدیق ہو کہ `bytes_used` ری بوٹ کے
-   بعد persisted manifests کو ظاہر کرتا ہے۔
+   بعد manifiestos persistentes کو ظاہر کرتا ہے۔
 
 ## 4. کوٹا ریجیکشن ٹیسٹ
 
 1. عارضی طور پر `torii.sorafs.storage.max_capacity_bytes` کو چھوٹی قدر پر لائیں
-   (مثلاً ایک manifest کے سائز کے برابر)۔
-2. ایک manifest pin کریں؛ ریکوئسٹ کامیاب ہونی چاہیے۔
-3. اسی طرح کے سائز والا دوسرا manifest pin کرنے کی کوشش کریں۔ Torii کو ریکوئسٹ
+   (مثلاً ایک manifiesto کے سائز کے برابر)۔
+2. Pin de manifiesto کریں؛ ریکوئسٹ کامیاب ہونی چاہیے۔
+3. اسی طرح کے سائز والا دوسرا pin de manifiesto کرنے کی کوشش کریں۔ Torii کو ریکوئسٹ
    HTTP `400` کے ساتھ مسترد کرنی چاہیے اور ایرر میسج میں `storage capacity exceeded`
    شامل ہونا چاہیے۔
 4. ختم ہونے پر نارمل کپیسٹی حد بحال کریں۔
 
 ## 5. PoR سیمپلنگ پروب
 
-1. ایک manifest pin کریں۔
-2. PoR sample ریکوئسٹ کریں:
+1. Pin de manifiesto کریں۔
+2. Muestra de PoR ریکوئسٹ کریں:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -163,27 +161,25 @@ gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/a
        "count": 4,
        "seed": 12345
      }'
-   ```
-
-3. تصدیق کریں کہ response میں `samples` مطلوبہ count کے ساتھ موجود ہیں اور ہر
-   proof اسٹور شدہ manifest root کے خلاف ویریفائی ہوتا ہے۔
+   ```3. تصدیق کریں کہ respuesta میں `samples` مطلوبہ cuenta کے ساتھ موجود ہیں اور ہر
+   prueba اسٹور شدہ raíz manifiesta کے خلاف ویریفائی ہوتا ہے۔
 
 ## 6. آٹومیشن ہکس
 
-- CI / smoke tests درج ذیل میں شامل ٹارگٹڈ چیکس دوبارہ استعمال کر سکتے ہیں:
+- Pruebas de CI/humo درج ذیل میں شامل ٹارگٹڈ چیکس دوبارہ استعمال کر سکتے ہیں:
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
   ```
 
-  جو `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, اور
+  Aquí `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, y
   `por_sampling_returns_verified_proofs` کو کور کرتے ہیں۔
 - ڈیش بورڈز کو یہ ٹریک کرنا چاہیے:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` اور `torii_sorafs_storage_fetch_inflight`
+  - `torii_sorafs_storage_pin_queue_depth` y `torii_sorafs_storage_fetch_inflight`
   - `/v1/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
-  - `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے settlement publish attempts
+  - `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے intentos de publicación de liquidación
 
-ان drills کی پیروی سے یہ یقینی ہوتا ہے کہ ایمبیڈڈ اسٹوریج ورکر ڈیٹا ingest کر
+ان ejercicios کی پیروی سے یہ یقینی ہوتا ہے کہ ایمبیڈڈ اسٹوریج ورکر ڈیٹا ingerir کر
 سکے، ری اسٹارٹس برداشت کرے، مقررہ کوٹاز کا احترام کرے، اور نوڈ کے وسیع نیٹ ورک
-کو کپیسٹی advertise کرنے سے پہلے ڈٹرمنسٹک PoR proofs تیار کرے۔
+کو کپیسٹی publicidad کرنے سے پہلے ڈٹرمنسٹک Pruebas PoR تیار کرے۔

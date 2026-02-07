@@ -4,57 +4,59 @@ direction: ltr
 source: docs/portal/docs/reference/publishing-checklist.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Publishing Checklist
+# Баҫма тикшерелгән исемлек
 
-Use this checklist whenever you update the developer portal. It ensures that the
-CI build, GitHub Pages deployment, and manual smoke tests cover every section
-before a release or roadmap milestone lands.
+Был тикшерелгән исемлекте ҡулланыу, ҡасан һеҙ яңыртыу порталы эшләүсе. Ул тәьмин итә, тип
+CI төҙөү, GitHub биттәре таратыу, һәм ҡул төтөн һынауҙары һәр бүлек ҡаплай
+йәки юл картаһы һыҙаттары алдынан ерҙәр.
 
-## 1. Local validation
+## 1. Урындағы раҫлау
 
-- `npm run sync-openapi -- --version=current --latest` (add one or more
-  `--mirror=<label>` flags when Torii OpenAPI changes for a frozen snapshot).
-- `npm run build` – confirm the `Build on Iroha with confidence` hero copy still
-  appears in `build/index.html`.
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` – verify the
-  checksum manifest (add `--descriptor`/`--archive` when testing downloaded CI
-  artefacts).
-- `npm run serve` – launches the checksum-gated preview helper which verifies
-  the manifest before calling `docusaurus serve`, so reviewers never browse an
-  unsigned snapshot (the `serve:verified` alias remains for explicit calls).
-- Spot-check the markdown you touched via `npm run start` and the live reload
-  server.
+- I18NI000000009X X (бер йәки бер нисә өҫтәү
+  `--mirror=<label>` флагтары, ҡасан I18NT000000007X I18NT00000000000000000 снимок өсөн үҙгәрештәр).
+- I18NI000000011X – I18NI000000012X герой күсермәһен раҫлау.
+  `build/index.html`-та күренә.
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` – раҫлай.
+  чек сумма манифест (өҫтәү I18NI000000015X/I18NI000000016X ҡасан һынау скачать CI .
+  артефакттары).
+- I18NI000000017X – чек-ҡайын ҡапҡалы алдан ҡарау ярҙамсыһы эшләй, улар раҫлай
+  манифест шылтыратыу алдынан I18NI00000000018X, шуға күрә рецензенттар бер ҡасан да браузерҙа
+  ҡултамғаһыҙ снимок (I18NI000000019X псевдонимы асыҡ шылтыратыуҙар өсөн ҡала).
+- Һеҙҙең I18NI0000000020X аша ҡағылған маркдаунды тап-тикшерергә һәм тура эфирҙа перезагрузка
+  сервер.
 
-## 2. Pull request checks
+## 2. Азат запрос чектары
 
-- Verify the `docs-portal-build` job succeeded in `.github/workflows/check-docs.yml`.
-- Confirm `ci/check_docs_portal.sh` ran (CI logs show the hero smoke check).
-- Ensure the preview workflow uploaded a manifest (`build/checksums.sha256`) and
-  the preview verification script succeeded (CI logs show the
-  `scripts/preview_verify.sh` output).
-- Add the published preview URL from the GitHub Pages environment to the PR
-  description.
+- `docs-portal-build` эшен тикшерергә I18NI000000022Х-ла уңышлы үтте.
+- `ci/check_docs_portal.sh` раҫланған (CI журналдар герой төтөн тикшерергә күрһәтә).
+- Алдан ҡарау эш ағымын тәьмин итеү манифест (`build/checksums.sha256`) һәм
+  алдан ҡарау тикшерелгән сценарий уңышлы булды (CI журналдар күрһәтә
+  `scripts/preview_verify.sh` сығыш).
+- баҫылған алдан ҡарау URL-адресын GitHub биттәренән PR-ға тиклем өҫтәгеҙ.
+  васиф.
 
-## 3. Section sign-off
+## 3. Бүлек ҡул ҡуйыу-офф
 
-| Section | Owner | Checklist |
-|---------|-------|-----------|
-| Homepage | DevRel | Hero copy renders, quickstart cards link to valid routes, CTA buttons resolve. |
-| Norito | Norito WG | Overview and getting-started guides reference the latest CLI flags and Norito schema docs. |
-| SoraFS | Storage Team | Quickstart runs to completion, manifest report fields documented, fetch simulation instructions verified. |
-| SDK guides | SDK leads | Rust/Python/JS guides compile the current examples and link to live repos. |
-| Reference | Docs/DevRel | Index lists the newest specs, Norito codec reference matches `norito.md`. |
-| Preview artifact | Docs/DevRel | `docs-portal-preview` artifact attached to the PR, smoke checks pass, link shared with reviewers. |
-| Security & Try it sandbox | Docs/DevRel · Security | OAuth device-code login configured (`DOCS_OAUTH_*`), `security-hardening.md` checklist executed, CSP/Trusted Types headers verified via `npm run build` or `npm run probe:portal`. |
+| Бүлек | Хужа | Тикшереү исемлеге |
+|--------|--------|------------|
+| Төп бит | DevRel | Герой күсермәһе күрһәтә, тиҙ башлау карталары һылтанма дөрөҫ маршруттар, CTA төймәләре хәл итә. |
+| Norito | Norito WG | Обзор һәм алыу-башланған етәкселәр һылтанма һуңғы CLI флагтары һәм I18NT0000000003X схемаһы docs. |
+| SoraFS | Һаҡлау командаһы | Quickstart тамамлау өсөн йүгерә, асыҡ отчет ҡырҙары документлаштырылған, алынған моделләштереү күрһәтмәләре раҫланды. |
+| SDK етәкселәр | SDK лидерҙары | Rust/Python/JS етәкселек итә, ағымдағы миҫалдарҙы компиляциялау һәм һылтанма тере репо. |
+| Һылтанма | Док/ДевРел | Индекс иң яңы спецификациялар исемлеге, I18NT0000000004X кодек белешмә тап килә `norito.md`. |
+| Алдан ҡарау артефакт | Док/ДевРел | I18NI000000027X артефакт беркетелгән пиар, төтөн тикшерелгән үтә, һылтанма менән уртаҡлашҡан рецензенттар. |
+| Хәүефһеҙлек & Ҡом йәшниген һынап ҡарағыҙ | Доктар/ДевРел · Хәүефһеҙлек | OAuth ҡоролма-код логин конфигурацияланған (I18NI0000028X), I18NI0000000029X тикшерелгән исемлек башҡарылған, CSP/Ышаныслы типтар аша раҫланған I18NI000000000300 йәки I18NI000000031X. |
 
-Mark each row as part of your PR review, or note any follow-up tasks so status
-tracking stays accurate.
+Һәр рәтте билдәләү өлөшө булараҡ, һеҙҙең PR тикшерергә, йәки ниндәй ҙә булһа эҙмә-эҙлекле бурыстарҙы билдәләп, шулай статус .
+күҙәтеү дөрөҫ ҡала.
 
-## 4. Release notes
+## 4. Яҙмаларҙы сығарыу
 
-- Include `https://docs.iroha.tech/` (or the environment URL
-  from the deployment job) in release notes and status updates.
-- Call out any new or changed sections explicitly so downstream teams know where
-  to re-run their own smoke tests.
+- I18NI000000032X (йәки тирә-яҡ мөхит URL
+  таратыу эшенән) ноталар һәм статус яңыртыуҙары.
+- Һеҙҙең теләһә ниндәй яңы йәки үҙгәртелгән бүлектәрҙе асыҡтан-асыҡ асыҡтан-асыҡ, шулай итеп, аҫҡы команда командаларын белергә, ҡайҙа белергә
+  үҙҙәренең төтөн анализдарын яңынан эшләтергә.

@@ -6,84 +6,83 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 779174437b1a7e57b371d3b41d1cab780d94700acf6642b1356cdb75504ae5fa
 source_last_modified: "2026-01-21T10:30:30.084677+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Bytecode Header
+# IVM بائیکوڈ ہیڈر
 
 
-Magic
-- 4 bytes: ASCII `IVM\0` at offset 0.
+جادو
+- 4 بائٹس: آفسیٹ 0 پر ASCII `IVM\0`۔
 
-Layout (current)
-- Offsets and sizes (17 bytes total):
-  - 0..4: magic `IVM\0`
+لے آؤٹ (موجودہ)
+- آفسیٹس اور سائز (کل 17 بائٹس):
+  - 0..4: جادو `IVM\0`
   - 4: `version_major: u8`
   - 5: `version_minor: u8`
-  - 6: `mode: u8` (feature bits; see below)
+  - 6: `mode: u8` (فیچر بٹس ؛ نیچے ملاحظہ کریں)
   - 7: `vector_length: u8`
-  - 8..16: `max_cycles: u64` (little‑endian)
+  - 8..16: `max_cycles: u64` (لٹل - اینڈین)
   - 16: `abi_version: u8`
 
-Mode bits
-- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
+موڈ بٹس
+- `ZK = 0x01` ، `VECTOR = 0x02` ، `HTM = 0x04` (محفوظ/خصوصیت - گیٹڈ)۔
 
-Fields (meaning)
-- `abi_version`: syscall table and pointer‑ABI schema version.
-- `mode`: feature bits for ZK tracing/VECTOR/HTM.
-- `vector_length`: logical vector length for vector ops (0 → unset).
-- `max_cycles`: execution padding bound used in ZK mode and admission.
+کھیتوں (جس کا مطلب ہے)
+- `abi_version`: سیسکل ٹیبل اور پوائنٹر - ABI اسکیما ورژن۔
+- `mode`: زیڈ کے ٹریسنگ/ویکٹر/ایچ ٹی ایم کے لئے فیچر بٹس۔
+- `vector_length`: ویکٹر اوپس (0 → غیر سیٹ) کے لئے منطقی ویکٹر کی لمبائی۔
+- `max_cycles`: ZK وضع اور داخلہ میں استعمال شدہ عملدرآمد کی بھرتی کا پابند۔
 
-Notes
-- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
-- A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
-- Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
-- Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
-  calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
-  NEON while keeping deterministic fallbacks.
-- Operators can also force-disable specific backends for diagnostics by exporting `IVM_DISABLE_METAL=1` or `IVM_DISABLE_CUDA=1`. These environment overrides take precedence over configuration and keep the VM on the deterministic CPU path.
+نوٹ
+- اختتامی اور ترتیب کی وضاحت نفاذ کے ذریعہ کی گئی ہے اور `version` کے پابند ہیں۔ مذکورہ بالا -وائر لے آؤٹ `crates/ivm_abi/src/metadata.rs` میں موجودہ نفاذ کی عکاسی کرتا ہے۔
+- ایک کم سے کم قاری موجودہ نمونے کے ل this اس ترتیب پر انحصار کرسکتا ہے اور اسے `version` گیٹنگ کے ذریعے مستقبل میں ہونے والی تبدیلیوں کو سنبھالنا چاہئے۔
+- ہارڈ ویئر ایکسلریشن (سم ڈی/دھات/CUDA) فی میزبان آپٹ ان ہے۔ رن ٹائم `iroha_config` سے `AccelerationConfig` اقدار کو پڑھتا ہے: `enable_simd` فورسز اسکیلر فال بیکس جب غلط ہے ، جبکہ `enable_metal` اور `enable_cuda` سے پہلے ان کے متعلقہ بیکینڈس کے ذریعے بھی استعمال کیا جاتا ہے۔
+- موبائل ایس ڈی کے (اینڈروئیڈ/سوئفٹ) ایک ہی نوبس کی سطح ؛ `IrohaSwift.AccelerationSettings`
+  کالز `connect_norito_set_acceleration_config` تاکہ میکوس /آئی او ایس بلڈز دھات /میں انتخاب کرسکیں
+  نیین ڈٹرمینسٹک فال بیکس کو برقرار رکھتے ہوئے۔
+- آپریٹرز `IVM_DISABLE_METAL=1` یا `IVM_DISABLE_CUDA=1` کو برآمد کرکے تشخیص کے ل force بھی قابل فخر مخصوص بیکینڈس کرسکتے ہیں۔ ماحولیات کے اوور رائڈز ترتیب پر فوقیت رکھتے ہیں اور VM کو عین مطابق سی پی یو کے راستے پر رکھتے ہیں۔
 
-Durable state helpers and ABI surface
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* and JSON/SCHEMA encode/decode) are part of the V1 ABI and are included in `abi_hash` computation.
-- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
+پائیدار ریاستی مددگار اور ABI سطح
+- پائیدار اسٹیٹ ہیلپر سیسکلس (0x50–0x5a: state_ {get ، سیٹ ، ڈیل} ، انکوڈ/ڈیکوڈ_ٹ ، بلڈ_پاتھ_* اور JSON/اسکیما انکوڈ/ڈیکوڈ) V1 ABI کا حصہ ہیں اور `abi_hash` کمپیوٹیشن میں شامل ہیں۔
+-کور ہوسٹ تاروں ریاست_ {حاصل کریں ، سیٹ کریں ، ڈیل} کو WSV کی حمایت یافتہ پائیدار سمارٹ معاہدہ ریاست ؛ دیو/ٹیسٹ میزبان اوورلیز یا مقامی استقامت کا استعمال کرسکتے ہیں لیکن اسی مشاہدہ کرنے والے طرز عمل کو محفوظ رکھنا چاہئے۔
 
-Validation
-- Node admission accepts only `version_major = 1` and `version_minor = 0` headers.
-- `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
-- `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
-- Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
+توثیق
+- نوڈ داخلہ صرف `version_major = 1` اور `version_minor = 0` ہیڈر قبول کرتا ہے۔
+- `mode` میں صرف معروف بٹس پر مشتمل ہونا چاہئے: `ZK` ، `VECTOR` ، `HTM` (نامعلوم بٹس مسترد کردیئے گئے ہیں)۔
+- `vector_length` مشاورتی ہے اور یہ غیر صفر ہوسکتا ہے یہاں تک کہ اگر `VECTOR` بٹ سیٹ نہیں کیا گیا ہے۔ داخلہ صرف اوپری حد کو نافذ کرتا ہے۔
+- معاون `abi_version` اقدار: پہلی ریلیز صرف `1` (V1) کو قبول کرتی ہے۔ داخلے کے وقت دیگر اقدار کو مسترد کردیا جاتا ہے۔
 
-### Policy (generated)
-The following policy summary is generated from the implementation and should not be edited manually.
-
-<!-- BEGIN GENERATED HEADER POLICY -->
-| Field | Policy |
-|---|---|
-| version_major | 1 |
-| version_minor | 0 |
-| mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
+### پالیسی (پیدا شدہ)
+مندرجہ ذیل پالیسی کا خلاصہ عمل درآمد سے تیار کیا گیا ہے اور اسے دستی طور پر ترمیم نہیں کی جانی چاہئے۔<!-- BEGIN GENERATED HEADER POLICY -->
+| فیلڈ | پالیسی |
+| --- | --- |
+| ورژن_مجور | 1 |
+| ورژن_مینور | 0 |
+| موڈ (معروف بٹس) | 0x07 (ZK = 0x01 ، ویکٹر = 0x02 ، HTM = 0x04) |
 | abi_version | 1 |
-| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
+| vector_length | 0 یا 1 .. = 64 (مشاورتی ؛ ویکٹر بٹ سے آزاد) |
 <!-- END GENERATED HEADER POLICY -->
 
-### ABI Hashes (generated)
-The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
+### ابی ہیشس (پیدا شدہ)
+مندرجہ ذیل جدول عمل درآمد سے تیار کیا گیا ہے اور معاون پالیسیوں کے لئے کیننیکل `abi_hash` اقدار کی فہرست ہے۔
 
 <!-- BEGIN GENERATED ABI HASHES -->
-| Policy | abi_hash (hex) |
-|---|---|
-| ABI v1 | ba1786031c3d0cdbd607debdae1cc611a0807bf9cf49ed349a0632855724969f |
+| پالیسی | ابی_ہش (ہیکس) |
+| --- | --- |
+| abi v1 | BA1786031C3D0CDBD607DEBDAE1CC611A0807BF9CF49ED349A0632855724969F |
 <!-- END GENERATED ABI HASHES -->
 
-- Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
-- Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
-- Gas schedules are bound to the `version` and require golden vectors on change.
+- معمولی اپ ڈیٹس `feature_bits` اور محفوظ اوپکوڈ کی جگہ کے پیچھے ہدایات شامل کرسکتی ہیں۔ بڑی تازہ ترین معلومات انکوڈنگ کو تبدیل کرسکتی ہیں یا صرف ایک پروٹوکول اپ گریڈ کے ساتھ مل کر ہٹائیں/دوبارہ تیار کرسکتی ہیں۔
+- سیسکل کی حدود مستحکم ہیں۔ فعال `abi_version` کی پیداوار `E_SCALL_UNKNOWN` کے لئے نامعلوم۔
+- گیس کے نظام الاوقات `version` کے پابند ہیں اور تبدیلی پر سنہری ویکٹر کی ضرورت ہوتی ہے۔
 
-Inspecting artifacts
-- Use `ivm_tool inspect <file.to>` for a stable view of header fields.
-- For development, examples/ include a small Makefile target `examples-inspect` that runs inspect over built artifacts.
+نمونے کا معائنہ کرنا
+- ہیڈر فیلڈز کے مستحکم نظارے کے لئے `ivm_tool inspect <file.to>` استعمال کریں۔
+- ترقی کے ل examples ، مثالوں/ ایک چھوٹا سا میک فائل ہدف `examples-inspect` شامل کریں جو تعمیر شدہ نمونے پر معائنہ کرتا ہے۔
 
-Example (Rust): minimal magic + size check
+مثال (زنگ): کم سے کم جادو + سائز چیک
 
 ```rust
 use std::fs::File;
@@ -99,4 +98,4 @@ fn is_ivm_artifact(path: &std::path::Path) -> std::io::Result<bool> {
 }
 ```
 
-Note: The exact header layout beyond the magic is versioned and implementation‑defined; prefer `ivm_tool inspect` for stable field names and values.
+نوٹ: جادو سے پرے کے عین مطابق ہیڈر لے آؤٹ کو ورژن اور اس پر عمل درآمد کیا گیا ہے۔ مستحکم فیلڈ کے ناموں اور اقدار کے لئے `ivm_tool inspect` کو ترجیح دیں۔

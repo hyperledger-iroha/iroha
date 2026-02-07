@@ -8,108 +8,110 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Node Implementation Plan
 sidebar_label: Node Implementation Plan
 description: Translate the SF-3 storage roadmap into actionable engineering work with milestones, tasks, and test coverage.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii process into a SoraFS storage provider. Use this plan alongside the [node storage guide](node-storage.md), [provider admission policy](provider-admission-policy.md), and [storage capacity marketplace roadmap](storage-capacity-marketplace.md) when sequencing deliverables.
+SF-3 သည် Iroha/Torii လုပ်ငန်းစဉ်ကို SoraFS သိုလှောင်မှုပံ့ပိုးသူအဖြစ်သို့ ပြောင်းလဲပေးသည့် ပထမဆုံးလုပ်ဆောင်နိုင်သော `sorafs-node` သေတ္တာကို ပေးဆောင်ပါသည်။ ဤအစီအစဉ်ကို [node သိုလှောင်မှုလမ်းညွှန်](node-storage.md)၊ [ပံ့ပိုးပေးသူဝင်ခွင့်မူဝါဒ](provider-admission-policy.md) နှင့် [သိုလှောင်နိုင်မှု စျေးကွက်လမ်းပြမြေပုံ](storage-capacity-marketplace.md) တို့ကို စီတန်းစဉ်တွင် အသုံးပြုပါ။
 
-## Target Scope (Milestone M1)
+## ပစ်မှတ်အတိုင်းအတာ (Milestone M1)
 
-1. **Chunk store integration.** Wrap `sorafs_car::ChunkStore` with a persistent backend that stores chunk bytes, manifests, and PoR trees in the configured data directory.
-2. **Gateway endpoints.** Expose Norito HTTP endpoints for pin submission, chunk fetch, PoR sampling, and storage telemetry within the Torii process.
-3. **Configuration plumbing.** Add a `SoraFsStorage` config struct (enabled flag, capacity, directories, concurrency limits) wired through `iroha_config`, `iroha_core`, and `iroha_torii`.
-4. **Quota/scheduling.** Enforce operator-defined disk/parallelism limits and queue requests with back-pressure.
-5. **Telemetry.** Emit metrics/logs for pin success, chunk fetch latency, capacity utilisation, and PoR sampling results.
+1. **Chunk store integration.** `sorafs_car::ChunkStore` ကို configured data directory တွင် chunk bytes, manifests, and PoR tree များကို သိမ်းဆည်းသည့် မြဲမြဲသောနောက်ကြောင်းတစ်ခုဖြင့် ထုပ်ပိုးထားသည်။
+2. **Gateway အဆုံးမှတ်များ။** Norito HTTP အဆုံးမှတ်များကို ပင်ပေးပို့မှု၊ အတုံးအလန်းရယူမှု၊ PoR နမူနာယူမှုနှင့် Torii လုပ်ငန်းစဉ်အတွင်း သိုလှောင်မှု တယ်လီမီတာကို ဖော်ထုတ်ပါ။
+3. **ဖွဲ့စည်းမှု ပိုက်ဆက်ခြင်း။** `SoraFsStorage` config struct (ဖွင့်ထားသော အလံ၊ စွမ်းရည်၊ လမ်းညွှန်များ၊ ကန့်သတ်ချက်များ) ကို `iroha_config`၊ `iroha_core` နှင့် `iroha_torii` မှတဆင့် ကြိုးတပ်ပါ။
+4. **Quota/scheduling.** အော်ပရေတာသတ်မှတ်ထားသော disk/parallelism ကန့်သတ်ချက်များနှင့် တန်းစီတောင်းဆိုမှုများကို back-pressure ဖြင့် တွန်းအားပေးပါ။
+5. **Telemetry.** ပင်အောင်မြင်မှုအတွက် မက်ထရစ်များ/မှတ်တမ်းများကို ထုတ်လွှတ်ခြင်း၊ အတုံးအတုံးလိုက်ယူခြင်း တုံ့ပြန်နေချိန်၊ စွမ်းရည်အသုံးချခြင်းနှင့် PoR နမူနာယူခြင်းရလဒ်များ။
 
-## Work Breakdown
+## အလုပ်ပျက်ခြင်း။
 
 ### A. Crate & Module Structure
 
-| Task | Owner(s) | Notes |
+| တာဝန် | ပိုင်ရှင်(များ) | မှတ်စုများ |
 |------|----------|-------|
-| Create `crates/sorafs_node` with modules: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Re-export reusable types for Torii integration. |
-| Implement `StorageConfig` mapped from `SoraFsStorage` (user → actual → defaults). | Storage Team / Config WG | Ensure the Norito/`iroha_config` layers remain deterministic. |
-| Provide a `NodeHandle` facade Torii uses to submit pins/fetches. | Storage Team | Encapsulate storage internals and async plumbing. |
+| မော်ဂျူးများဖြင့် `crates/sorafs_node` ကို ဖန်တီးပါ- `config`၊ `store`၊ `gateway`၊ `scheduler`၊ `telemetry`။ | သိုလှောင်ရေးအဖွဲ့ | Torii ပေါင်းစပ်မှုအတွက် ပြန်သုံးနိုင်သော အမျိုးအစားများကို ပြန်ထုတ်ပါ။ |
+| `SoraFsStorage` မှ ပုံဖော်ထားသော `StorageConfig` ကို အကောင်အထည်ဖော်ပါ (အသုံးပြုသူ → အမှန်တကယ် → ပုံသေများ)။ | သိုလှောင်မှုအဖွဲ့ / Config WG | Norito/`iroha_config` အလွှာများသည် အဆုံးအဖြတ်အတိုင်း ရှိနေကြောင်း သေချာပါစေ။ |
+| ပင်နံပါတ်များပေးပို့ရန် အသုံးပြုသည့် `NodeHandle` မျက်နှာစာ Torii ကို ပေးပါ။ | သိုလှောင်ရေးအဖွဲ့ | သိုလှောင်မှုအတွင်းပိုင်းကို ထုပ်ပိုးပြီး ပိုက်ဆက်ခြင်းများကို ချိတ်ဆက်ပါ။ |
 
 ### B. Persistent Chunk Store
 
-| Task | Owner(s) | Notes |
+| တာဝန် | ပိုင်ရှင်(များ) | မှတ်စုများ |
 |------|----------|-------|
-| Build a disk backend wrapping `sorafs_car::ChunkStore` with an on-disk manifest index (`sled`/`sqlite`). | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Maintain PoR metadata (64 KiB/4 KiB trees) using `ChunkStore::sample_leaves`. | Storage Team | Support replay after restart; fail fast on corruption. |
-| Implement integrity replay on startup (rehash manifests, prune incomplete pins). | Storage Team | Block Torii start until replay completes. |
+| on-disk manifest အညွှန်း (`sled`/`sqlite`) ဖြင့် `sorafs_car::ChunkStore` ကို ဒစ်ခ်နောက်ကွယ်တွင် ထုပ်ပိုးတည်ဆောက်ပါ။ | သိုလှောင်ရေးအဖွဲ့ | ဆုံးဖြတ်နိုင်သော အပြင်အဆင်- `<data_dir>/<manifest_cid>/chunk_{idx}.bin`။ |
+| `ChunkStore::sample_leaves` ကို အသုံးပြု၍ PoR မက်တာဒေတာ (64KiB/4KiB သစ်ပင်များ) ကို ထိန်းသိမ်းပါ။ | သိုလှောင်ရေးအဖွဲ့ | ပြန်လည်စတင်ပြီးနောက် ပြန်လည်ဖွင့်ခြင်းကို ပံ့ပိုးပါ။ အဂတိလိုက်စားမှု မြန်ဆန်စွာ ကျရှုံးသည်။ |
+| စတင်ချိန်တွင် သမာဓိပြန်ဖွင့်ခြင်းကို အကောင်အထည်ဖော်ပါ (ပြန်လည်ပြသခြင်းများ၊ မပြည့်စုံသော pins များကို ဖယ်ရှားပါ)။ | သိုလှောင်ရေးအဖွဲ့ | ပြန်လည်ကစားခြင်း မပြီးမချင်း Torii ကို စတင်ပိတ်ဆို့ပါ။ |
 
 ### C. Gateway Endpoints
 
-| Endpoint | Behaviour | Tasks |
-|----------|-----------|-------|
-| `POST /sorafs/pin` | Accept `PinProposalV1`, validate manifests, queue ingestion, respond with manifest CID. | Validate chunk profile, enforce quotas, stream data via chunk store. |
-| `GET /sorafs/chunks/{cid}` + range query | Serve chunk bytes with `Content-Chunker` headers; respect range capability spec. | Use scheduler + stream budgets (tie into SF-2d range capability). |
-| `POST /sorafs/por/sample` | Run PoR sampling for a manifest and return proof bundle. | Reuse chunk store sampling, respond with Norito JSON payloads. |
-| `GET /sorafs/telemetry` | Summaries: capacity, PoR success, fetch error counts. | Provide data for dashboards/operators. |
+| အဆုံးမှတ် | အနေအထိုင် | အလုပ်များ |
+|----------|-----------|------|
+| `POST /sorafs/pin` | `PinProposalV1` ကိုလက်ခံပါ၊ မန်နီးဖက်စ်များကိုအတည်ပြုပါ၊ တန်းစီခြင်းကိုထည့်သွင်းပါ၊ manifest CID ဖြင့်တုံ့ပြန်ပါ။ | အတုံးအခဲပရိုဖိုင်ကို အတည်ပြုပါ၊ ခွဲတမ်းကို တွန်းအားပေးပါ၊ အတုံးလိုက်စတိုးမှတစ်ဆင့် ဒေတာစီးကြောင်း။ |
+| `GET /sorafs/chunks/{cid}` + အပိုင်းအခြား မေးမြန်းမှု | `Content-Chunker` ခေါင်းစီးများဖြင့် အတွဲလိုက် ဘိုက်များကို ထမ်းဆောင်ပါ။ အကွာအဝေး စွမ်းဆောင်ရည် spec ကို လေးစားပါ။ | အချိန်ဇယားဆွဲသူ + ​​ထုတ်လွှင့်မှုဘတ်ဂျက်များကို သုံးပါ (SF-2d အကွာအဝေးစွမ်းရည်နှင့် ချိတ်ဆက်ပါ)။ |
+| `POST /sorafs/por/sample` | ထင်ရှားသော သက်သေအတွဲအတွက် PoR နမူနာကို လုပ်ဆောင်ပြီး ပြန်ပေးသည့် အထောက်အထားအတွဲ။ | စတိုးဆိုင်နမူနာကို ပြန်သုံးပါ၊ Norito JSON ပေးချေမှုများဖြင့် တုံ့ပြန်ပါ။ |
+| `GET /sorafs/telemetry` | အနှစ်ချုပ်များ- စွမ်းဆောင်ရည်၊ PoR အောင်မြင်မှု၊ ရယူမှု အမှားအယွင်း အရေအတွက်။ | ဒက်ရှ်ဘုတ်များ/အော်ပရေတာများအတွက် ဒေတာပေးပါ။ |
 
-Runtime plumbing threads PoR interactions through `sorafs_node::por`: the tracker records every `PorChallengeV1`, `PorProofV1`, and `AuditVerdictV1` so the `CapacityMeter` metrics reflect governance verdicts without bespoke Torii logic.【crates/sorafs_node/src/scheduler.rs#L147】
+Runtime ပိုက်လိုင်းများ PoR အပြန်အလှန်တုံ့ပြန်မှုများ `sorafs_node::por`- ခြေရာခံကိရိယာသည် `PorChallengeV1`၊ `PorProofV1` နှင့် `AuditVerdictV1` ဖြစ်သောကြောင့် `CapacityMeter` စီရင်ချက်သည် 8000100 အုပ်ချုပ်မှုမရှိဘဲ 1800000059X မက်ထရစ်များကို ထင်ဟပ်စေပါသည်။ ယုတ္တိဗေဒ။ 【crates/sorafs_node/src/scheduler.rs#L147】
 
-Implementation notes:
+အကောင်အထည်ဖော်မှုမှတ်စုများ
 
-- Use Torii’s Axum stack with `norito::json` payloads.
-- Add Norito schemas for responses (`PinResultV1`, `FetchErrorV1`, telemetry structs).
+- Torii ၏ Axum stack ကို `norito::json` payloads ဖြင့်သုံးပါ။
+- တုံ့ပြန်မှုများအတွက် Norito အစီအစဉ်များ (`PinResultV1`၊ `FetchErrorV1`၊ telemetry တည်ဆောက်ပုံများ)။
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now exposes backlog depth plus the oldest epoch/deadline and
-  the most recent success/failure timestamps for each provider, powered by
-  `sorafs_node::NodeHandle::por_ingestion_status`, and Torii records the
-  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges for dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` သည် ယခု backlog depth နှင့် သက်တမ်းအရင့်ဆုံး အချိန်/သတ်မှတ်ရက်ကို ထုတ်ဖော်ပြသပြီး
+  ပံ့ပိုးပေးသူတိုင်းအတွက် လတ်တလော အောင်မြင်မှု/ကျရှုံးမှု အချိန်တံဆိပ်များ
+  `sorafs_node::NodeHandle::por_ingestion_status` နှင့် Torii တို့က မှတ်တမ်းတင်သည်
+  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` တိုင်းထွာများ ဒက်ရှ်ဘုတ်များ။ 【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry.0】9:30
 
-### D. Scheduler & Quota Enforcement
+### D. အစီအစဉ်ဆွဲသူနှင့် ခွဲတမ်းအာဏာတည်ခြင်း။
 
-| Task | Details |
-|------|---------|
-| Disk quota | Track bytes on disk; reject new pins when exceeding `max_capacity_bytes`. Provide eviction hooks for future policies. |
-| Fetch concurrency | Global semaphore (`max_parallel_fetches`) plus per-provider budgets sourced from SF-2d range caps. |
-| Pin queue | Limit outstanding ingestion jobs; expose Norito status endpoints for queue depth. |
-| PoR cadence | Background worker driven by `por_sample_interval_secs`. |
+| တာဝန် | အသေးစိတ် |
+|--------|---------|
+| ဒစ်ခွဲတမ်း | ဒစ်ခ်ပေါ်တွင် ဘိုက်များကို ခြေရာခံပါ။ `max_capacity_bytes` ထက်ကျော်လွန်သောအခါ ပင်အသစ်များကို ငြင်းပယ်ပါ။ အနာဂတ်မူဝါဒများအတွက် နှင်ထုတ်ခြင်းချိတ်များကို ပံ့ပိုးပေးပါ။ |
+| ပေါင်းစပ်ငွေကြေး | Global semaphore (`max_parallel_fetches`) နှင့် SF-2d အကွာအဝေးထုပ်များမှ ရရှိသော ပံ့ပိုးပေးသူ တစ်ဦးချင်း ဘတ်ဂျက်များ။ |
+| ပင်ထိုးတန်းစီ | ထူးထူးခြားခြား စားသုံးမိသော အလုပ်များကို ကန့်သတ်ပါ။ တန်းစီခြင်းအတိမ်အနက်အတွက် Norito အခြေအနေ အဆုံးမှတ်များကို ဖော်ထုတ်ပါ။ |
+| PoR cadence | `por_sample_interval_secs` ဖြင့်မောင်းနှင်သောနောက်ခံအလုပ်သမား။ |
 
 ### E. Telemetry & Logging
 
-Metrics (Prometheus):
+မက်ထရစ်များ (Prometheus)
 
-- `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (histogram with `result` labels)
+- `sorafs_pin_success_total`၊ `sorafs_pin_failure_total`
+- `sorafs_chunk_fetch_duration_seconds` (`result` အညွှန်းများပါသည့် ဟီစတိုဂရမ်)
 - `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
 - `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
 - `torii_sorafs_storage_fetch_bytes_per_sec`
 - `torii_sorafs_storage_por_inflight`
 - `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
 
-Logs / events:
+မှတ်တမ်း/ဖြစ်ရပ်များ-
 
-- Structured Norito telemetry for governance ingestion (`StorageTelemetryV1`).
-- Alerts when utilisation > 90% or PoR failure streak exceeds threshold.
+- အုပ်ချုပ်မှုထည့်သွင်းမှုအတွက် ဖွဲ့စည်းပုံ Norito တယ်လီမီတာ (`StorageTelemetryV1`)။
+- အသုံးပြုမှု > 90% သို့မဟုတ် PoR ကျရှုံးမှု သတ်မှတ်ချက်ဘောင်ထက်ကျော်လွန်သည့်အခါ သတိပေးချက်များ။
 
-### F. Testing Strategy
+### F. စမ်းသပ်ခြင်း ဗျူဟာ
 
-1. **Unit tests.** Chunk store persistence, quota calculations, scheduler invariants (see `crates/sorafs_node/src/scheduler.rs`).  
-2. **Integration tests** (`crates/sorafs_node/tests`). Pin → fetch round trip, restart recovery, quota rejection, PoR sampling proof verification.  
-3. **Torii integration tests.** Run Torii with storage enabled, exercise HTTP endpoints via `assert_cmd`.  
-4. **Chaos roadmap.** Future drills simulate disk exhaustion, slow IO, provider removal.
+1. **ယူနစ်စမ်းသပ်မှုများ။** အတုံးအခဲများ သိုလှောင်မှု၊ ခွဲတမ်းတွက်ချက်မှုများ၊ အချိန်ဇယားဆွဲမှု ပုံစံကွဲများ (`crates/sorafs_node/src/scheduler.rs` ကိုကြည့်ပါ)။  
+2. **ပေါင်းစပ်စစ်ဆေးမှုများ** (`crates/sorafs_node/tests`)။ ပင်ထိုးပါ → အသွားအပြန်ခရီးကို ရယူပါ၊ ပြန်လည်ရယူခြင်း၊ ပြန်လည်စတင်ခြင်း၊ ခွဲတမ်းကို ပယ်ချခြင်း၊ PoR နမူနာယူခြင်း အထောက်အထားစိစစ်ခြင်း။  
+3. **Torii ပေါင်းစပ်စမ်းသပ်မှုများ။** သိုလှောင်မှုဖွင့်ထားခြင်းဖြင့် Torii ကိုဖွင့်ပြီး `assert_cmd` မှတစ်ဆင့် HTTP အဆုံးမှတ်များကို လေ့ကျင့်ပါ။  
+4. **Chaos လမ်းပြမြေပုံ။** အနာဂတ်လေ့ကျင့်ခန်းများသည် ဒစ်ကုန်ခန်းခြင်း၊ နှေးကွေးသော IO၊ ပံ့ပိုးပေးသူကို ဖယ်ရှားခြင်းတို့ကို ပုံဖော်သည်။
 
-## Dependencies
+## မှီခိုမှု
 
-- SF-2b admission policy — ensure nodes verify admission envelopes before advertising.  
-- SF-2c capacity marketplace — tie telemetry back into capacity declarations.  
-- SF-2d advert extensions — consume range capability + stream budgets once available.
+- SF-2b ဝင်ခွင့်မူဝါဒ — ကြော်ငြာမတင်မီ ဝင်ခွင့်စာအိတ်များကို ဆုံမှတ်များအား သေချာစစ်ဆေးပါ။  
+- SF-2c စွမ်းရည်စျေးကွက် - တယ်လီမီတာကို စွမ်းရည်ဆိုင်ရာ ကြေငြာချက်များတွင် ပြန်လည်ထည့်သွင်းပါ။  
+- SF-2d ကြော်ငြာ တိုးချဲ့မှုများ — အတိုင်းအတာ စွမ်းဆောင်ရည် + ထုတ်လွှင့်မှု ဘတ်ဂျက်များကို တစ်ကြိမ် ရရှိနိုင်သည်။
 
-## Milestone Exit Criteria
+## Milestone Exit သတ်မှတ်ချက်
 
-- `cargo run -p sorafs_node --example pin_fetch` works against local fixtures.  
-- Torii builds with `--features sorafs-storage` and passes integration tests.  
-- Documentation ([node storage guide](node-storage.md)) updated with configuration defaults + CLI examples; operator runbook available.  
-- Telemetry visible in staging dashboards; alerts configured for capacity saturation and PoR failures.
+- `cargo run -p sorafs_node --example pin_fetch` သည် ပြည်တွင်းပွဲများကို ဆန့်ကျင်သည်။  
+- Torii သည် `--features sorafs-storage` ဖြင့် တည်ဆောက်ပြီး ပေါင်းစပ်စစ်ဆေးမှုများကို အောင်မြင်သည်။  
+- စာရွက်စာတမ်းများ ([node သိုလှောင်မှုလမ်းညွှန်](node-storage.md)) ဖွဲ့စည်းမှုပုံသေပုံသေများ + CLI နမူနာများဖြင့် အပ်ဒိတ်လုပ်ထားသည်။ အော်ပရေတာ runbook ရနိုင်သည်။  
+- စံပြဒိုင်ခွက်များတွင် Telemetry ကိုမြင်နိုင်သည်; စွမ်းဆောင်ရည်ပြည့်ဝမှုနှင့် PoR ချို့ယွင်းမှုများအတွက် ပြင်ဆင်သတ်မှတ်ထားသော သတိပေးချက်များ။
 
-## Documentation & Ops Deliverables
+## စာရွက်စာတမ်းနှင့် ဝန်ဆောင်မှုများ ပေးပို့နိုင်ပါသည်။
 
-- Update the [node storage reference](node-storage.md) with configuration defaults, CLI usage, and troubleshooting steps.  
-- Keep the [node operations runbook](node-operations.md) aligned with the implementation as SF-3 evolves.  
-- Publish API references for `/sorafs/*` endpoints inside the developer portal and wire them into the OpenAPI manifest once Torii handlers land.
+- [node storage reference](node-storage.md) ကို ဖွဲ့စည်းမှုပုံသေများ၊ CLI အသုံးပြုမှုနှင့် ပြဿနာဖြေရှင်းခြင်းအဆင့်များဖြင့် အပ်ဒိတ်လုပ်ပါ။  
+- [node operations runbook](node-operations.md) ကို SF-3 တိုးတက်ပြောင်းလဲလာသည်နှင့်အမျှ အကောင်အထည်ဖော်မှုနှင့်အညီ ထားရှိပါ။  
+- developer portal အတွင်းရှိ `/sorafs/*` အတွက် အဆုံးမှတ်များအတွက် API ကိုးကားချက်များကို ထုတ်ဝေပြီး OpenAPI တွင် တစ်ကြိမ် Torii ကိုင်တွယ်သူများ ရောက်သည်နှင့် ပေါ်လာသည်။

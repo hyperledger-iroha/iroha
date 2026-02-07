@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/call-transfer-asset.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/call-transfer-asset
-title: استدعاء نقل المضيف من Kotodama
-description: يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+سلگ:/نوریٹو/مثالوں/کال ٹرانسفر-اثاثہ
+عنوان: Kotodama سے میزبان ٹرانسفر
+تفصیل: یہ ظاہر کرتا ہے کہ کس طرح انٹری پوائنٹ Kotodama بلٹ ان میٹا ڈیٹا چیکنگ کے ساتھ میزبان ہدایت `transfer_asset` کو کال کرسکتا ہے۔
+ماخذ: کریٹس/IVM/دستاویزات/مثالوں/08_Call_transfer_asset.ko
 ---
 
-يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
+یہ ظاہر کرتا ہے کہ کس طرح انٹری پوائنٹ Kotodama بلٹ میں میٹا ڈیٹا چیکنگ کے ساتھ میزبان ہدایت `transfer_asset` پر کال کرسکتا ہے۔
 
-## جولة دفتر الأستاذ
+## لیجر ٹور
 
-- موّل سلطة العقد (مثلا `ih58...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
-- استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `ih58...`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
-- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
+- معاہدہ اتھارٹی (مثال کے طور پر `ih58...`) کو اس اثاثہ کے ساتھ فنڈ دیں جس کی آپ منتقلی کر رہے ہیں اور اتھارٹی کو `CanTransfer` یا مساوی اجازت کا کردار دیں۔
+- انٹری پوائنٹ `call_transfer_asset` کو 5 نوڈ اکاؤنٹ یونٹوں کو `ih58...` پر منتقل کرنے کے لئے کال کریں ، جس طرح آن چین آٹومیشن میزبان کالوں کو گھیرے میں لے کر آئینہ دار ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے توازن چیک کریں اور واقعات کی جانچ پڑتال کریں تاکہ اس بات کی تصدیق کی جاسکے کہ میٹا ڈیٹا گارڈ نے منتقلی کے سیاق و سباق کو ریکارڈ کیا۔
 
-## أدلة SDK ذات صلة
+## متعلقہ SDK گائیڈز
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [مورچا SDK کوئیک اسٹارٹ] (/sdks/rust)
+- [ازگر SDK کوئیک اسٹارٹ] (/sdks/python)
+- [جاوا اسکرپٹ SDK کوئیک اسٹارٹ] (/sdks/javascript)
 
-[نزّل مصدر Kotodama](/norito-snippets/call-transfer-asset.ko)
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/call-transfer-asset.ko)
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

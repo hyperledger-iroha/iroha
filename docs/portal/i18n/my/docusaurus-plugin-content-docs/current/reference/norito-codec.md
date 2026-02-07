@@ -4,62 +4,64 @@ direction: ltr
 source: docs/portal/docs/reference/norito-codec.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Codec Reference
+# Norito Codec အကိုးအကား
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito သည် Iroha ၏ canonical serialization အလွှာဖြစ်သည်။ on-wire message တိုင်း၊ on-disk
+payload နှင့် cross-component API သည် Norito ကိုအသုံးပြုသောကြောင့် nodes များသည် တူညီသောဘိုက်များကိုသဘောတူသည်
+မတူညီတဲ့ hardware တွေပေါ်မှာ အလုပ်လုပ်နေရင်တောင်။ ဤစာမျက်နှာသည် ရွေ့လျားနေသော အစိတ်အပိုင်းများကို အကျဉ်းချုပ်ဖော်ပြသည်။
+`norito.md` တွင် သတ်မှတ်ချက် အပြည့်အစုံကို ညွှန်ပြသည်။
 
-## Core layout
+## Core အပြင်အဆင်
 
-| Component | Purpose | Source |
-| --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| အစိတ်အပိုင်း | ရည်ရွယ်ချက် | အရင်းအမြစ် |
+| ---| ---| ---|
+| **ခေါင်းစီး** | magic/version/schema hash, CRC64, length, and compression tag ဖြင့် payload ဘောင်များ v1 သည် `VERSION_MINOR = 0x00` လိုအပ်ပြီး ပံ့ပိုးထားသော မျက်နှာဖုံး (မူရင်း `0x00`) နှင့် ပတ်သက်သော ခေါင်းစီးအလံများကို အတည်ပြုသည်။ | `norito::header` — `norito.md` ကိုကြည့်ပါ (“ခေါင်းစီးနှင့်အလံများ”၊ repository root) |
+| **ဝန်ဆောင်ခ** | hashing/comparison အတွက် သုံးသော သတ်မှတ်တန်ဖိုး ကုဒ်နံပါတ် ကြိုးမဲ့သယ်ယူပို့ဆောင်ရေးတွင် ခေါင်းစီးကို အမြဲအသုံးပြုသည်။ bare bytes များသည် အတွင်းပိုင်းသီးသန့်ဖြစ်သည်။ | `norito::codec::{Encode, Decode}` |
+| **ချုံ့** | ရွေးချယ်နိုင်သော Zstd (နှင့် စမ်းသပ်ထားသော GPU အရှိန်မြှင့်ခြင်း) သည် ခေါင်းစီးချုံ့သည့်ဘိုက်မှတစ်ဆင့် ရွေးချယ်ထားသည်။ | `norito.md`၊ "ချုံ့ညှိနှိုင်းမှု" |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+အပြင်အဆင် အလံ မှတ်ပုံတင်ခြင်း (packed-struct၊ packed-seq၊ field bitset၊ compact
+lengths) `norito::header::flags` တွင်နေထိုင်သည်။ V1 သည် `0x00` အလံများအတွက် ပုံသေသတ်မှတ်ထားသော်လည်း၊
+ပံ့ပိုးထားသော မျက်နှာဖုံးအတွင်း ထင်ရှားသော ခေါင်းစီးအလံများကို လက်ခံသည်။ မသိသော bit များဖြစ်ကြပါသည်။
+ငြင်းပယ်ခဲ့သည်။ `norito::header::Flags` ကို အတွင်းပိုင်း စစ်ဆေးခြင်းနှင့် သိမ်းဆည်းထားသည်။
+အနာဂတ်ဗားရှင်းများ။
 
-## Derive support
+## ပံ့ပိုးမှုရယူပါ။
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` သည် `Encode`၊ `Decode`၊ `IntoSchema` နှင့် JSON အကူအညီပေးသူထံမှ ရရှိသည်။
+အဓိက သဘောတူညီချက်များ-
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- Derives သည် AoS နှင့် ထုပ်ပိုးထားသော ကုဒ်လမ်းကြောင်း နှစ်ခုလုံးကို ထုတ်ပေးသည်။ v1 သည် AoS အတွက် ပုံသေဖြစ်သည်။
+  ခေါင်းစီးအလံများသည် ထုပ်ပိုးထားသောမျိုးကွဲများထဲသို့ မပါဝင်ပါက အပြင်အဆင် (အလံများ `0x00`)။
+  အကောင်အထည်ဖော်မှုသည် `crates/norito_derive/src/derive_struct.rs` တွင်နေထိုင်သည်။
+- Layout ကိုထိခိုက်စေသောအင်္ဂါရပ်များ (`packed-struct`၊ `packed-seq`၊ `compact-len`) များမှာ
+  ခေါင်းစီးအလံများမှတစ်ဆင့် ရွေးချယ်ဝင်ရောက်ပြီး ရွယ်တူများကြားတွင် အမြဲတစေ ကုဒ်/ကုဒ်ဖြင့် ကုဒ်လုပ်ရပါမည်။
+- JSON အကူအညီပေးသူများ (`norito::json`) သည် အဆုံးအဖြတ်ပေးသော Norito-ကျောထောက်နောက်ခံ JSON အတွက် ပံ့ပိုးပေးသည်
+  APIs ကိုဖွင့်ပါ။ `norito::json::{to_json_pretty, from_json}` ကိုသုံးပါ — ဘယ်တော့မှ `serde_json` ကိုသုံးပါ။
 
-## Multicodec & identifier tables
+## Multicodec & identifier ဇယားများ
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito သည် ၎င်း၏ multicodec တာဝန်များကို `norito::multicodec` တွင် ထိန်းသိမ်းထားသည်။ အကိုးအကား
+ဇယား (hashes၊ သော့အမျိုးအစားများ၊ payload ဖော်ပြချက်များ) ကို `multicodec.md` တွင် ထိန်းသိမ်းထားသည်။
+repository root မှာ။ အထောက်အထားအသစ်တစ်ခုကို ထည့်သောအခါ-
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry` ကို အပ်ဒိတ်လုပ်ပါ။
+2. `multicodec.md` တွင် ဇယားကို တိုးချဲ့ပါ။
+3. ၎င်းတို့သည် မြေပုံကို စားသုံးပါက ရေစုန်နှောင်ကြိုးများ (Python/Java) ကို ပြန်ထုတ်ပါ။
 
-## Regenerating docs & fixtures
+## စာရွက်စာတမ်းများနှင့် ဖိုင်များကို ပြန်လည်ထုတ်ပေးခြင်း။
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+စကားပြေအကျဉ်းချုပ်ကို လက်ရှိအသုံးပြုနေသည့် ပေါ်တယ်အနေဖြင့်၊ အထက်စီးကြောင်း Markdown ကို အသုံးပြုပါ။
+အမှန်တရား၏အရင်းအမြစ်အဖြစ်၊
 
 - **Spec**: `norito.md`
 - **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **စံသတ်မှတ်ချက်များ**: `crates/norito/benches/`
+- **ရွှေစမ်းသပ်မှုများ**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Docusaurus automation တိုက်ရိုက်လွှင့်သည့်အခါ၊ portal မှတဆင့် update လုပ်ပါမည်။
+ဤအရာများမှဒေတာကိုဆွဲယူသောတစ်ပြိုင်တည်းချိန်ကိုက်ခြင်း script (`docs/portal/scripts/`)
+ဖိုင်များ။ ထိုအချိန်အထိ၊ spec ပြောင်းလဲသည့်အခါတိုင်း၊ ဤစာမျက်နှာကို ကိုယ်တိုင်ချိန်ညှိထားပါ။

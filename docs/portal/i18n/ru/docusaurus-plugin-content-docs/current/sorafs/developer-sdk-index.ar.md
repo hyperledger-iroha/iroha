@@ -4,64 +4,66 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-sdk-index.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-sdk-index
-title: أدلة SDK لـ SoraFS
-sidebar_label: أدلة SDK
-description: مقتطفات خاصة بكل لغة لدمج آرتيفاكتات SoraFS.
+идентификатор: индекс-разработчика SDK
+title: Добавлен SDK в SoraFS.
+Sidebar_label: Добавлен SDK
+описание: Создан بكل لغة لدمج آرتيفاكتات SoraFS.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/developer/sdk/index.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
+:::примечание
+Был установлен `docs/source/sorafs/developer/sdk/index.md`. Он был создан в честь Сфинкса.
 :::
 
-استخدم هذا المحور لتتبع المساعدات الخاصة بكل لغة التي تُشحن مع سلسلة أدوات SoraFS.
-للمقتطفات الخاصة بـ Rust انتقل إلى [مقتطفات Rust SDK](./developer-sdk-rust.md).
+Он был создан для того, чтобы помочь ему в работе над проектом. Это SoraFS.
+Загрузите Rust в [Rust SDK](./developer-sdk-rust.md).
 
 ## مساعدات اللغات
 
-- **Python** — `sorafs_multi_fetch_local` (اختبارات دخان للمُنسِّق المحلي) و
-  `sorafs_gateway_fetch` (تمارين E2E للبوابة) يقبلان الآن `telemetry_region` اختياريًا
-  مع تجاوز `transport_policy`
-  (`"soranet-first"`, `"soranet-strict"` أو `"direct-only"`)، بما يعكس أزرار الإطلاق في
-  CLI. عند تشغيل Proxy QUIC محلي، يعيد `sorafs_gateway_fetch` مانيفست المتصفح تحت
-  `local_proxy_manifest` حتى تتمكن الاختبارات من تمرير trust bundle إلى محولات المتصفح.
-- **JavaScript** — يعكس `sorafsMultiFetchLocal` مساعد Python ويعيد بايتات الحمولة وملخصات
-  الإيصالات، بينما يمارس `sorafsGatewayFetch` بوابات Torii، ويمرر مانيفستات proxy المحلية،
-  ويعرض نفس تجاوزات التليمترية/النقل الموجودة في CLI.
-- **Rust** — يمكن للخدمات تضمين المُجدول مباشرةً عبر `sorafs_car::multi_fetch`؛ راجع
-  [مقتطفات Rust SDK](./developer-sdk-rust.md) لمساعدات proof-stream وتكامل المُنسِّق.
-- **Android** — يعيد `HttpClientTransport.sorafsGatewayFetch(…)` استخدام مُنفّذ HTTP الخاص
-  بـ Torii ويلتزم بـ `GatewayFetchOptions`. ادمجه مع
-  `ClientConfig.Builder#setSorafsGatewayUri` ومع تلميح رفع PQ
-  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) عندما يجب أن تلتزم الرفوعات
+- **Python** — `sorafs_multi_fetch_local` (название приложения لمُنسِّق المحلي) и
+  `sorafs_gateway_fetch` (подключен к E2E) `telemetry_region`
+  Код `transport_policy`
+  (`"soranet-first"`, `"soranet-strict"` и `"direct-only"`)
+  Интерфейс командной строки. Для использования прокси-сервера QUIC используется `sorafs_gateway_fetch`.
+  `local_proxy_manifest` был создан в соответствии с пакетом доверия, установленным для проверки.
+- **JavaScript** — код `sorafsMultiFetchLocal` для Python, используемый для редактирования.
+  Установите прокси-сервер `sorafsGatewayFetch` и установите Torii. المحلية،
+  Вы можете получить доступ к интерфейсу командной строки/интерфейсу командной строки.
+- **Ржавчина** — يمكن للخدمات تضمين المُجدول مباشرةً عبر `sorafs_car::multi_fetch`; راجع
+  [Файл Rust SDK](./developer-sdk-rust.md) Доступен поток корректуры для проверки.
+- **Android** — `HttpClientTransport.sorafsGatewayFetch(…)` Поддержка HTTP-интерфейса.
+  Torii или `GatewayFetchOptions`. ادمجه مع
+  `ClientConfig.Builder#setSorafsGatewayUri` для PQ
+  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`)
   بمسارات PQ فقط.
 
-## مفاتيح scoreboard والسياسات
+## مفاتيح табло والسياسات
 
-يعرّض كل من مساعد Python (`sorafs_multi_fetch_local`) وJavaScript
-(`sorafsMultiFetchLocal`) لوحة scoreboard الواعية بالتليمترية التي يستخدمها CLI:
+Использование Python (`sorafs_multi_fetch_local`) и JavaScript
+(`sorafsMultiFetchLocal`) Открыть табло с помощью CLI:
 
-- تمكّن الثنائيات الإنتاجية scoreboard افتراضيًا؛ اضبط `use_scoreboard=True`
-  (أو وفّر إدخالات `telemetry`) عند إعادة تشغيل fixtures حتى يستخلص المساعد ترتيب
-  المزوّدين الموزون من بيانات adverts ولقطات التليمترية الحديثة.
-- اضبط `return_scoreboard=True` لتلقي الأوزان المحسوبة مع إيصالات الـ chunk حتى تتمكن
-  سجلات CI من التقاط التشخيصات.
+- Табло تمكّن الثنائيات الإنتاجية افتراضيًا؛ اضبط `use_scoreboard=True`
+  (أو وفّر إدخالات `telemetry`) عند إعادة تشغيل светильники
+  Рекламные ролики, сделанные в Нью-Йорке, посвящены праздничным дням.
+- اضبط `return_scoreboard=True` для получения фрагмента фрагмента.
+  Это CI в التقاط التشخيصات.
 - استخدم مصفوفتَي `deny_providers` أو `boost_providers` لرفض الأقران أو إضافة
-  `priority_delta` عندما يختار المُجدول المزوّدين.
-- حافظ على الوضع الافتراضي `"soranet-first"` ما لم تكن تجهّز لخفض المستوى؛ قدّم
-  `"direct-only"` فقط عندما يتعين على منطقة امتثال تجنّب المرحلات أو عند تدريب
-  ارتداد SNNet-5a، واحجز `"soranet-strict"` لطيارين PQ-only بموافقة الحوكمة.
-- تعرض مساعدات البوابة أيضًا `scoreboardOutPath` و`scoreboardNowUnixSecs`. اضبط
-  `scoreboardOutPath` لحفظ لوحة scoreboard المحسوبة (يعكس علم CLI `--scoreboard-out`)
-  حتى يتمكن `cargo xtask sorafs-adoption-check` من التحقق من آرتيفاكتات SDK، واستخدم
-  `scoreboardNowUnixSecs` عندما تحتاج fixtures إلى قيمة `assume_now` ثابتة لبيانات
-  وصفية قابلة لإعادة الإنتاج. في مساعد JavaScript يمكنك أيضًا ضبط
-  `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata`؛ وعند حذف الملصق
-  يشتق `region:<telemetryRegion>` (مع fallback إلى `sdk:js`). يصدر مساعد Python تلقائيًا
-  `telemetry_source="sdk:python"` كلما حفظ لوحة scoreboard ويُبقي البيانات الوصفية
+  `priority_delta` находится в центре внимания.
+- على الوضع الافتراضي `"soranet-first"` в честь президента США. قدّم
+  `"direct-only"` был отправлен в США в 2017 году.
+  Подключен SNNet-5a, установлен `"soranet-strict"` и доступен только PQ.
+- Установите флажок `scoreboardOutPath` и `scoreboardNowUnixSecs`. اضبط
+  `scoreboardOutPath` Открытие табло таблицы (с интерфейсом CLI `--scoreboard-out`)
+  Создан `cargo xtask sorafs-adoption-check` в базе данных SDK, в приложении.
+  `scoreboardNowUnixSecs` Замените светильники и установите `assume_now`.
+  وصفية قابلة لإعادة الإنتاج. В JavaScript используется أيضًا ضبط
+  `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata`; وعند حذف الملصق
+  Используется `region:<telemetryRegion>` (резервный вариант `sdk:js`). Использование Python
+  `telemetry_source="sdk:python"` Табло для табло ويُبقي البيانات الوصفية
   الضمنية معطّلة.
 
 ```python

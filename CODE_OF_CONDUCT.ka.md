@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ece3b82ce3096e15d3cc4524fbb6033ab3fa5119da561a1aec40306564ba0193
 source_last_modified: "2025-12-29T18:16:34.771616+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributor Covenant Code of Conduct
+# კონტრიბუტორი პაქტის ქცევის კოდექსი
 
-## Our Pledge
+## ჩვენი დაპირება
 
-In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+ღია და მისასალმებელი გარემოს ხელშეწყობის მიზნით, ჩვენ, როგორც კონტრიბუტორები და შემსრულებლები, პირობას ვდებთ, რომ მონაწილეობა მივიღოთ ჩვენს პროექტში და ჩვენს საზოგადოებაში შევიწროების გარეშე, განურჩევლად ასაკისა, სხეულის ზომის, ინვალიდობის, ეთნიკური წარმომავლობის, გენდერული იდენტობისა და გამოხატვის, გამოცდილების დონის, ეროვნების, გარეგნობის, რასის, რელიგიის ან სექსუალური იდენტობისა და ორიენტაციისა.
 
-## Our Standards
+## ჩვენი სტანდარტები
 
-Examples of behavior that contributes to creating a positive environment include:
+ქცევის მაგალითები, რომლებიც ხელს უწყობს პოზიტიური გარემოს შექმნას, მოიცავს:
 
-* Using welcoming and inclusive language
-* Being respectful of differing viewpoints and experiences
-* Gracefully accepting constructive criticism
-* Focusing on what is best for the community
-* Showing empathy towards other community members
+* მისასალმებელი და ინკლუზიური ენის გამოყენება
+* განსხვავებული შეხედულებებისა და გამოცდილების პატივისცემა
+* კონსტრუქციული კრიტიკის გრაციოზულად მიღება
+* ფოკუსირება იმაზე, რაც საუკეთესოა საზოგადოებისთვის
+* თანაგრძნობის გამოხატვა საზოგადოების სხვა წევრების მიმართ
 
-Examples of unacceptable behavior by participants include:
+მონაწილეთა მიერ მიუღებელი ქცევის მაგალითებია:
 
-* The use of sexualized language or imagery and unwelcome sexual attention or advances
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or electronic address, without explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+* სექსუალური ენის ან გამოსახულების გამოყენება და არასასურველი სექსუალური ყურადღება ან მიღწევები
+* ტროლინგი, შეურაცხმყოფელი/დამამცირებელი კომენტარები და პირადი ან პოლიტიკური თავდასხმები
+* საჯარო ან კერძო შევიწროება
+* სხვისი პირადი ინფორმაციის გამოქვეყნება, როგორიცაა ფიზიკური ან ელექტრონული მისამართი, აშკარა ნებართვის გარეშე
+* სხვა ქცევა, რომელიც გონივრულად შეიძლება ჩაითვალოს არასათანადოდ პროფესიულ გარემოში
 
-## Our Responsibilities
+## ჩვენი პასუხისმგებლობა
 
-Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+პროექტის შემსრულებლები პასუხისმგებელნი არიან მისაღები ქცევის სტანდარტების გარკვევაზე და მოელიან, რომ მიიღონ შესაბამისი და სამართლიანი მაკორექტირებელი ზომები მიუღებელი ქცევის ნებისმიერი შემთხვევის საპასუხოდ.
 
-Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+პროექტის შემსრულებლებს აქვთ უფლება და პასუხისმგებლობა წაშალონ, დაარედაქტირონ ან უარყონ კომენტარები, ვალდებულებები, კოდი, ვიკი რედაქტირება, საკითხები და სხვა შენატანები, რომლებიც არ შეესაბამება ამ ქცევის კოდექსს, ან დროებით ან სამუდამოდ აკრძალონ ნებისმიერი კონტრიბუტორი სხვა ქმედებებისთვის, რომლებიც მათ მიაჩნიათ შეუსაბამო, მუქარა, შეურაცხმყოფელი ან საზიანო.
 
-## Scope
+## სფერო
 
-This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+ეს ქცევის კოდექსი გამოიყენება როგორც პროექტის სივრცეში, ასევე საჯარო სივრცეში, როდესაც ინდივიდი წარმოადგენს პროექტს ან მის საზოგადოებას. პროექტის ან საზოგადოების წარმომადგენლობის მაგალითები მოიცავს პროექტის ოფიციალური ელფოსტის მისამართის გამოყენებას, გამოქვეყნებას ოფიციალური სოციალური მედიის ანგარიშის მეშვეობით ან დანიშნულ წარმომადგენლად მოქმედებას ონლაინ ან ოფლაინ ღონისძიებაზე. პროექტის წარმომადგენლობა შეიძლება შემდგომ განისაზღვროს და დაზუსტდეს პროექტის შემსრულებლების მიერ.
 
-## Enforcement
+## აღსრულება
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team [here](./CONTRIBUTING.md#contact). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+შეურაცხმყოფელი, შეურაცხმყოფელი ან სხვაგვარად მიუღებელი ქცევის შემთხვევები შეიძლება დაფიქსირდეს პროექტის გუნდთან დაკავშირებით [აქ] (./CONTRIBUTING.md#contact). ყველა საჩივარი განიხილება და გამოიკვლიება და გამოიწვევს პასუხს, რომელიც ჩათვლილია საჭიროდ და შესაბამის გარემოებებთან. პროექტის გუნდი ვალდებულია შეინარჩუნოს კონფიდენციალურობა ინციდენტის მომხსენებლის მიმართ. კონკრეტული აღსრულების პოლიტიკის დამატებითი დეტალები შეიძლება განთავსდეს ცალკე.
 
-Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+პროექტის შემსრულებლები, რომლებიც არ იცავენ ან არ აღასრულებენ ქცევის კოდექსს კეთილსინდისიერად, შეიძლება შეექმნათ დროებითი ან მუდმივი შედეგები, როგორც ეს განსაზღვრავს პროექტის ხელმძღვანელობის სხვა წევრებს.
 
-## Attribution
+## მიკუთვნება
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [http://contributor-covenant.org/version/1/4][version]
+ეს ქცევის კოდექსი ადაპტირებულია [Contributor Covenant][მთავარი გვერდიდან], ვერსია 1.4, ხელმისაწვდომია მისამართზე [http://contributor-covenant.org/version/1/4][ვერსია]
 
 [homepage]: http://contributor-covenant.org
 [version]: http://contributor-covenant.org/version/1/4/

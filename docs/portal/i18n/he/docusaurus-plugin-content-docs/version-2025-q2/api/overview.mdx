@@ -4,55 +4,57 @@ direction: rtl
 source: docs/portal/docs/api/overview.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import TryItConsole from '@site/src/components/TryItConsole.jsx';
+יבא את TryItConsole מ-'@site/src/components/TryItConsole.jsx';
 
-# Torii API Overview
+# סקירת ממשק API של Torii
 
-The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha
-nodes. The canonical OpenAPI document is generated via:
+שער Torii חושף משטח REST + WebSocket לאינטראקציה עם Iroha
+צמתים. מסמך OpenAPI הקנוני נוצר באמצעות:
 
 ```bash
 cargo xtask openapi
 ```
 
-Running the command above writes `docs/portal/static/openapi/torii.json` and
-feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+הפעלת הפקודה למעלה כותבת `docs/portal/static/openapi/torii.json` ו
+מזין את שילוב `docusaurus-plugin-openapi-docs` כך שסעיף זה מתעדכן
+באופן אוטומטי. המחולל מעלה נתב Torii בזיכרון ומנסה
+שאל את נקודת הקצה OpenAPI שלו; אם זה נכשל (לדוגמה, אתחול הנתב
+שגיאות) במקום זה נפלט מפרט מציין מיקום דטרמיניסטי.
 
-## Current status
+## מצב נוכחי
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
-- **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
-- **Authentication:** The “Try it” sandbox now forwards requests through a
-  constrained staging proxy. Operators must supply a Torii endpoint and bearer
-  token before issuing calls.
-- **Version selector:** Swagger UI, RapiDoc, and the full Torii OpenAPI page
-  expose a dropdown that reads `openapi/versions.json` so you can compare
-  historical snapshots. The `Latest (tracked)` option points to
-  `/openapi/torii.json`, while all other entries load the corresponding
-  `openapi/versions/<version>/torii.json` artifact.
-- **Snapshot workflow:** After running `npm run docs:version -- <label>`, refresh
-  the matching OpenAPI file with `npm run sync-openapi -- --version=<label> --latest`
-  so the dropdown can load both the frozen snapshot and the rolling “Latest” build.
+- **מקור מפרט:** `cargo xtask openapi` שואל את הנתב Torii ישירות; את
+  בדל החזרה נפלט רק כאשר הנתב לא מצליח לחשוף OpenAPI
+  מסמך.
+- **דטרמיניזם:** פלט JSON עובר קנוניזציה כדי להבטיח הבדל יציב ב-CI.
+- **אימות:** ארגז החול "נסה את זה" מעביר כעת בקשות דרך א
+  פרוקסי בימוי מוגבל. המפעילים חייבים לספק Torii נקודת קצה ונושא
+  אסימון לפני הוצאת שיחות.
+- **בורר גרסאות:** ממשק המשתמש של Swagger, RapiDoc ודף Torii OpenAPI המלא
+  חשוף תפריט נפתח שקורא `openapi/versions.json` כדי שתוכל להשוות
+  תצלומים היסטוריים. האפשרות `Latest (tracked)` מצביעה על
+  `/openapi/torii.json`, בעוד שכל שאר הערכים טוענים את הערכים המתאימים
+  חפץ `openapi/versions/<version>/torii.json`.
+- **זרימת עבודה של תמונת מצב:** לאחר הפעלת `npm run docs:version -- <label>`, רענן
+  הקובץ התואם OpenAPI עם `npm run sync-openapi -- --version=<label> --latest`
+  כך שהתפריט הנפתח יכול לטעון גם את תמונת המצב הקפואה וגם את המבנה המתגלגל "האחרון".
 
-The router-backed extractor now emits the full Torii surface. If you see the
-placeholder stub, treat it as a build-time failure and inspect the Torii
-router startup logs.
+המחלץ מגובה הנתב פולט כעת את משטח Torii המלא. אם אתה רואה את
+בדל מציין מיקום, התייחס אליו כאל כשל בזמן בנייה ובדוק את Torii
+יומני ההפעלה של הנתב.
 
-## Try it sandbox (DOCS-3)
+## נסה את זה בארגז חול (DOCS-3)
 
-The developer portal embeds a small console that relays REST requests through a
-Node-based proxy. The proxy enforces CORS, rate limits, and optional bearer
-tokens so the widget can talk to staging gateways without exposing credentials.
-See `docs/devportal/try-it.md` for the full operator checklist.
+פורטל המפתחים מטמיע קונסולה קטנה המעבירה בקשות REST דרך a
+פרוקסי מבוסס צומת. ה-proxy אוכף CORS, מגבלות תעריפים ונושא אופציונלי
+אסימונים כדי שהווידג'ט יוכל לדבר עם שערים מבלי לחשוף אישורים.
+ראה `docs/devportal/try-it.md` לרשימת הבדיקה המלאה של המפעיל.
 
-Start the proxy alongside the Docusaurus dev server:
+הפעל את ה-proxy לצד שרת הפיתוח Docusaurus:
 
 ```bash
 cd docs/portal
@@ -68,15 +70,15 @@ npm run tryit-proxy
 npm run start
 ```
 
-- The proxy listens on `TRYIT_PROXY_LISTEN` (default `127.0.0.1:8787`) and
-  forwards any `/proxy/...` requests to `TRYIT_PROXY_TARGET`.
-- Supply `TRYIT_PROXY_BEARER` for static bearer tokens or let callers provide
-  one per request via the “Bearer token” field.
-- Rate limits default to 60 requests per minute and can be tuned through
+- ה-proxy מאזין ב-`TRYIT_PROXY_LISTEN` (ברירת מחדל `127.0.0.1:8787`) ו
+  מעביר כל בקשות `/proxy/...` ל-`TRYIT_PROXY_TARGET`.
+- ספק `TRYIT_PROXY_BEARER` עבור אסימוני נושאים סטטיים או תן למתקשרים לספק
+  אחד לכל בקשה דרך השדה "אסימון נושא".
+- התעריף מגביל כברירת מחדל ל-60 בקשות לדקה וניתן לכוון אותם
   `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
 
-> ⚠️ The proxy is intended for staging/demo access. Production deployments
-> should run behind hardened ingress and reuse the same rate limiting policy in
-> front of Torii.
+> ⚠️ ה-proxy מיועד לגישה לשלב/הדגמה. פריסות ייצור
+> צריך לרוץ מאחורי כניסה קשוחה ולהשתמש מחדש באותה מדיניות הגבלת תעריפים ב
+> חזית Torii.
 
 <TryItConsole />

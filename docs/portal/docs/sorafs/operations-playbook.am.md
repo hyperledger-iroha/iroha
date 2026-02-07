@@ -11,189 +11,190 @@ id: operations-playbook
 title: SoraFS Operations Playbook
 sidebar_label: Operations Playbook
 description: Incident response guides and chaos drill procedures for SoraFS operators.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.md`. Keep both copies in sync until the Sphinx documentation set is fully migrated.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+ይህ ገጽ በ`docs/source/sorafs_ops_playbook.md` ስር የተቀመጠውን የሩጫ መጽሐፍ ያንጸባርቃል። የ Sphinx ሰነድ ስብስብ ሙሉ በሙሉ እስኪሰደድ ድረስ ሁለቱንም ቅጂዎች በማመሳሰል ያቆዩዋቸው።
+::
 
-## Key References
+## ቁልፍ ማጣቀሻዎች
 
-- Observability assets: refer to the Grafana dashboards under `dashboards/grafana/` and Prometheus alert rules in `dashboards/alerts/`.
-- Metric catalog: `docs/source/sorafs_observability_plan.md`.
-- Orchestrator telemetry surfaces: `docs/source/sorafs_orchestrator_plan.md`.
+- ታዛቢነት ያላቸው ንብረቶች፡ በ `dashboards/grafana/` እና Prometheus የማስጠንቀቂያ ደንቦች ስር ያሉትን Grafana ዳሽቦርዶችን በI18NI0000009X ይመልከቱ።
+- ሜትሪክ ካታሎግ: `docs/source/sorafs_observability_plan.md`.
+- ኦርኬስትራ ቴሌሜትሪ ንጣፎች: `docs/source/sorafs_orchestrator_plan.md`.
 
-## Escalation Matrix
+## Escalation ማትሪክስ
 
-| Priority | Trigger examples | Primary on-call | Backup | Notes |
-|----------|------------------|-----------------|--------|-------|
-| P1 | Global gateway outage, PoR failure rate > 5% (15 min), replication backlog doubling every 10 min | Storage SRE | Observability TL | Engage governance council if impact exceeds 30 min. |
-| P2 | Regional gateway latency SLO breach, orchestrator retry spike without SLA impact | Observability TL | Storage SRE | Continue rollout but gate new manifests. |
-| P3 | Non-critical alerts (manifest staleness, capacity 80–90%) | Intake triage | Ops guild | Address within next business day. |
+| ቅድሚያ | ቀስቅሴ ምሳሌዎች | የመጀመሪያ ደረጃ ጥሪ | ምትኬ | ማስታወሻ |
+|-------------|--------|
+| P1 | የአለም አቀፋዊ መግቢያ ማቋረጥ፣ የPoR ውድቀት መጠን > 5% (15 ደቂቃ)፣ የማባዛት የኋላ ሎግ በየ10 ደቂቃው በእጥፍ ይጨምራል | ማከማቻ SRE | ታዛቢነት TL | ተፅዕኖው ከ30 ደቂቃ በላይ ከሆነ የአስተዳደር ምክር ቤቱን ያሳትፉ። |
+| P2 | ክልላዊ መግቢያ በር መዘግየት SLO መጣስ፣ ኦርኬስትራ ያለ SLA ተጽዕኖ ድጋሚ ይሞክሩ | ታዛቢነት TL | ማከማቻ SRE | ልቀቱን ቀጥል ግን አዲስ መገለጫዎችን አስገባ። |
+| P3 | ወሳኝ ያልሆኑ ማንቂያዎች (የግልፅ ቆይታ፣ አቅም 80–90%) | የመግቢያ ልዩነት | Ops ጓድ | በሚቀጥለው የስራ ቀን ውስጥ አድራሻ |
 
-## Gateway Outage / Degraded Availability
+## የጌትዌይ መቋረጥ / የተበላሸ ተገኝነት
 
-**Detection**
+** ማወቂያ ***
 
-- Alerts: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
-- Dashboard: `dashboards/grafana/sorafs_gateway_overview.json`.
+- ማንቂያዎች፡ I18NI0000012X፣ `SoraFSGatewayLatencySlo`።
+- ዳሽቦርድ: `dashboards/grafana/sorafs_gateway_overview.json`.
 
-**Immediate actions**
+** አፋጣኝ እርምጃዎች ***
 
-1. Confirm scope (single provider vs fleet) via request-rate panel.
-2. Switch Torii routing to healthy providers (if multi-provider) by toggling `sorafs_gateway_route_weights` in the ops config (`docs/source/sorafs_gateway_self_cert.md`).
-3. If all providers impacted, enable “direct fetch” fallback for CLI/SDK clients (`docs/source/sorafs_node_client_protocol.md`).
+1. ወሰን ያረጋግጡ (ነጠላ አቅራቢ እና ፍሊት) በጥያቄ-ተመን ፓነል በኩል።
+2. በኦፕስ ውቅረት (`docs/source/sorafs_gateway_self_cert.md`) `sorafs_gateway_route_weights` በመቀያየር Torii ወደ ጤናማ አቅራቢዎች (ባለብዙ አቅራቢ ከሆነ) ቀይር።
+3. ሁሉም አቅራቢዎች ተጽዕኖ ካደረጉ፣ ለCLI/SDK ደንበኞች (`docs/source/sorafs_node_client_protocol.md`) “ቀጥታ ማምጣት” ውድቀትን አንቃ።
 
-**Triage**
+**ትሪጅ**
 
-- Check stream token utilisation against `sorafs_gateway_stream_token_limit`.
-- Inspect gateway logs for TLS or admission errors.
-- Run `scripts/telemetry/run_schema_diff.sh` to ensure the gateway exported schema matches the expected version.
+- የዥረት ማስመሰያ አጠቃቀምን ከ`sorafs_gateway_stream_token_limit` ጋር ያረጋግጡ።
+- የመግቢያ መዝገቦችን ለTLS ወይም የመግቢያ ስህተቶችን ይፈትሹ።
+- ወደ ውጭ የተላከው የአገናኝ መንገዱ ንድፍ ከተጠበቀው ስሪት ጋር እንደሚመሳሰል ለማረጋገጥ `scripts/telemetry/run_schema_diff.sh` ን ያሂዱ።
 
-**Remediation options**
+**የማስተካከያ አማራጮች**
 
-- Restart only the affected gateway process; avoid recycling the entire cluster unless multiple providers are failing.
-- Increase stream token limit by 10–15% temporarily if saturation is confirmed.
-- Re-run self-cert (`scripts/sorafs_gateway_self_cert.sh`) after stabilisation.
+- የተጎዳውን የመግቢያ ሂደት ብቻ እንደገና ያስጀምሩ; ብዙ አቅራቢዎች ካልተሳኩ በስተቀር ሙሉውን ክላስተር እንደገና ጥቅም ላይ ማዋልን ያስወግዱ።
+- ሙሌት ከተረጋገጠ የዥረት ማስመሰያ ገደቡን በጊዜያዊነት ከ10-15% ይጨምሩ።
+- ከተረጋጋ በኋላ የራስ ሰር ማረጋገጫ (`scripts/sorafs_gateway_self_cert.sh`) እንደገና ያሂዱ።
 
-**Post-incident**
+**ከአደጋ በኋላ**
 
-- File a P1 postmortem using `docs/source/sorafs/postmortem_template.md`.
-- Schedule follow-up chaos drill if remediation relied on manual interventions.
+- `docs/source/sorafs/postmortem_template.md` በመጠቀም የ P1 ድህረ ሞት ያስገቡ።
+- ማሻሻያው በእጅ በሚደረጉ ጣልቃገብነቶች ላይ ከተመረኮዘ የክትትል ትርምስ መሰርሰሪያን መርሐግብር ያስይዙ።
 
-## Proof Failure Spike (PoR / PoTR)
+## አለመሳካቱን የሚያረጋግጥ ስፒክ (PoR/PoTR)
 
-**Detection**
+** ማወቂያ ***
 
-- Alerts: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
-- Dashboard: `dashboards/grafana/sorafs_proof_integrity.json`.
-- Telemetry: `torii_sorafs_proof_stream_events_total` and `sorafs.fetch.error` events with `provider_reason=corrupt_proof`.
+- ማንቂያዎች፡ I18NI0000022X፣ `SoraFSPoTRDeadlineMiss`።
+- ዳሽቦርድ: I18NI0000024X.
+- ቴሌሜትሪ: I18NI0000025X እና I18NI0000026X ክስተቶች ከ I18NI0000027X ጋር።
 
-**Immediate actions**
+** አፋጣኝ እርምጃዎች ***
 
-1. Freeze new manifest admissions by flagging the manifest registry (`docs/source/sorafs/manifest_pipeline.md`).
-2. Notify Governance to pause incentives for affected providers.
+1. የአንጸባራቂውን መዝገብ (`docs/source/sorafs/manifest_pipeline.md`) በማመልከት አዲስ የሰነድ መግባቶችን ያቁሙ።
+2. ለተጎዱ አቅራቢዎች የሚሰጠውን ማበረታቻ ለአፍታ እንዲያቆም ለመንግስት ያሳውቁ።
 
-**Triage**
+**ትሪጅ**
 
-- Check PoR challenge queue depth vs `sorafs_node_replication_backlog_total`.
-- Validate proof verification pipeline (`crates/sorafs_node/src/potr.rs`) for recent deployments.
-- Compare provider firmware versions with the operator registry.
+- የPoR ፈታኝ ወረፋ ጥልቀት ከ `sorafs_node_replication_backlog_total` ጋር ያረጋግጡ።
+- በቅርብ ጊዜ ለተሰማሩ የማረጋገጫ ቧንቧ መስመር (`crates/sorafs_node/src/potr.rs`) ያረጋግጡ።
+- የአቅራቢውን የጽኑ ትዕዛዝ ስሪቶች ከኦፕሬተር መዝገብ ቤት ጋር ያወዳድሩ።
 
-**Remediation options**
+**የማስተካከያ አማራጮች**
 
-- Trigger PoR replays using `sorafs_cli proof stream` with the latest manifest.
-- If proofs consistently fail, remove provider from active set by updating the governance registry and forcing orchestrator scoreboards to refresh.
+- `sorafs_cli proof stream` በመጠቀም የPoR ድግግሞሾችን ከቅርብ ጊዜው አንጸባራቂ ጋር።
+- ማስረጃዎች በተከታታይ ካልተሳኩ የአስተዳደር መዝገብ ቤቱን በማዘመን እና የኦርኬስትራ የውጤት ሰሌዳዎችን እንዲያድሱ በማስገደድ አቅራቢውን ከገባሪው ያስወግዱት።
 
-**Post-incident**
+**ከአደጋ በኋላ**
 
-- Run the PoR chaos drill scenario before the next production deploy.
-- Capture lessons in the postmortem template and update provider qualification checklist.
+- ከሚቀጥለው የምርት ማሰማራቱ በፊት የPoR chaos drill scenarioን ያሂዱ።
+- በድህረ ሞት አብነት ውስጥ ትምህርቶችን ይያዙ እና የአቅራቢውን የብቃት ማረጋገጫ ዝርዝር ያዘምኑ።
 
-## Replication Lag / Backlog Growth
+## የማባዛት መዘግየት / የኋላ እድገት
 
-**Detection**
+** ማወቂያ ***
 
-- Alerts: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Import
-  `dashboards/alerts/sorafs_capacity_rules.yml` and run
+- ማንቂያዎች: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. አስመጣ
+  `dashboards/alerts/sorafs_capacity_rules.yml` እና አሂድ
   `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
-  before promotion so Alertmanager reflects the documented thresholds.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
-- Metrics: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
+  ማስተዋወቂያ ከመደረጉ በፊት Alertmanager በሰነድ የተቀመጡትን ገደቦች ያንፀባርቃል።
+- ዳሽቦርድ: `dashboards/grafana/sorafs_capacity_health.json`.
+- መለኪያዎች: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
 
-**Immediate actions**
+** አፋጣኝ እርምጃዎች ***
 
-1. Verify backlog scope (single provider or fleet) and pause non-essential replication tasks.
-2. If backlog is isolated, temporarily reassign new orders to alternate providers via the replication scheduler.
+1. የኋላ መዝገብ ወሰን (ነጠላ አቅራቢ ወይም መርከቦች) ያረጋግጡ እና አስፈላጊ ያልሆኑ የማባዛት ስራዎችን ለአፍታ ያቁሙ።
+2. የኋላ መዝገብ የተገለለ ከሆነ፣ በጊዜያዊነት አዲስ ትዕዛዞችን ለተለዋጭ አቅራቢዎች በማባዛት መርሐግብር ይመድቡ።
 
-**Triage**
+**ትሪጅ**
 
-- Inspect orchestrator telemetry for retry bursts that may cascade backlog.
-- Confirm storage targets have sufficient headroom (`sorafs_node_capacity_utilisation_percent`).
-- Review recent configuration changes (chunk profile updates, proof cadence).
+- የኋላ ታሪክን ሊያበላሹ የሚችሉ ፍንዳታዎችን እንደገና ለመሞከር ኦርኬስትራ ቴሌሜትሪ ይፈትሹ።
+- የማጠራቀሚያ ኢላማዎች በቂ ዋና ክፍል (`sorafs_node_capacity_utilisation_percent`) እንዳላቸው ያረጋግጡ።
+- የቅርብ ጊዜ የውቅረት ለውጦችን ይገምግሙ (የመገለጫ ዝማኔዎች ፣ የማረጋገጫ ማረጋገጫ)።
 
-**Remediation options**
+**የማስተካከያ አማራጮች**
 
-- Run `sorafs_cli` with the `--rebalance` option to redistribute content.
-- Scale replication workers horizontally for the impacted provider.
-- Trigger manifest refresh to re-align TTL windows.
+- ይዘትን እንደገና ለማሰራጨት `sorafs_cli`ን በ`--rebalance` አማራጭ ያሂዱ።
+- ለተጎዳው አቅራቢው የማባዛት ሰራተኞችን በአግድም ያስመዝኑ።
+- የቲቲኤል መስኮቶችን እንደገና ለማቀናጀት አንጸባራቂ እድሳት ያስነሱ።
 
-**Post-incident**
+**ከአደጋ በኋላ**
 
-- Schedule a capacity drill focusing on provider saturation failure.
-- Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
+- በአቅራቢው ሙሌት ውድቀት ላይ የሚያተኩር የአቅም ቁፋሮ መርሐግብር ያስይዙ።
+- በ `docs/source/sorafs_node_client_protocol.md` ውስጥ የማባዛት SLA ሰነዶችን ያዘምኑ።
 
-## Repair Backlog & SLA Breaches
+## የኋላ መዝገብ እና SLA ጥሰቶችን መጠገን
 
-**Detection**
+** ማወቂያ ***
 
-- Alerts:
-  - `SoraFSRepairBacklogHigh` (queue depth > 50 or oldest queued age > 4h for 10m).
-  - `SoraFSRepairEscalations` (> 3 escalations/hour).
-  - `SoraFSRepairLeaseExpirySpike` (> 5 lease expiries/hour).
-  - `SoraFSRetentionBlockedEvictions` (retention blocked by active repairs in last 15m).
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- ማንቂያዎች
+  - `SoraFSRepairBacklogHigh` (የወረፋ ጥልቀት> 50 ወይም በጣም የቆየ ወረፋ ዕድሜ> 4 ሰ ለ 10 ሜትር)።
+  - `SoraFSRepairEscalations` (> 3 escalations / ሰዓት).
+  - `SoraFSRepairLeaseExpirySpike` (> 5 የኪራይ ውል የሚያልቅበት/ሰዓት)።
+  - `SoraFSRetentionBlockedEvictions` (በመጨረሻው 15 ሜትር ውስጥ በንቁ ጥገናዎች ማቆየት ታግዷል).
+- ዳሽቦርድ: I18NI0000047X.
 
-**Immediate actions**
+** አፋጣኝ እርምጃዎች ***
 
-1. Identify affected providers (queue depth spikes) and pause new pins/replication orders for them.
-2. Verify repair worker liveness and increase worker concurrency if safe.
+1. የተጎዱ አቅራቢዎችን ይለዩ (የወረፋ ጥልቀት ነጠብጣቦች) እና ለእነሱ አዲስ ፒን / የማባዛት ትዕዛዞችን ለአፍታ ያቁሙ።
+2. የጥገና ሰራተኛውን ህይወት ያረጋግጡ እና ደህንነቱ የተጠበቀ ከሆነ የሰራተኛውን ምንዛሬ ይጨምሩ።
 
-**Triage**
+**ትሪጅ**
 
-- Compare `torii_sorafs_repair_backlog_oldest_age_seconds` against the 4h SLA window.
-- Inspect `torii_sorafs_repair_lease_expired_total{outcome=...}` for crash/clock-skew patterns.
-- Review escalated tickets for repeated manifest/provider pairs and verify evidence bundles.
+- `torii_sorafs_repair_backlog_oldest_age_seconds` ከ 4h SLA መስኮት ጋር ያወዳድሩ።
+- ለብልሽት/የሰዓት-skew ቅጦች `torii_sorafs_repair_lease_expired_total{outcome=...}`ን መርምር።
+- ለተደጋጋሚ አንጸባራቂ/አቅራቢ ጥንዶች የተባባሱ ትኬቶችን ይገምግሙ እና የማስረጃ እሽጎችን ያረጋግጡ።
 
-**Remediation options**
+**የማስተካከያ አማራጮች**
 
-- Reassign or restart stalled repair workers; clear orphaned leases via the normal claim flow.
-- Throttle new pins while repairs drain to prevent additional SLA pressure.
-- Escalate to governance if escalations persist and attach the repair audit artefacts.
+- የቆሙ የጥገና ሠራተኞችን እንደገና መመደብ ወይም እንደገና ማስጀመር; በመደበኛ የይገባኛል ጥያቄ ፍሰት ወላጅ አልባ የኪራይ ውል ማፅዳት።
+- ጥገናዎች ተጨማሪ SLA ጫና ለመከላከል ሲሉ አዲስ ካስማዎች ስሮት.
+- ፍጥነቱ ከቀጠለ ወደ አስተዳደር እንሸጋገር እና የጥገና ኦዲት ቅርሶችን በማያያዝ።
 
-## Retention / GC Inspection (Read-only)
+## ማቆየት / ጂሲ ፍተሻ (ተነባቢ-ብቻ)
 
-**Detection**
+** ማወቂያ ***
 
-- Alerts: `SoraFSCapacityPressure` or sustained `torii_sorafs_storage_bytes_used` > 90%.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- ማንቂያዎች፡ I18NI0000050X ወይም ቀጣይነት ያለው `torii_sorafs_storage_bytes_used`> 90%.
+- ዳሽቦርድ: I18NI0000052X.
 
-**Immediate actions**
+** አፋጣኝ እርምጃዎች ***
 
-1. Run a local retention snapshot:
+1. የአካባቢ ማቆያ ቅጽበተ-ፎቶን ያሂዱ፡-
    ```bash
    iroha app sorafs gc inspect --data-dir /var/lib/sorafs
    ```
-2. Capture an expired-only view for triage:
+2. የአገልግሎት ጊዜው ያለፈበት-ብቻ እይታን ያንሱ፡-
    ```bash
    iroha app sorafs gc dry-run --data-dir /var/lib/sorafs
    ```
-3. Attach the JSON outputs to the incident ticket for auditability.
+3. ለኦዲትነት የJSON ውጤቶችን ከአደጋው ትኬት ጋር ያያይዙ።
 
-**Triage**
+**ትሪጅ**
 
-- Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
-- Use `retention_sources` in the GC JSON output to see which constraint set the effective
-  retention (`deal_end`, `governance_cap`, `pin_policy`, or `unbounded`). Deal and governance caps
-  are supplied via manifest metadata keys `sorafs.retention.deal_end_epoch` and
+- የትኛውን ሪፖርት እንደሚያሳይ ያረጋግጡ `retention_epoch=0` (የማለቂያ ጊዜ የለም) እና የግዜ ገደቦች ካላቸው ጋር።
+- የትኛው ገደብ ውጤታማ እንደሆነ ለማየት በGC JSON ውፅዓት ውስጥ `retention_sources` ይጠቀሙ
+  ማቆየት (`deal_end`፣ `governance_cap`፣ `pin_policy`፣ ወይም I18NI0000058X)። ስምምነት እና የአስተዳደር ገደቦች
+  በአንጸባራቂ ሜታዳታ ቁልፎች `sorafs.retention.deal_end_epoch` እና
   `sorafs.retention.governance_cap_epoch`.
-- If `dry-run` reports expired manifests but capacity remains pinned, verify no
-  active repairs or retention policy overrides block eviction.
-  Capacity-triggered sweeps evict expired manifests by least-recently-used order with
-  `manifest_id` tie-breakers.
+- የ`dry-run` ሪፖርቶች ጊዜያቸው ያለፈባቸው መገለጫዎች ነገር ግን አቅሙ እንደተሰካ ከቀጠለ፣ ምንም ያረጋግጡ
+  ንቁ ጥገና ወይም ማቆየት ፖሊሲ ከቤት ማስወጣትን ያግዳል።
+  በችሎታ የተቀሰቀሱ ጠራርጎዎች ማስወጣት ጊዜው አልፎበታል ቢያንስ በቅርብ ጊዜ ጥቅም ላይ በዋለ ትእዛዝ
+  `manifest_id` ክራባት ሰሪዎች።
 
-**Remediation options**
+**የማስተካከያ አማራጮች**
 
-- The GC CLI is read-only. Do not delete manifests or chunks manually in production.
-- Escalate to governance for retention policy adjustments or capacity expansion
-  when expired data accumulates without automated eviction.
+- GC CLI ተነባቢ-ብቻ ነው። በምርት ውስጥ መግለጫዎችን ወይም ቁርጥራጮችን እራስዎ አይሰርዙ።
+- የማቆያ ፖሊሲ ማስተካከያ ወይም የአቅም ማስፋፋት ወደ አስተዳደር ማደግ
+  ጊዜው ያለፈበት መረጃ በራስ-ሰር ሳይወጣ ሲከማች።
 
 ## Chaos Drill Cadence
 
-- **Quarterly**: Combined gateway outage + orchestrator retry storm simulation.
-- **Biannual**: PoR/PoTR failure injection across two providers with recovery.
-- **Monthly spot-check**: Replication lag scenario using staging manifests.
-- Track drills in the shared runbook log (`ops/drill-log.md`) via:
+- ** በየሩብ ዓመቱ ***: የተዋሃደ የመግቢያ መንገድ መቋረጥ + ኦርኬስትራ የማዕበል ማስመሰልን እንደገና ይሞክሩ።
+- **ሁለትዮሽ ***፡- የPoR/PoTR ውድቀት በሁለት አቅራቢዎች ከማገገም ጋር።
+- ** ወርሃዊ የቦታ-ቼክ ***: የማሳያ መግለጫዎችን በመጠቀም የማባዛት መዘግየት ሁኔታ።
+- ልምምዶችን በተጋራው የሩጫ መጽሐፍ ምዝግብ ማስታወሻ (`ops/drill-log.md`) በኩል ይከታተሉ፡-
 
   ```bash
   scripts/telemetry/log_sorafs_drill.sh \
@@ -206,15 +207,15 @@ This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.
     --link "docs/source/sorafs/postmortem_template.md"
   ```
 
-- Validate the log before commits with:
+- ከመግባትዎ በፊት መዝገቡን ያረጋግጡ፡-
 
   ```bash
   scripts/telemetry/validate_drill_log.sh
   ```
 
-- Use `--status scheduled` for upcoming drills, `pass`/`fail` for completed runs, and `follow-up` when action items remain open.
-- Override the destination with `--log` for dry-runs or automated verification; without it the script continues to update `ops/drill-log.md`.
+- ለሚመጡት ልምምዶች `--status scheduled`፣ ለተጠናቀቁ ሩጫዎች `pass`/I18NI0000066X፣ እና የድርጊት እቃዎች ክፍት ሲሆኑ `follow-up` ይጠቀሙ።
+- መድረሻውን በ I18NI0000068X ለደረቅ ሩጫዎች ወይም በራስ ሰር ማረጋገጥ; ያለ እሱ ስክሪፕቱ `ops/drill-log.md` ማዘመን ይቀጥላል።
 
-## Postmortem Template
+## የድህረ ሞት አብነት
 
-Use `docs/source/sorafs/postmortem_template.md` for every P1/P2 incident and for chaos drill retrospectives. The template covers timeline, impact quantification, contributing factors, corrective actions, and follow-up verification tasks.
+ለእያንዳንዱ P1/P2 ክስተት እና ለትርምስ መሰርሰሪያ የኋላ እይታዎች `docs/source/sorafs/postmortem_template.md` ይጠቀሙ። አብነቱ የጊዜ መስመርን፣ የተፅዕኖ አቆጣጠርን፣ አስተዋጽዖ ምክንያቶችን፣ የማስተካከያ እርምጃዎችን እና የክትትል ማረጋገጫ ስራዎችን ይሸፍናል።

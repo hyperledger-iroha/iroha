@@ -7,24 +7,26 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript Connect preview recipe
 description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-ის იმპორტი '@site/src/components/SampleDownload'-დან;
 
-This recipe shows how to combine `bootstrapConnectPreviewSession` with the
-WebSocket dialer exposed by `ToriiClient.openConnectWebSocket()`. The script
-mirrors the Connect section of the JS SDK roadmap: it mints deterministic
-preview URIs, records queue depth telemetry, and opens the canonical
-`/v1/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
-same flow as browsers.
+ეს რეცეპტი გვიჩვენებს, თუ როგორ უნდა დააკავშიროთ `bootstrapConnectPreviewSession`
+WebSocket აკრიფეთ `ToriiClient.openConnectWebSocket()`. სცენარი
+ასახავს JS SDK საგზაო რუქის Connect მონაკვეთს: ის დეტერმინისტულია
+გადახედეთ URI-ებს, ჩაიწერს რიგის სიღრმის ტელემეტრიას და ხსნის კანონიკურს
+`/v1/connect/ws` საბოლოო წერტილი `ws` პაკეტის გამოყენებით, რათა Node.js აპებმა შეძლონ განახორციელონ
+იგივე ნაკადი, როგორც ბრაუზერები.
 
 <SampleDownload
   href="/sdk-recipes/javascript/connect-preview.mjs"
-  filename="connect-preview.mjs"
-  description="Download the runnable script referenced in this recipe."
+  ფაილის სახელი = "connect-preview.mjs"
+  description="ჩამოტვირთეთ runnable სკრიპტი, რომელიც მითითებულია ამ რეცეპტში."
 />
 
-## Prerequisites
+## წინაპირობები
 
 ```bash
 npm install @iroha/iroha-js ws
@@ -37,10 +39,10 @@ export IROHA_TORII_API_TOKEN="sandbox-token"
 export CONNECT_REGISTRATION_NODE="https://torii.backup.example"
 ```
 
-Set `CONNECT_ROLE` to `app` when you need to dial the application side of the
-handshake. The default role is `wallet`.
+დააყენეთ `CONNECT_ROLE`-ზე `app`, როდესაც გჭირდებათ აკრიფეთ აპლიკაციის მხარე
+ხელის ჩამორთმევა. ნაგულისხმევი როლი არის `wallet`.
 
-## Example script
+## მაგალითი სკრიპტი
 
 ```ts title="connect-preview.mjs"
 #!/usr/bin/env node
@@ -135,21 +137,21 @@ main().catch((error) => {
 });
 ```
 
-## Run & monitor
+## გაშვება და მონიტორინგი
 
-- Execute the script with `node --env-file=.env connect-preview.mjs` (or export
-  the variables manually). The script logs the preview wallet URI, deeplink, and
-  queue depth before opening the WebSocket.
-- Feed telemetry dashboards by scraping the queue metrics the script prints for
-  overflow/expiry cases (`connect.queue_depth`, `connect.queue_overflow_total`,
-  `connect.queue_expired_total`). The `ConnectQueueError` helpers emit the
-  roadmap taxonomy (`queueOverflow`, `timeout`) so OTEL exporters can stay
-  consistent with Android/Swift clients.
-- Swap the role to `app` to inspect the application leg of the handshake. The
-  dialer automatically chooses the correct token (`token_app` vs. `token_wallet`)
-  and upgrades `http→ws`/`https→wss` so both roles share the same snippet.
+- შეასრულეთ სკრიპტი `node --env-file=.env connect-preview.mjs`-ით (ან ექსპორტი
+  ცვლადები ხელით). სკრიპტი აღრიცხავს გადახედვისას საფულის URI-ს, ღრმა ბმულს და
+  რიგის სიღრმე WebSocket-ის გახსნამდე.
+- მიაწოდეთ ტელემეტრიის საინფორმაციო დაფები რიგის მეტრიკის ამოკვეთით, რისთვისაც ბეჭდავს სკრიპტს
+  გადინება/გადასვლის შემთხვევები (`connect.queue_depth`, `connect.queue_overflow_total`,
+  `connect.queue_expired_total`). `ConnectQueueError` დამხმარეები ასხივებენ
+  საგზაო რუქის ტაქსონომია (`queueOverflow`, `timeout`), რათა OTEL-ის ექსპორტიორებს შეეძლოთ დარჩენა
+  შეესაბამება Android/Swift კლიენტებს.
+- შეცვალეთ როლი `app`-ზე, რათა შეამოწმოთ ხელის ჩამორთმევის აპლიკაციის ფეხი. The
+  აკრიფეთ ავტომატურად ირჩევს სწორ ჟეტონს (`token_app` vs. `token_wallet`)
+  და განაახლებს `http→ws`/`https→wss`, ასე რომ ორივე როლი იზიარებს ერთნაირ სნიპეტს.
 
-This recipe closes the remaining JS5 documentation gap for the Connect preview
-story called out in `roadmap.md`: the portal now ships a turnkey sample plus
-queue telemetry guidance, matching the roadmap requirement to document the
-WebSocket walkthrough alongside the Connect session helpers.
+ეს რეცეპტი ხურავს დარჩენილ JS5 დოკუმენტაციის ხარვეზს Connect გადახედვისთვის
+ამბავი გამოქვეყნებულია `roadmap.md`-ში: პორტალი ახლა აგზავნის ანაზრაურების ნიმუშს პლუს
+რიგის ტელემეტრიის მითითება, რომელიც შეესაბამება საგზაო რუქის მოთხოვნას დოკუმენტურად
+WebSocket გზამკვლევი Connect სესიის დამხმარეებთან ერთად.

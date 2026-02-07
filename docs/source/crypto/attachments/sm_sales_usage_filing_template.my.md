@@ -7,90 +7,88 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2025-12-29T18:16:35.938696+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+% SM2/SM3/SM4 အရောင်းနှင့် အသုံးပြုမှု တင်သွင်းခြင်း (销售/使用备案) နမူနာပုံစံ
+%Hyperledger Iroha လိုက်နာမှုလုပ်ငန်းအဖွဲ့
+ရာခိုင်နှုန်း 2026-05-06
 
-# Instructions
+#ညွှန်ကြားချက်များ
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+ကုန်းတွင်းပိုင်းအတွက် SCA ရုံးတွင် ဖြန့်ကျက်အသုံးပြုမှုကို တင်ပြသည့်အခါ ဤပုံစံကို အသုံးပြုပါ။
+အော်ပရေတာများ။ အသုံးချမှုအစုတစ်ခု သို့မဟုတ် ဒေတာနေရာလွတ်တစ်ခုလျှင် တင်သွင်းမှုတစ်ခု ပေးပါ။ အပ်ဒိတ်
+အော်ပရေတာအသေးစိတ်အသေးစိတ်များပါရှိသော placeholder နှင့်ဖော်ပြထားသောအထောက်အထားများကို ပူးတွဲပါ
+checklist ထဲမှာ။
 
-# 1. Operator & Deployment Summary
+#1. Operator & Deployment အနှစ်ချုပ်
 
-| Field | Value |
-|-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| လယ် | တန်ဖိုး |
+|---------|-------|
+| အော်ပရေတာအမည် | {{ OPERATOR_NAME }} |
+| လုပ်ငန်းမှတ်ပုံတင် ID | {{ REG_ID }} |
+| မှတ်ပုံတင်လိပ်စာ | {{ လိပ်စာ }} |
+| မူလအဆက်အသွယ် (အမည်/ ခေါင်းစဉ်/ အီးမေးလ်/ ဖုန်း) | {{ ဆက်သွယ်ရန် }} |
+| ဖြန့်ကျက်သတ်မှတ်မှု | {{ DEPLOYMENT_ID }} |
+| ဖြန့်ကျက်တည်နေရာ(များ) | {{တည်နေရာများ }} |
+| ဖိုင်အမျိုးအစား | အရောင်း/အသုံးပြုမှု (销售/使用备案) |
+| တင်တဲ့ရက်စွဲ | {{ YYYY-MM-DD }} |
 
-# 2. Deployment Details
+#2. ဖြန့်ကျက်မှုအသေးစိတ်
 
 - Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
-  |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+- တည်ဆောက်မှုရင်းမြစ်- {{ BUILD_SOURCE }} (ဥပမာ၊ အော်ပရေတာမှ တည်ဆောက်ထားသော အရင်းအမြစ်၊ ရောင်းချသူမှ ပေးထားသော ဒွိစုံ)။
+- စတင်အသုံးပြုသည့်ရက်စွဲ- {{ ACTIVATION_DATE }}
+- စီစဉ်ထားသော ပြုပြင်ထိန်းသိမ်းမှု ပြတင်းပေါက်များ- {{ MAINTENANCE_CADENCE }}
+- SM လက်မှတ်ရေးထိုးခြင်းတွင် ပါဝင်သော Node အခန်းကဏ္ဍများ-
+  | Node | အခန်းကဏ္ဍ | SM အင်္ဂါရပ်များကို ဖွင့်ထားသည် | သော့ဖွင့်ထားသော တည်နေရာ |
+  |--------|------|---------------------------------|--------------------|
+  | {{ NODE_ID }} | {{ ရာထူး }} | {{ အင်္ဂါရပ်များ }} | {{ VAULT }} |
 
-# 3. Cryptographic Controls
+# 3. ကူးယူဖော်ပြမှု ထိန်းချုပ်မှုများ
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
-  |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+- ခွင့်ပြုထားသော အယ်လဂိုရီသမ်များ- {{ ALGORITHMS }} (SM set နှင့် ကိုက်ညီမှုရှိမရှိ သေချာစေရန်)။
+- အဓိက ဘဝသံသရာ အကျဉ်းချုပ်-
+  | ဇာတ်ခုံ | ဖော်ပြချက် |
+  |--------|-------------|
+  | မျိုးဆက် | {{ KEY_GENERATION }} |
+  | ထိန် | {{ KEY_STORAGE }} |
+  | လှည့် | {{ KEY_ROTATION }} |
+  | ရုတ်သိမ်းခြင်း | {{ KEY_REVOCATION }} |
+- ထူးခြားသောအထောက်အထား (`distid`) မူဝါဒ- {{ DISTID_POLICY }}
+- ဖွဲ့စည်းမှုပုံစံကောက်နုတ်ချက် (`crypto` အပိုင်း)- Norito/JSON လျှပ်တစ်ပြက်ပုံများကို hashes ဖြင့် ပေးပါ။
 
-# 4. Telemetry & Audit Trails
+#4. Telemetry & Audit Trails
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- အဆုံးမှတ်များကို စောင့်ကြည့်ခြင်း- {{ METRICS_ENDPOINTS }} (`/metrics`၊ ဒက်ရှ်ဘုတ်များ)။
+- မှတ်တမ်းတင်ထားသော မက်ထရစ်များ- `crypto.sm.verification_total`၊ `crypto.sm.sign_total`၊
+  latency histograms၊ အမှားကောင်တာများ။
+- မှတ်တမ်းထိန်းသိမ်းခြင်းမူဝါဒ- {{ LOG_RETENTION }} (≥ သုံးနှစ် အကြံပြုထားသည်)။
+- စာရင်းစစ်မှတ်တမ်းသိုလှောင်မှုတည်နေရာ- {{ AUDIT_STORAGE }}
 
-# 5. Incident Response & Contacts
+#5. Incident Response & Contacts
 
-| Role | Name | Phone | Email | SLA |
-|------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+| အခန်းကဏ္ဍ | အမည် | ဖုန်း | အီးမေးလ် | SLA |
+|---|------|-------|-------|-----|
+| လုံခြုံရေး စစ်ဆင်ရေး ဦးဆောင် | {{ NAME }} | {{ ဖုန်း }} | {{ အီးမေးလ် }} | {{ SLA }} |
+| Crypto on-call | {{ NAME }} | {{ ဖုန်း }} | {{ အီးမေးလ် }} | {{ SLA }} |
+| ဥပဒေ/လိုက်နာမှု| {{ NAME }} | {{ ဖုန်း }} | {{ အီးမေးလ် }} | {{ SLA }} |
+| ရောင်းချသူ ပံ့ပိုးကူညီမှု (ရှိလျှင်) | {{ NAME }} | {{ ဖုန်း }} | {{ အီးမေးလ် }} | {{ SLA }} |
 
-# 6. Attachments Checklist
+#6. Attachments Checklist- [ ] ဖွဲ့စည်းမှုလျှပ်တစ်ပြက်ရိုက်ချက် (Norito + JSON)
+- [ ] အဆုံးအဖြတ်ပေးသော တည်ဆောက်မှုဆိုင်ရာ အထောက်အထား (hashes၊ SBOM၊ ပြန်လည်ထုတ်လုပ်နိုင်မှုမှတ်စုများ)။
+- [ ] တယ်လီမီတာ ဒက်ရှ်ဘုတ် တင်ပို့မှုနှင့် သတိပေးချက် အဓိပ္ပါယ်ဖွင့်ဆိုချက်များ။
+- [ ] မတော်တဆ တုံ့ပြန်မှု အစီအစဉ် နှင့် ဖုန်းခေါ်ဆိုမှု အလှည့်ကျ စာရွက်စာတမ်း။
+- [ ] အော်ပရေတာ လေ့ကျင့်ရေး အသိအမှတ်ပြုမှု သို့မဟုတ် ရှေ့ပြေးစာအုပ် ပြေစာ။
+- [ ] ပို့ကုန်-ထိန်းချုပ်ရေးထုတ်ပြန်ချက်အား ထင်ဟပ်နေသည့်အရာများကို ပေးပို့ထားသည်။
+- [ ] သက်ဆိုင်ရာ စာချုပ် သဘောတူညီချက်များ သို့မဟုတ် မူဝါဒ စွန့်လွှတ်မှု မိတ္တူများ။
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+#7. အော်ပရေတာကြေညာစာတမ်း
 
-# 7. Operator Declaration
+> အထက်တွင်ဖော်ပြထားသော ဖြန့်ကျက်မှုသည် PRC ကုန်သွယ်မှုနှင့် ကိုက်ညီကြောင်း ကျွန်ုပ်တို့ အတည်ပြုပါသည်။
+> မှတ်တမ်းတင်ထားသော SM-enabled ဝန်ဆောင်မှုများသည် မှတ်တမ်းတင်ထားသည့်အတိုင်းလိုက်နာသော cryptography စည်းမျဉ်းများ
+> အဖြစ်အပျက် တုန့်ပြန်မှုနှင့် တယ်လီမီတာ မူဝါဒများ နှင့် အဆိုပါ စာရင်းစစ် ပစ္စည်းများ ဖြစ်လိမ့်မည်။
+> အနည်းဆုံး သုံးနှစ်လောက် သိမ်းထားတယ်။
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- လုပ်ပိုင်ခွင့် လက်မှတ်ရေးထိုးသူ- ________________________
+- ရက်စွဲ- ________________________

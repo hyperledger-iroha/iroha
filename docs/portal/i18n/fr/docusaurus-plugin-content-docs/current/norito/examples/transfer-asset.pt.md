@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: Transferir ativo entre contas
-description: Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.
-source: examples/transfer/transfer.ko
+slug : /norito/examples/transfer-asset
+titre : Transférer ativo entre contas
+description : Flux direct de transfert d'actifs qui exécutent les démarrages rapides du SDK et les rotations du livre razao.
+source : exemples/transfert/transfer.ko
 ---
 
-Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.
+Flux direct de transfert des activités qui exécutent les démarrages rapides du SDK et les rotations du livre razao.
 
-## Roteiro do livro razao
+## Roteiro do livro razão
 
-- Pre-financie Alice com o ativo alvo (por exemplo via o trecho `register and mint` ou os fluxos de quickstart do SDK).
-- Execute o entrypoint `do_transfer` para mover 10 unidades de Alice para Bob, atendendo a permissao `AssetTransferRole`.
-- Consulte saldos (`FindAccountAssets`, `iroha_cli ledger assets list`) ou assine eventos do pipeline para observar o resultado da transferencia.
+- Pré-financer Alice avec ou d'autre (par exemple via le trecho `register and mint` ou les flux de démarrage rapide du SDK).
+- Exécutez le point d'entrée `do_transfer` pour déplacer 10 unités d'Alice pour Bob, en attendant l'autorisation `AssetTransferRole`.
+- Consultez les saldos (`FindAccountAssets`, `iroha_cli ledger assets list`) ou assistez aux événements du pipeline pour observer le résultat du transfert.
 
-## Guias de SDK relacionados
+## Guides des utilisateurs du SDK
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [Démarrage rapide du SDK Rust](/sdks/rust)
+- [Démarrage rapide du SDK Python](/sdks/python)
+- [Démarrage rapide du SDK JavaScript](/sdks/javascript)
 
 [Baixe a fonte Kotodama](/norito-snippets/transfer-asset.ko)
 

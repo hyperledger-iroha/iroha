@@ -7,80 +7,75 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 40185fd79a4d6bcb2a7f35cbb4a14ca8feb82f31e62b4e51f9a6f1657f524ed4
 source_last_modified: "2025-12-29T18:16:35.940026+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% ARMv8 SM3/SM4 Intrinsics vs Pure Rust Implementations
-% Iroha Crypto Working Group
-% 2026-02-12
+% ARMv8 SM3/SM4 ནང་དོན་རིག་པ་ vs རསཊི་ལག་ལེན་འཐབ་ཐངས།
+% Iroha ཀིརིཔ་ཊོ་ལས་བྱེད་སྡེ་ཚན།
+% ༢༠༢༦-༠༢-༡༢
 
-# Prompt
+# འདི་འཕྲོ་ལས
 
-> You are LLM acting as an expert advisor to the Hyperledger Iroha crypto team.  
-> Background:  
-> - Hyperledger Iroha is a Rust-based permissioned blockchain where every validator must execute deterministically so consensus cannot diverge.  
-> - Iroha uses the Chinese GM/T cryptographic primitives SM2 (signatures), SM3 (hash), and SM4 (block cipher) for certain regulatory deployments.  
-> - The team ships two SM3/SM4 implementations inside the validator stack:  
->   1. Pure Rust, bit-sliced, constant-time scalar code that runs on any CPU.  
->   2. ARMv8 NEON accelerated kernels that rely on the optional `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, `SM4E`, and `SM4EKEY` instructions exposed on newer Apple M-series and Arm server CPUs.  
-> - Accelerated code is behind runtime feature detection using `core::arch::aarch64` intrinsics; the system must avoid non-deterministic behaviour when threads migrate across big.LITTLE cores or when replicas are built with different compiler flags.  
-> Requested analysis:  
-> Compare the ARMv8 intrinsic implementations with the pure Rust fallbacks for deterministic blockchain verification. Discuss throughput/latency gains, determinism pitfalls (feature detection, heterogeneous cores, SIGILL risk, alignment, mixing execution paths), constant-time properties, and the operational safeguards—tests, manifests, telemetry, operator documentation—needed to keep all validators in sync even when some hardware supports the instructions and others do not.
+> ཁྱོད་ཀྱིས་ Hyperledger Iroha ཀིརིཔ་ཊོ་སྡེ་ཚན་ལུ་ མཁས་མཆོག་བསླབ་བྱ་བྱིན་མི་ཅིག་སྦེ་ ལཱ་འབད་དོ་ཡོདཔ་ཨིན།  
+> རྒྱབ་ལྗོངས།  
+> - Hyperledger Iroha འདི་ Rust-based གཞི་བཞག་པའི་གནང་བ་སྤྲོད་ཡོད་པའི་བཀག་ཆ་ཅིག་ཨིནམ་ད་ དེ་ཡང་ བདེན་དཔྱད་འབད་མི་ག་ར་གིས་ གཏན་འབེབས་སྦེ་ ལག་ལེན་འཐབ་དགོཔ་ལས་ མོས་མཐུན་འདི་ ཁ་སྟོར་མི་ཚུགས།  
+> - Iroha གིས་ རྒྱ་ནག་གི་ ཇི་ཨེམ་/ཊི་ ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་ པི་རི་མི་ཊིབ་ ཨེསི་ཨེམ་༢ (མཚན་རྟགས་) དང་ ཨེསི་ཨེམ་༣ (ཧཤ་) དེ་ལས་ ཨེསི་ཨེམ་༤ (བཀག་ཆ་སི་ཕར་) ཚུ་ ཁྲིམས་ལུགས་བཀྲམ་སྤེལ་ལ་ལུ་ཅིག་གི་དོན་ལུ་ ལག་ལེན་འཐབ་ཨིན།  
+> - སྡེ་ཚན་འདི་གིས་ བདེན་དཔྱད་འབད་མི་བརྩེགས་བརྩེགས་ནང་ལུ་ SM3/SM4 ལག་ལེན་འཐབ་ཐངས་གཉིས་བཀོདཔ་ཨིན།  
+> 1. སི་པི་ཡུ་གང་རུང་ཅིག་གུ་གཡོག་བཀོལ་མི་ རཱསིཊི་ གཙང་ཏོག་ཏོ་ བིཊི་སིལཌ་ དུས་རྒྱུན་གྱི་ སི་ཀེ་ལེར་ཨང་རྟགས་ཨང་།  
+> 2. ARMv8 མགྱོགས་ཚད་ཅན་གྱི་ ཀར་ནེལ་ཚུ་ གདམ་ཁ་ཅན་གྱི་ `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, `SM4E`, དང་། `SM4EKEY` གིས་ ཨེ་པཱལ་ཨེམ་རིམ་པ་གསརཔ་དང་ ལགཔ་སར་བར་གྱི་ སི་པི་ཡུ་གསརཔ་ཚུ་ གསལ་སྟོན་འབད་ཡོདཔ་ཨིན།  
+> - མགྱོགས་ཚད་ཅན་གྱི་ཨང་རྟགས་འདི་ `core::arch::aarch64` intrinsics ལག་ལེན་འཐབ་སྟེ་ རན་ཊའིམ་ཁྱད་རྣམ་བརྟག་དཔྱད་རྒྱབ་ལུ་ཨིན། ཐགཔ་སྦོམ་ཚུ་ནང་ལུ་ གནས་སྤོ་འགྱོ་བའི་སྐབས་ རིམ་ལུགས་འདི་གིས་ གཏན་འབེབས་མེན་པའི་སྤྱོད་ལམ་འདི་ བཀག་དགོཔ་ཨིན།  
+> ཞུ་བ་འབད་མི་དབྱེ་དཔྱད།  
+> ཨར་ཨེམ་ཝི་༨ ནང་དོན་ལག་ལེན་ཚུ་ གཏན་འབེབས་བཀག་ཆའི་བདེན་དཔྱད་ཀྱི་དོན་ལུ་ རཱསི་ ཕོལཀ་བེག་ཚུ་དང་ ག་བསྡུར་འབད། གྲོས་བསྡུར་གྱི་ཐོན་འབྲས་དང་ གཏན་འབེབས་ཀྱི་གནད་དོན་ ༼ཁྱད་རྣམ་བརྟག་དཔྱད་ རིགས་མ་འདྲ་བའི་ ཀོར་ཚུ་ ཕྲང་སྒྲིག་འབད་ནི་ ཕྲང་སྒྲིག་འབད་ནི་ བཀོལ་སྤྱོད་ཀྱི་ལམ་སླ་བསྲེ་ ༽ དུས་རྒྱུན་གྱི་རྒྱུ་དངོས་དང་ ལག་ལེན་གྱི་ཉེན་སྲུང་ཚུ་ བརྟག་དཔྱད་དང་ གསལ་སྟོན་ གསལ་སྟོན་ གསལ་སྟོན་ གསལ་སྟོན་ གསལ་སྟོན་ གསལ་སྟོན་ གསལ་སྟོན་ གསལ་སྟོན་ གསལ་སྟོན་ གསལ་སྟོན་ བརྡ་འཕྲིན་དང་ བཀོལ་སྤྱོད་ཀྱི་ཡིག་ཆ་ཚུ་ སྲ་ཆས་ལ་ལུ་ཅིག་གིས་ བཀོད་རྒྱ་ལུ་རྒྱབ་སྐྱོར་འབད་བའི་སྐབས་ལུ་ཡང་ བདེན་དཔྱད་འབད་མི་ཆ་མཉམ་ལུ་བཞག་དགོཔ་ཨིན།
 
-# Summary
+# བཅུད༌བསྡུ
 
-ARMv8-A devices that expose the optional `SM3` (`SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`) and `SM4` (`SM4E`, `SM4EKEY`) instruction sets can accelerate the GM/T hash and block cipher primitives substantially. However, deterministic blockchain execution demands tight control over feature detection, fallback parity, and constant-time behaviour. The following guidance covers how the two implementation strategies compare and what the Iroha stack must enforce.
+ARMv8-A གདམ་ཁ་ཅན་གྱི་`SM3` (Hyperledger, `SM3PARTW2`, Hyperledger, `SM3SS2`, དང་ `SM3SS2`, དང་ `SM4` (`SM4E`, `SM4EKEY`) བཀོད་རྒྱ་ཆ་ཚན་ཚུ་གིས་ GM/T hash མགྱོགས་དྲགས་བཟོ་ཚུགས་ནི་དང་ སི་ཕར་གྱི་རིགས་རྒྱུད་ཚུ་བཀག་ཆ་འབད་ཚུགས། ཨིན་རུང་ གཏན་འབེབས་བཟོ་ནིའི་བཀག་ཆ་འདི་གིས་ ཁྱད་རྣམ་བརྟག་དཔྱད་དང་ ཆ་སྙོམས་ དེ་ལས་ དུས་ཚོད་ཀྱི་སྤྱོད་ལམ་ཚུ་ ཚད་འཛིན་འབད་དགོཔ་སྦེ་ཨིན་མས། འོག་གི་ལམ་སྟོན་འདི་གིས་ ལག་ལེན་འཐབ་ཐངས་གཉིས་དང་ Iroha བང་རིམ་འདི་ ག་དེ་སྦེ་བསྟར་སྤྱོད་འབད་དགོཔ་ཨིན་ན་ ག་བསྡུར་ག་དེ་སྦེ་འབདཝ་ཨིན་ན་ ཁྱབ་ཚུགསཔ་ཨིན།
 
-# Implementation Comparison
+# ལག་བསྟར་བསྡུར་བ།| མཐོང་སྣང་ | ARMv8 intrinsics (Arch64 ནང་ཐིག་ཨེ་ཨེསི་ཨེམ་/ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༢༨ཨེགསི་) | རསཊི་ གཙང་མ་ (bit-sliced ​​/ ཐིག་ཁྲམ་མེད་པ) |
+|--|||||ས་དབྱིངས་ནས་|-|-||-|-|-|-||-|-|-|                                                   འཕེལ་པོའི་ཆེལ༌
+| ཐབས་ལམ། | 3–5× མགྱོགས་མྱུར་ SM3 ཧ་ཤིང་དང་ 8× མགྱོགས་མྱུར་ SM4 ECB/CTR Apple M-series དང་ Neoverse V1 ལུ་ ཀོར་རེ་ལུ་ ཀོར་རེ་ལུ་། དྲན་ཚད་-བསྡམ་པའི་སྐབས་ ཁེབ་སང་ཚུ་ མཐོ་ཚད། | གཞི་རྟེན་ཐོན་འབྲས་འདི་ scalar ALU དང་ བསྐོར་བརྐྱབ་སྟེ་; འཕྲལ་འཕྲལ་སྐབས་ `aarch64` SHA རྒྱ་བསྐྱེད་ལས་ ཁེ་ཕན་འབྱུང་དོ་ཡོདཔ་ཨིན། |
+| དུས་ཡུན་ | གཅིག་མཐུན་གྱི་ འཕྲོ་མཐུད་དེ་ ~30–40ns ནང་ M2 དང་ མཉམ་སྦྲེལ་རིག་པ་དང་གཅིག་ཁར་; བརྡ་འཕྲིན་ཐུང་ཀུའི་ ཧ་ཤིང་དང་ སི་ཀཱལ་ནང་ བཀག་ཆ་ཆུང་ཀུ་གི་གསང་བཟོ་ཚུ་ འོས་འབབ་ཡོདཔ་ཨིན། | སྡེབ་ཚན་རེ་ལུ་ ༩༠–༡༢༠ns; དོ་འགྲན་ཅན་སྦེ་སྡོད་ནིའི་དོན་ལུ་ ཐོ་ཡིག་ཚུ་ བཏོན་དགོཔ་འཐོན་འོང་། |
+| གསང་གྲངས་ཚད་ | ཨང་རྟགས་གཉིས་ལྡན་འགྲུལ་ལམ་ (internsics + scalar) དང་ རན་དུས་ཚོད་ཀྱི་སྒོ་ཚུ་དགོཔ་ཨིན། `cfg(target_feature)` ལག་ལེན་འཐབ་པ་ཅིན་ intrinsic གི་ལམ་ཆུང་། | ལམ་རྐྱང་པ།; ལག་ཐོག་དུས་ཚོད་ཀྱི་ཐིག་ཁྲམ་ཚུ་ལས་བརྟེན་ཏེ་ དུམ་གྲ་ཅིག་སྦོམ་ཡོདཔ་ཨིན། དེ་འབདཝ་ད་ འཛུལ་སྒོ་གི་ཚད་མ་མེདཔ་ཨིན། |
+| གཏན་འབེབས་ཟམ་ | གལ་སྲིད་ རིགས་བརྒྱུད་ཀྱི་དབྱེ་བ་ཚུ་ སོ་སོ་སྦེ་ཡོད་པ་ཅིན་ འགྲན་བསྡུར་གྱི་ཁྱད་རྣམ་ཚུ་ བཀག་ཐབས་ལུ་ རན་དུས་ཚོད་བཏང་དགོཔ་ཨིན། (དཔེར་ན་ སྦོམ་.LITTLE) | སྔོན་སྒྲིག་གིས་ གཏན་འབེབས་བཟོ་ནི། རན་དུས་ཚོད་ཀྱི་ཁྱད་རྣམ་བརྟག་དཔྱད། |
+| དུས་རྒྱུན་གྱི་དུས་ཚོད་གནས་ཚུལ། | སྲབ་ཆས་ཆ་ཚན་འདི་ ཀོར་ཀོར་ཚུ་གི་དོན་ལུ་ དུས་རྒྱུན་གྱི་དུས་ཚོད་ཨིན་རུང་ བཀབ་ཆ་འདི་ ལོག་འབབ་པའི་སྐབས་ ཡང་ན་ སླ་བསྲེ་རྐྱབ་པའི་སྐབས་ གསང་བའི་བརྟེན་པའི་སེལ་འཐུ་འདི་ སྤང་དགོཔ་ཨིན། | Rust ནང་ལུ་ ཆ་ཚང་ཚད་འཛིན་འབད་ཡོདཔ། བཟོ་བསྐྲུན་གྱིས་ (bit-slicing) ངེས་བདེན་སྦེ་ གསང་ཡིག་བཙུགས་པ་ཅིན་ དུས་རྒྱུན་གྱི་དུས་ཚོད་ངེས་གཏན་བཟོ་ཡོདཔ། |
+| འབག་བཏུབ་པའི་ | `aarch64` + གདམ་ཁའི་ཁྱད་རྣམ་ཚུ་དགོཔ་ཨིན། x86_64 དང་ RISC-V རང་བཞིན་གྱིས་ལོག་ལྷོདཔ་ཨིན། | ག་ཏེ་ཡང་ལཱ་འབདཝ་ཨིན། ལཱ་འགན་འདི་ བསྡུ་སྒྲིག་འབད་མི་ཡར་འཕེལ་ཚུ་ལུ་རག་ལསཔ་ཨིན། |
 
-| Aspect | ARMv8 Intrinsics (AArch64 Inline ASM/`core::arch::aarch64`) | Pure Rust (bit-sliced / table-free) |
-|--------|-------------------------------------------------------------|--------------------------------------|
-| Throughput | 3–5× faster SM3 hashing and up to 8× faster SM4 ECB/CTR per core on Apple M-series and Neoverse V1; gains taper when memory-bound. | Baseline throughput bound by scalar ALU and rotates; occasionally benefits from `aarch64` SHA extensions (via compiler auto-vectorisation) but usually lags NEON by similar 3–8× gap. |
-| Latency | Single-block latency ~30–40 ns on M2 with intrinsics; suits short-message hashing and small block encryption in syscalls. | 90–120 ns per block; may require unrolling to stay competitive, increasing instruction cache pressure. |
-| Code size | Requires dual code paths (intrinsics + scalar) and runtime gating; intrinsic path compact if using `cfg(target_feature)`. | Single path; slightly larger due to manual schedule tables but no gating logic. |
-| Determinism | Must lock runtime dispatch to deterministic outcome, avoid cross-thread feature probing races, and pin CPU affinity if heterogeneous cores differ (e.g., big.LITTLE). | Deterministic by default; no runtime feature detection. |
-| Constant-time posture | Hardware unit is constant-time for core rounds but wrapper must avoid secret-dependent selection when falling back or mixing tables. | Fully controlled in Rust; constant-time ensured by construction (bit-slicing) if coded correctly. |
-| Portability | Requires `aarch64` + optional features; x86_64 and RISC-V fall back automatically. | Works everywhere; performance depends on compiler optimisations. |
+# རཱན་ཊའིཔ་བཏོན་གཏང་ནི་ པིཊི་ལོ་ཊི།
 
-# Runtime Dispatch Pitfalls
+1. **གཏན་འབེབས་མེན་པའི་ཁྱད་རྣམ་འཚོལ་ཞིབ་**
+   - དཀའ་ངལ་: `is_aarch64_feature_detected!("sm4")` ལུ་ རིགས་མ་འདྲ་བའི་ སྦོམ་གྱི་ཐོག་ལུ་ བརྟག་ཞིབ་འབད་ནི།
+   - མར་ཕབ་: མཐུད་མཚམས་འགོ་བཙུགས་པའི་སྐབས་ མཐུན་རྐྱེན་གྱི་ནུས་པ་འདི་ ཏན་ཏན་སྦེ་ བཟུང་ཞིནམ་ལས་ `OnceLock` བརྒྱུད་དེ་ རྒྱང་བསྒྲགས་འབད་ཞིནམ་ལས་ VM ཡང་ན་ ཀིརིཔ་ཊོ་ཀེརེཊ་ནང་ལུ་ མགྱོགས་ཚད་ཅན་གྱི་ཀར་ནེལ་ཚུ་ལག་ལེན་འཐབ་པའི་སྐབས་ སི་པི་ཡུ་མཐུན་འབྲེལ་དང་གཅིག་ཁར་ ཆ་སྒྲིག་འབད། མོས་མཐུན་གྱི་ལཱ་འགོ་བཙུགས་པའི་ཤུལ་ལས་ ཁྱད་རྣམ་དར་ཆ་ཚུ་གི་ཐོག་ལུ་ ཡན་ལག་ཚུ་ ནམ་ཡང་མ་འབད།
 
-1. **Non-deterministic feature probing**
-   - Problem: probing `is_aarch64_feature_detected!("sm4")` on heterogeneous big.LITTLE SoCs can yield different answers per core, and cross-thread work-stealing may mix paths inside one block.
-   - Mitigation: capture hardware capability exactly once during node initialisation, broadcast through `OnceLock`, and pair with CPU affinity when executing accelerated kernels inside the VM or crypto crates. Never branch on feature flags after consensus-critical work starts.
+༢ **འདྲ་དཔེ་ཚུ་ནང་ལུ་ གཏན་གཏན་བཟོ་ནི།**
+   - དཀའ་ངལ། བསྡུ་སྒྲིག་འབད་མི་སོ་སོ་ཚུ་དང་གཅིག་ཁར་བཟོ་བསྐྲུན་འབད་མི་ མཐུད་མཚམས་ཚུ་ ནང་འཁོད་ཐོབ་ཚུལ་ལུ་ ངོས་ལེན་མེདཔ་ཨིན་ (`target_feature=+sm4` བསྡུ་སྒྲིག་འབད་དུས་ཚོད་ལྕོགས་ཅན་བཟོ་ནི་ དང་ རན་དུས་ཚོད་བརྟག་དཔྱད་)། གལ་སྲིད་ ལག་ལེན་འཐབ་མི་འདི་གིས་ གསང་ཡིག་འགྲུལ་ལམ་སོ་སོ་ཚུ་བརྒྱུད་དེ་འགྱོ་བ་ཅིན་ དུས་ཚོད་ཆུང་བ་འདི་གིས་ རྒྱབ་གཞི་རྒྱབ་གཞི་ཡང་ན་ ཚད་གཞི་ཚད་འཛིན་ཚུ་ནང་ལུ་ འཕྱར་ཚུགས།
+   - མར་ཕབ་: གསལ་ཏོག་ཏོ་ `RUSTFLAGS`/`CARGO_CFG_TARGET_FEATURE` དང་གཅིག་ཁར་ ཁྲིམས་མཐུན་བཟོ་བསྐྲུན་གསལ་སྡུད་ཚུ་བཀྲམ་སྤེལ་འབད་ཞིནམ་ལས་ མགུ་ཐོམ་སི་སི་གི་ མཐའ་མཚམས་གོ་རིམ་བཟོ་དགོཔ་ཨིན།3. **ཨེ་པཱལ་ vs ལི་ནགསི་** ནང་བཀོད་རྒྱ་ཐོབ་ཚུལ།
+   - དཀའ་ངལ་: ཨེ་པཱལ་གྱིས་ SM4 བཀོད་རྒྱ་ཚུ་ སི་ལི་ཀོན་དང་ཨོ་ཨེསི་གསར་བཏོན་ཚུ་ནང་རྐྱངམ་ཅིག་ གསལ་སྟོན་འབད་ཡོདཔ་ཨིན། ལི་ནགསི་ཌིསི་ཊོརས་ཀྱིས་ ཕྱིར་ཚོང་གི་གནང་བ་ཚུ་ མ་བྱིན་པར་ བཞག་ནིའི་དོན་ལུ་ ཀར་ནེལ་ཚུ་ ལག་ལེན་འཐབ་བཏུབ། བཀག་འཛིན་མེད་པར་ མཉམ་སྦྲགས་ལུ་བློ་གཏད་མི་འདི་གིས་ SIGILLs འབྱུང་དོ་ཡོདཔ་ཨིན།
+   - ཉམས་རྒུད་: `std::arch::is_aarch64_feature_detected!` བརྒྱུད་དེ་ འཛུལ་སྒོ་འདི་ `SIGILL` གིས་ ཐལཝ་གི་བརྟག་དཔྱད་ནང་ འཛིན་བཟུང་འབདཝ་ཨིན།
 
-2. **Mixed precision across replicas**
-   - Problem: nodes built with different compilers may disagree on intrinsic availability (`target_feature=+sm4` compile-time enable vs runtime detection). If execution goes through different code paths, micro-architectural timing can leak into pow-based backoffs or rate limiters.
-   - Mitigation: distribute canonical build profiles with explicit `RUSTFLAGS`/`CARGO_CFG_TARGET_FEATURE`, require deterministic fallback ordering (e.g., prefer scalar unless config enables hardware), and include a config hash in manifests for attestation.
+4. **པཱ་རཱལ་ཕྱོགས་མཚམས་དང་དྲན་ཤེས་བཀོད་སྒྲིག་**
+   - དཀའ་ངལ། མགྱོགས་ཚད་ཅན་གྱི་ཀར་ནེལ་ཚུ་གིས་ འཕྲལ་འཕྲལ་སྦེ་ར་ བསྐྱར་ལོག་རེ་ལུ་ སྡེབ་ཚན་ལེ་ཤ་བཟོ་སྦྱོར་འབདཝ་ཨིན། ཕྲང་སྒྲིག་མེད་པའི་ཨིན་པུཊི་ཚུ་དང་གཅིག་ཁར་ NEON མངོན་གསལ་/ཚོང་ཁང་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་ འཛོལ་བ་འོང་ ཡང་ན་ Norito-deserialised བཱ་ཕར་ཚུ་གིས་ ཕུལཝ་ད་ གསལ་ཏོག་ཏོ་ཕྲང་སྒྲིག་འབད་ནིའི་དོན་ལུ་ དགོཔ་ཨིན།
+   - མར་ཕབ་: བཀག་ཆ་ཕྲང་སྒྲིག་འབད་མི་བགོ་བཀྲམ་ (དཔེར་ན་ `SM4_BLOCK_SIZE` སྣ་མང་ཚུ་ `aligned_alloc` གི་ བཀབ་ཆ་ཚུ་) རྐྱེན་སེལ་ནང་ བདེན་དཔྱད་འབད་ནི་དང་ མ་བདེན་པའི་སྐབས་ ཕྲང་སྒྲིག་འབད་ནི་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
 
-3. **Instruction availability on Apple vs Linux**
-   - Problem: Apple exposes SM4 instructions only in newest silicon and OS releases; Linux distros may patch kernels to mask them pending export approvals. Relying on intrinsics without guard causes SIGILLs.
-   - Mitigation: gate via `std::arch::is_aarch64_feature_detected!`, catch `SIGILL` on smoke tests, and treat missing intrinsics as expected fallback (still deterministic).
+5. **བཀོད་རྒྱ་འདྲ་མཛོད་ཀྱི་དུག་རྫས་འཇབ་རྒོལ་**།
+   - དཀའ་ངལ། མོས་མཐུན་གྱི་སྒོ་ལས་ ལཱ་གི་འབོར་ཚད་ཚུ་ ཞན་ཁོག་ལུ་ ཞན་ཁོག་ཡོད་པའི་ ཐིག་ཆུང་ཀུ་ཚུ་ བརྡལ་བཤིག་གཏང་ཚུགས་པའི་ ལཱ་གི་འབོར་ཚད་ཚུ་ བཟོ་ཚུགས།
+   - མར་ཕབ་འབད་ནི། ཆ་ཤས་ཀྱི་ཚད་གཞི་གཏན་འབེབས་བཟོ་ནི་དང་ ཡན་ལག་ཚུ་ སྔོན་དཔག་འབད་མ་ཚུགསཔ་སྦེ་བཟོ་ནི་ དེ་ལས་ བཟོད་བསྲན་གྱི་སྒོ་སྒྲིག་ནང་ལུ་ ཇི་ཊར་ཚུ་སྡོད་ཚུགསཔ་བཟོ་ནི་གི་དོན་ལུ་ མའི་ཀོ་བེནཇ་གི་འགྱུར་ལྡོག་བརྟག་དཔྱད་ཚུ་ བཙུགས་དགོ།
 
-4. **Parallel chunking and memory ordering**
-   - Problem: accelerated kernels often process multiple blocks per iteration; using NEON loads/stores with unaligned inputs can fault or require explicit alignment fixes when fed by Norito-deserialised buffers.
-   - Mitigation: keep block-aligned allocations (e.g., `SM4_BLOCK_SIZE` multiples via `aligned_alloc` wrappers), validate alignment in debug builds, and fall back to scalar when misaligned.
+# གཏན་འཁེལ་གྱི་ ལས་ ིན་ ་འ ོན།
 
-5. **Instruction cache poisoning attacks**
-   - Problem: consensus adversaries may craft workloads that thrash tiny I-cache lines on weaker cores, widening latency difference between accelerated and scalar paths.
-   - Mitigation: fix scheduling to deterministic chunk sizes, pad loops to avoid unpredictable branching, and include microbench regression tests to ensure jitter stays within tolerance windows.
+- **བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་སྲིད་བྱུས་:** ཁྱད་རྣམ་དར་ཆ་གི་རྒྱབ་ཁར་ མགྱོགས་ཚད་ཅན་གྱི་ཨང་རྟགས་ (དཔེར་ན་ `sm_accel_neon`) གསར་བཏོན་འབད་ཡོད་པའི་བཟོ་བསྐྲུན་ནང་ སྔོན་སྒྲིག་གིས་ ལྕོགས་ཅན་བཟོ་ཡོདཔ་ཨིན་ དེ་འབདཝ་ད་ ཆ་སྙོམས་ཁྱབ་ཚད་འདི་ རྒས་ཤོས་མ་འགྱོ་ཚུན་ཚོད་ ཊེམ་ནེཊི་ཚུ་གི་དོན་ལུ་ རིམ་སྒྲིག་དོན་ལུ་ གསལ་སྟོན་ནང་ གསལ་ཏོག་ཏོ་ཡོད་པའི་གདམ་ཁ་དགོཔ་ཨིན།
+- **ཕོལ་བེག་ ཆ་སྙོམས་བརྟག་དཔྱད་:** མགྱོགས་ཚད་དང་ མགྱོགས་ལམ་ཚུ་ རྒྱབ་ཕྱོགས་ལུ་ གཡོག་བཀོལ་མི་ གསེར་གྱི་བེག་ཊར་ཚུ་ བདག་འཛིན་འཐབ་དགོ། SM3/SM4 GCM ཐབས་ལམ་ཚུ་གིས་ བྱིན་མི་ ས་ཆ་ཚུ་ལུ་ ཚར་གཅིག་རྒྱབ་སྐྱོར་འབད་ནི་ལུ་ རྒྱ་སྐྱེད་འབད་ནི།
+- **བདེན་དཔང་འབད་ནི།:* མཐུད་མཚམས་ཀྱི་ Norito ནང་ལུ་ མགྱོགས་ཚད་སྲིད་བྱུས་ (`hardware=sm-neon|scalar`) འདི་ མཉམ་བསྡོམ་གྱི་འཛུལ་ཞུགས་འབད་བའི་སྐབས་ ཁྱད་པར་ཤེས་རྟོགས་འབད་ཚུགསཔ་སྦེ་བཟོ་ཚུགས།
+- **Telemetry:** འགྲུལ་ལམ་གཉིས་ཆ་རའི་ནང་ འབོད་བརྡ་རེ་ལུ་ འཕྲོ་མཐུད་ཀྱི་ བར་ཆད་ཚུ་ ག་བསྡུར་འབད་མི་ མེ་ཊིག་ཚུ། གལ་སྲིད་ ཁ་སྟོར་འདི་ སྔོན་སྒྲིག་འབད་ཡོད་པའི་ཚད་གཞི་ལས་ལྷག་སྟེ་ཡོད་པ་ཅིན་ (དཔེར་ན་ >༥% ཇི་ཊར་) སྲ་ཆས་ཀྱི་ གཡོ་འགུལ་གྱི་བརྡ་སྟོན་འབདཝ་ཨིན།
+- **ཡིག་ཆ་:** བཞག་མི་ལམ་སྟོན་ (`sm_operator_rollout.md`) འདི་ ནང་དོན་མཐོར་ཡིག་ཚུ་ ལྕོགས་ཅན་/ལྕོགས་མིན་བཟོ་ནི་གི་དོན་ལུ་ བཀོད་རྒྱ་ཚུ་དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ་ནི་དང་ གཏན་འབེབས་སྤྱོད་ལམ་འདི་ འགྲུལ་ལམ་ལུ་མ་ལྟོས་པར་ ཉམས་སྲུང་འབད་ཡོདཔ་ཨིནམ་ དྲན་འཛིན་འབད་དགོ།
 
-# Deterministic Deployment Recommendations
+# དཔྱད་གཞི།
 
-- **Compile-time policy:** keep accelerated code behind a feature flag (e.g., `sm_accel_neon`) enabled by default in release builds, but require an explicit opt-in in configs for testnets until parity coverage is mature.
-- **Fallback parity tests:** maintain golden vectors that run accelerated and scalar paths back-to-back (current `sm_neon_check` workflow); extend to cover SM3/SM4 GCM modes once provider support lands.
-- **Manifest attestation:** include the acceleration policy (`hardware=sm-neon|scalar`) in the node’s Norito manifest to make divergence detectable during peer admission.
-- **Telemetry:** emit metrics comparing per-call latency across both paths; alert if divergence exceeds predetermined thresholds (e.g., >5 % jitter), signalling possible hardware drift.
-- **Documentation:** keep operator guidance (`sm_operator_rollout.md`) up to date with instructions for enabling/disabling intrinsics, and note that deterministic behaviour is preserved regardless of the path.
+- `crates/iroha_crypto/src/sm.rs` — NEON དང་ scalar ལག་ལེན་འཐབ་པའི་ ཧུཀ་ཚུ།
+- `.github/workflows/sm-neon-check.yml` — བཙན་ཤེད་-NEON CI ལེན་གྱི་ འདྲ་མཉམ་བཟོ་ནི།
+- `docs/source/crypto/sm_program.md` — བཀག་འཛིན་དང་ ལས་དོན་གྱི་སྒོ་ཚུ་ བཏོན་གཏང་ནི།
+- ལག་བཟོའི་གཞི་བསྟུན་ལག་དེབ།, Armv8-A, Section D13 (SM3/SM4 བརྡ་བཀོད་)།
+- GM/T 0002-2012, GM/T 0003-2012 — ག་བསྡུར་བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ SM3/SM4 ཁྱད་ཚད་ཚུ།
 
-# References
-
-- `crates/iroha_crypto/src/sm.rs` — NEON vs scalar implementation hooks.
-- `.github/workflows/sm-neon-check.yml` — forced-NEON CI lane ensuring parity.
-- `docs/source/crypto/sm_program.md` — release guardrails and performance gates.
-- Arm Architecture Reference Manual, Armv8-A, Section D13 (SM3/SM4 instructions).
-- GM/T 0002-2012, GM/T 0003-2012 — official SM3/SM4 specifications for comparison testing.
-
-## Standalone Prompt (Copy/Paste)
-
-> You are LLM acting as an expert advisor to the Hyperledger Iroha crypto team.  
-> Background: Hyperledger Iroha is a Rust-based permissioned blockchain that requires deterministic execution across validators. The platform supports the Chinese GM/T SM2/SM3/SM4 cryptography suite. For SM3 and SM4, the codebase ships two implementations: (a) pure Rust bit-sliced constant-time scalar code that runs everywhere, and (b) ARMv8 NEON accelerated kernels that depend on the optional instructions `SM3PARTW1`, `SM3PARTW2`, `SM3SS1`, `SM3SS2`, `SM4E`, and `SM4EKEY`. Accelerated paths are enabled via runtime feature detection using `core::arch::aarch64`; they must not introduce non-determinism when threads migrate across heterogeneous big.LITTLE cores or when replicas are built with different `target_feature` flags.  
-> Task: Compare the intrinsic-powered implementations with the scalar fallbacks for deterministic blockchain verification. Detail throughput and latency differences, enumerate determinism hazards (feature detection, heterogeneous cores, SIGILL behaviour, alignment, mixed execution paths), comment on constant-time posture, and recommend safeguards (testing strategy, manifest/attestation fields, telemetry, operator documentation) that ensure all validators remain in sync even if hardware capabilities differ.
+## སི་ན་ཌ་ལོན་པྲོམཔ་ (འདྲ་བཤུས་/སྦྱར་པ)> ཁྱོད་ཀྱིས་ Hyperledger Iroha ཀིརིཔ་ཊོ་སྡེ་ཚན་ལུ་ མཁས་མཆོག་བསླབ་བྱ་བྱིན་མི་ཅིག་སྦེ་ ལཱ་འབད་དོ་ཡོདཔ་ཨིན།  
+> རྒྱབ་ཁུངས་: Hyperledger Iroha འདི་ བདེན་དཔྱད་འབད་མི་ཚུ་ལུ་ གཏན་འབེབས་བཟོ་དགོ་པའི་ རསཊི་གཞི་བཞག་པའི་གནང་བ་ཡོད་པའི་ བཀག་ཆ་ཅིག་ཨིན། སྟེགས་བུ་འདི་གིས་ རྒྱ་ནག་གི་ ཇི་ཨེམ་/ཊི་ཨེསི་ཨེམ་༢/ཨེསི་ཨེམ་༣/ཨེསི་ཨེམ་༤ ཀིརིཔ་ཊོ་གཱར་ཕིག་ཀཊི་ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན། SM3 དང་ SM4 གི་དོན་ལུ་ གསང་ཡིག་གཞི་རྟེན་འདི་གིས་ ལག་ལེན་འཐབ་ཐངས་གཉིས་བཀོདཔ་ཨིན། `SM3SS2`, Hyperledger, དང་ `SM4EKEY`. མགྱོགས་དྲགས་བཟོ་ཡོད་པའི་འགྲུལ་ལམ་ཚུ་ `core::arch::aarch64` ལག་ལེན་འཐབ་སྟེ་ རན་དུས་ཚོད་ཁྱད་རྣམ་བརྟག་དཔྱད་བརྒྱུད་དེ་ ལྕོགས་ཅན་བཟོ་ཡོདཔ་ཨིན། འདི་ཡང་ ཐིག་ཚུ་ རིགས་མ་འདྲ་བའི་སྦོམ་ཚུ་ནང་ལས་ཕར་ གནས་སྤོ་འགྱོ་བའི་སྐབས་ ཡང་ན་ འདྲ་དཔེ་ཚུ་ Norito དར་ཚུ་ མ་འདྲཝ་སྦེ་རྐྱབ་པའི་སྐབས་ལུ་ ངོ་སྤྲོད་འབད་མི་བཏུབ།  
+> ལས་ཀ་: གཏན་འབེབས་བཀག་ཆ་བདེན་དཔྱད་ཀྱི་དོན་ལས་ མཉམ་གནས་ཀྱི་ནུས་ཤུགས་ཅན་གྱི་ལག་ལེན་ཚུ་ འཇལ་ཚད་ཀྱི་ ཀེར་སི་ ཕོལཀ་ཚུ་དང་ ག་བསྡུར་རྐྱབ། ཁ་གསལ་གྱི་ཐོན་འབྲས་དང་ འཕྲོ་མཐུད་ཀྱི་ཁྱད་པར་ དེ་ལས་ ཨང་གྲངས་བརྟག་དཔྱད་དང་ རིགས་མ་འདྲ་བའི་ལྟེ་བ་ སི་ཨའི་ཇི་ཨའི་ཨེལ་གྱི་སྤྱོད་ལམ་ ཕྲང་སྒྲིག་འབད་ནི་ སླ་བསྲེ་བའི་ལམ་ལུགས་ཚུ་ བསམ་བརྗོད་བཀོད་ནི་ དེ་ལས་ ཉེན་སྲུང་ཚུ་ བསམ་འཆར་བཀོད་ནི་དང་ ཉེན་སྲུང་ཚུ་ གྲོས་འཆར་བཀོདཔ་ཨིན།

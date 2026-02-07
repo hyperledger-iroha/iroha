@@ -4,143 +4,133 @@ direction: rtl
 source: docs/portal/docs/sorafs/node-client-protocol.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS نوڈ ↔ کلائنٹ پروٹوکول
+# SoraFS جديد ↔ بروتوكول الشبكة
 
-یہ گائیڈ پروٹوکول کی canonical تعریف کو
+هذا هو السعر الأساسي للبروتوكول
 [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-میں summarize کرتی ہے۔ byte-level Norito layouts اور changelogs کے لیے upstream
-spec استعمال کریں؛ portal copy SoraFS runbooks کے ساتھ operational highlights کو
-قریب رکھتی ہے۔
+سألخص الأمر ہے. تخطيطات Norito على مستوى البايت وسجلات التغيير في المنبع
+استخدام المواصفات؛ نسخة البوابة SoraFS أدلة التشغيل التي تتضمن أبرز العمليات التشغيلية
+قريب رکھتی ہے۔
 
-## Provider adverts اور validation
+## إعلانات الموفر والتحقق من صحتها
 
-SoraFS providers `ProviderAdvertV1` payloads (دیکھیں
-`crates/sorafs_manifest::provider_advert`) gossip کرتے ہیں جو governed operator
-نے sign کیے ہوتے ہیں۔ adverts discovery metadata اور guardrails کو pin کرتے ہیں
-جنہیں multi-source orchestrator runtime میں enforce کرتا ہے۔
+موفرو SoraFS حمولات `ProviderAdvertV1` (دیکھیں
+`crates/sorafs_manifest::provider_advert`) مشغل القيل والقال الذي يحكمه
+لا توجد علامة کیے ہوتے ہیں. يتم تثبيت البيانات الوصفية لاكتشاف الإعلانات وحواجز الحماية
+يعمل وقت تشغيل المنسق متعدد المصادر على فرض القيود.- **مدى الحياة** — `issued_at < expires_at ≤ issued_at + 86,400 s`. مقدمي الخدمة
+  في غضون 12 ثانية، قم بتحديث الصفحة.
+- **قدرات TLVs** — تعلن ميزات نقل قائمة TLV عن کرتی ہے (Torii,
+  QUIC+ضوضاء، مرحلات SoraNet، ملحقات البائعين). رموز غير معروفة کو
+  `allow_unknown_capabilities = true` قم بالتخطي إلى ما هو أبعد من ذلك، يتوافق توجيه GREASE.
+- **تلميحات جودة الخدمة** — الطبقة `availability` (ساخن/دافئ/بارد)، الحد الأقصى لزمن وصول الاسترجاع،
+  حد التزامن، وميزانية البث الاختيارية. مراقبة جودة الخدمة والقياس عن بعد
+  وفقًا لمتطلباتنا ومراجعة القبول في جاتا.
+- **نقاط النهاية ومواضيع الالتقاء** — بيانات تعريف TLS/ALPN محددة بشكل ملموس
+  عناوين URL للخدمة وموضوعات الاكتشاف جن پر العملاء کو مجموعات الحراسة للفتيات وقت الاشتراك
+  كرانا چاہيے۔
+- **سياسة تنوع المسار** — `min_guard_weight`، أغطية مراوح AS/pool، و
+  `provider_failure_threshold` عمليات الجلب الحتمية متعددة الأقران التي يمكن أن تساعد الفتيات.
+- **معرفات الملفات الشخصية** — يعرض الموفرون المقبض الأساسي معلوماتهم الشخصية
+  (مثلاً `sorafs.sf1@1.0.0`); اختياري `profile_aliases` عملاء التشغيل
+  الهجرة أكثر تنوعا.
 
-- **Lifetime** — `issued_at < expires_at ≤ issued_at + 86,400 s`. providers کو
-  ہر 12 گھنٹے میں refresh کرنا چاہیے۔
-- **Capability TLVs** — TLV list transport features advertise کرتی ہے (Torii,
-  QUIC+Noise, SoraNet relays, vendor extensions). unknown codes کو
-  `allow_unknown_capabilities = true` پر skip کیا جا سکتا ہے، GREASE guidance کے مطابق۔
-- **QoS hints** — `availability` tier (Hot/Warm/Cold)، max retrieval latency،
-  concurrency limit، اور optional stream budget. QoS کو observed telemetry کے
-  مطابق ہونا چاہیے اور admission میں audit کیا جاتا ہے۔
-- **Endpoints اور rendezvous topics** — TLS/ALPN metadata کے ساتھ concrete
-  service URLs اور discovery topics جن پر clients کو guard sets بناتے وقت subscribe
-  کرنا چاہیے۔
-- **Path diversity policy** — `min_guard_weight`, AS/pool fan-out caps، اور
-  `provider_failure_threshold` deterministic multi-peer fetches کو ممکن بناتے ہیں۔
-- **Profile identifiers** — providers کو canonical handle expose کرنا ہوتا ہے
-  (مثلاً `sorafs.sf1@1.0.0`); optional `profile_aliases` پرانے clients کی
-  migration میں مدد دیتے ہیں۔
+قواعد التحقق من الصحة حصة صفر، القدرة الفارغة/نقاط النهاية/قوائم المواضيع، مرتبة بشكل غير صحيح
+عمر، أو فقدان أهداف جودة الخدمة يؤدي إلى رفض العناصر. إعلان مظاريف القبول
+وهيئات الاقتراح (`compare_core_fields`) کو مقارنة کرتے ہیں پھر تحديثات القيل والقال
+كرتے ہيں.
 
-Validation rules zero stake، empty capability/endpoints/topic lists، misordered
-lifetimes، یا missing QoS targets کو reject کرتی ہیں۔ admission envelopes advert
-اور proposal bodies (`compare_core_fields`) کو compare کرتے ہیں پھر updates gossip
-کرتے ہیں۔
+### امتدادات جلب النطاق
 
-### Range fetch extensions
-
-Range-capable providers درج ذیل metadata شامل کرتے ہیں:
-
-| Field | Purpose |
+يشمل موفرو القدرة على النطاق نطاقًا من البيانات التعريفية:| المجال | الغرض |
 |-------|---------|
-| `CapabilityType::ChunkRangeFetch` | `max_chunk_span`, `min_granularity` اور alignment/proof flags declare کرتا ہے۔ |
-| `StreamBudgetV1` | optional concurrency/throughput envelope (`max_in_flight`, `max_bytes_per_sec`, optional `burst`). range capability required ہے۔ |
-| `TransportHintV1` | ordered transport preferences (مثلاً `torii_http_range`, `quic_stream`, `soranet_relay`). priorities `0–15` ہیں اور duplicates reject ہوتے ہیں۔ |
+| `CapabilityType::ChunkRangeFetch` | `max_chunk_span`، `min_granularity` وأعلام المحاذاة/الإثبات تعلن کرتا ہے۔ |
+| `StreamBudgetV1` | مظروف التزامن/الإنتاجية الاختياري (`max_in_flight`، `max_bytes_per_sec`، `burst` اختياري). قدرة النطاق المطلوبة ہے۔ |
+| `TransportHintV1` | تفضيلات النقل المطلوبة (مثلاً `torii_http_range`، `quic_stream`، `soranet_relay`). الأولويات `0–15` ويتم رفض التكرارات. |
 
-Tooling support:
+دعم الأدوات:
 
-- Provider advert pipelines کو range capability، stream budget، اور transport hints
-  validate کرنے چاہییں پھر audits کے لیے deterministic payloads emit کریں۔
-- `cargo xtask sorafs-admission-fixtures` canonical multi-source adverts کو
-  downgrade fixtures کے ساتھ `fixtures/sorafs_manifest/provider_admission/` میں bundle کرتا ہے۔
-- Range-capable adverts جو `stream_budget` یا `transport_hints` omit کریں، CLI/SDK
-  loaders انہیں scheduling سے پہلے reject کرتے ہیں تاکہ multi-source harness
-  Torii admission expectations کے ساتھ aligned رہے۔
+- خطوط أنابيب الإعلان عن الموفر، والقدرة على النطاق، وميزانية التدفق، وتلميحات النقل
+  التحقق من صحة عمليات التدقيق الإضافية للحمولات النافعة الحتمية التي تنبعث منها كريات.
+- `cargo xtask sorafs-admission-fixtures` الإعلانات الأساسية متعددة المصادر کو
+  تحتوي تركيبات الرجوع إلى إصدار أقدم على `fixtures/sorafs_manifest/provider_admission/` على حزمة كرتا.
+- إعلانات ذات قدرة على النطاق مثل `stream_budget` أو `transport_hints` تحذف کریں، CLI/SDK
+  اللوادر تقوم بجدولة الرفض والرفض والتسخير متعدد المصادر
+  لقد تمت محاذاة توقعات القبول Torii.
 
-## Gateway range endpoints
+## نقاط نهاية نطاق البوابة
 
-Gateways deterministic HTTP requests accept کرتے ہیں جو advert metadata کو mirror
-کرتی ہیں۔
+تقبل طلبات HTTP الحتمية للبوابات البيانات الوصفية للإعلان والمرآة
+شكرا جزيلا.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+###`GET /v1/sorafs/storage/car/{manifest_id}`| المتطلبات | التفاصيل |
+|------------|---------|
+| **العناوين** | `Range` (نافذة واحدة محاذاة لإزاحات المجموعة)، `dag-scope: block`، `X-SoraFS-Chunker`، `X-SoraFS-Nonce` اختياري، وضروري base64 `X-SoraFS-Stream-Token`. |
+| **الردود** | `206` مع `Content-Type: application/vnd.ipld.car`، `Content-Range` النافذة المقدمة من قبل البيانات التعريفية `X-Sora-Chunk-Range`، ورؤوس المقطع/الرمز المميز. |
+| **أوضاع الفشل** | النطاقات غير المحاذية پر `416`، الرموز المميزة المفقودة/غير الصالحة پر `401`، وتتجاوز ميزانيات الدفق/البايت ہونے پر `429`. |
 
-| Requirement | Details |
-|-------------|---------|
-| **Headers** | `Range` (single window aligned to chunk offsets), `dag-scope: block`, `X-SoraFS-Chunker`, optional `X-SoraFS-Nonce`, اور لازمی base64 `X-SoraFS-Stream-Token`. |
-| **Responses** | `206` with `Content-Type: application/vnd.ipld.car`, `Content-Range` جو served window کو بیان کرتا ہے، `X-Sora-Chunk-Range` metadata، اور chunker/token headers کا echo۔ |
-| **Failure modes** | misaligned ranges پر `416`, missing/invalid tokens پر `401`, اور stream/byte budgets exceed ہونے پر `429`۔ |
+###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+جلب قطعة واحدة عبارة عن رؤوس ثابتة بالإضافة إلى ملخص القطعة الحتمية. إعادة المحاولة
+تعتبر تنزيلات الطب الشرعي مفيدة لشرائح CAR غير الضرورية.
 
-Single-chunk fetch انہی headers کے ساتھ plus deterministic chunk digest۔ retries
-یا forensic downloads کے لیے مفید جب CAR slices غیر ضروری ہوں۔
+## سير عمل منسق متعدد المصادر
 
-## Multi-source orchestrator workflow
+تم تمكين جلب SF-6 متعدد المصادر ہو (Rust CLI عبر `sorafs_fetch`، SDKs عبر
+`sorafs_orchestrator`):1. **جمع المدخلات** — فك تشفير خطة القطعة الواضحة، سحب أحدث الإعلانات،
+   ولقطة قياس عن بعد اختيارية (`--telemetry-json` أو `TelemetrySnapshot`)
+2. **إنشاء لوحة نتائج** — تقييم الأهلية `Orchestrator::build_scoreboard`
+   كرتا ہے وأسباب الرفض سجل کرتا ہے؛ `sorafs_fetch --scoreboard-out`
+   JSON تستمر كرتا ہے۔
+3. **جدولة القطع** — `fetch_with_scoreboard` (أو `--plan`) قيود النطاق،
+   ميزانيات الدفق، إعادة المحاولة/الأحرف الاستهلالية للأقران (`--retry-budget`، `--max-peers`) فرض الحد الأقصى
+   وطلب إصدار رمز مميز للدفق واضح النطاق.
+4. **التحقق من الإيصالات** — تتضمن المخرجات `chunk_receipts` و`provider_reports`
+   ہوتے ہيں؛ ملخصات CLI `provider_reports`، `chunk_receipts`، و
+   `ineligible_providers` لا تزال حزم الأدلة مستمرة.
 
-جب SF-6 multi-source fetch enabled ہو (Rust CLI via `sorafs_fetch`, SDKs via
-`sorafs_orchestrator`):
+مشغلي/SDKs أخطاء عامة:
 
-1. **Collect inputs** — manifest chunk plan decode کریں، latest adverts pull کریں،
-   اور optional telemetry snapshot (`--telemetry-json` یا `TelemetrySnapshot`) پاس کریں۔
-2. **Build a scoreboard** — `Orchestrator::build_scoreboard` eligibility evaluate
-   کرتا ہے اور rejection reasons record کرتا ہے؛ `sorafs_fetch --scoreboard-out`
-   JSON persist کرتا ہے۔
-3. **Schedule chunks** — `fetch_with_scoreboard` (یا `--plan`) range constraints،
-   stream budgets، retry/peer caps (`--retry-budget`, `--max-peers`) enforce کرتا ہے
-   اور ہر request کے لیے manifest-scoped stream token emit کرتا ہے۔
-4. **Verify receipts** — outputs میں `chunk_receipts` اور `provider_reports` شامل
-   ہوتے ہیں؛ CLI summaries `provider_reports`, `chunk_receipts`, اور
-   `ineligible_providers` کو evidence bundles کے لیے persist کرتے ہیں۔
+| خطأ | الوصف |
+|-------|------------|
+| `no providers were supplied` | لا توجد تصفية بعد الإدخال المؤهل. |
+| `no compatible providers available for chunk {index}` | مخصوص جزء من النطاق أو عدم تطابق الميزانية. |
+| `retry budget exhausted after {attempts}` | `--retry-budget` يطرد الأقران الفاشلين أو يطردونهم من المدرسة. |
+| `no healthy providers remaining` | حالات الفشل المتكررة بعد تمام تعطيل مقدمي الخدمة. |
+| `streaming observer failed` | الكاتب CAR المصب إحباط ہو گیا۔ |
+| `orchestrator invariant violated` | بيان الفرز، ولوحة النتائج، ولقطة القياس عن بعد، والتقاط CLI JSON. |
 
-Operators/SDKs کو ملنے والی عام errors:
+## القياس عن بعد والأدلة- المقاييس کی:  
+  `sorafs_orchestrator_active_fetches`، `sorafs_orchestrator_fetch_duration_ms`،
+  `sorafs_orchestrator_retries_total`، `sorafs_orchestrator_provider_failures_total`
+  (البيان/المنطقة/علامات المزود). لوحات العدادات کو أسطول کے لحاظ سے
+  تظهر علامات القسم على التكوين أو CLI `telemetry_region`.
+- ملخصات جلب CLI/SDK تحتوي على لوحة النتائج المستمرة JSON وإيصالات القطع و
+  تتضمن تقارير الموفرين بوابات SF-6/SF-7 التي تتضمن حزم الإطلاق المزيد منها.
+- معالجات البوابة `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
+  الكشف عن قرارات المنسق ولوحات معلومات SRE وسلوك الخادم
+  ربط کر سکیں۔
 
-| Error | Description |
-|-------|-------------|
-| `no providers were supplied` | filtering کے بعد کوئی eligible entry نہیں۔ |
-| `no compatible providers available for chunk {index}` | مخصوص chunk کے لیے range یا budget mismatch۔ |
-| `retry budget exhausted after {attempts}` | `--retry-budget` بڑھائیں یا failing peers کو evict کریں۔ |
-| `no healthy providers remaining` | repeated failures کے بعد تمام providers disable ہو گئے۔ |
-| `streaming observer failed` | downstream CAR writer abort ہو گیا۔ |
-| `orchestrator invariant violated` | triage کے لیے manifest، scoreboard، telemetry snapshot، اور CLI JSON capture کریں۔ |
+## مساعدي CLI وREST
 
-## Telemetry اور evidence
-
-- Orchestrator کی metrics:  
-  `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
-  `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (manifest/region/provider کے tags کے ساتھ). dashboards کو fleet کے لحاظ سے
-  partition کرنے کے لیے config یا CLI flags میں `telemetry_region` سیٹ کریں۔
-- CLI/SDK fetch summaries میں persisted scoreboard JSON، chunk receipts اور
-  provider reports شامل ہوتے ہیں جو SF-6/SF-7 gates کے rollout bundles میں شامل ہونے چاہییں۔
-- Gateway handlers `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
-  expose کرتے ہیں تاکہ SRE dashboards orchestrator decisions اور server behavior
-  correlate کر سکیں۔
-
-## CLI اور REST helpers
-
-- `iroha app sorafs pin list|show`, `alias list`, اور `replication list` pin-registry
-  REST endpoints wrap کرتے ہیں اور audit evidence کے لیے attestation blocks کے ساتھ
-  raw Norito JSON print کرتے ہیں۔
-- `iroha app sorafs storage pin` اور `torii /v1/sorafs/pin/register` Norito یا JSON
-  manifests کے ساتھ optional alias proofs اور successors accept کرتے ہیں؛ malformed
-  proofs پر `400`, stale proofs پر `503` مع `Warning: 110`, اور hard-expired proofs
+- `iroha app sorafs pin list|show`، `alias list`، و`replication list` دبوس التسجيل
+  تقوم نقاط نهاية REST بتغليف البطاقة وأدلة التدقيق لكتل المصادقة تلقائيًا
+  طباعة خام Norito JSON.
+- `iroha app sorafs storage pin` أو `torii /v1/sorafs/pin/register` Norito أو JSON
+  يُظهر البراهين الاسم المستعار الاختياري والخلفاء يقبلون البطاقة؛ مشوه
+  بروفات پر `400`، بروفات قديمة پر `503` مع `Warning: 110`، وبراهين منتهية الصلاحية
   پر `412`۔
-- REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
-  attestation structures شامل کرتے ہیں تاکہ clients latest block headers کے
-  خلاف data verify کر سکیں۔
+- نقاط نهاية REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`، `/v1/sorafs/replication`)
+  تشتمل هياكل التصديق على أحدث رؤوس الكتل للعملاء
+  التحقق من البيانات المختلفة کر سكای۔
 
-## References
-
-- Canonical spec:
+## مراجع- المواصفات الكنسية:
   [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- Norito types: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
-- CLI helpers: `crates/iroha_cli/src/commands/sorafs.rs`,
+- أنواع Norito: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- مساعدي CLI: `crates/iroha_cli/src/commands/sorafs.rs`،
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- Orchestrator crate: `crates/sorafs_orchestrator`
-- Dashboard pack: `dashboards/grafana/sorafs_fetch_observability.json`
+- صندوق المنسق: `crates/sorafs_orchestrator`
+- حزمة لوحة القيادة: `dashboards/grafana/sorafs_fetch_observability.json`

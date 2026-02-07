@@ -8,68 +8,67 @@ source_hash: ff3faabda5f1c277f545b7edbbc93f3b58dee65cec943cfd464a026b2984a146
 source_last_modified: "2025-12-29T18:16:35.979378+00:00"
 translation_last_reviewed: 2026-02-07
 title: Policy Jury Sortition & Ballots
+translator: machine-google-reviewed
 ---
 
-Roadmap item **MINFO-5 — Policy jury voting toolkit** requires a portable format
-for deterministic juror selection plus sealed commit → reveal ballots.  The
-`iroha_data_model::ministry::jury` module now ships three Norito payloads that
-cover the entire voting workflow:
+路線圖項目 **MINFO-5 — 政策陪審團投票工具包** 需要便攜式格式
+用於確定性陪審員選擇以及密封提交 → 揭示選票。  的
+`iroha_data_model::ministry::jury` 模塊現在提供三個 Norito 有效負載，
+涵蓋整個投票流程：
 
-1. **`PolicyJurySortitionV1`** – records the draw metadata (proposal id,
-   round id, proof-of-personhood snapshot digest, randomness beacon),
-   committee size, selected jurors, and the waitlist used for automatic
-   failover.  Each primary slot may include a `PolicyJuryFailoverPlan`
-   pointing at the waitlist rank it should escalate to after its grace
-   period lapses.  The structure is intentionally deterministic so auditors
-   can replay the draw and regenerate the manifest from the same POP
-   snapshot + beacon.
-2. **`PolicyJuryBallotCommitV1`** – sealed commitment written before ballots
-   are revealed.  It stores the round/proposal/juror identifiers, the
-   Blake2b‑256 digest of the juror id + vote choice + nonce tuple, the capture
-   timestamp, and the ballot mode (`plaintext` or `zk-envelope` when the
-   `zk-ballot` feature is active).  `PolicyJuryBallotCommitV1::verify_reveal`
-   ensures the stored digest matches the reveal payload.
-3. **`PolicyJuryBallotRevealV1`** – the public reveal object containing the
-   vote choice, the nonce used at commit time, and optional ZK proof URIs.
-   Reveals require a minimum 16-byte nonce so governance can treat the
-   commitment as binding even when jurors operate over insecure channels.
+1. **`PolicyJurySortitionV1`** – 記錄抽獎元數據（提案 ID、
+   回合 ID、身份證明快照摘要、隨機性信標），
+   委員會規模、選定的陪審員以及用於自動確定的候補名單
+   故障轉移。  每個主插槽可能包含 `PolicyJuryFailoverPlan`
+   指向候補名單排名，在其寬限後應升級到
+   經期流逝。  該結構是有意確定性的，因此審計員
+   可以重放抽籤並從同一 POP 重新生成清單
+   快照+信標。
+2. **`PolicyJuryBallotCommitV1`** – 投票前寫下的密封承諾
+   被揭露。  它存儲回合/提案/陪審員標識符、
+   Blake2b-256 陪審員 ID + 投票選擇 + 隨機數元組摘要，捕獲
+   時間戳和選票模式（`plaintext` 或 `zk-envelope`
+   `zk-ballot` 功能已激活）。  `PolicyJuryBallotCommitV1::verify_reveal`
+   確保存儲的摘要與顯示有效負載匹配。
+3. **`PolicyJuryBallotRevealV1`** – 包含以下內容的公共揭示對象
+   投票選擇、提交時使用的隨機數以及可選的 ZK 證明 URI。
+   Reveals 需要至少 16 字節的隨機數，以便治理可以處理
+   即使陪審員通過不安全的渠道運作，承諾也具有約束力。
 
-The `PolicyJurySortitionV1::validate` helper enforces committee sizing,
-duplicate detection (no juror may appear in both the committee and the
-waitlist), ordered waitlist ranks, and valid failover references.  The ballot
-validation routines raise `PolicyJuryBallotError` when proposal or round ids
-drift, when jurors attempt to reveal with an incorrect nonce, or when a
-`zk-envelope` commitment fails to provide matching proof references in its
-reveal.
+`PolicyJurySortitionV1::validate` 幫助程序強制執行委員會規模調整，
+重複檢測（評審員不得同時出現在委員會和評審委員會中）
+等候名單）、有序的等候名單排名以及有效的故障轉移參考。  選票
+當提案或回合 ID 時，驗證例程會引發 `PolicyJuryBallotError`
+漂移，當陪審員試圖用不正確的隨機數來揭示時，或者當
+`zk-envelope`承諾未能在其承諾中提供匹配的證明參考
+揭示。
 
-### Integrating with clients
+### 與客戶整合
 
-- Governance tools should persist the sortition manifest and include it in
-  policy packets so observers can recompute the POP snapshot digest and
-  confirm that the randomness beacon plus candidate set lead to the same
-  juror assignments.
-- Juror clients record a `PolicyJuryBallotCommitV1` immediately after
-  generating the nonce for their vote.  The derived commitment bytes can be
-  submitted to Torii as a base64 value or embedded directly into Norito
-  events.
-- During the reveal phase, jurors emit `PolicyJuryBallotRevealV1`.  Operators
-  feed the payload to `PolicyJuryBallotCommitV1::verify_reveal` before
-  accepting the vote, ensuring the reveal was not swapped or tampered with.
-- When the `zk-ballot` feature is enabled, jurors can attach deterministic
-  proof URIs (e.g., `sorafs://proofs/pj-2026-02/juror-5`) so downstream
-  auditors can retrieve the zero-knowledge witness bundle referenced by the
-  commitment.
+- 治理工具應保留抽籤清單並將其包含在
+  策略數據包，以便觀察者可以重新計算 POP 快照摘要並
+  確認隨機性信標加上候選集會導致相同的結果
+  陪審員分配。
+- 陪審員客戶在之後立即記錄 `PolicyJuryBallotCommitV1`
+  為他們的投票生成隨機數。  導出的承諾字節可以是
+  作為 base64 值提交給 Torii 或直接嵌入到 Norito 中
+  事件。
+- 在揭曉階段，陪審員發出 `PolicyJuryBallotRevealV1`。  運營商
+  之前將有效負載饋送到 `PolicyJuryBallotCommitV1::verify_reveal`
+  接受投票，確保信息不被交換或篡改。
+- 當啟用 `zk-ballot` 功能時，陪審員可以附加確定性
+  證明 URI（例如，`sorafs://proofs/pj-2026-02/juror-5`），以便下游
+  審計員可以檢索引用的零知識見證包
+  承諾。所有三個結構都派生出 `Encode`、`Decode` 和 `IntoSchema`，這意味著它們
+可用於 ISI 流、CLI 工具、SDK 和治理 REST API。
+請參閱 `crates/iroha_data_model/src/ministry/jury.rs` 以了解規範的 Rust
+定義和輔助方法。
 
-All three structures derive `Encode`, `Decode`, and `IntoSchema`, meaning they
-are available to ISI flows, CLI tooling, SDKs, and the governance REST API.
-See `crates/iroha_data_model/src/ministry/jury.rs` for the canonical Rust
-definitions and helper methods.
+### CLI 對抽籤清單的支持
 
-### CLI support for sortition manifests
-
-Roadmap item **MINFO-5** also called for reproducible tooling so governance can
-ship verifiable policy-jury rosters before each referendum packet is published.
-The workspace now exposes the `cargo xtask ministry-jury sortition` command:
+路線圖項目 **MINFO-5** 還呼籲使用可重複的工具，以便治理可以
+在每次公投數據包發布之前發送可驗證的政策陪審團名冊。
+工作區現在公開 `cargo xtask ministry-jury sortition` 命令：
 
 ```bash
 cargo xtask ministry-jury sortition \
@@ -84,31 +83,31 @@ cargo xtask ministry-jury sortition \
   --out artifacts/ministry/policy_jury_sortition.json
 ```
 
-- `--roster` accepts a deterministic PoP roster (JSON example:
-  `docs/examples/ministry/policy_jury_roster_example.json`).  Each entry
-  declares the `juror_id`, `pop_identity`, weight, and optional
-  `grace_period_secs`.  Ineligible entries are filtered automatically.
-- `--beacon` injects the 32-byte randomness beacon captured in the governance
-  minutes.  The CLI wires the beacon directly into the ChaCha20 RNG so auditors
-  can replay the draw byte-for-byte.
-- `--committee-size`, `--waitlist-size`, and `--waitlist-ttl-hours` control the
-  number of seated jurors, the failover buffer, and the expiry timestamp applied
-  to the waitlist entries.  When a failover rank exists for a slot, the command
-  records a `PolicyJuryFailoverPlan` pointing at the matching waitlist rank.
-- `--drawn-at` records the wall-clock timestamp for the sortition; the tool
-  converts it into Unix milliseconds for the manifest.
+- `--roster` 接受確定性 PoP 名冊（JSON 示例：
+  `docs/examples/ministry/policy_jury_roster_example.json`）。  每個條目
+  聲明 `juror_id`、`pop_identity`、重量和可選
+  `grace_period_secs`。  不符合條件的條目將被自動過濾。
+- `--beacon` 注入治理中捕獲的 32 字節隨機信標
+  分鐘。  CLI 將信標直接連接到 ChaCha20 RNG，以便審核員
+  可以逐字節重放繪製。
+- `--committee-size`、`--waitlist-size` 和 `--waitlist-ttl-hours` 控制
+  就座陪審員數量、故障轉移緩衝區以及應用的到期時間戳
+  到候補名單條目。  當某個插槽存在故障轉移等級時，該命令
+  記錄指向匹配的候補名單排名的 `PolicyJuryFailoverPlan`。
+- `--drawn-at` 記錄抽籤的掛鐘時間戳；工具
+  將其轉換為清單中的 Unix 毫秒。
 
-The generated manifest is a fully validated `PolicyJurySortitionV1` payload.
-Large deployments typically save the output under `artifacts/ministry/` so it
-can be bundled directly into referendum packets alongside the review-panel
-summary.  An illustrative output is available in
-`docs/examples/ministry/policy_jury_sortition_example.json` so SDK teams can
-exercise their Norito decoders without replaying an entire draw locally.
+生成的清單是經過充分驗證的 `PolicyJurySortitionV1` 有效負載。
+大型部署通常將輸出保存在 `artifacts/ministry/` 下，因此
+可以與審查小組一起直接捆綁到公投包中
+總結。  說明性輸出可在
+`docs/examples/ministry/policy_jury_sortition_example.json`，以便 SDK 團隊可以
+運行其 Norito 解碼器，而無需在本地重播整個繪製過程。
 
-### Ballot commit/reveal helpers
+### 投票提交/顯示助手
 
-Juror clients need deterministic tooling for the commit → reveal flow as well.
-The same `cargo xtask ministry-jury` command now exposes the following helpers:
+陪審員客戶也需要用於提交 → 揭示流程的確定性工具。
+相同的 `cargo xtask ministry-jury` 命令現在公開以下幫助程序：
 
 ```bash
 cargo xtask ministry-jury ballot commit \
@@ -126,19 +125,19 @@ cargo xtask ministry-jury ballot verify \
   --reveal artifacts/ministry/policy_jury_reveal_ada.json
 ```
 
-- `ballot commit` emits a `PolicyJuryBallotCommitV1` JSON payload.  When
-  `--out` is omitted the command prints the commitment to stdout.  If
-  `--reveal-out` is supplied the tool also writes the matching
-  `PolicyJuryBallotRevealV1`, reusing the provided nonce and applying the
-  optional `--revealed-at` timestamp (defaults to `--committed-at` or the
-  current time).
-- `--nonce-hex` accepts any even-length hex string ≥ 16 bytes.  When omitted the
-  helper generates a 32-byte nonce using `OsRng`, making it easy to script
-  juror workflows without custom randomness plumbing.
-- `--choice` is case-insensitive and accepts `approve`, `reject`, or `abstain`.
+- `ballot commit` 發出 `PolicyJuryBallotCommitV1` JSON 負載。  當
+  `--out` 被省略，該命令將承諾打印到標準輸出。  如果
+  `--reveal-out` 提供的工具還寫入匹配的
+  `PolicyJuryBallotRevealV1`，重用提供的隨機數並應用
+  可選 `--revealed-at` 時間戳（默認為 `--committed-at` 或
+  當前時間）。
+- `--nonce-hex` 接受任何長度≥16 字節的偶數十六進製字符串。  當省略時
+  helper 使用 `OsRng` 生成 32 字節隨機數，從而可以輕鬆編寫腳本
+  無需自定義隨機性管道的陪審員工作流程。
+- `--choice` 不區分大小寫，接受 `approve`、`reject` 或 `abstain`。
 
-`ballot verify` cross-checks the commitment/reveal pair via
-`PolicyJuryBallotCommitV1::verify_reveal`, guaranteeing that the round id,
-proposal id, juror id, nonce, and vote choice all align before the reveal is
-admitted to Torii.  The helper exits with a non-zero status when validation
-fails, making it safe to wire into CI or local juror portals.
+`ballot verify` 通過交叉檢查承諾/揭示對
+`PolicyJuryBallotCommitV1::verify_reveal`，保證輪次id，
+提案 ID、陪審員 ID、隨機數和投票選擇在揭曉之前全部對齊
+考入Torii。  驗證時助手以非零狀態退出
+失敗，從而可以安全地連接到 CI 或當地陪審員門戶。

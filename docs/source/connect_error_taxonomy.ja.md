@@ -6,63 +6,62 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: bd6ab18725af866ffd2589a3fa7bd7130bab1d5efef2920408baa8e338d5d068
 source_last_modified: "2026-01-03T18:08:01.837162+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Connect Error Taxonomy (Swift baseline)
+# 接続エラー分類 (Swift ベースライン)
 
-This note tracks IOS-CONNECT-010 and documents the shared error taxonomy for
-Nexus Connect SDKs. Swift now exports the canonical `ConnectError` wrapper,
-which maps all Connect-related failures to one of six categories so telemetry,
-dashboards, and UX copy stay aligned across platforms.
+このノートでは、IOS-CONNECT-010 を追跡し、IOS-CONNECT-010 の共有エラー分類を文書化します。
+Nexus SDK を接続します。 Swift は正規の `ConnectError` ラッパーをエクスポートするようになりました。
+これにより、すべての接続関連の障害が 6 つのカテゴリのいずれかにマッピングされるため、テレメトリ、
+ダッシュボードと UX コピーはプラットフォーム間で整合性が保たれます。
 
-> Last updated: 2026-01-15  
-> Owner: Swift SDK Lead (taxonomy steward)  
-> Status: Swift + Android + JavaScript implementations **landed**; queue integration pending.
+> 最終更新日: 2026-01-15  
+> 所有者: Swift SDK リード (分類管理者)  
+> ステータス: Swift + Android + JavaScript の実装は **着陸**;キューの統合は保留中です。
 
-## Categories
+## カテゴリ
 
-| Category | Purpose | Typical sources |
-|----------|---------|-----------------|
-| `transport` | WebSocket/HTTP transport failures that terminate a session. | `URLError(.cannotConnectToHost)`, `ConnectClient.ClientError.closed` |
-| `codec` | Serialization/bridge failures while encoding/decoding frames. | `ConnectEnvelopeError.invalidPayload`, `DecodingError` |
-| `authorization` | TLS/attestation/policy failures requiring user or operator remediation. | `URLError(.secureConnectionFailed)`, Torii 4xx responses |
-| `timeout` | Idle/offline expirations and watchdogs (queue TTL, request timeout). | `URLError(.timedOut)`, `ConnectQueueError.expired` |
-| `queueOverflow` | FIFO back-pressure signals so apps can shed load gracefully. | `ConnectQueueError.overflow(limit:)` |
-| `internal` | Everything else: SDK misuse, missing Norito bridge, corrupted journals. | `ConnectSessionError.missingDecryptionKeys`, `ConnectCryptoError.*` |
+|カテゴリー |目的 |代表的な情報源 |
+|----------|-----------|------|
+| `transport` |セッションを終了する WebSocket/HTTP トランスポート障害。 | `URLError(.cannotConnectToHost)`、`ConnectClient.ClientError.closed` |
+| `codec` |フレームのエンコード/デコード中にシリアル化/ブリッジが失敗しました。 | `ConnectEnvelopeError.invalidPayload`、`DecodingError` |
+| `authorization` |ユーザーまたはオペレーターの修復が必要な TLS/構成証明/ポリシーの障害。 | `URLError(.secureConnectionFailed)`、Torii 4xx 応答 |
+| `timeout` |アイドル/オフラインの有効期限とウォッチドッグ (キュー TTL、リクエスト タイムアウト)。 | `URLError(.timedOut)`、`ConnectQueueError.expired` |
+| `queueOverflow` | FIFO バックプレッシャー信号により、アプリは正常に負荷を軽減できます。 | `ConnectQueueError.overflow(limit:)` |
+| `internal` |その他: SDK の誤用、Norito ブリッジの欠落、ジャーナルの破損。 | `ConnectSessionError.missingDecryptionKeys`、`ConnectCryptoError.*` |
 
-Every SDK publishes an error type that conforms to the taxonomy and exposes
-structured telemetry attributes: `category`, `code`, `fatal`, and optional
-metadata (`http_status`, `underlying`).
+すべての SDK は、分類法に準拠して公開されるエラー タイプを公開します。
+構造化テレメトリ属性: `category`、`code`、`fatal`、およびオプション
+メタデータ (`http_status`、`underlying`)。
 
-## Swift mapping
+## 迅速なマッピング
 
-Swift exports `ConnectError`, `ConnectErrorCategory`, and helper protocols in
-`IrohaSwift/Sources/IrohaSwift/ConnectError.swift`. All public Connect error
-types conform to `ConnectErrorConvertible`, so apps can call `error.asConnectError()`
-and forward the result to telemetry/logging layers.
+Swift は、`ConnectError`、`ConnectErrorCategory`、およびヘルパー プロトコルをエクスポートします。
+`IrohaSwift/Sources/IrohaSwift/ConnectError.swift`。すべてのパブリック接続エラー
+型は `ConnectErrorConvertible` に準拠しているため、アプリは `error.asConnectError()` を呼び出すことができます
+そして結果をテレメトリ/ロギングレイヤーに転送します。|迅速なエラー |カテゴリー |コード |メモ |
+|-----------|----------|------|------|
+| `ConnectClient.ClientError.alreadyStarted` | `internal` | `client.already_started` |二重 `start()` を示します。開発者のミス。 |
+| `ConnectClient.ClientError.closed` | `transport` | `client.closed` |クローズ後の送受信時に発生します。 |
+| `ConnectClient.ClientError.unknownPayload` | `codec` | `client.unknown_payload` | WebSocket はバイナリを予期しながらテキストのペイロードを配信しました。 |
+| `ConnectSessionError.streamEnded` | `transport` | `session.stream_ended` |カウンターパーティが予期せずストリームを閉じました。 |
+| `ConnectSessionError.missingDecryptionKeys` | `internal` | `session.missing_direction_keys` |アプリケーションが対称キーの構成を忘れました。 |
+| `ConnectEnvelopeError.invalidPayload` | `codec` | `envelope.invalid_payload` | Norito ペイロードに必須フィールドがありません。 |
+| `ConnectEnvelopeError.unknownPayloadKind` | `codec` | `envelope.unknown_payload_kind` |古い SDK によって認識される将来のペイロード。 |
+| `ConnectCodecError.*` | `codec` | `codec.bridge_unavailable` / `codec.encode_failed` / `codec.decode_failed` | Norito ブリッジが見つからないか、フレーム バイトのエンコード/デコードに失敗しました。 |
+| `ConnectCryptoError.*` | `internal` | `crypto.*` |ブリッジが使用できないか、キーの長さが一致していません。 |
+| `ConnectQueueError.overflow(limit:)` | `queueOverflow` | `queue.overflow` |オフライン キューの長さが設定された制限を超えました。 |
+| `URLError(.timedOut)` | `timeout` | `network.timeout` | `URLSessionWebSocketTask` によって浮上しました。 |
+| `URLError` TLS ケース | `authorization` | `network.tls_failure` | ATS/TLS ネゴシエーションの失敗。 |
+| `DecodingError` / `EncodingError` | `codec` | `codec.*` | JSON デコード/エンコードが SDK の他の場所で失敗しました。メッセージは Swift デコーダー コンテキストを使用します。 |
+|その他の `Error` | `internal` | `unknown_error` |全てを網羅することを保証。メッセージは `LocalizedError` をミラーリングします。 |
 
-| Swift error | Category | Code | Notes |
-|-------------|----------|------|-------|
-| `ConnectClient.ClientError.alreadyStarted` | `internal` | `client.already_started` | Indicates double `start()`; developer mistake. |
-| `ConnectClient.ClientError.closed` | `transport` | `client.closed` | Raised when sending/receiving after a close. |
-| `ConnectClient.ClientError.unknownPayload` | `codec` | `client.unknown_payload` | WebSocket delivered textual payload while expecting binary. |
-| `ConnectSessionError.streamEnded` | `transport` | `session.stream_ended` | Counterparty closed the stream unexpectedly. |
-| `ConnectSessionError.missingDecryptionKeys` | `internal` | `session.missing_direction_keys` | Application forgot to configure symmetric keys. |
-| `ConnectEnvelopeError.invalidPayload` | `codec` | `envelope.invalid_payload` | Norito payload missing required fields. |
-| `ConnectEnvelopeError.unknownPayloadKind` | `codec` | `envelope.unknown_payload_kind` | Future payload seen by old SDK. |
-| `ConnectCodecError.*` | `codec` | `codec.bridge_unavailable` / `codec.encode_failed` / `codec.decode_failed` | Norito bridge missing or failed to encode/decode frame bytes. |
-| `ConnectCryptoError.*` | `internal` | `crypto.*` | Bridge unavailable or mismatched key lengths. |
-| `ConnectQueueError.overflow(limit:)` | `queueOverflow` | `queue.overflow` | Offline queue length exceeded the configured bound. |
-| `URLError(.timedOut)` | `timeout` | `network.timeout` | Surfaced by `URLSessionWebSocketTask`. |
-| `URLError` TLS cases | `authorization` | `network.tls_failure` | ATS/TLS negotiation failures. |
-| `DecodingError` / `EncodingError` | `codec` | `codec.*` | JSON decoding/encoding failed elsewhere in the SDK; message uses the Swift decoder context. |
-| Any other `Error` | `internal` | `unknown_error` | Guaranteed catch-all; message mirrors `LocalizedError`. |
+単体テスト (`IrohaSwift/Tests/IrohaSwiftTests/ConnectErrorTests.swift`) のロックダウン
+このマッピングにより、将来のリファクタリングでカテゴリやコードがサイレントに変更されることがなくなります。
 
-Unit tests (`IrohaSwift/Tests/IrohaSwiftTests/ConnectErrorTests.swift`) lock down
-the mapping so future refactors cannot silently change categories or codes.
-
-### Example usage
+### 使用例
 
 ```swift
 do {
@@ -75,11 +74,11 @@ do {
 }
 ```
 
-## Telemetry & dashboards
+## テレメトリーとダッシュボード
 
-The Swift SDK provides `ConnectError.telemetryAttributes(fatal:httpStatus:)`
-which returns the canonical attribute map. Exporters should forward these
-attributes into `connect.error` OTEL events with optional extras:
+Swift SDK は `ConnectError.telemetryAttributes(fatal:httpStatus:)` を提供します
+これは正規の属性マップを返します。輸出者はこれらを転送する必要があります
+オプションの追加機能を備えた `connect.error` OTEL イベントへの属性:
 
 ```
 attributes = {
@@ -91,33 +90,31 @@ attributes = {
 }
 ```
 
-Dashboards correlate `connect.error` counters with queue depth (`connect.queue_depth`)
-and reconnect histograms to detect regressions without spelunking logs.
+ダッシュボードは `connect.error` カウンターをキューの深さと関連付けます (`connect.queue_depth`)
+ヒストグラムを再接続して、ログを調べずに回帰を検出します。
 
-## Android mapping
+## Android マッピングAndroid SDK は、`ConnectError`、`ConnectErrorCategory`、`ConnectErrorTelemetryOptions`、
+`ConnectErrorOptions`、および以下のヘルパー ユーティリティ
+`org.hyperledger.iroha.android.connect.error`。ビルダー スタイルのヘルパーは、あらゆる `Throwable` を変換します。
+分類法に準拠したペイロードに変換し、トランスポート/TLS/コーデックの例外からカテゴリを推測します。
+OpenTelemetry/サンプリング スタックが
+カスタムアダプターなしの結果。【java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectError.java:8】【java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectErrors.java:25】
+`ConnectQueueError` はすでに `ConnectErrorConvertible` を実装しており、queueOverflow/timeout を発行しています
+オーバーフロー/有効期限条件のカテゴリ。オフライン キューの計測を同じフローに接続できるようにします。【java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectQueueError.java:5】
+Android SDK README では分類法が参照され、トランスポート例外をラップする方法が示されています。
+テレメトリを発行する前に、dApp ガイダンスを Swift ベースラインに合わせて維持します。【java/iroha_android/README.md:167】
 
-The Android SDK exports `ConnectError`, `ConnectErrorCategory`, `ConnectErrorTelemetryOptions`,
-`ConnectErrorOptions`, and the helper utilities under
-`org.hyperledger.iroha.android.connect.error`. Builder-style helpers convert any `Throwable`
-into a taxonomy-compliant payload, infer categories from transport/TLS/codec exceptions,
-and expose deterministic telemetry attributes so OpenTelemetry/sampling stacks can consume the
-result without bespoke adapters.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectError.java:8】【java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectErrors.java:25】
-`ConnectQueueError` already implements `ConnectErrorConvertible`, emitting the queueOverflow/timeout
-categories for overflow/expiry conditions so offline queue instrumentation can wire into the same flow.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/connect/error/ConnectQueueError.java:5】
-The Android SDK README now references the taxonomy and shows how to wrap transport exceptions
-before emitting telemetry, keeping dApp guidance aligned with the Swift baseline.【java/iroha_android/README.md:167】
+## JavaScript マッピング
 
-## JavaScript mapping
+Node.js/ブラウザ クライアント インポート `ConnectError`、`ConnectQueueError`、`ConnectErrorCategory`、および
+`connectErrorFrom()`から`@iroha/iroha-js`。共有ヘルパーは HTTP ステータス コードを検査します。
+ノード エラー コード (ソケット、TLS、タイムアウト)、`DOMException` 名、およびコーデックの出力失敗
+このノートに記載されているのと同じカテゴリ/コードですが、TypeScript の定義はテレメトリをモデル化しています。
+属性がオーバーライドされるため、ツールは手動でキャストせずに OTEL イベントを発行できます。【javascript/iroha_js/src/connectError.js:1】【javascript/iroha_js/index.d.ts:840】
+SDK README にはワークフローが文書化されており、この分類法にリンクされているため、アプリケーション チームは次のことを行うことができます。
+インストルメンテーションのスニペットをそのままコピーします。【javascript/iroha_js/README.md:1387】
 
-Node.js/browser clients import `ConnectError`, `ConnectQueueError`, `ConnectErrorCategory`, and
-`connectErrorFrom()` from `@iroha/iroha-js`. The shared helper inspects HTTP status codes,
-Node error codes (socket, TLS, timeout), `DOMException` names, and codec failures to emit the
-same categories/codes documented in this note, while TypeScript definitions model the telemetry
-attribute overrides so tooling can emit OTEL events without manual casting.【javascript/iroha_js/src/connectError.js:1】【javascript/iroha_js/index.d.ts:840】
-The SDK README documents the workflow and links back to this taxonomy so application teams can
-copy the instrumentation snippets verbatim.【javascript/iroha_js/README.md:1387】
+## 次のステップ (クロス SDK)
 
-## Next steps (cross-SDK)
-
-- **Queue integration:** once the offline queue ships, ensure dequeue/drop logic
-  surfaces `ConnectQueueError` values so overflow Telemetry remains trustworthy.
+- **キューの統合:** オフライン キューが出荷されたら、デキュー/ドロップ ロジックを確認します。
+  は `ConnectQueueError` 値を表面化するため、オーバーフロー テレメトリの信頼性は維持されます。

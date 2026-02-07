@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/soranet/pq-ratchet-runbook.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-ratchet-runbook
-title: Simulacro PQ Ratchet do SoraNet
-sidebar_label: Runbook de PQ Ratchet
-description: Passos de ensaio on-call para promover ou rebaixar a politica de anonimato PQ em estagios com validacao deterministica de telemetria.
+ID: pq-ratchet-runbook
+タイトル: Simulacro PQ ラチェット ド ソラネット
+Sidebar_label: PQ ラチェットのランブック
+説明: プロモーターのオンコール対応は、テレメトリの確定性を確認するための政治的監視を担当します。
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/soranet/pq_ratchet_runbook.md`. Mantenha ambas as copias sincronizadas.
+:::note フォンテ カノニカ
+エスタ・ページナ・エスペルハ`docs/source/soranet/pq_ratchet_runbook.md`。マンテンハ・アンバスはコピア・シンクロニザダスとして。
 :::
 
-## Proposito
+## プロポジト
 
-Este runbook guia a sequencia do simulacro para a politica de anonimato post-quantum (PQ) em estagios do SoraNet. Operadores ensaiam promocao (Stage A -> Stage B -> Stage C) e a despromocao controlada de volta a Stage B/A quando a oferta de PQ cai. O simulacro valida hooks de telemetria (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) e coleta artefatos para o log de rehearsal de incidentes.
+ランブックは、SoraNet のポスト量子 (PQ) の政治的シミュレーションを実行するためのシーケンスを作成します。オペラドールのプロモーション (ステージ A -> ステージ B -> ステージ C) は、ステージ B/A と PQ のパフォーマンスを制御します。テレメトリのフックのシミュレーション (`sorafs_orchestrator_policy_events_total`、`sorafs_orchestrator_brownouts_total`、`sorafs_orchestrator_pq_ratio_*`) は、インシデントのリハーサル ログに基づいて収集された芸術品です。
 
-## Prerequisitos
+## 前提条件
 
-- Ultimo binario `sorafs_orchestrator` com capability-weighting (commit igual ou posterior ao reference do drill mostrado em `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- Acesso ao stack Prometheus/Grafana que serve `dashboards/grafana/soranet_pq_ratchet.json`.
-- Snapshot nominal do guard directory. Busque e valide uma copia antes do simulacro:
+- Ultimo binario `sorafs_orchestrator` com 機能重み付け (コミット igual ou posterior ao リファレンス do ドリル mostrado em `docs/source/soranet/reports/pq_ratchet_validation.md`)。
+- Acesso ao スタック Prometheus/Grafana que サーブ `dashboards/grafana/soranet_pq_ratchet.json`。
+- スナップショット名目上のディレクトリをガードします。バスクと有効なコピーピアは、シミュレーションを実行します:
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -34,9 +36,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-Se o source directory publicar apenas JSON, re-encode para Norito binary com `soranet-directory build` antes de rodar os helpers de rotacao.
+ソース ディレクトリを JSON として公開し、Norito バイナリ COM `soranet-directory build` を再エンコードして、ロータリー オス ヘルパーを参照してください。
 
-- Capture metadata e pre-stage artefatos de rotacao do issuer com o CLI:
+- 発行者側の CLI による前段階の技術情報によるメタデータのキャプチャ:
 
 ```bash
 soranet-directory inspect \
@@ -47,67 +49,67 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- Janela de mudanca aprovada pelos times on-call de networking e observability.
+- ジャネラ・デ・ムダンカは、ネットワーキングと可観測性のオンコール時間を承認します。
 
-## Passos de promocao
+## 宣伝活動
 
-1. **Stage audit**
+1. **段階監査**
 
-   Registre o stage inicial:
+   登録ステージのイニシャル:
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   Espere `anon-guard-pq` antes da promocao.
+   Espere `anon-guard-pq` はプロモーション用です。
 
-2. **Promova para Stage B (Majority PQ)**
+2. **ステージ B のプロモバ (多数決 PQ)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   - Aguarde >=5 minutos para manifests serem atualizados.
-   - No Grafana (dashboard `SoraNet PQ Ratchet Drill`) confirme que o painel "Policy Events" mostra `outcome=met` para `stage=anon-majority-pq`.
-   - Capture um screenshot ou JSON do painel e anexe ao log de incidentes.
+   - Aguarde >=5 分でセレム アトゥアリザドスが現れます。
+   - いいえ、Grafana (ダッシュボード `SoraNet PQ Ratchet Drill`) は、「ポリシー イベント」のほとんどの `outcome=met` パラ `stage=anon-majority-pq` を確認します。
+   - JSON のスクリーンショットをキャプチャし、インシデントのログを作成します。
 
-3. **Promova para Stage C (Strict PQ)**
+3. **ステージ C のプロモバ (厳格な PQ)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - Verifique que os histogramas `sorafs_orchestrator_pq_ratio_*` tendem a 1.0.
-   - Confirme que o contador de brownout permanece plano; caso contrario, siga os passos de despromocao.
+   - バージョン 1.0 のヒストグラム `sorafs_orchestrator_pq_ratio_*` を検証します。
+   - 停電の永久計画を確認します。カソ・コントラリオ、シガ・オス・パソス・デ・デスプロモカオ。
 
-## Despromocao / brownout drill
+## Despromocao / 停電ドリル
 
-1. **Induza uma escassez sintetica de PQ**
+1. **インドゥサ ウマ エスカセ シンテティカ デ PQ**
 
-   Desative relays PQ no ambiente playground reduzindo o guard directory a entradas classicas apenas, depois recarregue o cache do orchestrator:
+   Desative リレー PQ は、アンビエンテ プレイグラウンド レドゥジンド、ガード ディレクトリ、古典的なアペナス、デポワ リカルレグ、オーケストレーターをキャッシュするものではありません。
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **Observe a telemetria de brownout**
+2. **停電時のテレメトリを観察します**
 
-   - Dashboard: o painel "Brownout Rate" sobe acima de 0.
+   - ダッシュボード: 「停電率」0 を表示します。
    - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - `sorafs_fetch` deve reportar `anonymity_outcome="brownout"` com `anonymity_reason="missing_majority_pq"`.
+   - `sorafs_fetch` 開発レポーター `anonymity_outcome="brownout"` com `anonymity_reason="missing_majority_pq"`。
 
-3. **Despromova para Stage B / Stage A**
+3. **デスプロモバ ステージ B / ステージ A**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   Se a oferta de PQ ainda for insuficiente, despromova para `anon-guard-pq`. O simulacro termina quando os contadores de brownout estabilizam e as promocoes podem ser reaplicadas.
+   不十分な場合は PQ を参照してください。`anon-guard-pq` のデスプロモバを参照してください。これは、プロモーション用のシステムとして、ブラウンアウトの制御を確立するための仮想端末です。
 
-4. **Restaure o guard directory**
+4. **レストラン・ガードディレクトリ**
 
    ```bash
    sorafs_cli guard-directory import \
@@ -115,14 +117,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetria e artefatos
+## テレメトリアとアルティファト
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **Alertas Prometheus:** garanta que o alerta de brownout de `sorafs_orchestrator_policy_events_total` fique abaixo do SLO configurado (&lt;5% em qualquer janela de 10 minutos).
-- **Incident log:** anexe trechos de telemetria e notas do operador em `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **Captura assinada:** use `cargo xtask soranet-rollout-capture` para copiar o drill log e o scoreboard para `artifacts/soranet_pq_rollout/<timestamp>/`, calcular digests BLAKE3 e produzir um `rollout_capture.json` assinado.
+- **ダッシュボード:** `dashboards/grafana/soranet_pq_ratchet.json`
+- **アラート Prometheus:** `sorafs_orchestrator_policy_events_total` でブラウンアウトに関するアラートが発生しました。SLO 設定が行われています (10 分間で 5% 未満)。
+- **インシデント ログ:** テレメトリーの記録は管理者 `docs/examples/soranet_pq_ratchet_fire_drill.log` に記録されていません。
+- **キャプチャ アッシナダ:** `cargo xtask soranet-rollout-capture` パラ コピア、ドリル ログ、スコアボードパラ `artifacts/soranet_pq_rollout/<timestamp>/`、計算ダイジェスト BLAKE3、`rollout_capture.json` アッシナドを使用します。
 
-Exemplo:
+例:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -134,12 +136,12 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-Anexe os metadata gerados e a assinatura ao pacote de governance.
+別の OS メタデータはガバナンスの機能を提供します。
 
-## Rollback
+## ロールバック
 
-Se o simulacro revelar escassez real de PQ, permanece em Stage A, notifique o Networking TL e anexe as metricas coletadas junto com os diffs do guard directory ao incident tracker. Use o export do guard directory capturado anteriormente para restaurar o servico normal.
+PQ の実際のエスカセをシミュレートし、ステージ A を永続的に管理し、ネットワーク TL の別のメトリクスを収集し、インシデント トラッカーとディレクトリを監視します。レストランのガード ディレクトリのキャプチャをエクスポートしたり、通常のサービスを使用したりしてください。
 
-:::tip Cobertura de regressao
-`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` fornece a validacao sintetica que sustenta este simulacro.
+:::回帰に関するヒント
+`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` は、シミュレーションを継続的に検証するためのものです。
 :::

@@ -7,42 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d04af2ad3ae5cc6a9254236f5627850aab7c6517308e9f3a09650cbc1490168
 source_last_modified: "2026-01-05T18:22:23.401292+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Connect Session Preview Runbook (IOS7 / JS4)
+# Тоташтырыу сессияһын алдан ҡарау Рунбук (IOS7 / JS4)
 
-This runbook documents the end-to-end procedure for staging, validating, and
-tearing down Connect preview sessions as required by roadmap milestones **IOS7**
-and **JS4** (`roadmap.md:1340`, `roadmap.md:1656`). Follow these steps whenever
-you demo the Connect strawman (`docs/source/connect_architecture_strawman.md`),
-exercise the queue/telemetry hooks promised in the SDK roadmaps, or collect
-evidence for `status.md`.
+Был runbook документтар өсөн стадиялау, раҫлау, һәм
+өҙөп төшөп Connect алдан ҡарау сессиялары талап итә, юл картаһы осҡондары **IOS7**
+һәм **JS4** (`roadmap.md:1340`, `roadmap.md:1656`). Был аҙымдарҙы үтәгеҙ, ҡасан
+һеҙ демо-Коннект strawman (`docs/source/connect_architecture_strawman.md`),
+сират/телеметрия ҡармаҡтарын ҡулланыу SDK юл карталарында вәғәҙә ителә, йәки йыйыу
+`status.md` тураһында дәлилдәр.
 
-## 1. Preflight Checklist
+## 1. Осоу алдынан тикшерелгән исемлек
 
-| Item | Details | References |
-|------|---------|------------|
-| Torii endpoint + Connect policy | Confirm the Torii base URL, `chain_id`, and Connect policy (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). Capture the JSON snapshot in the runbook ticket. | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
-| Fixture + bridge versions | Note the Norito fixture hash and bridge build you will use (Swift requires `NoritoBridge.xcframework`, JS requires `@iroha/iroha-js` ≥ the version that shipped `bootstrapConnectPreviewSession`). | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
-| Telemetry dashboards | Ensure the dashboards that chart `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, `swift.connect.session_event`, etc., are reachable (Grafana `Android/Swift Connect` board + exported Prometheus snapshots). | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
-| Evidence folders | Pick a destination such as `docs/source/status/swift_weekly_digest.md` (weekly digest) and `docs/source/sdk/swift/connect_risk_tracker.md` (risk tracker). Store logs, metrics screenshots, and acknowledgements under `docs/source/sdk/swift/readiness/archive/<date>/connect/`. | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
+| Элемент | Ентекле | Һылтанмалар |
+|------|---------|------------ |
+| Torii ос нөктәһе + Тоташыу сәйәсәте | Torii база URL, `chain_id`, һәм тоташтырыу сәйәсәте (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). JSON снимокты runbook билетында төшөрөп алырға. | Grafana, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
+| Фикстура + күпер версиялары | Иҫкәрмә Norito ҡоролма хеш һәм күпер төҙөү һеҙ ҡулланасаҡ (Swift талап итә `NoritoBridge.xcframework`, JS талап итә `@iroha/iroha-js` ≥ версияһы, тип ебәргән `bootstrapConnectPreviewSession`). | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` X |
+| Телеметрия приборҙар таҡтаһы | `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, Grafana, һ.б. Prometheus снимоктары). | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
+| Дәлилдәр папкалар | `docs/source/status/swift_weekly_digest.md` (аҙна һайын һеңдерелгән) һәм `docs/source/sdk/swift/connect_risk_tracker.md` (хәүефле трекер) кеүек йүнәлеште һайлағыҙ. Магазин журналдары, метрика скриншоттар һәм `docs/source/sdk/swift/readiness/archive/<date>/connect/` буйынса таныуҙар. | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
 
-## 2. Bootstrap the Preview Session
+## 2. Загрузка алдан ҡарау сессияһын
 
-1. **Validate policy + quotas.** Call:
+1. **Сәйәсәт + квоталар.** Шылтыратыу:
    ```js
    const status = await torii.getConnectStatus();
    console.log(status.policy.queue_max, status.policy.offline_timeout_ms);
-   ```
-   Fail the run if `queue_max` or TTL differs from the config you planned to
-   test.
-2. **Generate deterministic SID/URIs.** The `@iroha/iroha-js`
-   `bootstrapConnectPreviewSession` helper ties SID/URI generation to Torii
-   session registration; use it even when Swift will drive the WebSocket layer.
+   ``` X
+   Үпкәү йүгерә, әгәр `queue_max` йәки TTL айырыла конфиг һеҙ планлаштырған
+   тест.
+2. **Детерминистик SID/URIs генерациялау.** `@iroha/iroha-js`
+   `bootstrapConnectPreviewSession` ярҙамсыһы SID/URI быуынын Torii менән бәйләй
+   сеанс теркәү; уны ҡулланыу хатта ҡасан Swift водитель WebSocket ҡатламы.
    ```js
    import {
      ToriiClient,
@@ -58,16 +59,14 @@ evidence for `status.md`.
    });
    console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
-   - Set `register: false` to dry-run QR/deep-link scenarios.
-   - Persist the returned `sidBase64Url`, deeplink URLs, and `tokens` blob in the
-     evidence folder; the governance review expects these artefacts.
-3. **Distribute secrets.** Share the deeplink URI with the wallet operator
-   (swift dApp sample, Android wallet, or QA harness). Never paste raw tokens
-   into chat; use the encrypted vault documented in the enablement packet.
+   - `register: false` комплекты ҡоро идара итеү өсөн QR/тәрән-бәйләнешле сценарийҙар.
+   - Ҡайтып алынған `sidBase64Url`, deeplink URL-адрестар, һәм `tokens` тап 1990 йылда.
+     дәлилдәр папкаһы; идара итеүгә рецензия был артефакттарҙы көтә.
+3. **Серҙәрҙе таратыу.** Өслө һылтанма менән уртаҡлашыу URI менән янсыҡ операторы .
+   (свифт dApp өлгөһө, Android янсыҡ, йәки QA йүгән). Бер ҡасан да сей токендарҙы йәбештермәгеҙ
+   чатҡа инә; ҡулланыу шифрланған склеп документлаштырылған өҫтәмә пакет.
 
-## 3. Drive the Session
-
-1. **Open the WebSocket.** Swift clients typically use:
+## 3. Сессияны йөрөтөү1. **WebSocket асырға.** Клиенттар свифт ғәҙәттә:
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
@@ -79,77 +78,75 @@ evidence for `status.md`.
    })
    try client.open()
    ```
-   Reference `docs/connect_swift_integration.md` for additional setup (bridge
-   imports, concurrency adapters).
-2. **Approve + sign flows.** DApps call `ConnectSession.requestSignature(...)`,
-   while wallets respond via `approveSession` / `reject`. Each approval must log
-   the hashed alias + permissions to match the Connect governance charter.
-3. **Exercise queue + resume paths.** Toggle network connectivity or suspend the
-   wallet to ensure the bounded queue and replay hooks log entries. JS/Android
-   SDKs emit `ConnectQueueError.overflow(limit)` /
-   `.expired(ttlMs)` when they drop frames; Swift should observe the same once
-   IOS7 queue scaffolding lands (`docs/source/connect_architecture_strawman.md`).
-   After you record at least one reconnect, run
+   Өҫтәмә ҡоролма өсөн Һылтанма `docs/connect_swift_integration.md`
+   импорт, конкурентлыҡ адаптерҙары).
+2. **Таны + билдә ағымы.** DApps шылтыратыу `ConnectSession.requestSignature(...)`,
+   ә янсыҡтар `approveSession` аша яуап бирә / `reject`. Һәр раҫлау тейеш логин .
+   хешэд псевдонимы + рөхсәттәр тура килтерергә Connect идара итеү уставы.
+3. **Күнекмә сират + резюме юлдары.** Селтәр тоташыуын кәметергә йәки туҡтатыу .
+   янсыҡты тәьмин итеү өсөн сикләнгән сират һәм реплей ҡармаҡтар журнал яҙмалары. JS/Android
+   SDKs `ConnectQueueError.overflow(limit)` / сығара.
+   `.expired(ttlMs)` улар рамдарҙы төшөргәндә; Свифт бер тапҡыр шул уҡ күҙәтергә тейеш
+   IOS7 сират ҡоролмалары ерҙәре (`docs/source/connect_architecture_strawman.md`).
+   Һеҙ яҙғандан һуң, кәмендә бер ҡабаттан тоташтырыу, йүгерергә
    ```bash
    iroha connect queue inspect --sid "$SID" --root ~/.iroha/connect --metrics
    ```
-   (or pass the export directory returned by `ConnectSessionDiagnostics`) and
-   attach the rendered table/JSON to the runbook ticket. The CLI reads the same
-   `state.json` / `metrics.ndjson` pair that `ConnectQueueStateTracker` produces,
-   so governance reviewers can trace drill evidence without bespoke tooling.
+   (йәки экспорт каталогын `ConnectSessionDiagnostics` тарафынан ҡайтарған) һәм
+   беркетелгән таблица/JSON runbook билетына. CLI шул уҡ уҡый .
+   `state.json` / `metrics.ndjson` пары, тип `ConnectQueueStateTracker` X,
+   шулай итеп, идара итеү рецензенттары эҙләй ала быраулау дәлилдәре, инструменталь инструменталь.
 
-## 4. Telemetry & Observability
+## 4. Телеметрия & Күҙәтеүсәнлек
 
-- **Metrics to capture:**
-  - `connect.queue_depth{direction}` gauge (should stay below policy cap).
-  - `connect.queue_dropped_total{reason="overflow|ttl"}` counter (non-zero only
-    during fault-injection).
-  - `connect.resume_latency_ms` histogram (record the p95 after forcing a
-    reconnect).
+- **Метриканы тотоу өсөн:**
+  - `connect.queue_depth{direction}` датчигы (сәйәси капиталдан түбәнерәк ҡалырға тейеш).
+  - `connect.queue_dropped_total{reason="overflow|ttl"}` счетчигы (нуль булмаған
+    етешһеҙлек-инъекция ваҡытында).
+  - `connect.resume_latency_ms` гистограмма (яҙма p95 мәжбүрҙән һуң a
+    яңынан тоташтырыу).
   - `connect.replay_success_total` / `connect.replay_error_total`.
-  - Swift-specific `swift.connect.session_event` and
-    `swift.connect.frame_latency` exports (`docs/source/sdk/swift/telemetry_redaction.md`).
-- **Dashboards:** Update the Connect board bookmarks with annotation markers.
-  Attach screenshots (or JSON exports) to the evidence folder alongside the raw
-  OTLP/Prometheus snapshots pulled via the telemetry exporter CLI.
-- **Alerting:** If any Sev 1/2 thresholds trigger (per `docs/source/android_support_playbook.md` §5),
-  page the SDK Program Lead and document the PagerDuty incident ID in the runbook
-  ticket before continuing.
+  - Свифт-специфик `swift.connect.session_event` һәм
+    `swift.connect.frame_latency` экспорты (Torii).
+- ** Приборҙар таҡталары:** Аннотация маркерҙары менән тоташтырылған таҡта закладкаларын яңыртыу.
+  Беркетергә скриншоттар (йәки JSON экспорты) сеймал менән бер рәттән дәлилдәр папкаһына
+  OTLP/Prometheus снимоктары телеметрия экспортеры аша тартылған CLI.
+- **Иҫкәртмә:** Әгәр ниндәй ҙә булһа Sev1/2 сиктәре триггер (пер `docs/source/android_support_playbook.md` §5),
+  битендә SDK программаһы етәксеһе һәм документ PagerDuty инцидент идентификаторы runbook
+  билет дауам иткәнсе.
 
-## 5. Cleanup & Rollback
+## 5. Таҙа & Ролбек
 
-1. **Delete staged sessions.** Always delete preview sessions so queue depth
-   alarms remain meaningful:
+1. **Эшкә сәхнәләштерелгән сеанстарҙы юй.
+   сигналдар мәғәнәле булып ҡала:
    ```js
    await client.deleteConnectSession(preview.sidBase64Url);
    ```
-   For Swift-only test runs, call the same endpoint through the Rust/CLI helper.
-2. **Purge journals.** Remove any persisted queue journals
-   (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB stores, etc.) so the
-   next run starts clean. Record the file hash before deletion if you need to
-   debug a replay issue.
-3. **File incident notes.** Summarise the run in:
-   - `docs/source/status/swift_weekly_digest.md` (deltas block),
-   - `docs/source/sdk/swift/connect_risk_tracker.md` (clear or downgrade CR-2
-     once telemetry is in place),
-   - the JS SDK changelog or recipe if new behaviour was validated.
-4. **Escalate failures:**
-   - Queue overflow without injected faults ⇒ file a bug against the SDK whose
-     policy diverged from Torii.
-   - Resume errors ⇒ attach `connect.queue_depth` + `connect.resume_latency_ms`
-     snapshots to the incident report.
-   - Governance mismatches (tokens reused, TTL exceeded) ⇒ raise with the SDK
-     Program Lead and annotate `roadmap.md` during the next revision.
+   Swift-тик һынау өсөн йүгерә, шылтыратыу шул уҡ ос нөктәһе аша Rust/CLI ярҙамсыһы.
+2. **Пурж журналдары.** Теләһә ниндәй һаҡланған сират журналдарын юйырға
+   (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB магазиндарында һ.б.) шулай
+   сираттағы йүгерә таҙа башлана. Яҙылған файл хеш юйыу алдынан, әгәр һеҙгә кәрәк
+   отладка реплей мәсьәләһе.
+3. **Файл ваҡиға иҫкәрмәләр.** Йүгереүҙе йомғаҡлау:
+   - `docs/source/status/swift_weekly_digest.md`X (дельтас блогы), 1990 й.
+   - `docs/source/sdk/swift/connect_risk_tracker.md` (CR-200-се асыҡ йәки түбәнәйтелә.
+     бер тапҡыр телеметрия урынында),
+   - JS SDK demperglog йәки рецепт, әгәр яңы тәртип раҫланды.
+4. **Уңышһыҙлыҡтарҙы көсәйтергә:**
+   - Сират ташыу инъекцияһыҙ инъекцияһыҙ ⇒ ҡаршы хаталар ҡаршы SDK кем
+     сәйәсәте Torii-тан айырылған.
+   - Резюме хаталары ⇒ `connect.queue_depth` + `connect.resume_latency_ms` беркетегеҙ
+     снимоктар инцидент отчеты.
+   - Идара итеү тап килмәүе (токендар ҡабаттан ҡулланылған, TTL артып китте) ⇒ күтәреү менән SDK .
+     Программа етәксеһе һәм аннотация `roadmap.md` сираттағы ҡабатлау ваҡытында.
 
-## 6. Evidence Checklist
+## 6. Дәлилдәр тикшерелгән исемлек| Артефакт | Урыны |
+|---------|-----------|
+| SID/deeplink/токендар JSON | `docs/source/sdk/swift/readiness/archive/<date>/connect/session.json` |
+| Приборҙар таҡтаһы экспорты (`connect.queue_depth` һ.б.) | `.../metrics/` подпапкаһы |
+| PagerDuty / ваҡиға идентификаторҙары | `.../notes.md` |
+| Таҙартыу раҫлау (Torii юйыу, журнал салфетка) | `.../cleanup.log` |
 
-| Artefact | Location |
-|----------|----------|
-| SID/deeplink/tokens JSON | `docs/source/sdk/swift/readiness/archive/<date>/connect/session.json` |
-| Dashboard exports (`connect.queue_depth`, etc.) | `.../metrics/` subfolder |
-| PagerDuty / incident IDs | `.../notes.md` |
-| Cleanup confirmation (Torii delete, journal wipe) | `.../cleanup.log` |
-
-Completing this checklist satisfies the “docs/runbooks updated” exit criterion
-for IOS7/JS4 and gives governance reviewers a deterministic trail for every
-Connect preview session.
+Был тикшерелгән исемлекте тамамлау ҡәнәғәтләндерә “доктар/йүгереп яңыртылған” сығыу критерийы .
+IOS7/JS4 өсөн һәм идара итеү рецензенттарына һәр өсөн детерминистик эҙ бирә
+Ҡушымта алдан ҡарау сессияһы.

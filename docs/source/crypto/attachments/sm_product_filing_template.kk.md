@@ -7,94 +7,92 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2025-12-29T18:16:35.938246+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Өнімді беру (开发备案) Үлгі
+% Hyperledger Iroha Сәйкестік жөніндегі жұмыс тобы
 % 2026-05-06
 
-# Instructions
+# Нұсқаулар
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+Провинцияға *өнім әзірлеу құжатын* жіберген кезде осы үлгіні пайдаланыңыз
+немесе тарату алдында муниципалды Мемлекеттік криптография басқармасының (SCA) кеңсесі
+SM қосылған екілік файлдар немесе материктік Қытайдағы бастапқы артефактілер. ауыстырыңыз
+жобаға қатысты мәліметтері бар толтырғыштар, егер толтырылған пішінді PDF ретінде экспорттаңыз
+қажет және тексеру парағында сілтеме жасалған артефактілерді тіркеңіз.
 
-# 1. Applicant & Product Summary
+№ 1. Өтініш беруші және өнім туралы қысқаша мәлімет
 
-| Field | Value |
+| Өріс | Мән |
 |-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Ұйым атауы | {{ ҰЙЫМДАСТЫРУ }} |
+| Тіркелген мекенжайы | {{ АДРЕС }} |
+| Заңды өкіл | {{ ҚҰҚЫҚТЫҚ_РЕП }} |
+| Негізгі контакт (аты/атауы/электрондық поштасы/телефоны) | {{ БАЙЛАНЫС }} |
+| Өнім атауы | Hyperledger Iroha {{ RELEASE_NAME }} |
+| Өнім нұсқасы / құрастыру идентификаторы | {{ НҰСҚА }} |
+| Құжат түрі | Өнім әзірлеу (开发备案) |
+| Өтініш беру күні | {{ ЖЖЖЖ-АА-КК }} |
 
-# 2. Cryptography Usage Overview
+№ 2. Криптографияны пайдалануды шолу
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
+- Қолдау көрсетілетін алгоритмдер: `SM2`, `SM3`, `SM4` (төменде пайдалану матрицасын беріңіз).
+- Қолдану контексті:
+  | Алгоритм | Құрамдас | Мақсаты | Детерминистік қорғау шаралары |
   |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+  | SM2 | {{ КОМПОНЕНТ }} | {{ МАҚСАТ }} | RFC6979 + канондық r∥ орындау |
+  | SM3 | {{ КОМПОНЕНТ }} | {{ МАҚСАТ }} | `Sm3Digest` | арқылы детерминистік хэштеу
+  | SM4 | {{ КОМПОНЕНТ }} | {{ МАҚСАТ }} | Міндетті емес саясаты бар AEAD (GCM/CCM).
+- Құрастырудағы SM емес алгоритмдер: {{ OTHER_ALGORITHMS }} (толықтығы үшін).
 
-# 3. Development & Supply Chain Controls
+№ 3. Даму және жеткізу тізбегін басқару
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- Бастапқы код репозиторийі: {{ REPOSITORY_URL }}
+- Детерминирленген құрастыру нұсқаулары:
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (қажетінше реттеңіз).
+  3. `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`) арқылы жасалған SBOM.
+- Үздіксіз интеграция ортасының қысқаша мазмұны:
+  | Элемент | Мән |
   |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  | Құрастыру ОС / нұсқасы | {{ BUILD_OS }} |
+  | Компилятор құралдар тізбегі | {{ ҚҰРАЛДЫҚ ЖОЛ }} |
+  | OpenSSL / Tongsuo көзі | {{ OPENSSL_SOURCE }} |
+  | Қайта шығаруды бақылау сомасы | {{ БАҚЫЛАУ СОМДАСЫ }} |
 
-# 4. Key Management & Security
+№ 4. Кілттерді басқару және қауіпсіздік
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
+- Әдепкі бойынша қосылған SM мүмкіндіктері: {{ ӘДІСТЕМЕЛІКТЕР }} (мысалы, тек растау үшін).
+- Қол қою үшін қажет конфигурация жалаулары: {{ CONFIG_FLAGS }}.
+- Қамқоршылықтың негізгі тәсілі:
+  | Элемент | Мәліметтер |
   |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
+  | Кілттерді генерациялау құралы | {{ KEY_TOOL }} |
+  | Сақтау ортасы | {{ STORAGE_ORTA }} |
+  | Сақтық көшірме саясаты | {{ САҚТЫҚ_САЯСАТЫ }} |
+  | Қол жеткізуді басқару | {{ ACCESS_CONTROLS }} |
+- Оқиғаға жауап беру контактілері (24/7):
+  | Рөл | Аты | Телефон | Электрондық пошта |
   |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+  | Крипто жетекші | {{ АТЫ }} | {{ ТЕЛЕФОН }} | {{ ПОЧТА }} |
+  | Платформа операциялары | {{ АТЫ }} | {{ ТЕЛЕФОН }} | {{ ПОЧТА }} |
+  | Құқықтық байланыс | {{ АТЫ }} | {{ ТЕЛЕФОН }} | {{ ПОЧТА }} |
 
-# 5. Attachments Checklist
+№ 5. Қосымшаларды тексеру тізімі- [ ] Бастапқы кодтың суреті (`{{ SOURCE_ARCHIVE }}`) және хэш.
+- [ ] Детерминистік құрастыру сценарийі / қайталану туралы ескертпелер.
+- [ ] SBOM (`{{ SBOM_PATH }}`) және тәуелділік манифесті (`Cargo.lock` саусақ ізі).
+- [ ] Детерминистік сынақ транскрипттері (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
+- [ ] SM бақылау мүмкіндігін көрсететін телеметрия бақылау тақтасының экспорты.
+- [ ] Экспортты бақылау мәлімдемесі (бөлек үлгіні қараңыз).
+- [ ] Аудит есептері немесе үшінші тарап бағалаулары (егер аяқталған болса).
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+№ 6. Өтініш берушінің декларациясы
 
-# 6. Applicant Declaration
+> Мен жоғарыда көрсетілген ақпараттың нақты екенін, ашылғанын растаймын
+> криптографиялық функционалдық ҚХР қолданыстағы заңдары мен ережелеріне сәйкес келеді,
+> және ұйым ұсынылған артефактілерді кем дегенде сақтайды
+> үш жыл.
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- қолы (заңды өкілі): ________________________
+- Күні: ______________________

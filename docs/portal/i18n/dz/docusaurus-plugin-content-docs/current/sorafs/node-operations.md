@@ -8,62 +8,39 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Node Operations Runbook
 sidebar_label: Node Operations Runbook
 description: Validate the embedded `sorafs-node` deployment inside Torii.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Keep both versions in sync until the Sphinx set is retired.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+མེ་ལོང་ I18NI0000018X. ཐོན་རིམ་གཉིས་ཆ་ར་ སི་ཕིནཀསི་ཆ་ཚན་འདི་ དགོངས་ཞུ་མ་འབད་ཚུན་ཚོད་ མཉམ་འབྱུང་སྦེ་བཞག།
 :::
 
-## Overview
+## སྤྱི་མཐོང་།
 
-This runbook walks operators through validating an embedded `sorafs-node` deployment inside Torii. Each section maps directly to the SF-3 deliverables: pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
+རན་དེབ་འདི་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ `sorafs-node` བཀྲམ་སྤེལ་ཅིག་ བདེན་དཔྱད་འབད་དེ་ I18NT000000001X ནང་འཁོད་ལུ་ བདེན་དཔྱད་འབདཝ་ཨིན། དབྱེ་ཚན་རེ་རེ་གིས་ ཨེསི་ཨེཕ་-༣ ལུ་ ཐད་ཀར་དུ་ སབ་ཁྲ་བཟོཝ་ཨིན།
 
-## 1. Prerequisites
+## 1. སྔོན་འགྲོ།
 
-- Enable the storage worker in `torii.sorafs.storage`:
+- `torii.sorafs.storage` ནང་ གསོག་འཇོག་ལས་བྱེད་པ་འདི་ལྕོགས་ཅན་བཟོ།
 
-  ```toml
-  [torii.sorafs.storage]
-  enabled = true
-  data_dir = "./storage/sorafs"
-  max_capacity_bytes = 21474836480    # 20 GiB
-  max_parallel_fetches = 32
-  max_pins = 1000
-  por_sample_interval_secs = 600
+  I18NF0000008X
 
-  [torii.sorafs.storage.metering_smoothing]
-  gib_hours_enabled = true
-  gib_hours_alpha = 0.25
-  por_success_enabled = true
-  por_success_alpha = 0.25
-  ```
+- I18NT000000002X བྱ་རིམ་འདི་ `data_dir` ལུ་ལྷག་ནི་/འབྲི་ནི་གི་འཛུལ་སྤྱོད་འབད་ཡོདཔ་ངེས་གཏན་བཟོ།
+- གསལ་བསྒྲགས་ཅིག་ཐོ་བཀོད་འབད་ཚར་བའི་ཤུལ་ལས་ I18NI000000022X བརྒྱུད་དེ་ མཐུད་མཚམས་ཁྱབ་བསྒྲགས་འདི་ ངེས་འཛིན་འབདཝ་ཨིན།
+- འཇམ་ཐང་ཐང་བཟོ་ནི་འདི་ ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ ཌེཤ་བོརཌ་ཚུ་གིས་ གིབི་·ཆུ་ཚོད་/པོ་ཨར་ ཀའུན་ཊར་གཉིས་ཆ་ར་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-- Ensure the Torii process has read/write access to `data_dir`.
-- Confirm the node advertises the expected capacity via `GET /v1/sorafs/capacity/state` once a declaration is recorded.
-- When smoothing is enabled, dashboards expose both the raw and smoothed GiB·hour/PoR counters to highlight jitter-free trends alongside spot values.
+### CLI སྐམ་རྒྱུག་ (གདམ་ཁ།)
 
-### CLI Dry Run (Optional)
+ཨེཆ་ཊི་ཊི་པི་མཇུག་བསྡུའི་ས་སྒོ་ཚུ་ ཕྱིར་བཏོན་མ་འབད་བའི་ཧེ་མ་ ཁྱོད་ཀྱིས་ ཀླད་ཀོར་གྱི་རྒྱབ་གཞི་འདི་ བཱན་ཌི་འབད་ཡོད་པའི་སི་ཨེལ་ཨའི་ སི་ཨེལ་ཨའི་ དང་གཅིག་ཁར་ཞིབ་དཔྱད་འབད་ཚུགས།
 
-Before exposing HTTP endpoints you can sanity-check the storage backend with the bundled CLI.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+I18NF0000009X
 
-```bash
-cargo run -p sorafs_node --bin sorafs-node ingest \
-  --data-dir ./storage/sorafs \
-  --manifest ./fixtures/manifest.to \
-  --payload ./fixtures/payload.bin
+བརྡ་བཀོད་ཚུ་གིས་ དཔར་བསྐྲུན་ Norito JSON བཅུད་བསྡུས་དང་ ཅངཀ་-གསལ་སྡུད་ཡང་ན་ བཞུ་ཁུ་མ་མཐུནམ་ཚུ་ ངོས་ལེན་མ་འབད་བར་ Torii གློག་ཐག་ལས་ གདོང་ཁར་ CI དུ་པའི་ཞིབ་དཔྱད་ཀྱི་དོན་ལུ་ ཕན་ཐོགས་ཅན་བཟོཝ་ཨིན།
 
-cargo run -p sorafs_node --bin sorafs-node export \
-  --data-dir ./storage/sorafs \
-  --manifest-id <hex> \
-  --manifest-out ./out/manifest.to \
-  --payload-out ./out/payload.bin
-```
+### POR བདེན་ཁུངས་ཤེས་བྱ།
 
-The commands print Norito JSON summaries and refuse chunk-profile or digest mismatches, making them useful for CI smoke checks ahead of Torii wiring.【crates/sorafs_node/tests/cli.rs#L1】
-
-### PoR Proof Rehearsal
-
-Operators can now replay governance-issued PoR artefacts locally before uploading them to Torii. The CLI reuses the same `sorafs-node` ingestion path, so local runs surface the exact validation errors that the HTTP API would return.
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ད་རེས་ Torii ལུ་ མ་བཙུགས་པའི་ཧེ་མ་ ས་གནས་ནང་ གཞུང་སྐྱོང་གིས་ བསྐྱར་རྩེད་འབད་མི་ PoR ཅ་ཆས་ཚུ་ ལོག་སྤྲོད་ཚུགས། སི་ཨེལ་ཨའི་གིས་ `sorafs-node` གི་ ཟས་སྤྱོད་འགྲུལ་ལམ་གཅིགཔོ་འདི་ ལོག་ལག་ལེན་འཐབ་དོ་ཡོདཔ་ལས་ ས་གནས་ཀྱི་འདི་གིས་ HTTP API འདི་ལོག་འོང་ནི་གི་ བདེན་དཔྱད་ཀྱི་འཛོལ་བ་ངོ་མ་ཚུ་ ཁ་ཐོག་ལུ་གཡོག་བཀོལཝ་ཨིན།
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest por \
@@ -73,21 +50,21 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
   --verdict ./fixtures/sorafs_manifest/por/verdict_v1.to
 ```
 
-The command emits a JSON summary (manifest digest, provider id, proof digest, sample count, optional verdict outcome). Provide `--manifest-id=<hex>` to ensure the stored manifest matches the challenge digest, and `--json-out=<path>` when you want to archive the summary with the original artefacts for audit evidence. Including `--verdict` lets you rehearse the entire challenge → proof → verdict loop offline before calling the HTTP API.
+བརྡ་བཀོད་འདི་གིས་ JSON བཅུད་བསྡུས་ (མགུ་རྙོག་ཅན་ བཞུ་ཤོས་དང་ བྱིན་མི་ བདེན་ཁུངས་ བཞུ་བཅོས་ དཔེ་ཚད་གྱངས་ཁ་ གདམ་ཁ་ཅན་གྱི་ཐག་བཅད་གྲུབ་འབྲས་) ཅིག་བཏོནམ་ཨིན། གསོག་འཇོག་འབད་ཡོད་པའི་གསལ་སྟོན་འདི་ གདོང་ལེན་གྱི་ བཞུ་ཁུ་དང་མཐུན་སྒྲིག་འབད་ནི་གི་དོན་ལུ་ I18NI0000000024X དང་ ཁྱོད་ཀྱིས་ རྩིས་ཞིབ་སྒྲུབ་བྱེད་ཀྱི་ དངོས་གཞི་ངོ་མ་ཚུ་དང་གཅིག་ཁར་ བཅུད་བསྡུས་འདི་ གཏན་མཛོད་འབད་དགོ་མནོཝ་ད་ `--json-out=<path>` དང་མཐུན་སྒྲིག་འབད་དགོ། I18NI0000000026X གིས་ ཨེཆ་ཊི་ཊི་པི་ཨེ་པི་ཨའི་ ཁ་པར་མ་གཏང་པའི་ཧེ་མ་ ཁྱོད་ལུ་ གདོང་ལེན་ཆ་མཉམ་རང་ བསྐྱར་སྦྱོང་འབད་བཅུགཔ་ཨིན།
 
-Once Torii is live you can retrieve the same artefacts via HTTP:
+ཚར་གཅིག་ Torii འདི་ ཐད་རི་བ་རི་ཨིན་ ཁྱོད་ཀྱིས་ HTTP བརྒྱུད་དེ་ ཅ་རྙིང་ཚུ་ ལོག་ཐོབ་ཚུགས།
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+མཐའ་མའི་གཉིས་ཆ་ར་ བཙུགས་ཡོད་པའི་ གསོག་འཇོག་འབད་མི་ལཱ་འབད་མི་ཚུ་གིས་ ཞབས་ཏོག་བྱིན་དོ་ཡོདཔ་ལས་ CLI དུ་པའི་བརྟག་དཔྱད་དང་ འཛུལ་སྒོ་གི་འཚོལ་ཞིབ་ཚུ་ མཉམ་མཐུན་སྦེ་སྡོདཔ་ཨིན།
 
-## 2. Pin → Fetch Round Trip
+## 2. པིན → ཕེཆ་སྐོར་རིམ་ཊིརིཔ་
 
-1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. Submit the manifest with base64 encoding:
+༡ གསལ་སྟོན་ཅིག་བཟོ་བསྐྲུན་འབད་ + པེ་ལོཌ་བཱན་ཌལ་ (དཔེར་ན་ I18NI0000027X དང་གཅིག་ཁར་)།
+2. གཞི་རྟེན་༦༤ ཨིན་ཀོ་ཌིང་དང་གཅིག་ཁར་ གསལ་སྟོན་འདི་ཕུལ་ནི།
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -95,8 +72,8 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      -d @pin_request.json
    ```
 
-   The request JSON must contain `manifest_b64` and `payload_b64`. A successful response returns `manifest_id_hex` and the payload digest.
-3. Fetch the pinned data:
+   ཞུ་བ་ནང་ JSON ནང་ `manifest_b64` དང་ `payload_b64` ཡོད། མཐར་འཁྱོལ་ཅན་གྱི་ལན་འདེབས་འདི་གིས་ I18NI000000030X དང་ འབབ་ཁུངས་འདི་གིས་ བཞུ་བཅུགཔ་ཨིན།
+3. པིན་འབད་ཡོད་པའི་གནས་སྡུད་འདི་ལེན།
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -108,44 +85,44 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-   Base64-decode the `data_b64` field and verify it matches the original bytes.
+   Base64-decode འདི་ I18NI000000031X ས་སྒོ་དང་ དེ་ལས་ བཱའིཊི་ངོ་མ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
-## 3. Restart Recovery Drill
+## 3. སླར་གསོ་འབད་ནི།
 
-1. Pin at least one manifest as above.
-2. Restart the Torii process (or the entire node).
-3. Re-submit the fetch request. The payload must still be retrievable and the returned digest must match the pre-restart value.
-4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the persisted manifests after the reboot.
+༡ གོང་དུ་བཤད་པ་ལྟར་ཉུང་མཐར་མངོན་པའི་མངོན་རྟགས་གཅིག་པིན།
+2. Torii ལས་སྦྱོར་ (ཡང་ན་ མཐུད་མཚམས་ཧྲིལ་བུ་) འདི་འགོ་བཙུགས།
+༣ ཕེཆ་ཞུ་བ་འདི་ལོག་སྟེ་བཙུགས་དགོ། པེ་ལོཌ་འདི་ ད་ལྟོ་ཡང་ ལོག་ཐོབ་ཚུགསཔ་ཨིནམ་ལས་ སླར་ལོག་འབད་མི་ ཟས་བཅུད་འདི་གིས་ སྔོན་འགྲོའི་ལོག་འགོ་བཙུགས་གནས་གོང་དང་མཐུན་དགོཔ་ཨིན།
+4. `GET /v1/sorafs/storage/state` གིས་ I18NI000000033X འདི་ ལོག་འགོ་བཙུགས་པའི་ཤུལ་ལས་ གནས་ཏེ་ཡོད་པའི་ མངོན་གསལ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-## 4. Quota Rejection Test
+## 4. ཆོས་ཚན་བཀག་ཆ་བརྟག་དཔྱད།
 
-1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
-2. Pin one manifest; the request should succeed.
-3. Attempt to pin a second manifest of similar size. Torii must reject the request with HTTP `400` and an error message containing `storage capacity exceeded`.
-4. Restore the normal capacity limit when finished.
+1. གནས་སྐབས་ཀྱི་ `torii.sorafs.storage.max_capacity_bytes` གནས་གོང་ཆུང་ཆུང་ལུ་མར་ཕབ་འབདཝ་ཨིན་ (དཔེར་ན་ གསལ་སྟོན་རྐྱང་པའི་ཚད་གཞི།)།
+2. Pin གཅིག་མངོན་སུམ་དང་། ཞུ་བ་འདི་ མཐར་འཁྱོལ་དགོ།
+༣ ཚད་གཞི་འདྲ་མཚུངས་ཀྱི་ གསལ་སྟོན་གཉིས་པ་ཅིག་ བཏབ་ནིའི་དཔའ་བཅམ། I18NT000000007X གིས་ ཨེཆ་ཊི་ཊི་པི་ I18NI000000035X དང་ `storage capacity exceeded` ཡོད་པའི་འཛོལ་བའི་འཕྲིན་དོན་ཅིག་དང་གཅིག་ཁར་ ཞུ་བ་འདི་ ངོས་ལེན་མ་འབད་བར་བཞག་དགོ།
+༤ མཇུག་བསྡུ་བའི་སྐབས་ སྤྱིར་བཏང་ལྕོགས་གྲུབ་ཚད་གཞི་འདི་ སླར་སྒྲིག་འབད།
 
-## 5. Retention / GC Inspection (Read-only)
+## 5. བདག་འཛིན་/ GC ཞིབ་དཔྱོད་པ།
 
-1. Run a local retention scan against the storage directory:
+1. གསོག་འཇོག་སྣོད་ཐོ་ལུ་ ཉེ་གནས་བདག་འཛིན་ པར་ལེན་འབད་ནི་ གཡོག་བཀོལ།
 
    ```bash
    iroha app sorafs gc inspect --data-dir ./storage/sorafs
    ```
 
-2. Inspect only expired manifests (dry-run only, no deletions):
+2. དུས་ཡོལ་འབད་ཡོད་པའི་མངོན་རྟགས་ཚུ་རྐྱངམ་ཅིག་བརྟག་དཔྱད་འབད་དགོ།
 
    ```bash
    iroha app sorafs gc dry-run --data-dir ./storage/sorafs
    ```
 
-3. Use `--now` or `--grace-secs` to pin the evaluation window when comparing reports across hosts or incidents.
+༣༽ ཧོསིཊི་ཡང་ན་ བྱུང་རྐྱེན་ཚུ་གི་བར་ན་ སྙན་ཞུ་ཚུ་ག་བསྡུར་འབད་བའི་སྐབས་ བརྟག་ཞིབ་སྒོ་སྒྲིག་འདི་ པིན་འབད་ནི་ལུ་ I18NI000000037X ཡང་ན་ I18NI000000038X ལག་ལེན་འཐབ།
 
-The GC CLI is intentionally read-only. Use it to capture retention deadlines and expired-manifest inventory for audit trails; do not remove data manually in production.
+GC CLI འདི་ ཤེས་བཞིན་དུ་ ལྷག་རྐྱངམ་ཅིག་ཨིན། རྩིས་ཞིབ་ལམ་ལུགས་ཚུ་གི་དོན་ལུ་ བཀག་འཛིན་གྱི་དུས་ཚོད་དང་ དུས་ཚོད་རྫོགས་པའི་ ཐོ་གཞུང་ཚུ་ བཟུང་ནི་གི་དོན་ལུ་ ལག་ལེན་འཐབ། བཟོ་བསྐྲུན་ནང་ གནད་སྡུད་ལག་ཐོག་ལས་ བཏོན་གཏང་མི་བཏུབ།
 
-## 6. PoR Sampling Probe
+## 6. POR དཔེ་ཚད་ཞིབ་འཇུག།
 
-1. Pin a manifest.
-2. Request a PoR sample:
+1. པིན་མངོན་དུ་བྱེད་པ།
+2. པོ་ཨར་དཔེ་ཚད་ཅིག་ཞུ་བ་འབད།
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -157,21 +134,21 @@ The GC CLI is intentionally read-only. Use it to capture retention deadlines and
      }'
    ```
 
-3. Verify the response contains `samples` with the requested count and that each proof validates against the stored manifest root.
+༣ ལན་འདི་བདེན་བཤད་འབད་ ཞུ་བ་འབད་ཡོད་པའི་གྱངས་ཁ་དང་གཅིག་ཁར་ `samples` དང་ བདེན་ཁུངས་རེ་རེ་གིས་ གསོག་འཇོག་འབད་ཡོད་པའི་གསལ་སྟོན་རྩ་བ་ལུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
 
-## 7. Automation Hooks
+## 7. རང་འགུལ།
 
-- CI / smoke tests can reuse the targeted checks added in:
+- CI / ཐ་མག་བརྟག་དཔྱད་ཚུ་གིས་ དམིགས་གཏད་ཅན་གྱི་ཞིབ་དཔྱད་ཚུ་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཚུགས།
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
   ```
 
-  which covers `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, and `por_sampling_returns_verified_proofs`.
-- Dashboards should track:
-  - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
-  - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
-  - Settlement publish attempts via `sorafs_node_deal_publish_total{result=success|failure}`
+  དེ་ཡང་ `pin_fetch_roundtrip`, I18NI000000041X, I18NI000000042X, དང་ `por_sampling_returns_verified_proofs` ཚུ་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+- ཌེཤ་བོརཌི་ཚུ་གིས་ བརྟག་ཞིབ་འབད་དགོ།
+  - I18NI0000044X
+  - `torii_sorafs_storage_pin_queue_depth` དང་ I18NI0000046X
+  - པོ་ཨར་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་ གྱངས་ཁ་ཚུ་ I18NI000000047X བརྒྱུད་དེ་ ཐོན་ཡོདཔ།
+  - གཞིས་ཆགས་དཔར་བསྐྲུན་འབད་ནི་ དཔའ་བཅམ་མི་ཚུ་ I18NI0000048X བརྒྱུད་དེ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
 
-Following these drills ensures the embedded storage worker can ingest data, survive restarts, respect configured quotas, and generate deterministic PoR proofs before the node advertises capacity to the wider network.
+འ་ནི་སྦྱོང་བརྡར་ཚུ་གི་ཤུལ་ལས་ བཙུགས་ཡོད་པའི་ གསོག་འཇོག་འབད་མི་ལཱ་འབད་མི་ཚུ་གིས་ གནས་སྡུད་ཚུ་ བཙུགས་ནི་དང་ ལོག་འགོ་བཙུགས་ནི་ དེ་ལས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ ཚད་རིམ་ཚུ་ལུ་ གུས་ཞབས་འབད་ནི་ དེ་ལས་ མཐུད་མཚམས་ལུ་ ལྕོགས་གྲུབ་ཁྱབ་བསྒྲགས་མ་འབད་བའི་ཧེ་མ་ གཏན་འབེབས་བཟོ་མི་ པོ་ཨར་ བདེན་ཁུངས་ཚུ་ བཟོ་བཏོན་འབདཝ་ཨིན།

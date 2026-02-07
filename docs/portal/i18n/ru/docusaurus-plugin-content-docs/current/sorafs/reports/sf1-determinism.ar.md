@@ -4,47 +4,49 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf1-determinism.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: التشغيل التجريبي للحتمية SF1 في SoraFS
-summary: قائمة تحقق و digests متوقعة للتحقق من ملف chunker القياسي `sorafs.sf1@1.0.0`.
+Название: التشغيل التجريبي للحتمية SF1 на SoraFS
+Краткое описание: Созданы и дайджесты, созданные для фрагмента `sorafs.sf1@1.0.0`.
 ---
 
-# التشغيل التجريبي للحتمية SF1 في SoraFS
+# التشغيل التجريبي للحتمية SF1 для SoraFS
 
-يلتقط هذا التقرير التشغيل التجريبي الأساسي لملف chunker القياسي
-`sorafs.sf1@1.0.0`. يجب على Tooling WG إعادة تشغيل قائمة التحقق أدناه عند
-التحقق من تحديث fixtures أو خطوط استهلاك جديدة. سجل نتيجة كل أمر في الجدول
-للحفاظ على أثر تدقيق قابل للمراجعة.
+Он хочет, чтобы в его жизни была история с Люком Чанкером.
+`sorafs.sf1@1.0.0`. В рабочей группе Tooling WG вы можете найти материалы по строительным инструментам.
+Матчи были проведены в матче с "Спорт-Сити" и "Спорт-Сити". Сэйл Найт в Сан-Франциско
+Он сказал, что хочет сделать это.
 
 ## قائمة التحقق
 
-| الخطوة | الأمر | النتيجة المتوقعة | ملاحظات |
+| خطوة | أمر | Новости | ملاحظات |
 |------|---------|------------------|-------|
-| 1 | `cargo test -p sorafs_chunker` | تنجح جميع الاختبارات؛ ينجح اختبار parity `vectors`. | يؤكد أن fixtures القياسية تُبنى وتطابق تنفيذ Rust. |
-| 2 | `ci/check_sorafs_fixtures.sh` | يخرج السكربت بـ 0؛ ويبلغ digests للـ manifest أدناه. | يتحقق من أن fixtures تُعاد توليدها بشكل نظيف وأن التواقيع تبقى مرفقة. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | الإدخال الخاص بـ `sorafs.sf1@1.0.0` يطابق واصف registry (`profile_id=1`). | يضمن بقاء metadata الخاصة بالregistry متزامنة. |
-| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | تنجح إعادة التوليد دون `--allow-unsigned`; ملفات manifest والتوقيع لا تتغير. | يقدم دليلا على الحتمية لحدود chunk و manifests. |
-| 5 | `node scripts/check_sf1_vectors.mjs` | يبلغ عدم وجود diff بين fixtures TypeScript و Rust JSON. | helper اختياري؛ تأكد من parity عبر runtimes (السكربت يديره Tooling WG). |
+| 1 | `cargo test -p sorafs_chunker` | تنجح جميع الاختبارات؛ Проверьте четность `vectors`. | Он был назначен на матчи команды "Спорт-Сити" и "Ржавчина". |
+| 2 | `ci/check_sorafs_fixtures.sh` | Нападение на 0; Он переваривает манифест أدناه. | На днях были запланированы матчи с Торонто Сан-Франциско и Сан-Франциско Стивом. |
+| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | Откройте реестр `sorafs.sf1@1.0.0` и откройте реестр (`profile_id=1`). | Сохраните метаданные в реестре. |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | تنجح إعادة التوليد دون `--allow-unsigned`; В манифесте было объявлено о том, что это не так. | Для этого требуется фрагмент и манифесты. |
+| 5 | `node scripts/check_sf1_vectors.mjs` | Здесь собраны различия между приспособлениями TypeScript и Rust JSON. | помощник Обеспечивает контроль четности во время выполнения (англ. Tooling WG). |
 
-## digests المتوقعة
+## дайджесты
 
-- Chunk digest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
+- Дайджест фрагмента (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
 - `manifest_blake3.json`: `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`
 - `sf1_profile_v1.json`: `23a14fe4bf06a44bc2cc84ad0f287659f62a3ff99e4147e9e7730988d9eb01be`
-- `sf1_profile_v1.ts`: `2bc35d45a9a1e539c4b0e3571817dc57d5a938e954882537379d7abba7b751a1`
+- И18НИ00000018Х: И18НИ00000019Х
 - `sf1_profile_v1.go`: `dcca46978768cca5fdbc5174a35036d5e168cc5e584bba33056b76f316590666`
 - `sf1_profile_v1.rs`: `181f0595284dcbb862db997d1c18564832c157f9e1eaf804f0bf88c846f73d65`
 
 ## سجل الاعتماد
 
-| التاريخ | Engineer | نتيجة قائمة التحقق | ملاحظات |
+| تاريخ | Инженер | Справочная информация | ملاحظات |
 |------|----------|---------------------|-------|
-| 2026-02-12 | Tooling (LLM) | ❌ Failed | الخطوة 1: يفشل `cargo test -p sorafs_chunker` في مجموعة `vectors` لأن fixtures ما زالت تنشر handle القديم `sorafs.sf1@1.0.0` وتفتقد profile aliases/digests (`fixtures/sorafs_chunker/sf1_profile_v1.*`). الخطوة 2: يتوقف `ci/check_sorafs_fixtures.sh` — الملف `manifest_signatures.json` مفقود في حالة repo (محذوف في working tree). الخطوة 4: لا يستطيع `export_vectors` التحقق من التواقيع بينما ملف manifest مفقود. التوصية: استعادة fixtures الموقعة (أو توفير مفتاح council) وإعادة توليد bindings حتى يتم تضمين handle القياسي + مصفوفة aliases كما تتطلب الاختبارات. |
-| 2026-02-12 | Tooling (LLM) | ✅ Passed | تمت إعادة توليد fixtures عبر `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f`، منتجة handle قياسي + alias lists و manifest digest جديد `2084f98010fd59b630fede19fa85d448e066694f77fa41a03c62b867eb5a9e55`. تم التحقق باستخدام `cargo test -p sorafs_chunker` وتشغيل نظيف لـ `ci/check_sorafs_fixtures.sh` (fixtures تم تجهيزها للتحقق). الخطوة 5 معلقة حتى وصول helper parity الخاص بـ Node. |
-| 2026-02-20 | Storage Tooling CI | ✅ Passed | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) تم جلبه عبر `ci/check_sorafs_fixtures.sh`; أعاد السكربت توليد fixtures، وأكد manifest digest `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`, وأعاد تشغيل harness Rust (خطوات Go/Node تنفذ عند توفرها) دون فروقات. |
+| 12.02.2026 | Оснастка (LLM) | ❌ Не удалось | Пример 1: `cargo test -p sorafs_chunker` в комплекте с `vectors` светильниками и ручкой для крепления к корпусу. `sorafs.sf1@1.0.0` — псевдонимы/дайджесты профилей (`fixtures/sorafs_chunker/sf1_profile_v1.*`). Код 2: `ci/check_sorafs_fixtures.sh` — `manifest_signatures.json` для репозитория (в рабочем дереве). Шаг 4: Запустится `export_vectors`, который будет создан в результате манифеста. Дополнительно: крепежные приспособления и крепления (Американский совет) и крепления для креплений. Вы можете обрабатывать псевдонимы القياسي + مصفوفة, а также использовать псевдонимы الاختبارات. |
+| 12.02.2026 | Оснастка (LLM) | ✅ Пройдено | Доступны фикстуры `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f`, дескриптор дескриптора + списки псевдонимов и дайджест манифеста `2084f98010fd59b630fede19fa85d448e066694f77fa41a03c62b867eb5a9e55`. Подключен к `cargo test -p sorafs_chunker` и установлен на `ci/check_sorafs_fixtures.sh` (светильники установлены в салоне). 5 минут назад и вспомогательная четность для Node. |
+| 20 февраля 2026 г. | Инструменты для хранения данных CI | ✅ Пройдено | Конверт парламента (`fixtures/sorafs_chunker/manifest_signatures.json`) تم جلبه عبر `ci/check_sorafs_fixtures.sh`; Для создания фикстур, дайджеста манифеста `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21` и использования протокола Rust (для Go/Node используется Дэнни Уоррен. |
 
-يجب على Tooling WG إضافة صف مؤرخ بعد تشغيل قائمة التحقق. إذا فشلت أي خطوة،
-افتح issue مرتبطا هنا وضمن تفاصيل remediation قبل الموافقة على fixtures أو
-ملفات جديدة.
+В WG Tooling WG вы найдете информацию о том, как работать с инструментами. إذا فشلت أي خطوة،
+Проблема с проблемой مرتبطا هنا وضمن تفاصيل, исправление ситуации, установка светильников أو
+Это не так.

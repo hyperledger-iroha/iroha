@@ -11,20 +11,21 @@ id: developer-cli
 title: SoraFS CLI Cookbook
 sidebar_label: CLI Cookbook
 description: Task-focused walkthrough of the consolidated `sorafs_cli` surface.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-The consolidated `sorafs_cli` surface (provided by the `sorafs_car` crate with
-the `cli` feature enabled) exposes every step required to prepare SoraFS
-artifacts. Use this cookbook to jump directly to common workflows; pair it with
-the manifest pipeline and orchestrator runbooks for operational context.
+Нэгдсэн `sorafs_cli` гадаргуу (`sorafs_car` хайрцгаар хангагдсан.
+`cli` функц идэвхжсэн) SoraFS бэлтгэхэд шаардлагатай алхам бүрийг харуулна.
+олдворууд. Нийтлэг ажлын урсгал руу шууд шилжихийн тулд энэ хоолны номыг ашиглана уу; үүнийг хослуул
+үйл ажиллагааны контекстэд зориулсан манифест дамжуулах хоолой болон найруулагчийн дэвтэр.
 
-## Package payloads
+## Багцын ачаалал
 
-Use `car pack` to produce deterministic CAR archives and chunk plans. The
-command automatically selects the SF-1 chunker unless a handle is provided.
+`car pack`-г ашиглан тодорхойлогдох АВТОМАШИНЫ архив болон багцын төлөвлөгөөг гарга. The
+Хэрэв бариул өгөөгүй бол тушаал нь SF-1 хэсгийг автоматаар сонгоно.
 
 ```bash
 sorafs_cli car pack \
@@ -34,13 +35,13 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs are walked in lexicographic order so checksums stay stable
-  across platforms.
-- The JSON summary includes payload digests, per-chunk metadata, and the root
-  CID recognised by the registry and orchestrator.
+- Анхдагч chunker бариул: `sorafs.sf1@1.0.0`.
+- Лавлах оруулга нь үг зүйн дарааллаар явагддаг тул шалгах нийлбэр тогтвортой байна
+  платформ даяар.
+- JSON-ийн хураангуй нь ачааллын хураангуй мэдээлэл, хэсэг бүрийн мета өгөгдөл болон үндэсийг агуулдаг
+  Бүртгэл болон найруулагчаар хүлээн зөвшөөрөгдсөн CID.
 
-## Construct manifests
+## Манифестуудыг бүтээх
 
 ```bash
 sorafs_cli manifest build \
@@ -52,15 +53,15 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- `--pin-*` options map directly to `PinPolicy` fields in
+- `--pin-*` сонголтуудын зураглал дахь `PinPolicy` талбарт шууд
   `sorafs_manifest::ManifestBuilder`.
-- Provide `--chunk-plan` when you want the CLI to recompute the SHA3 chunk
-  digest before submission; otherwise it reuses the digest embedded in the
-  summary.
-- The JSON output mirrors the Norito payload for straightforward diffs during
-  reviews.
+- CLI-г SHA3 хэсгийг дахин тооцоолохыг хүсвэл `--chunk-plan` оруулна уу.
+  илгээхээс өмнө задлах; эс бөгөөс энэ нь дотор суулгагдсан дижестийг дахин ашигладаг
+  хураангуй.
+- JSON гаралт нь Norito ачааллыг тусгаж, тухайн үеийн шууд ялгааг харуулдаг.
+  тойм.
 
-## Sign manifests without long-lived keys
+## Тэмдгүүд нь урт хугацааны түлхүүргүйгээр илэрдэг
 
 ```bash
 sorafs_cli manifest sign \
@@ -70,13 +71,13 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Accepts inline tokens, environment variables, or file-based sources.
-- Adds provenance metadata (`token_source`, `token_hash_hex`, chunk digest)
-  without persisting the raw JWT unless `--include-token=true`.
-- Works well in CI: combine with GitHub Actions OIDC by setting
+- Дотор токен, орчны хувьсагч эсвэл файлд суурилсан эх сурвалжийг хүлээн авна.
+- Гарал үүслийн мета өгөгдлийг нэмдэг (`token_source`, `token_hash_hex`, хэсэгчилсэн мэдээлэл)
+  `--include-token=true`-ээс бусад тохиолдолд түүхий JWT-г хадгалахгүйгээр.
+- CI-д сайн ажилладаг: GitHub Actions OIDC-тай хослуулан тохируулна уу
   `--identity-token-provider=github-actions`.
 
-## Submit manifests to Torii
+## Манифестуудыг Torii хаягаар илгээнэ үү
 
 ```bash
 sorafs_cli manifest submit \
@@ -91,13 +92,13 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Performs Norito decoding for alias proofs and verifies they match the
-  manifest digest before POSTing to Torii.
-- Recomputes the chunk SHA3 digest from the plan to prevent mismatch attacks.
-- Response summaries capture HTTP status, headers, and registry payloads for
-  later auditing.
+- Хуваарийн нотолгоонд Norito код тайлж, тэдгээртэй тохирч байгаа эсэхийг шалгана.
+  Torii-д нийтлэхээс өмнө манифест дижест.
+- Үл тохирох халдлагаас урьдчилан сэргийлэхийн тулд SHA3-ийн багцыг төлөвлөгөөнөөс дахин тооцоолно.
+- Хариултын хураангуй нь HTTP статус, толгой хэсэг, бүртгэлийн ачааллыг агуулдаг
+  дараа нь аудит хийх.
 
-## Verify CAR contents and proofs
+## Автомашины контент болон нотолгоог баталгаажуулна уу
 
 ```bash
 sorafs_cli proof verify \
@@ -106,11 +107,11 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Rebuilds the PoR tree and compares payload digests with the manifest summary.
-- Captures counts and identifiers required when submitting replication proofs
-  to governance.
+- PoR модыг дахин бүтээж, ачааллын дижестийг манифест хураангуйтай харьцуулна.
+- Хуулбарлах нотолгоог илгээхэд шаардлагатай тоо, танигчийг бичнэ
+  засаглалд.
 
-## Stream proof telemetry
+## Урсгал хамгаалалттай телеметр
 
 ```bash
 sorafs_cli proof stream \
@@ -123,24 +124,24 @@ sorafs_cli proof stream \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
 ```
 
-- Emits NDJSON items for each streamed proof (disable replay with
+- Дамжуулсан нотлох баримт бүрт NDJSON зүйлийг ялгаруулна (давталтаар тоглуулахыг идэвхгүй болгох
   `--emit-events=false`).
-- Aggregates success/failure counts, latency histograms, and sampled failures in
-  the summary JSON so dashboards can plot outcomes without scraping logs.
-- Exits non-zero when the gateway reports failures or local PoR verification
-  (via `--por-root-hex`) rejects proofs. Adjust the thresholds with
-  `--max-failures` and `--max-verification-failures` for rehearsal runs.
-- Supports PoR today; PDP and PoTR reuse the same envelope once SF-13/SF-14
-  land.
-- `--governance-evidence-dir` writes the rendered summary, metadata (timestamp,
-  CLI version, gateway URL, manifest digest), and a copy of the manifest into
-  the supplied directory so governance packets can archive the proof-stream
-  evidence without replaying the run.
+- Амжилт/бүтэлгүйтлийн тоо, хоцрогдлын гистограм, түүвэрлэсэн алдааг нэгтгэдэг.
+  хураангуй JSON нь хяналтын самбар нь бүртгэлийг хусахгүйгээр үр дүнг зурах боломжтой.
+- Гарц нь алдаа гарсан эсвэл орон нутгийн PoR баталгаажуулалтыг мэдээлэх үед тэгээс өөр гарна
+  (`--por-root-hex`-ээр дамжуулан) нотлох баримтыг үгүйсгэдэг. Босгыг тохируулна уу
+  `--max-failures` болон `--max-verification-failures` бэлтгэлийн гүйлтэд зориулагдсан.
+- Өнөөдөр PoR-ийг дэмждэг; PDP болон PoTR нь SF-13/SF-14 нэг удаа ижил дугтуйг дахин ашигладаг
+  газар.
+- `--governance-evidence-dir` үзүүлсэн хураангуй, мета өгөгдлийг (цаг хугацааны тэмдэг,
+  CLI хувилбар, гарцын URL, манифест дижест) болон манифестын хуулбар
+  нийлүүлсэн лавлах, ингэснээр засаглалын пакетууд баталгааны урсгалыг архивлах боломжтой
+  гүйлтийг дахин тоглуулахгүйгээр нотлох баримт.
 
-## Additional references
+## Нэмэлт лавлагаа
 
-- `docs/source/sorafs_cli.md` — exhaustive flag documentation.
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema and Grafana
-  dashboard template.
-- `docs/source/sorafs/manifest_pipeline.md` — deep dive on chunking, manifest
-  composition, and CAR handling.
+- `docs/source/sorafs_cli.md` - тугны бүрэн баримт бичиг.
+- `docs/source/sorafs_proof_streaming.md` — баталгаат телеметрийн схем ба Grafana
+  самбарын загвар.
+- `docs/source/sorafs/manifest_pipeline.md` - хэсэгчилсэн гүнзгий шумбалт, манифест
+  найрлага, АВТО машинтай харьцах.

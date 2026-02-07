@@ -4,48 +4,48 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-profile-authoring.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-profile-authoring
-title: SoraFS chunker profile authoring guide
-sidebar_label: Chunker authoring guide
-description: SoraFS chunker profiles اور fixtures تجویز کرنے کے لیے checklist۔
+identifiant : création de profil chunker
+titre : Guide de création de profils de chunker SoraFS
+sidebar_label : guide de création de Chunker
+description : Profils de chunker SoraFS et luminaires pour la liste de contrôle
 ---
 
 :::note مستند ماخذ
 :::
 
-# SoraFS chunker profile authoring guide
+# SoraFS Guide de création de profil de chunker
 
-یہ گائیڈ وضاحت کرتی ہے کہ SoraFS کے لیے نئے chunker profiles کیسے تجویز اور publish کیے جائیں۔
-یہ architecture RFC (SF-1) اور registry reference (SF-2a) کو
-concrete authoring requirements، validation steps اور proposal templates کے ساتھ مکمل کرتی ہے۔
+Les profils de chunker sont publiés sous SoraFS et sont publiés sous forme de profils chunker.
+Architecture RFC (SF-1) et référence de registre (SF-2a)
+exigences de création concrètes, étapes de validation et modèles de proposition
 Canonical مثال کے لیے دیکھیں
 `docs/source/sorafs/proposals/sorafs_sf1_profile_v1.json`
-اور متعلقہ dry-run log
-`docs/source/sorafs/reports/sf1_determinism.md` میں۔
+اور متعلقہ journal d'exécution à sec
+`docs/source/sorafs/reports/sf1_determinism.md` Français
 
-## Overview
+## Aperçu
 
-ہر profile جو registry میں داخل ہوتی ہے اسے یہ کرنا ہوگا:
+Votre profil et votre registre sont disponibles pour votre compte :
 
-- deterministic CDC parameters اور multihash settings کو architectures کے درمیان یکساں طور پر advertise کرنا؛
-- replayable fixtures (Rust/Go/TS JSON + fuzz corpora + PoR witnesses) فراہم کرنا جنہیں downstream SDKs بغیر bespoke tooling کے verify کر سکیں؛
-- council review سے پہلے deterministic diff suite پاس کرنا۔
+- Paramètres CDC déterministes et paramètres multihash et architectures pour les applications et les publicités
+- appareils rejouables (Rust/Go/TS JSON + fuzz corpora + témoins PoR) pour les SDK en aval et les outils sur mesure pour vérifier et vérifier
+- examen du conseil par suite de diff déterministe پاس کرنا۔
 
-نیچے دی گئی checklist پر عمل کریں تاکہ ایک ایسا proposal تیار ہو جو ان قواعد پر پورا اترے۔
+Voici une liste de contrôle pour votre proposition de proposition.
 
-## Registry charter snapshot
+## Aperçu de la charte du registre
 
-Proposal draft کرنے سے پہلے تصدیق کریں کہ یہ registry charter کے مطابق ہے جسے
-`sorafs_manifest::chunker_registry::ensure_charter_compliance()` enforce کرتا ہے:
+Avant-projet de charte du registre کے مطابق ہے جسے
+`sorafs_manifest::chunker_registry::ensure_charter_compliance()` applique کرتا ہے :- Les identifiants de profil sont des nombres entiers et des espaces monotones ou monotones.
+- alias کسی دوسرے poignée canonique سے collision نہیں کر سکتا اور ایک سے زیادہ بار ظاہر نہیں ہو سکتا۔
+- Alias ​​non vides et espaces et garnitures
 
-- Profile IDs مثبت integers ہوتے ہیں جو بغیر gaps کے monotonic طور پر بڑھتے ہیں۔
-- کوئی alias کسی دوسرے canonical handle سے collide نہیں کر سکتا اور ایک سے زیادہ بار ظاہر نہیں ہو سکتا۔
-- Aliases non-empty ہوں اور whitespace سے trim ہوں۔
-
-Handy CLI helpers:
+Aides CLI pratiques :
 
 ```bash
 # تمام registered descriptors کی JSON listing (ids, handles, aliases, multihash)
@@ -56,56 +56,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --promote-profile=sorafs.sf1@1.0.0 --json-out=-
 ```
 
-یہ commands proposals کو registry charter کے مطابق رکھتے ہیں اور governance discussions کے لیے درکار canonical metadata فراہم کرتے ہیں۔
+یہ propositions de commandes کو charte de registre کے مطابق رکھتے ہیں اور discussions sur la gouvernance کے لیے درکار métadonnées canoniques فراہم کرتے ہیں۔
 
-## Required metadata
-
-| Field | Description | Example (`sorafs.sf1@1.0.0`) |
+## Métadonnées obligatoires| Champ | Descriptif | Exemple (`sorafs.sf1@1.0.0`) |
 |-------|-------------|------------------------------|
-| `namespace` | متعلقہ profiles کے لیے logical grouping۔ | `sorafs` |
-| `name` | human-readable label۔ | `sf1` |
-| `semver` | parameter set کے لیے semantic version string۔ | `1.0.0` |
-| `profile_id` | Monotonic numeric identifier جو profile کے land ہونے پر assign ہوتا ہے۔ اگلا id reserve کریں مگر موجودہ نمبرز reuse نہ کریں۔ | `1` |
-| `profile.min_size` | chunk length کی minimum حد bytes میں۔ | `65536` |
-| `profile.target_size` | chunk length کی target حد bytes میں۔ | `262144` |
-| `profile.max_size` | chunk length کی maximum حد bytes میں۔ | `524288` |
-| `profile.break_mask` | rolling hash کے لیے adaptive mask (hex)۔ | `0x0000ffff` |
-| `profile.polynomial` | gear polynomial constant (hex)۔ | `0x3da3358b4dc173` |
-| `gear_seed` | 64 KiB gear table derive کرنے کے لیے seed۔ | `sorafs-v1-gear` |
-| `chunk_multihash.code` | per-chunk digests کے لیے multihash code۔ | `0x1f` (BLAKE3-256) |
-| `chunk_multihash.digest` | canonical fixtures bundle کا digest۔ | `13fa...c482` |
-| `fixtures_root` | regenerated fixtures رکھنے والی relative directory۔ | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
-| `por_seed` | deterministic PoR sampling کے لیے seed (`splitmix64`)۔ | `0xfeedbeefcafebabe` (example) |
+| `namespace` | متعلقہ profils کے لیے regroupement logique۔ | `sorafs` |
+| `name` | étiquette lisible par l'homme | `sf1` |
+| `semver` | jeu de paramètres کے لیے chaîne de version sémantique۔ | `1.0.0` |
+| `profile_id` | Identificateur numérique monotone جو profil کے terrain ہونے پر attribuer ہوتا ہے۔ اگلا id reserve کریں مگر موجودہ نمبرز réutilisation نہ کریں۔ | `1` |
+| `profile.min_size` | longueur du bloc minimum en octets | `65536` |
+| `profile.target_size` | longueur du morceau کی cible حد octets میں۔ | `262144` |
+| `profile.max_size` | longueur du morceau کی maximum حد octets میں۔ | `524288` |
+| `profile.break_mask` | hachage roulant کے لیے masque adaptatif (hex)۔ | `0x0000ffff` |
+| `profile.polynomial` | constante polynomiale d'engrenage (hex)۔ | `0x3da3358b4dc173` |
+| `gear_seed` | La table d'engrenages de 64 KiB dérive des graines | `sorafs-v1-gear` |
+| `chunk_multihash.code` | résumés par morceau ou code multihash | `0x1f` (BLAKE3-256) |
+| `chunk_multihash.digest` | bundle de luminaires canoniques کا digest۔ | `13fa...c482` |
+| `fixtures_root` | luminaires régénérés رکھنے والی répertoire relatif۔ | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
+| `por_seed` | échantillonnage PoR déterministe et graine (`splitmix64`) | `0xfeedbeefcafebabe` (exemple) |Métadonnées et document de proposition et luminaires générés pour créer un registre et un registre, outils CLI et automatisation de la gouvernance, références croisées manuelles et confirmation des valeurs. Il s'agit d'un magasin de blocs et de CLI de manifeste et d'un `--json-out=-` qui contient des notes d'examen des métadonnées calculées et un flux de données.
 
-Metadata کو proposal document اور generated fixtures دونوں میں شامل ہونا چاہیے تاکہ registry، CLI tooling اور governance automation بغیر manual cross-referencing کے values confirm کر سکیں۔ اگر شک ہو تو chunk-store اور manifest CLIs کو `--json-out=-` کے ساتھ چلائیں تاکہ computed metadata review notes میں stream ہو سکے۔
+### CLI et points de contact du registre
 
-### CLI اور registry touchpoints
+- `sorafs_manifest_chunk_store --profile=<handle>` — paramètres proposés pour les métadonnées de fragments, le résumé du manifeste et les vérifications PoR et les métadonnées
+- `sorafs_manifest_chunk_store --json-out=-` — rapport de magasin de blocs et sortie standard et flux de données pour comparaisons automatisées et autres
+- `sorafs_manifest_stub --chunker-profile=<handle>` — confirmer les manifestes et les plans CAR, gérer canoniquement et les alias intégrés
+- `sorafs_manifest_stub --plan=-` — `chunk_fetch_specs` et alimentation pour changer et vérifier les compensations/digests
 
-- `sorafs_manifest_chunk_store --profile=<handle>` — proposed parameters کے ساتھ chunk metadata، manifest digest اور PoR checks دوبارہ چلائیں۔
-- `sorafs_manifest_chunk_store --json-out=-` — chunk-store report کو stdout پر stream کریں تاکہ automated comparisons ہو سکیں۔
-- `sorafs_manifest_stub --chunker-profile=<handle>` — confirm کریں کہ manifests اور CAR plans canonical handle اور aliases embed کرتے ہیں۔
-- `sorafs_manifest_stub --plan=-` — پچھلا `chunk_fetch_specs` واپس feed کریں تاکہ change کے بعد offsets/digests verify ہوں۔
+Résultat de la commande (résumés, racines PoR, hachages du manifeste) et la proposition est reproduite textuellement par les réviseurs.
 
-Command output (digests, PoR roots, manifest hashes) کو proposal میں ریکارڈ کریں تاکہ reviewers انہیں verbatim reproduce کر سکیں۔
-
-## Determinism & validation checklist
-
-1. **Fixtures regenerate کریں**
+## Liste de contrôle du déterminisme et de la validation1. **Les luminaires se régénèrent کریں**
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors \
      --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
    ```
-2. **Parity suite چلائیں** — `cargo test -p sorafs_chunker` اور cross-language diff harness (`crates/sorafs_chunker/tests/vectors.rs`) نئے fixtures کے ساتھ green ہونا چاہیے۔
-3. **Fuzz/back-pressure corpora replay کریں** — `cargo fuzz list` اور streaming harness (`fuzz/sorafs_chunker`) کو regenerated assets کے خلاف چلائیں۔
-4. **Proof-of-Retrievability witnesses verify کریں** — `sorafs_manifest_chunk_store --por-sample=<n>` proposed profile کے ساتھ چلائیں اور roots کو fixture manifest سے match کریں۔
-5. **CI dry run** — `ci/check_sorafs_fixtures.sh` لوکل چلائیں؛ script کو نئے fixtures اور موجودہ `manifest_signatures.json` کے ساتھ succeed ہونا چاہیے۔
-6. **Cross-runtime confirmation** — یقینی بنائیں کہ Go/TS bindings regenerated JSON consume کریں اور identical chunk boundaries اور digests emit کریں۔
+2. ** Suite de parité ** — `cargo test -p sorafs_chunker` et faisceau de différences multilingues (`crates/sorafs_chunker/tests/vectors.rs`) pour les luminaires vert et vert
+3. **Relecture de corpus fuzz/contre-pression** — `cargo fuzz list` pour le harnais de streaming (`fuzz/sorafs_chunker`) et les actifs régénérés pour les actifs régénérés
+4. **Les témoins de preuve de récupérabilité vérifient ** — Profil proposé `sorafs_manifest_chunk_store --por-sample=<n>` pour les racines et le manifeste du luminaire et la correspondance avec les fichiers.
+5. **Exécution à sec CI** — `ci/check_sorafs_fixtures.sh` لوکل چلائیں؛ script کو نئے luminaires اور موجودہ `manifest_signatures.json` کے ساتھ réussir ہونا چاہیے۔
+6. **Confirmation inter-exécution** — Les liaisons Go/TS régénérées JSON consomment des limites de fragments identiques et les résumés émettent des fragments
 
-Commands اور resulting digests کو proposal میں دستاویزی کریں تاکہ Tooling WG بغیر guesswork کے انہیں دوبارہ چلا سکے۔
+Commandes et résumés résultants et proposition pour le projet Tooling WG pour les conjectures.
 
-### Manifest / PoR confirmation
+### Confirmation du manifeste/PoR
 
-Fixtures regenerate کرنے کے بعد مکمل manifest pipeline چلائیں تاکہ CAR metadata اور PoR proofs consistent رہیں:
+Les appareils régénèrent les métadonnées CAR et les preuves PoR cohérentes :
 
 ```bash
 # نئے profile کے ساتھ chunk metadata + PoR validate کریں
@@ -129,29 +123,26 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --plan=chunk_plan.json --json-out=-
 ```
 
-Input file کو اپنے fixtures میں استعمال ہونے والے کسی representative corpus سے بدلیں
-(مثلاً 1 GiB deterministic stream) اور resulting digests کو proposal کے ساتھ attach کریں۔
+Fichier d'entrée pour les appareils et pour le corpus représentatif
+(avec flux déterministe de 1 Gio) et les résumés résultants et la proposition en pièce jointe
 
-## Proposal template
+## Modèle de proposition
 
-Proposals کو `ChunkerProfileProposalV1` Norito records کے طور پر `docs/source/sorafs/proposals/` میں check in کیا جاتا ہے۔ نیچے JSON template expected شکل دکھاتا ہے (اپنی values سے replace کریں):
+Propositions pour `ChunkerProfileProposalV1` Norito enregistrements pour `docs/source/sorafs/proposals/` pour l'enregistrement pour les enregistrements Un modèle JSON attendu est disponible ici (les valeurs de remplacement sont remplacées par ):Rapport Markdown correspondant (`determinism_report`) qui comprend la sortie de la commande, les résumés de fragments et la validation et les écarts.
 
+## Workflow de gouvernance
 
-Matching Markdown report (`determinism_report`) فراہم کریں جس میں command output، chunk digests اور validation کے دوران پائی گئی deviations شامل ہوں۔
+1. **Proposition + calendriers pour la soumission des relations publiques ** Actifs générés, proposition Norito et mises à jour `chunker_registry_data.rs` pour les mises à jour
+2. **Révision du groupe de travail sur les outils**** Liste de contrôle de validation des évaluateurs pour confirmer les règles du registre des propositions (réutilisation des identifiants et déterminisme satisfait)
+3. **Enveloppe du Conseil** Approuver le résumé des propositions des membres du conseil (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) et signer les signatures de l'enveloppe de profil pour ajouter les éléments et les calendriers. ساتھ رکھا جاتا ہے۔
+4. **Publication du registre** Fusionner le registre, la documentation et la mise à jour des appareils ہوتے ہیں۔ Profil CLI par défaut pour la migration de la gouvernance et prêt pour l'instant
 
-## Governance workflow
+## Conseils de création
 
-1. **Proposal + fixtures کے ساتھ PR submit کریں۔** Generated assets، Norito proposal، اور `chunker_registry_data.rs` updates شامل کریں۔
-2. **Tooling WG review۔** Reviewers validation checklist دوبارہ چلاتے ہیں اور confirm کرتے ہیں کہ proposal registry rules کے مطابق ہے (id reuse نہیں، determinism satisfied)۔
-3. **Council envelope۔** Approve ہونے کے بعد council members proposal digest (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) پر sign کرتے ہیں اور signatures کو profile envelope میں append کرتے ہیں جو fixtures کے ساتھ رکھا جاتا ہے۔
-4. **Registry publish۔** Merge سے registry، docs اور fixtures update ہوتے ہیں۔ Default CLI پچھلے profile پر رہتا ہے جب تک governance migration کو ready قرار نہ دے۔
+- Puissance de deux avec limites paires et comportement de regroupement des cas extrêmes
+- Graines de table d'engrenages et pistes d'audit lisibles par l'homme et uniques au monde
+- Artefacts d'analyse comparative (comparaisons de débit par exemple) avec `docs/source/sorafs/reports/` pour référence et référence
 
-## Authoring tips
-
-- Power-of-two کی even bounds ترجیح دیں تاکہ edge-case chunking behavior کم ہو۔
-- Gear table seeds کو human-readable مگر globally unique رکھیں تاکہ audit trails آسان ہوں۔
-- Benchmarking artifacts (مثلاً throughput comparisons) کو `docs/source/sorafs/reports/` میں محفوظ کریں تاکہ مستقبل میں reference ہو سکے۔
-
-Rollout کے دوران operational expectations کے لیے migration ledger دیکھیں
-(`docs/source/sorafs/migration_ledger.md`)۔ Runtime conformance rules کے لیے
+Déploiement et attentes opérationnelles et grand livre de migration
+(`docs/source/sorafs/migration_ledger.md`)۔ Règles de conformité d'exécution
 `docs/source/sorafs/chunker_conformance.md` دیکھیں۔

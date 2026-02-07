@@ -6,20 +6,21 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 5e0e4f16000f6a578fe9c9d6e204c01087e987ac3b46d70537a15b072df48a13
 source_last_modified: "2026-01-03T18:08:01.373878+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Compiler Error Codes
+# رموز خطأ المترجم Kotodama
 
-The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
-to print the corresponding hint.
+يصدر المترجم Kotodama رموز خطأ ثابتة بحيث يمكن لمستخدمي الأدوات وCLI
+فهم بسرعة سبب الفشل. استخدم `koto_compile --explain <code>`
+لطباعة التلميح المقابل.
 
-| Code  | Description | Typical Fix |
-|-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+| الكود | الوصف | الإصلاح النموذجي |
+|-------|------------|-------------|
+| `E0001` | هدف الفرع خارج نطاق تشفير الانتقال IVM. | قم بتقسيم الوظائف الكبيرة جدًا أو تقليل التضمين بحيث تظل مسافات الكتل الأساسية ضمن ±1ميجابايت. |
+| `E0002` | تشير مواقع الاتصال إلى وظيفة لم يتم تعريفها مطلقًا. | تحقق من الأخطاء المطبعية أو معدّلات الرؤية أو علامات الميزات التي أدت إلى إزالة المستدعى. |
+| `E0003` | تم إصدار مكالمات النظام الدائمة بدون تمكين ABI v1. | قم بتعيين `CompilerOptions::abi_version = 1` أو قم بإضافة `meta { abi_version: 1 }` داخل العقد `seiyaku`. |
+| `E0004` | تلقت مكالمات النظام المتعلقة بالأصول مؤشرات غير حرفية. | استخدم `account_id(...)`، و`asset_definition(...)`، وما إلى ذلك، أو قم بتمرير 0 حراس للإعدادات الافتراضية للمضيف. |
+| `E0005` | يعد مُهيئ `for`-loop أكثر تعقيدًا مما هو مدعوم اليوم. | نقل الإعداد المعقد قبل الحلقة؛ يتم حاليًا قبول أدوات تهيئة `let`/expression البسيطة فقط. |
+| `E0006` | تعد جملة الخطوة `for`-loop أكثر تعقيدًا مما هو مدعوم اليوم. | قم بتحديث عداد الحلقة بتعبير بسيط (مثل `i = i + 1`). |

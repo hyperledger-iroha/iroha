@@ -7,42 +7,44 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Ledger Walkthrough
 description: Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This walkthrough complements the [Norito quickstart](./quickstart.md) by showing
-how to mutate and inspect ledger state with the `iroha` CLI. You will register a
-new asset definition, mint some units into the default operator account, transfer
-part of the balance to another account, and verify the resulting transactions
-and holdings. Each step mirrors the flows covered in the Rust/Python/JavaScript
-SDK quickstarts so you can confirm parity between CLI and SDK behaviour.
+ეს გზამკვლევი ავსებს [Norito სწრაფ დაწყებას](./quickstart.md) ჩვენებით
+როგორ მოვახდინოთ მუტაცია და შევამოწმოთ წიგნის მდგომარეობა `iroha` CLI-ით. თქვენ დარეგისტრირდებით ა
+ახალი აქტივის განმარტება, რამდენიმე ერთეულის შეტანა ნაგულისხმევი ოპერატორის ანგარიშზე, გადარიცხვა
+ბალანსის ნაწილი სხვა ანგარიშზე და გადაამოწმეთ მიღებული ტრანზაქციები
+და ჰოლდინგი. თითოეული ნაბიჯი ასახავს Rust/Python/JavaScript-ში დაფარულ ნაკადებს
+SDK სწრაფად იწყება, ასე რომ თქვენ შეგიძლიათ დაადასტუროთ პარიტეტი CLI და SDK ქცევას შორის.
 
-## Prerequisites
+## წინაპირობები
 
-- Follow the [quickstart](./quickstart.md) to boot the single-peer network via
+- მიჰყევით [სწრაფად დაწყებას] (./quickstart.md) ერთჯერადი ქსელის ჩატვირთვისთვის
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Ensure `iroha` (the CLI) is built or downloaded and that you can reach the
-  peer using `defaults/client.toml`.
-- Optional helpers: `jq` (formatting JSON responses) and a POSIX shell for the
-  environment-variable snippets used below.
+- დარწმუნდით, რომ `iroha` (CLI) არის აშენებული ან ჩამოტვირთული და რომ შეგიძლიათ მიაღწიოთ
+  თანატოლების გამოყენებით `defaults/client.toml`.
+- არჩევითი დამხმარეები: `jq` (JSON პასუხების ფორმატირება) და POSIX გარსი
+  გარემოს ცვლადი ფრაგმენტები გამოყენებული ქვემოთ.
 
-Throughout the guide, replace `$ADMIN_ACCOUNT` and `$RECEIVER_ACCOUNT` with the
-account IDs you plan to use. The defaults bundle already includes two accounts
-derived from the demo keys:
+მთელი სახელმძღვანელოს განმავლობაში, შეცვალეთ `$ADMIN_ACCOUNT` და `$RECEIVER_ACCOUNT`
+ანგარიშის ID, რომლის გამოყენებასაც აპირებთ. ნაგულისხმევი ნაკრები უკვე შეიცავს ორ ანგარიშს
+მიღებული დემო კლავიშებიდან:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirm the values by listing the first few accounts:
+დაადასტურეთ მნიშვნელობები პირველი რამდენიმე ანგარიშის ჩამოთვლით:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspect the genesis state
+## 1. შეამოწმეთ გენეზის მდგომარეობა
 
-Start by exploring the ledger the CLI is targeting:
+დაიწყეთ იმ წიგნის შესწავლით, რომელსაც CLI მიზნად ისახავს:
 
 ```sh
 # Domains registered in genesis
@@ -57,26 +59,26 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-These commands rely on Norito-backed responses, so filtering and pagination are
-deterministic and match what the SDKs receive.
+ეს ბრძანებები ეყრდნობა Norito პასუხებს, ამიტომ ფილტრაცია და პაგინაცია ხდება
+განმსაზღვრელი და შეესაბამება იმას, რასაც SDK-ები იღებენ.
 
-## 2. Register an asset definition
+## 2. დაარეგისტრირეთ აქტივის განმარტება
 
-Create a new, infinitely mintable asset called `coffee` inside the `wonderland`
-domain:
+შექმენით ახალი, უსაზღვროდ დასამუშავებელი აქტივი სახელწოდებით `coffee` `wonderland`-ში
+დომენი:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-The CLI prints the submitted transaction hash (for example,
-`0x5f…`). Save it so you can query the status later.
+CLI ბეჭდავს წარდგენილ ტრანზაქციის ჰეშს (მაგალითად,
+`0x5f…`). შეინახეთ, რათა მოგვიანებით მოიძიოთ სტატუსი.
 
-## 3. Mint units into the operator account
+## 3. ზარაფხანა ერთეული ოპერატორის ანგარიშზე
 
-Asset quantities live under the `(asset definition, account)` pair. Mint 250
-units of `coffee#wonderland` into `$ADMIN_ACCOUNT`:
+აქტივების რაოდენობა ცხოვრობს `(asset definition, account)` წყვილის ქვეშ. ზარაფხანა 250
+`coffee#wonderland`-ის ერთეული `$ADMIN_ACCOUNT`-ში:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -84,14 +86,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Again, capture the transaction hash (`$MINT_HASH`) from the CLI output. To
-double-check the balance, run:
+კიდევ ერთხელ, აღბეჭდეთ ტრანზაქციის ჰეში (`$MINT_HASH`) CLI გამომავალიდან. რომ
+ორჯერ შეამოწმეთ ბალანსი, გაუშვით:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-or, to target just the new asset:
+ან უბრალოდ ახალი აქტივის დასამიზნებლად:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -99,9 +101,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfer part of the balance to another account
+## 4. ბალანსის ნაწილი გადაიტანეთ სხვა ანგარიშზე
 
-Move 50 units from the operator account to `$RECEIVER_ACCOUNT`:
+გადაიტანეთ 50 ერთეული ოპერატორის ანგარიშიდან `$RECEIVER_ACCOUNT`-ზე:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -110,8 +112,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Save the transaction hash as `$TRANSFER_HASH`. Query the holdings on both
-accounts to verify the new balances:
+შეინახეთ ტრანზაქციის ჰეში `$TRANSFER_HASH`. გამოკითხეთ ჰოლდინგი ორივეზე
+ანგარიშები ახალი ნაშთების შესამოწმებლად:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -121,35 +123,35 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verify ledger evidence
+## 5. გადაამოწმეთ წიგნის მტკიცებულება
 
-Use the saved hashes to confirm that both transactions committed:
+გამოიყენეთ შენახული ჰეშები, რათა დაადასტუროთ, რომ ორივე ტრანზაქცია შესრულებულია:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-You can also stream recent blocks to see which block included the transfer:
+ასევე შეგიძლიათ უახლესი ბლოკების სტრიმინგი, რომ ნახოთ რომელი ბლოკი მოიცავდა გადაცემას:
 
 ```sh
 # Stream from the latest block and stop after ~5 seconds
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Every command above uses the same Norito payloads as the SDKs. If you replicate
-this flow via code (see the SDK quickstarts below), the hashes and balances will
-line up as long as you target the same network and defaults.
+ზემოთ მოცემული ყველა ბრძანება იყენებს იგივე Norito დატვირთვას, როგორც SDK-ები. თუ იმეორებთ
+ეს ნაკადი კოდის საშუალებით (იხილეთ SDK სწრაფი სტარტები ქვემოთ), ჰეშები და ნაშთები იქნება
+დაწექით მანამ, სანამ მიზნად ისახავთ იმავე ქსელს და ნაგულისხმევს.
 
-## SDK parity links
+## SDK პარიტეტის ბმულები
 
-- [Rust SDK quickstart](../sdks/rust) — demonstrates registering instructions,
-  submitting transactions, and polling status from Rust.
-- [Python SDK quickstart](../sdks/python) — shows the same register/mint
-  operations with Norito-backed JSON helpers.
-- [JavaScript SDK quickstart](../sdks/javascript) — covers Torii requests,
-  governance helpers, and typed query wrappers.
+- [Rust SDK quickstart](../sdks/rust) — აჩვენებს რეგისტრაციის ინსტრუქციებს,
+  ტრანზაქციების წარდგენა და კენჭისყრის სტატუსი Rust-დან.
+- [Python SDK სწრაფი დაწყება] (../sdks/python) - აჩვენებს იგივე რეგისტრს/ზარაფხანას
+  ოპერაციები Norito მხარდაჭერილი JSON დამხმარეებით.
+- [JavaScript SDK სწრაფი დაწყება](../sdks/javascript) — მოიცავს Torii მოთხოვნებს,
+  მართვის დამხმარეები და აკრეფილი შეკითხვის შეფუთვები.
 
-Run the CLI walkthrough first, then repeat the scenario with your preferred SDK
-to make sure both surfaces agree on transaction hashes, balances, and query
-outputs.
+ჯერ გაუშვით CLI გზამკვლევი, შემდეგ გაიმეორეთ სცენარი სასურველი SDK-ით
+რათა დარწმუნდეთ, რომ ორივე ზედაპირი თანხმდება ტრანზაქციის ჰეშებზე, ნაშთებსა და მოთხოვნაზე
+გამოსავლები.

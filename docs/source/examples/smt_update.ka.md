@@ -7,51 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 788902cfafc6c7db6d52d4237b46ffe78193efd57852bc3427a16d7f3cda2f9c
 source_last_modified: "2025-12-29T18:16:35.954370+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Sparse Merkle Update Example
+# Sparse Merkle განახლების მაგალითი
 
-This worked example illustrates how the FASTPQ Stage 2 trace encodes a
-non-membership witness using the `neighbour_leaf` column. The sparse Merkle tree
-is binary over Poseidon2 field elements. Keys are converted to canonical
-32-byte little-endian strings, hashed to a field element, and the most
-significant bits select the branch at each level.
+ეს სამუშაო მაგალითი გვიჩვენებს, თუ როგორ შიფრავს FASTPQ ეტაპი 2 კვალი a
+არაწევრობის მოწმე `neighbour_leaf` სვეტის გამოყენებით. მწირი მერკლის ხე
+ორობითია Poseidon2 ველის ელემენტებზე. გასაღებები გარდაიქმნება კანონიკურად
+32-ბაიტიანი პატარა ენდიანის სტრიქონები, ჰეშირებული ველის ელემენტზე და ყველაზე მეტი
+მნიშვნელოვანი ბიტები ირჩევენ ფილიალს თითოეულ დონეზე.
 
-## Scenario
+## სცენარი
 
-- Pre-state leaves
-  - `asset::alice::rose` -> hashed key `0x12b7...` with value `0x0000_0000_0000_0005`.
-  - `asset::bob::rose`   -> hashed key `0x1321...` with value `0x0000_0000_0000_0003`.
-- Update request: insert `asset::carol::rose` with value 2.
-- The canonical key hash for Carol expands to the 5-bit prefix `0b01011`. The
-  existing neighbours have prefixes `0b01010` (Alice) and `0b01101` (Bob).
+- წინა სახელმწიფო ფოთლები
+  - `asset::alice::rose` -> ჰეშირებული გასაღები `0x12b7...` `0x0000_0000_0000_0005` მნიშვნელობით.
+  - `asset::bob::rose` -> ჰეშირებული გასაღები `0x1321...` `0x0000_0000_0000_0003` მნიშვნელობით.
+- განახლების მოთხოვნა: ჩადეთ `asset::carol::rose` მნიშვნელობით 2.
+- კლავიშების კანონიკური ჰეში Carol-ისთვის ვრცელდება 5-ბიტიან პრეფიქსზე `0b01011`. The
+  არსებულ მეზობლებს აქვთ პრეფიქსები `0b01010` (ალისა) და `0b01101` (ბობ).
 
-Because there is no leaf whose prefix matches `0b01011`, the prover must provide
-additional evidence that the interval `(alice, bob)` is empty. Stage 2 populates
-the trace row across the columns `path_bit_{level}`, `sibling_{level}`,
-`node_in_{level}`, and `node_out_{level}` (with `level` in `[0, 31]`). All values
-are Poseidon2 field elements encoded in little-endian form:
+იმის გამო, რომ არ არსებობს ფურცელი, რომლის პრეფიქსი ემთხვევა `0b01011`, პროვერმა უნდა უზრუნველყოს
+დამატებითი მტკიცებულება იმისა, რომ `(alice, bob)` ინტერვალი ცარიელია. 2 ეტაპი ივსება
+კვალის მწკრივი სვეტების გასწვრივ `path_bit_{level}`, `sibling_{level}`,
+`node_in_{level}` და `node_out_{level}` (`level`-ით `[0, 31]`-ში). ყველა ღირებულება
+არის Poseidon2 ველის ელემენტები დაშიფრული პატარა-ენდიური ფორმით:
 
-| level | `path_bit_level` | `sibling_level`             | `node_in_level`                      | `node_out_level`                     | Notes |
+| დონე | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | შენიშვნები |
 | ----- | ---------------- | --------------------------- | ------------------------------------ | ------------------------------------ | ----- |
-| 0 | 1             | `0x241f...` (Alice leaf hash) | `0x0000...`                          | `0x4b12...` (`value_2 = 2`)          | Insert: start from zero, store new value. |
-| 1 | 1             | `0x7d45...` (empty right)     | Poseidon2(`node_out_0`, `sibling_0`) | Poseidon2(`sibling_1`, `node_out_1`) | Follow prefix bit 1. |
-| 2 | 0             | `0x03ae...` (Bob branch)      | Poseidon2(`node_out_1`, `sibling_1`) | Poseidon2(`node_in_2`, `sibling_2`)  | Branch flips because bit = 0. |
-| 3 | 1             | `0x9bc4...`                   | Poseidon2(`node_out_2`, `sibling_2`) | Poseidon2(`sibling_3`, `node_out_3`) | Higher levels continue hashing upward. |
-| 4 | 0             | `0xe112...`                   | Poseidon2(`node_out_3`, `sibling_3`) | Poseidon2(`node_in_4`, `sibling_4`)  | Root level; result is the post-state root. |
+| 0 | 1 | `0x241f...` (ალისა ფოთლის ჰაში) | `0x0000...` | `0x4b12...` (`value_2 = 2`) | ჩასმა: დაიწყეთ ნულიდან, შეინახეთ ახალი მნიშვნელობა. |
+| 1 | 1 | `0x7d45...` (ცარიელი მარჯვნივ) | პოსეიდონი2(`node_out_0`, `sibling_0`) | პოსეიდონი2(`sibling_1`, `node_out_1`) | დაიცავით პრეფიქსი ბიტი 1. |
+| 2 | 0 | `0x03ae...` (ბობის ფილიალი) | პოსეიდონი2(`node_out_1`, `sibling_1`) | პოსეიდონი2(`node_in_2`, `sibling_2`) | ფილიალი ტრიალებს, რადგან ბიტი = 0. |
+| 3 | 1 | `0x9bc4...` | პოსეიდონი2(`node_out_2`, `sibling_2`) | პოსეიდონი2(`sibling_3`, `node_out_3`) | უმაღლესი დონეები აგრძელებს ჰეშირებას ზემოთ. |
+| 4 | 0 | `0xe112...` | პოსეიდონი2(`node_out_3`, `sibling_3`) | პოსეიდონი2(`node_in_4`, `sibling_4`) | ფესვის დონე; შედეგი არის პოსტსახელმწიფოებრივი ფესვი. |
 
-The `neighbour_leaf` column for this row is populated with Bob's leaf
-(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). When
-verifying, the AIR checks that:
+ამ მწკრივის `neighbour_leaf` სვეტი სავსეა ბობის ფოთლით
+(`key = 0x1321...`, `value = 3`, `hash = Poseidon2(key, value) = 0x03ae...`). როცა
+შემოწმებისას, AIR ამოწმებს, რომ:
 
-1. The supplied neighbour corresponds to the sibling used at level 2.
-2. The neighbour key is lexicographically greater than the inserted key and the
-   left sibling (Alice) is lexicographically smaller.
-3. Replacing the inserted leaf with the neighbour reproduces the pre-state root.
-
-Together these checks prove that no leaf existed for the interval `(0b01010,
-0b01101)` before the update. Implementations generating FASTPQ traces can use
-this layout verbatim; the numerical constants above are illustrative. For a full
-JSON witness, emit the columns exactly as they appear in the table above (with
-numeric suffixes per level), using little-endian byte strings serialized with
-Norito JSON helpers.
+1. მიწოდებული მეზობელი შეესაბამება მე-2 დონეზე გამოყენებულ ძმას.
+2. მეზობელი გასაღები ლექსიკოგრაფიულად უფრო დიდია, ვიდრე ჩასმული გასაღები და
+   მარცხენა ძმა (ალისა) ლექსიკოგრაფიულად უფრო მცირეა.
+3. ჩასმული ფოთლის მეზობელთან ჩანაცვლება ამრავლებს წინამდგომარეობის ფესვს.ეს შემოწმებები ერთად ამტკიცებს, რომ არ არსებობდა ფურცელი ინტერვალისთვის `(0b01010,
+0b01101)` განახლებამდე. FASTPQ კვალის წარმომქმნელი იმპლემენტაციების გამოყენება შესაძლებელია
+ეს განლაგება სიტყვასიტყვით; ზემოთ მოცემული რიცხვითი მუდმივები საილუსტრაციოა. სრული
+JSON მოწმე, გამოაქვეყნეთ სვეტები ზუსტად ისე, როგორც ისინი ნაჩვენებია ზემოთ მოცემულ ცხრილში (ერთად
+რიცხვითი სუფიქსები თითო დონეზე), სერიული სერიული პატარა ენდიანური ბაიტის გამოყენებით
+Norito JSON დამხმარეები.

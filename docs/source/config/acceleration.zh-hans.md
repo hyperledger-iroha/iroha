@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 03275f401b49b62d8ccb361358235e5964b1ca791a68dcada0fd763bb6a4941b
 source_last_modified: "2026-01-31T19:25:45.072378+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Acceleration & Norito Heuristics Reference
+## 加速和 Norito 启发式参考
 
-The `[accel]` block in `iroha_config` threads through
-`crates/irohad/src/main.rs:1895` into `ivm::set_acceleration_config`. Every host
-applies the same knobs before instantiating the VM, so operators can deterministically
-pick which GPU backends are allowed while keeping scalar/SIMD fallbacks available.
-Swift, Android, and Python bindings load the same manifest via the bridge layer, so
-documenting these defaults unblocks WP6-C in the hardware-acceleration backlog.
+`iroha_config` 中的 `[accel]` 块穿过
+`crates/irohad/src/main.rs:1895` 转换为 `ivm::set_acceleration_config`。各位主持人
+在实例化虚拟机之前应用相同的旋钮，因此操作员可以确定性地
+选择允许使用哪些 GPU 后端，同时保持标量/SIMD 后备可用。
+Swift、Android 和 Python 绑定通过桥接层加载相同的清单，因此
+记录这些默认值可以解除 WP6-C 在硬件加速积压中的阻碍。
 
-### `accel` (hardware acceleration)
+### `accel`（硬件加速）
 
-The table below mirrors `docs/source/references/peer.template.toml` and the
-`iroha_config::parameters::user::Acceleration` definition, exposing the environment
-variable that overrides each key.
+下表反映了 `docs/source/references/peer.template.toml` 和
+`iroha_config::parameters::user::Acceleration`定义，暴露环境
+覆盖每个键的变量。
 
-| Key | Env var | Default | Description |
+|关键|环境变量 |默认|描述 |
 |-----|---------|---------|-------------|
-| `enable_simd` | `ACCEL_ENABLE_SIMD` | `true` | Enables SIMD/NEON/AVX execution. When `false`, the VM forces scalar backends for vector ops and Merkle hashing to ease deterministic parity captures. |
-| `enable_cuda` | `ACCEL_ENABLE_CUDA` | `true` | Enables the CUDA backend when it is compiled in and the runtime passes all golden-vector checks. |
-| `enable_metal` | `ACCEL_ENABLE_METAL` | `true` | Enables the Metal backend on macOS builds. Even when true, Metal self-tests can still disable the backend at runtime if parity mismatches occur. |
-| `max_gpus` | `ACCEL_MAX_GPUS` | `0` (auto) | Caps how many physical GPUs the runtime initialises. `0` means “match hardware fan-out” and is clamped by `GpuManager`. |
-| `merkle_min_leaves_gpu` | `ACCEL_MERKLE_MIN_LEAVES_GPU` | `8192` | Minimum leaves required before Merkle leaf hashing offloads to GPU. Values below this threshold keep hashing on the CPU to avoid PCIe overhead (`crates/ivm/src/byte_merkle_tree.rs:49`). |
-| `merkle_min_leaves_metal` | `ACCEL_MERKLE_MIN_LEAVES_METAL` | `0` (inherit global) | Metal-specific override for the GPU threshold. When `0`, Metal inherits `merkle_min_leaves_gpu`. |
-| `merkle_min_leaves_cuda` | `ACCEL_MERKLE_MIN_LEAVES_CUDA` | `0` (inherit global) | CUDA-specific override for the GPU threshold. When `0`, CUDA inherits `merkle_min_leaves_gpu`. |
-| `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0` (32 768 internally) | Caps the tree size where ARMv8 SHA-2 instructions should win over GPU hashing. `0` keeps the compiled-in default of `32_768` leaves (`crates/ivm/src/byte_merkle_tree.rs:59`). |
-| `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | `0` (32 768 internally) | Same as above but for x86/x86_64 hosts using SHA-NI (`crates/ivm/src/byte_merkle_tree.rs:63`). |
+| `enable_simd` | `ACCEL_ENABLE_SIMD` | `true` |启用 SIMD/NEON/AVX 执行。当 `false` 时，VM 强制使用标量后端进行向量运算和 Merkle 哈希，以简化确定性奇偶校验捕获。 |
+| `enable_cuda` | `ACCEL_ENABLE_CUDA` | `true` |在编译时启用 CUDA 后端并且运行时通过所有黄金向量检查。 |
+| `enable_metal` | `ACCEL_ENABLE_METAL` | `true` |在 macOS 版本上启用 Metal 后端。即使为 true，如果发生奇偶校验不匹配，Metal 自检仍然可以在运行时禁用后端。 |
+| `max_gpus` | `ACCEL_MAX_GPUS` | `0`（自动）|限制运行时初始化的物理 GPU 数量。 `0` 表示“匹配硬件扇出”，并由 `GpuManager` 钳位。 |
+| `merkle_min_leaves_gpu` | `ACCEL_MERKLE_MIN_LEAVES_GPU` | `8192` | Merkle 叶散列卸载到 GPU 之前所需的最少叶数。低于此阈值的值会在 CPU 上继续进行哈希处理，以避免 PCIe 开销 (`crates/ivm/src/byte_merkle_tree.rs:49`)。 |
+| `merkle_min_leaves_metal` | `ACCEL_MERKLE_MIN_LEAVES_METAL` | `0`（继承全局）| GPU 阈值的 Metal 特定覆盖。当 `0` 时，Metal 继承 `merkle_min_leaves_gpu`。 |
+| `merkle_min_leaves_cuda` | `ACCEL_MERKLE_MIN_LEAVES_CUDA` | `0`（继承全局）| GPU 阈值的 CUDA 特定覆盖。当`0`时，CUDA继承`merkle_min_leaves_gpu`。 |
+| `prefer_cpu_sha2_max_leaves_aarch64` | `ACCEL_PREFER_CPU_SHA2_MAX_AARCH64` | `0`（内部 32768）|限制 ARMv8 SHA-2 指令应胜过 GPU 哈希的树大小。 `0` 保留 `32_768` 叶 (`crates/ivm/src/byte_merkle_tree.rs:59`) 的编译默认值。 |
+| `prefer_cpu_sha2_max_leaves_x86` | `ACCEL_PREFER_CPU_SHA2_MAX_X86` | `0`（内部 32768）|与上面相同，但适用于使用 SHA-NI (`crates/ivm/src/byte_merkle_tree.rs:63`) 的 x86/x86_64 主机。 |
 
-`enable_simd` also controls RS16 erasure coding (Torii DA ingest + tooling). Disable it to
-force scalar parity generation while keeping outputs deterministic across hardware.
+`enable_simd` 还控制 RS16 擦除编码（Torii DA 摄取 + 工具）。禁用它以
+强制标量奇偶校验生成，同时保持硬件输出的确定性。
 
-Example configuration:
+配置示例：
 
 ```toml
 [accel]
@@ -53,17 +54,15 @@ merkle_min_leaves_cuda = 16384
 prefer_cpu_sha2_max_leaves_aarch64 = 65536
 ```
 
-Zero values for the last five keys mean “keep the compiled default”. Hosts must not
-set conflicting overrides (e.g., disabling CUDA while forcing CUDA-only thresholds),
-otherwise the request is ignored and the backend continues to follow the global policy.
+最后五个键的零值意味着“保留编译的默认值”。主办方不得
+设置冲突的覆盖（例如，禁用 CUDA，同时强制仅使用 CUDA 阈值），
+否则请求将被忽略，后端继续遵循全局策略。
 
-### Inspecting runtime state
-
-Run `cargo xtask acceleration-state [--format table|json]` to snapshot the applied
-configuration alongside the Metal/CUDA runtime health bits. The command pulls the
-current `ivm::acceleration_config`, parity status, and sticky error strings (if a
-backend was disabled) so operations can feed the result directly into parity
-dashboards or incident reviews.
+### 检查运行时状态运行 `cargo xtask acceleration-state [--format table|json]` 对应用的快照
+配置以及 Metal/CUDA 运行时健康位。该命令拉取
+当前 `ivm::acceleration_config`、奇偶校验状态和粘性错误字符串（如果
+后端被禁用），因此操作可以将结果直接输入奇偶校验
+仪表板或事件回顾。
 
 ```
 $ cargo xtask acceleration-state
@@ -87,23 +86,23 @@ Metal   yes        yes         yes        yes       -
 CUDA    no         no          no         no        policy disabled (no CUDA libraries present)
 ```
 
-Use `--format json` when the snapshot needs to be ingested by automation (the JSON
-contains the same fields shown in the table).
+当快照需要通过自动化摄取时，使用 `--format json`（JSON
+包含表中所示的相同字段）。
 
-`acceleration_runtime_errors()` now calls out why SIMD fell back to scalar:
-`disabled by config`, `forced scalar override`, `simd unsupported on hardware`, or
-`simd unavailable at runtime` when detection succeeds but execution still runs
-without vectors. Clearing the override or re-enabling the policy drops the message
-on hosts that support SIMD.
+`acceleration_runtime_errors()` 现在指出了 SIMD 回退到标量的原因：
+`disabled by config`、`forced scalar override`、`simd unsupported on hardware` 或
+`simd unavailable at runtime` 当检测成功但执行仍然运行时
+没有向量。清除覆盖或重新启用策略会删除该消息
+在支持 SIMD 的主机上。
 
-### Parity checks
+### 奇偶校验
 
-Flip `AccelerationConfig` between CPU-only and accel-on to prove deterministic results.
-The `poseidon_instructions_match_across_acceleration_configs` regression runs the
-Poseidon2/6 opcodes twice—first with `enable_cuda`/`enable_metal` set to `false`, then
-with both enabled—and asserts identical outputs plus CUDA parity when GPUs are present.【crates/ivm/tests/crypto.rs:100】
-Capture `acceleration_runtime_status()` alongside the run to record whether backends
-were configured/available in lab logs.
+在仅 CPU 和加速之间翻转 `AccelerationConfig` 以证明确定性结果。
+`poseidon_instructions_match_across_acceleration_configs` 回归运行
+Poseidon2/6 操作码两次 — 首先将 `enable_cuda`/`enable_metal` 设置为 `false`，然后
+两者都启用，并在存在 GPU 时断言相同的输出以及 CUDA 奇偶校验。【crates/ivm/tests/crypto.rs:100】
+捕获 `acceleration_runtime_status()` 并记录后端是否运行
+已在实验室日志中配置/可用。
 
 ```rust
 let baseline = ivm::acceleration_config();
@@ -126,90 +125,86 @@ SIMD-enabled baseline on the same host while surfacing the `simd` status/error
 fields via `acceleration_runtime_status`/`acceleration_runtime_errors`.【crates/ivm/tests/acceleration_simd.rs:9】
 ```
 
-### GPU defaults & heuristics
+### GPU 默认值和启发式
 
-`MerkleTree` GPU offload kicks in at `8192` leaves by default, and the CPU SHA-2
-preference thresholds stay at `32_768` leaves per architecture. When neither CUDA nor
-Metal is available or has been disabled by health checks, the VM automatically falls
-back to SIMD/scalar hashing and the above numbers do not affect determinism.
+默认情况下，`MerkleTree` GPU 卸载在 `8192` 离开时启动，CPU SHA-2
+每个架构的首选项阈值保持在 `32_768` 叶。当 CUDA 和
+Metal可用或已被健康检查禁用，VM自动下降
+回到 SIMD/标量哈希，上面的数字不会影响确定性。
 
-`max_gpus` clamps the pool size fed into `GpuManager`. Setting `max_gpus = 1` on
-multi-GPU hosts keeps telemetry simple while still allowing acceleration. Operators can
-use this switch to reserve the remaining devices for FASTPQ or CUDA Poseidon jobs.
+`max_gpus` 限制输入 `GpuManager` 的池大小。将 `max_gpus = 1` 设置为开启
+多 GPU 主机使遥测变得简单，同时仍允许加速。运营商可以
+使用此开关可为 FASTPQ 或 CUDA Poseidon 作业保留剩余设备。
 
-### Next acceleration targets & budgets
+### 下一步加速目标和预算
 
-The latest FastPQ Metal trace (`fastpq_metal_bench_20k_latest.json`, 32 K rows × 16
-columns, 5 iters) shows Poseidon column hashing dominating ZK workloads:
+最新的FastPQ金属走线（`fastpq_metal_bench_20k_latest.json`，32K行×16
+列，5 迭代）显示 Poseidon 列哈希主导 ZK 工作负载：
 
-- `poseidon_hash_columns`: CPU mean **3.64 s** vs. GPU mean **3.55 s** (1.03×).
-- `lde`: CPU mean **1.75 s** vs. GPU mean **1.57 s** (1.12×).
+- `poseidon_hash_columns`：CPU 平均值 **3.64s** 与 GPU 平均值 **3.55s** (1.03×)。
+- `lde`：CPU 平均值 **1.75s** 与 GPU 平均值 **1.57s** (1.12×)。
 
-IVM/Crypto will target these two kernels in the next accel sweep. Baseline budgets:
+IVM/Crypto 将在下一次加速扫描中针对这两个内核。基准预算：
 
-- Keep scalar/SIMD parity at or below the CPU means above, and capture
-  `acceleration_runtime_status()` alongside each run so Metal/CUDA availability is
-  logged with the budget numbers.
-- Target ≥1.3× speedup for `poseidon_hash_columns` and ≥1.2× for `lde` once tuned Metal
-  and CUDA kernels land, without changing outputs or telemetry labels.
+- 保持标量/SIMD 奇偶校验等于或低于 CPU 均值以上，并捕获
+  `acceleration_runtime_status()` 伴随每次运行，因此 Metal/CUDA 可用性是
+  记录预算数字。
+- 一旦调谐金属，`poseidon_hash_columns` 的目标加速≥1.3×，`lde` 的目标加速≥1.2×
+  和 CUDA 内核落地，无需更改输出或遥测标签。
 
-Attach the JSON trace and `cargo xtask acceleration-state --format json` snapshot to
-future lab runs so CI/regressions can assert both the budgets and backend health while
-comparing CPU-only vs. accel-on runs.
+将 JSON 跟踪和 `cargo xtask acceleration-state --format json` 快照附加到
+未来的实验室运行，以便 CI/回归可以断言预算和后端运行状况，同时
+比较仅 CPU 与加速运行。
 
-### Norito heuristics (compile-time defaults)
+### Norito 启发式（编译时默认值）Norito 的布局和压缩启发式方法存在于 `crates/norito/src/core/heuristics.rs` 中
+并被编译到每个二进制文件中。它们在运行时不可配置，但会暴露
+这些输入可帮助 SDK 和运营团队预测 GPU 运行后 Norito 的行为方式
+压缩内核已启用。
+工作区现在构建 Norito，并且默认启用 `gpu-compression` 功能，
+所以 GPU zstd 后端被编译进去；运行时可用性仍然取决于硬件，
+帮助程序库 (`libgpuzstd_*`/`gpuzstd_cuda.dll`) 和 `allow_gpu_compression`
+配置标志。使用 `cargo build -p gpuzstd_metal --release` 构建 Metal 助手并
+将 `libgpuzstd_metal.dylib` 放在加载程序路径上。当前 Metal 助手运行 GPU
+匹配查找/序列生成并使用板条箱内确定性 zstd 框架
+主机上的编码器（Huffman/FSE+框架组件）；解码使用板条箱内的帧
+对不支持的帧使用 CPU zstd 回退的解码器，直到连接 GPU 块解码。
 
-Norito’s layout and compression heuristics live in `crates/norito/src/core/heuristics.rs`
-and are compiled into every binary. They are not configurable at runtime, but exposing
-the inputs helps SDK and operator teams predict how Norito will behave once GPU
-compression kernels are enabled.
-The workspace now builds Norito with the `gpu-compression` feature enabled by default,
-so GPU zstd backends are compiled in; runtime availability still depends on hardware,
-the helper library (`libgpuzstd_*`/`gpuzstd_cuda.dll`), and the `allow_gpu_compression`
-config flag. Build the Metal helper with `cargo build -p gpuzstd_metal --release` and
-place `libgpuzstd_metal.dylib` on the loader path. The current Metal helper runs GPU
-match-finding/sequence generation and uses the in-crate deterministic zstd frame
-encoder (Huffman/FSE + frame assembly) on the host; decode uses the in-crate frame
-decoder with a CPU zstd fallback for unsupported frames until GPU block decode is wired in.
+|领域 |默认 |目的|
+|--------|---------|---------|
+| `min_compress_bytes_cpu` | `256` 字节 |在此之下，有效负载完全跳过 zstd 以避免开销。 |
+| `min_compress_bytes_gpu` | `1_048_576` 字节 (1MiB) |当 `norito::core::hw::has_gpu_compression()` 为 true 时，等于或高于此限制的有效负载会切换到 GPU zstd。 |
+| `zstd_level_small` / `zstd_level_large` | `1` / `3` |分别针对 <32KiB 和 ≥32KiB 有效负载的 CPU 压缩级别。 |
+| `zstd_level_gpu` | `1` |保守的 GPU 级别可在填充命令队列时保持延迟一致。 |
+| `large_threshold` | `32_768` 字节 | “小”和“大”CPU zstd 级别之间的大小边界。 |
+| `aos_ncb_small_n` | `64` 行 |在此行数下方，自适应编码器探测 AoS 和 NCB 布局以选择最小的有效负载。 |
+| `combo_no_delta_small_n_if_empty` | `2` 行 |当 1-2 行包含空单元格时，防止启用 u32/id 增量编码。 |
+| `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` |仅当至少有两行时，增量才会生效。 |
+| `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` |默认情况下，对于行为良好的输入启用所有增量变换。 |
+| `combo_enable_name_dict` | `true` |当命中率证明内存开销合理时，允许使用每列字典。 |
+| `combo_dict_ratio_max` | `0.40` |当超过 40% 的行不同时禁用字典。 |
+| `combo_dict_avg_len_min` | `8.0` |在构建字典之前要求平均字符串长度≥8（短别名保持内联）。 |
+| `combo_dict_max_entries` | `1024` |字典条目的硬上限以保证有限的内存使用。 |
 
-| Field | Default | Purpose |
-|-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` bytes | Below this, payloads skip zstd entirely to avoid overhead. |
-| `min_compress_bytes_gpu` | `1_048_576` bytes (1 MiB) | Payloads at or above this limit switch to GPU zstd when `norito::core::hw::has_gpu_compression()` is true. |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | CPU compression levels for <32 KiB and ≥32 KiB payloads respectively. |
-| `zstd_level_gpu` | `1` | Conservative GPU level to keep latency consistent while filling command queues. |
-| `large_threshold` | `32_768` bytes | Size boundary between the “small” and “large” CPU zstd levels. |
-| `aos_ncb_small_n` | `64` rows | Below this row count adaptive encoders probe both AoS and NCB layouts to pick the smallest payload. |
-| `combo_no_delta_small_n_if_empty` | `2` rows | Prevents enabling u32/id delta encodings when 1–2 rows contain empty cells. |
-| `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltas kick in only once there are at least two rows. |
-| `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | All delta transforms are enabled by default for well-behaved inputs. |
-| `combo_enable_name_dict` | `true` | Allows per-column dictionaries when hit ratios justify the memory overhead. |
-| `combo_dict_ratio_max` | `0.40` | Disable dictionaries when more than 40 % of rows are distinct. |
-| `combo_dict_avg_len_min` | `8.0` | Require average string length ≥8 before building dictionaries (short aliases stay inline). |
-| `combo_dict_max_entries` | `1024` | Hard cap on dictionary entries to guarantee bounded memory usage. |
+这些启发式方法使启用 GPU 的主机与仅使用 CPU 的主机保持一致：选择器
+从不做出改变线路格式的决定，并且阈值是固定的
+每个版本。当分析发现更好的收支平衡点时，Norito 会更新
+规范 `Heuristics::canonical` 实现和 `docs/source/benchmarks.md` plus
+`status.md` 将更改与版本证据一起记录。GPU zstd 帮助程序强制执行相同的 `min_compress_bytes_gpu` 截止，即使
+直接调用（例如通过 `norito::core::gpu_zstd::encode_all`），所以很小
+无论 GPU 可用性如何，有效负载始终保留在 CPU 路径上。
 
-These heuristics keep GPU-enabled hosts aligned with CPU-only peers: the selector
-never makes a decision that would change the wire format, and the thresholds are fixed
-per release. When profiling uncovers better break-even points, Norito updates the
-canonical `Heuristics::canonical` implementation and `docs/source/benchmarks.md` plus
-`status.md` record the change alongside the versioned evidence.
+### 故障排除和奇偶校验检查表
 
-The GPU zstd helper enforces the same `min_compress_bytes_gpu` cutoff even when
-called directly (for example via `norito::core::gpu_zstd::encode_all`), so small
-payloads always stay on the CPU path regardless of GPU availability.
-
-### Troubleshooting and parity checklist
-
-- Snapshot runtime state with `cargo xtask acceleration-state --format json` and keep
-  the output alongside any failing logs; the report shows configured/available backends
-  plus parity/last-error strings.
-- Re-run the accel parity regression locally to rule out drift:
+- 使用 `cargo xtask acceleration-state --format json` 快照运行时状态并保留
+  输出以及任何失败的日志；该报告显示已配置/可用的后端
+  加上奇偶校验/最后一个错误字符串。
+- 在本地重新运行加速奇偶校验回归以排除漂移：
   `cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  (runs CPU-only then accel-on). Record `acceleration_runtime_status()` for the run.
-- If a backend fails self-tests, keep the node online in CPU-only mode (`enable_metal =
-  false`, `enable_cuda = false`) and open an incident with the captured parity output
-  instead of forcing the backend on. Results must remain deterministic across modes.
-- **CUDA parity smoke (lab NV hardware):** Run
+  （仅运行 CPU，然后加速）。记录运行的 `acceleration_runtime_status()`。
+- 如果后端自检失败，请以仅 CPU 模式保持节点在线（`enable_metal =
+  false`, `enable_cuda = false`) 并使用捕获的奇偶校验输出打开事件
+  而不是强制启动后端。结果必须在不同模式下保持确定性。
+- **CUDA 奇偶校验烟雾（实验室 NV 硬件）：** 运行
   `ACCEL_ENABLE_CUDA=1 cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
-  on sm_8x hardware, capture `cargo xtask acceleration-state --format json`, and attach
-  the status snapshot (GPU model/driver included) to the benchmark artefacts.
+  在 sm_8x 硬件上，捕获 `cargo xtask acceleration-state --format json`，并附加
+  基准测试工件的状态快照（包括 GPU 型号/驱动程序）。

@@ -7,17 +7,18 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4b1191d3475126df594d0f9f81d91f8ebbcd002c74a1f4d4176f2f42a59ca885
 source_last_modified: "2025-12-29T18:16:35.070397+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Feedback Digest (Template)
+# Docs Portal အစမ်းကြည့်ခြင်း တုံ့ပြန်ချက် Digest (Template)
 
-Use this template when summarising a preview wave for governance, release
-reviews, or `status.md`. Copy the Markdown into the tracking ticket, replace
-placeholders with real data, and attach the JSON summary exported via
-`npm run --prefix docs/portal preview:log -- --summary --summary-json`. The
-`preview:digest` helper (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
-generates the metrics section shown below so you only need to fill in the
-highlights/actions/artefacts rows.
+အုပ်ချုပ်ရေးအတွက်၊ ထုတ်လွှတ်ခြင်းအတွက် အစမ်းကြည့်လှိုင်းကို အကျဉ်းချုပ်သည့်အခါ ဤပုံစံကို အသုံးပြုပါ။
+သုံးသပ်ချက်များ သို့မဟုတ် `status.md`။ Markdown ကို ခြေရာခံလက်မှတ်တွင် ကူးယူပြီး အစားထိုးပါ။
+အစစ်အမှန်ဒေတာနှင့်အတူ နေရာယူထားသူများနှင့် ပေးပို့ထားသော JSON အကျဉ်းချုပ်ကို ပူးတွဲတင်ပြပါ။
+`npm run --prefix docs/portal preview:log -- --summary --summary-json`။ ဟိ
+`preview:digest` အကူအညီပေးသူ (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
+အောက်တွင်ဖော်ပြထားသော မက်ထရစ်အပိုင်းကို ထုတ်ပေးသောကြောင့် သင်ဖြည့်စွက်ရန်သာ လိုအပ်ပါသည်။
+မီးမောင်းထိုးပြမှုများ/လုပ်ဆောင်ချက်များ/အနုပညာပစ္စည်းများ အတန်းများ။
 
 ```markdown
 ## Wave preview-<tag> feedback digest (YYYY-MM-DD)
@@ -45,5 +46,5 @@ highlights/actions/artefacts rows.
 
 ```
 
-Keep each digest with the invite-tracking ticket so reviewers and governance can
-replay the evidence trail without digging through CI logs.
+သုံးသပ်သူများနှင့် အုပ်ချုပ်မှု တတ်နိုင်စေရန် ဖိတ်ခေါ်ခြေရာခံ လက်မှတ်ဖြင့် အချေအတင်တစ်ခုစီကို သိမ်းဆည်းပါ။
+CI မှတ်တမ်းများကို မတူးဘဲ အထောက်အထားလမ်းကြောင်းကို ပြန်ဖွင့်ပါ။

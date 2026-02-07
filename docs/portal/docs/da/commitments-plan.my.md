@@ -7,51 +7,52 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7fd1985901145d0dbcc587d953b0b1a3b5210132c3f915ffd36ec81fbe0692b7
 source_last_modified: "2026-01-22T14:45:01.276618+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-title: Data Availability Commitments Plan
-sidebar_label: Commitments Plan
-description: Block, RPC, and proof plumbing for embedding DA commitments in Nexus.
+ခေါင်းစဉ်- ဒေတာရရှိနိုင်မှု ကတိကဝတ်များ အစီအစဉ်
+sidebar_label- ကတိကဝတ်များ အစီအစဉ်
+ဖော်ပြချက်- Nexus တွင် DA ကတိကဝတ်များကို မြှုပ်နှံရန်အတွက် ပိတ်ဆို့ခြင်း၊ RPC နှင့် ပိုက်လိုင်းများ။
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-# Sora Nexus Data Availability Commitments Plan (DA-3)
+# Sora Nexus ဒေတာရရှိနိုင်မှု ကတိကဝတ်များ အစီအစဉ် (DA-3)
 
-_Drafted: 2026-03-25 — Owners: Core Protocol WG / Smart Contract Team / Storage Team_
+_မူကြမ်း- 2026-03-25 — ပိုင်ရှင်များ- Core Protocol WG / Smart Contract Team / Storage Team_
 
-DA-3 extends the Nexus block format so every lane embeds deterministic records
-describing the blobs accepted by DA-2. This note captures the canonical data
-structures, block pipeline hooks, light-client proofs, and Torii/RPC surfaces
-that must land before validators can rely on DA commitments during admission or
-governance checks. All payloads are Norito-encoded; no SCALE or ad-hoc JSON.
+DA-3 သည် Nexus ဘလောက်ဖော်မတ်ကို တိုးချဲ့ပေးသောကြောင့် လမ်းသွားတိုင်းသည် အဆုံးအဖြတ်မှတ်တမ်းများကို မြှုပ်နှံထားသည်
+DA-2 မှ လက်ခံထားသော blobs များကို ဖော်ပြခြင်း။ ဤမှတ်စုသည် canonical data ကိုဖမ်းယူသည်။
+အဆောက်အဦများ၊ ပိုက်လိုင်းချိတ်များ၊ အလင်းဖောက်သည်အထောက်အထားများနှင့် Torii/RPC မျက်နှာပြင်များ
+တရားဝင်ခွင့်ပြုသူများသည် ဝင်ခွင့်ကာလအတွင်း DA ကတိကဝတ်များကို အားကိုးနိုင်သည် သို့မဟုတ် ဝင်ခွင့်မပြုမီတွင် ဆင်းသက်ရမည်ဖြစ်သည်။
+အုပ်ချုပ်ရေးစစ်ဆေးမှုများ။ ပေးဆောင်မှုအားလုံးသည် Norito-ကုဒ်ဖြင့် ပြုလုပ်ထားသည်။ SCALE သို့မဟုတ် ad-hoc JSON မရှိပါ။
 
-## Objectives
+## ရည်ရွယ်ချက်များ
 
-- Carry per-blob commitments (chunk root + manifest hash + optional KZG
-  commitment) inside every Nexus block so peers can reconstruct availability
-  state without consulting off-ledger storage.
-- Provide deterministic membership proofs so light clients can verify that a
-  manifest hash was finalised in a given block.
-- Expose Torii queries (`/v1/da/commitments/*`) and proofs that let relays,
-  SDKs, and governance automation audit availability without replaying every
-  block.
-- Keep the existing `SignedBlockWire` envelope canonical by threading the new
-  structures through the Norito metadata header and block hash derivation.
+- တစ်တုံးအလိုက် ကတိကဝတ်များ သယ်ဆောင်ပါ (အတုံးအမြစ် + မန်နီးဖက်စ် hash + ရွေးချယ်နိုင်သော KZG
+  ကတိကဝတ်) Nexus ဘလောက်တိုင်းအတွင်းတွင် သက်တူရွယ်တူများ ရရှိနိုင်မှုကို ပြန်လည်တည်ဆောက်နိုင်သည်
+  လယ်ဂျာသိမ်းဆည်းခြင်းအား မတိုင်ပင်ဘဲ ပြည်နယ်။
+- ပေါ့ပါးသောဖောက်သည်များသည် ၎င်းကိုစစ်ဆေးနိုင်စေရန် တိကျသေချာသောအသင်းဝင်အထောက်အထားများကို ပေးဆောင်ပါ။
+  manifest hash ကို ပေးထားသော block တစ်ခုတွင် အပြီးသတ်ခဲ့သည်။
+- Torii မေးခွန်းများ (`/v1/da/commitments/*`) နှင့် relays များခွင့်ပြုသည့် အထောက်အထားများကို ဖော်ထုတ်ပါ၊
+  SDKs နှင့် အုပ်ချုပ်မှု အလိုအလျောက်စနစ်ဆိုင်ရာ စာရင်းစစ်များ ရရှိနိုင်မှု အားလုံးကို ပြန်ဖွင့်ခြင်းမပြုဘဲ
+  ဘလောက်။
+- အသစ်ကို ကြိုးချည်ခြင်းဖြင့် ရှိပြီးသား `SignedBlockWire` စာအိတ်ကို Canonical ထားရှိပါ။
+  Norito မက်တာဒေတာ ခေါင်းစီးနှင့် ပိတ်ဆို့ hash ဆင်းသက်ခြင်းမှတဆင့် တည်ဆောက်မှု။
 
-## Scope Overview
+## နယ်ပယ်အကျဉ်းချုပ်
 
-1. **Data model additions** in `iroha_data_model::da::commitment` plus block
-   header changes in `iroha_data_model::block`.
-2. **Executor hooks** so `iroha_core` ingests DA receipts emitted by Torii
-   (`crates/iroha_core/src/queue.rs` and `crates/iroha_core/src/block.rs`).
-3. **Persistence/indexes** so the WSV can answer commitment queries quickly
-   (`iroha_core/src/wsv/mod.rs`).
-4. **Torii RPC additions** for list/query/prove endpoints under
-   `/v1/da/commitments`.
-5. **Integration tests + fixtures** validating the wire layout and proof flow in
-   `integration_tests/tests/da/commitments.rs`.
+1. `iroha_data_model::da::commitment` plus block တွင် **ဒေတာမော်ဒယ် ထပ်တိုးမှုများ**
+   `iroha_data_model::block` တွင် ခေါင်းစီးပြောင်းလဲမှု။
+2. **Executor ချိတ်များ** ထို့ကြောင့် `iroha_core` သည် Torii မှ ထုတ်လွှတ်သော DA လက်ခံပြေစာများကို စားသုံးပါသည်။
+   (`crates/iroha_core/src/queue.rs` နှင့် `crates/iroha_core/src/block.rs`)။
+3. **Persistence/indexes** ထို့ကြောင့် WSV သည် ကတိကဝတ်မေးခွန်းများကို လျင်မြန်စွာ ဖြေဆိုနိုင်ပါသည်။
+   (`iroha_core/src/wsv/mod.rs`)။
+4. **Torii RPC ထပ်လောင်းမှုများ** အောက်တွင် စာရင်း/မေးမြန်းမှု/သက်သေပြသည့် အဆုံးမှတ်များအတွက်
+   `/v1/da/commitments`။
+5. **ပေါင်းစပ်စစ်ဆေးမှုများ + ကိရိယာများ** ဝိုင်ယာလက်ကွက်နှင့် အထောက်အထားစီးဆင်းမှုကို သက်သေပြခြင်း
+   `integration_tests/tests/da/commitments.rs`။
 
 ## 1. Data Model Additions
 
@@ -75,18 +76,18 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. When absent we fall back to Merkle proofs only.
-- `proof_scheme` is derived from the lane catalog; Merkle lanes reject KZG
-  payloads while `kzg_bls12_381` lanes require non-zero KZG commitments. Torii
-  currently only produces Merkle commitments and rejects KZG-configured lanes.
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. When absent on Merkle lanes we fall back to Merkle proofs
-  only.
-- `proof_digest` anticipates DA-5 PDP/PoTR integration so the same record
-  enumerates the sampling schedule used to keep blobs live.
+- `KzgCommitment` သည် အောက်ရှိ ရှိပြီးသား 48-byte point ကို ပြန်သုံးသည်
+  `iroha_crypto::kzg`။ ပျက်ကွက်သည့်အခါ ကျွန်ုပ်တို့သည် Merkle အထောက်အထားများထံသာ ပြန်သွားကြသည်။
+- `proof_scheme` ကို လမ်းသွားကတ်တလောက်မှ ဆင်းသက်လာသည်။ Merkle လမ်းကြောများသည် KZG ကို ငြင်းပယ်သည်။
+  `kzg_bls12_381` လမ်းကြောများသည် KZG ကတိကဝတ်များ သုညမဟုတ်သော လိုအပ်ပါသည်။ Torii
+  လက်ရှိတွင် Merkle မှ ကတိကဝတ်များကိုသာ ထုတ်လုပ်ပြီး KZG-configured လမ်းသွားများကို ပယ်ချပါသည်။
+- `KzgCommitment` သည် အောက်ရှိ ရှိပြီးသား 48-byte point ကို ပြန်သုံးသည်
+  `iroha_crypto::kzg`။ Merkle လမ်းကြောများတွင် မရှိတော့သည့်အခါ Merkle အထောက်အထားများထံ ပြန်ရောက်သွားပါသည်။
+  အားလုံးအတွက်
+- `proof_digest` သည် DA-5 PDP/PoTR ပေါင်းစပ်မှုကို မျှော်လင့်ထားသောကြောင့် တူညီသောစံချိန်
+  blobs အသက်ရှင်နေစေရန်အသုံးပြုသည့်နမူနာအချိန်ဇယားကိုရေတွက်သည်။
 
-### 1.2 Block header extension
+### 1.2 ခေါင်းစီးတိုးချဲ့မှုကို ပိတ်ဆို့ခြင်း။
 
 ```
 pub struct BlockHeader {
@@ -100,115 +101,115 @@ pub struct DaCommitmentBundle {
 }
 ```
 
-The bundle hash feeds into both the block hash and `SignedBlockWire` metadata.
-overhead.
+အစုအဝေး hash သည် block hash နှင့် `SignedBlockWire` မက်တာဒေတာနှစ်ခုလုံးသို့ ဖြည့်သွင်းသည်။
+ပေါ်ကနေ။
 
-Implementation note: `BlockPayload` and the transparent `BlockBuilder` now expose
-`da_commitments` setters/getters (see `BlockBuilder::set_da_commitments` and
-`SignedBlock::set_da_commitments`), so hosts can attach a pre-built bundle
-before sealing a block. All helper constructors default the field to `None`
-until Torii threads real bundles through.
+အကောင်အထည်ဖော်မှုမှတ်စု- `BlockPayload` နှင့် ပွင့်လင်းမြင်သာသော `BlockBuilder` တို့ကို ယခု ဖော်ထုတ်နိုင်ပါပြီ
+`da_commitments` setters/getters (`BlockBuilder::set_da_commitments` ကိုကြည့်ပါ နှင့်
+`SignedBlock::set_da_commitments`)၊ ထို့ကြောင့် host များသည် ကြိုတင်တည်ဆောက်ထားသောအတွဲကို ပူးတွဲနိုင်သည်
+တစ်တုံးကို မပိတ်ခင် အကူအညီပေးသူ တည်ဆောက်သူအားလုံးသည် အကွက်ကို `None` သို့ ပုံသေသတ်မှတ်သည်။
+Torii တိုင်အောင် မှန်ကန်သော အစုအဝေးများကို ဖြတ်သန်းပါ။
 
-### 1.3 Wire encoding
+### 1.3 ဝိုင်ယာ ကုဒ်ပြောင်းခြင်း။
 
-- `SignedBlockWire::canonical_wire()` appends the Norito header for
-  `DaCommitmentBundle` immediately after the existing transaction list. The
-  version byte is `0x01`.
-- `SignedBlockWire::decode_wire()` rejects bundles whose `version` is unknown,
-  matching the Norito policy described in `norito.md`.
-- Hash derivation updates exist only in `block::Hasher`; light clients decoding
-  the existing wire format automatically gain the new field because the Norito
-  header advertises its presence.
+- `SignedBlockWire::canonical_wire()` အတွက် Norito ခေါင်းစီးကို ဖြည့်စွက်သည်
+  `DaCommitmentBundle` သည် တည်ဆဲ ငွေပေးငွေယူစာရင်းပြီးပြီးချင်း။ ဟိ
+  ဗားရှင်း byte သည် `0x01` ဖြစ်သည်။
+- `SignedBlockWire::decode_wire()` သည် `version` အမည်မသိ အတွဲများကို ငြင်းပယ်သည်၊
+  `norito.md` တွင်ဖော်ပြထားသော Norito မူဝါဒနှင့် ကိုက်ညီပါသည်။
+- Hash ဆင်းသက်လာမှု အပ်ဒိတ်များသည် `block::Hasher` တွင်သာ ရှိပါသည်။ အလင်းဖောက်သည်များ စကားဝှက်
+  ရှိပြီးသားဝိုင်ယာဖော်မတ်သည် Norito ဖြစ်သောကြောင့် အကွက်အသစ်ကို အလိုအလျောက်ရရှိမည်ဖြစ်သည်။
+  ခေါင်းစီးသည် ၎င်း၏တည်ရှိမှုကို ကြော်ငြာသည်။
 
-## 2. Block Production Flow
+## 2. ထုတ်လုပ်မှုစီးဆင်းမှုကို ပိတ်ဆို့ခြင်း။
 
-1. Torii DA ingest finalises a `DaIngestReceipt` and publishes it on the
-   internal queue (`iroha_core::gossiper::QueueMessage::DaReceipt`).
-2. `PendingBlocks` collects all receipts whose `lane_id` matches the block under
-   construction, deduplicating by `(lane_id, client_blob_id, manifest_hash)`.
-3. Right before sealing, the block builder sorts commitments by `(lane_id,
-   epoch, sequence)` to keep the hash deterministic, encodes the bundle with the
-   Norito codec, and updates `da_commitments_hash`.
-4. The full bundle is stored in the WSV and emitted alongside the block inside
-   `SignedBlockWire`.
+1. Torii DA သည် `DaIngestReceipt` ကို အပြီးသတ်ပြီး ၎င်းကို ထုတ်ဝေသည်။
+   အတွင်းပိုင်းတန်းစီ (`iroha_core::gossiper::QueueMessage::DaReceipt`)။
+2. `PendingBlocks` သည် `lane_id` အောက်တွင် ပိတ်ဆို့ထားသော ပြေစာများအားလုံးကို စုဆောင်းသည်
+   `(lane_id, client_blob_id, manifest_hash)` ဖြင့် ထုလုပ်ထားသော ဆောက်လုပ်ရေး၊
+3. တံဆိပ်ခတ်ခြင်းမပြုမီ၊ ဘလောက်တည်ဆောက်သူသည် `(lane_id၊
+   epoch၊ sequence)` hash အဆုံးအဖြတ်ကို ထိန်းသိမ်းရန်၊ အစုအစည်းကို ကုဒ်လုပ်သည်။
+   Norito ကုဒ်ဒက်နှင့် `da_commitments_hash` ကို အပ်ဒိတ်လုပ်သည်။
+4. အစုအဝေးအပြည့်အစုံကို WSV တွင် သိမ်းဆည်းထားပြီး အတွင်းဘလောက်နှင့်အတူ ထုတ်လွှတ်သည်။
+   `SignedBlockWire`။
 
-If block creation fails the receipts remain in the queue so the next block
-attempt can pick them up; the builder records the last included `sequence` per
-lane to avoid replay attacks.
+ပိတ်ဆို့ဖန်တီးမှု မအောင်မြင်ပါက ပြေစာများသည် တန်းစီနေမည်ဖြစ်သဖြင့် နောက်ဘလောက်ကို ဆက်လုပ်ပါ။
+ကြိုးစားမှုတို့ကို ကောက်ယူနိုင်သည်။ တည်ဆောက်သူသည် နောက်ဆုံးပါဝင်သည့် `sequence` နှုန်းဖြင့် မှတ်တမ်းတင်ပါသည်။
+replay တိုက်ခိုက်မှုများကိုရှောင်ရှားရန်လမ်းသွား။
 
 ## 3. RPC & Query Surface
 
-Torii exposes three endpoints:
+Torii သည် အဆုံးမှတ်သုံးခုကို ထုတ်ပြသည်-
 
-| Route | Method | Payload | Notes |
-|-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (range filter by lane/epoch/sequence, pagination) | Returns `DaCommitmentPage` with total count, commitments, and block hash. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash or `(epoch, sequence)` tuple). | Responds with `DaCommitmentProof` (record + Merkle path + block hash). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper that replays the block hash calculation and validates inclusion; used by SDKs that cannot link directly to `iroha_crypto`. |
+| လမ်းကြောင်း | နည်းလမ်း | ဝန်ဆောင်ခ | မှတ်စုများ |
+|---------|--------|---------|---------|
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (လမ်းကြော/အပိုင်း/အစီအစဥ်အလိုက် စစ်ထုတ်ခြင်း) | စုစုပေါင်းရေတွက်မှု၊ ကတိကဝတ်များနှင့် ပိတ်ဆို့ hash ဖြင့် `DaCommitmentPage` ကို ပြန်ပေးသည်။ |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (လမ်းကြော + manifest hash သို့မဟုတ် `(epoch, sequence)` tuple)။ | `DaCommitmentProof` (မှတ်တမ်း + Merkle လမ်းကြောင်း + ပိတ်ဆို့ hash) ဖြင့် တုံ့ပြန်သည်။ |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | block hash တွက်ချက်မှုကို ပြန်လည်ပြသပြီး ပါဝင်မှုကို အတည်ပြုပေးသည့် နိုင်ငံမဲ့အကူအညီ၊ `iroha_crypto` နှင့် တိုက်ရိုက်ချိတ်ဆက်၍မရသော SDK များမှ အသုံးပြုသည်။ |
 
-All payloads live under `iroha_data_model::da::commitment`. Torii routers mount
-the handlers next to the existing DA ingest endpoints to reuse token/mTLS
-policies.
+payload များအားလုံး `iroha_data_model::da::commitment` အောက်တွင် နေထိုင်ပါသည်။ Torii routers များ mount
+တိုကင်/mTLS ကို ပြန်သုံးရန် ရှိပြီးသား DA သုံးစွဲမှု အဆုံးမှတ်များဘေးရှိ ကိုင်တွယ်သူများ
+မူဝါဒများ။
 
-## 4. Inclusion Proofs & Light Clients
+## 4. ပါဝင်မှုသက်သေများနှင့် အလင်းဖောက်သည်များ
 
-- The block producer builds a binary Merkle tree over the serialized
-  `DaCommitmentRecord` list. The root feeds `da_commitments_hash`.
-- `DaCommitmentProof` packages the target record plus a vector of `(sibling_hash,
-  position)` entries so verifiers can reconstruct the root. Proofs also include
-  the block hash and signed header so light clients can verify finality.
-- CLI helpers (`iroha_cli app da prove-commitment`) wrap the proof request/verify
-  cycle and surface Norito/hex outputs for operators.
+- ပိတ်ဆို့ထုတ်လုပ်သူသည် အမှတ်စဉ်အလိုက် binary Merkle သစ်ပင်ကို တည်ဆောက်သည်။
+  `DaCommitmentRecord` စာရင်း။ အမြစ်သည် `da_commitments_hash` ကို ကျွေးသည်။
+- `DaCommitmentProof` သည် ပစ်မှတ်မှတ်တမ်းနှင့် `(sibling_hash၊
+  position)` entries တွေကို verifier တွေက root ကို ပြန်လည်တည်ဆောက်နိုင်ပါတယ်။ အထောက်အထားများလည်း ပါဝင်သည်။
+  ပေါ့ပါးသော ဖောက်သည်များသည် နောက်ဆုံးအဖြစ် အတည်ပြုနိုင်စေရန် ဘလောက် hash နှင့် ခေါင်းစီးကို ရေးထိုးထားသည်။
+- CLI အကူအညီပေးသူများ (`iroha_cli app da prove-commitment`) မှ သက်သေတောင်းဆိုချက်/အတည်ပြုခြင်းကို ထုပ်ပိုးပါ
+  အော်ပရေတာများအတွက် စက်ဝိုင်းနှင့်မျက်နှာပြင် Norito/hex အထွက်များ။
 
 ## 5. Storage & Indexing
 
-WSV stores commitments in a dedicated column family keyed by `manifest_hash`.
-Secondary indexes cover `(lane_id, epoch)` and `(lane_id, sequence)` so queries
-avoid scanning full bundles. Each record tracks the block height that sealed it,
-allowing catch-up nodes to rebuild the index quickly from the block log.
+WSV သည် `manifest_hash` ဖြင့် သော့ခတ်ထားသော သီးခြားကော်လံမိသားစုတွင် ကတိကဝတ်များကို သိမ်းဆည်းထားသည်။
+ဒုတိယအညွှန်းကိန်းများသည် `(lane_id, epoch)` နှင့် `(lane_id, sequence)` အကျုံးဝင်သောကြောင့် စုံစမ်းမေးမြန်းမှုများ
+အစုအဝေး အပြည့်အစုံကို စကင်န်ဖတ်ခြင်းမှ ရှောင်ကြဉ်ပါ။ မှတ်တမ်းတစ်ခုစီသည် ၎င်းကို ချိတ်ပိတ်ထားသည့် ဘလောက်အမြင့်ကို ခြေရာခံ၊
+block log မှ အညွှန်းကိန်းကို လျင်မြန်စွာ ပြန်လည်တည်ဆောက်ရန် catch-up node အား ခွင့်ပြုပေးသည်။
 
 ## 6. Telemetry & Observability
 
-- `torii_da_commitments_total` increments whenever a block seals at least one
-  record.
-- `torii_da_commitment_queue_depth` tracks receipts waiting to be bundled (per
-  lane).
-- Grafana dashboard `dashboards/grafana/da_commitments.json` visualises block
-  inclusion, queue depth, and proof throughput so DA-3 release gates can audit
-  behaviour.
+- `torii_da_commitments_total` သည် ဘလောက်တစ်ခုအား တံဆိပ်ခတ်သည့်အခါတိုင်း အနည်းဆုံးတစ်ခုတိုးသည်။
+  မှတ်တမ်း။
+- `torii_da_commitment_queue_depth` ထုပ်ပိုးရန် စောင့်ဆိုင်းနေသည့် ပြေစာများ (နှုန်း၊
+  လမ်းသွား)။
+- Grafana ဒက်ရှ်ဘုတ် `dashboards/grafana/da_commitments.json` ပိတ်ဆို့ခြင်းကို မြင်သာစေသည်
+  ပါဝင်မှု၊ တန်းစီအတိမ်အနက်နှင့် အထောက်အထား ဖြတ်သန်းမှုတို့ကြောင့် DA-3 ထုတ်လွှတ်မှုဂိတ်များသည် စာရင်းစစ်နိုင်သည်။
+  အပြုအမူ။
 
-## 7. Testing Strategy
+## 7. စမ်းသပ်ခြင်းဗျူဟာ
 
-1. **Unit tests** for `DaCommitmentBundle` encoding/decoding and block hash
-   derivation updates.
-2. **Golden fixtures** under `fixtures/da/commitments/` capturing canonical
-   bundle bytes and Merkle proofs.
-3. **Integration tests** booting two validators, ingesting sample blobs, and
-   asserting that both nodes agree on the bundle contents and query/proof
-   responses.
-4. **Light-client tests** in `integration_tests/tests/da/commitments.rs`
-   (Rust) that call `/prove` and verify the proof without talking to Torii.
-5. **CLI smoke** script `scripts/da/check_commitments.sh` to keep operator
-   tooling reproducible.
+1. `DaCommitmentBundle` အတွက် **ယူနစ်စမ်းသပ်မှုများ** သည် ကုဒ်/ကုဒ်နှင့် ဘလောက် hash
+   ဆင်းသက်လာသော အပ်ဒိတ်များ။
+2. `fixtures/da/commitments/` အောက်တွင် **ရွှေရောင်စုံများ**
+   bundle bytes နှင့် Merkle အထောက်အထားများ။
+3. **ပေါင်းစပ်စစ်ဆေးမှုများ** စစ်ဆေးမှုနှစ်ခုကို စတင်ခြင်း၊ နမူနာ blobs များကို ထည့်သွင်းခြင်းနှင့်
+   node နှစ်ခုလုံးသည် အစုအဝေးပါ အကြောင်းအရာများနှင့် မေးမြန်းမှု/အထောက်အထားအပေါ် သဘောတူကြောင်း အခိုင်အမာဆိုသည်။
+   တုံ့ပြန်မှုများ
+4. `integration_tests/tests/da/commitments.rs` တွင် **Light-client စမ်းသပ်မှုများ**
+   `/prove` ကိုခေါ်ဆိုပြီး Torii အား စကားမပြောဘဲ အထောက်အထားစစ်ဆေးသည့် (သံချေးများ)။
+5. **CLI smoke** script `scripts/da/check_commitments.sh` ကို အော်ပရေတာ ထားရှိရန်
+   tooling သည် ပြန်လည်ထုတ်လုပ်နိုင်သည်။
 
-## 8. Rollout Plan
+## 8. စတင်ခြင်းအစီအစဉ်
 
-| Phase | Description | Exit Criteria |
-|-------|-------------|---------------|
-| P0 — Data model merge | Land `DaCommitmentRecord`, block header updates, and Norito codecs. | `cargo test -p iroha_data_model` green with new fixtures. |
-| P1 — Core/WSV wiring | Thread queue + block builder logic, persist indexes, and expose RPC handlers. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` pass with bundle proof assertions. |
-| P2 — Operator tooling | Ship CLI helpers, Grafana dashboard, and proof verification doc updates. | `iroha_cli app da prove-commitment` works against devnet; dashboard displays live data. |
-| P3 — Governance gate | Enable block validator requiring DA commitments on the lanes flagged in `iroha_config::nexus`. | Status entry + roadmap update mark DA-3 as 🈴. |
+| အဆင့် | ဖော်ပြချက် | သတ်မှတ်ချက် | ထွက်ရန်
+|--------|----------------|----------------|
+| P0 — ဒေတာပုံစံ ပေါင်းစည်းခြင်း | Land `DaCommitmentRecord`၊ ပိတ်ပင်တားဆီးမှု ခေါင်းစီးအပ်ဒိတ်များနှင့် Norito ကုဒ်ဒစ်များ။ | `cargo test -p iroha_data_model` အစိမ်းရောင် တပ်ဆင်မှုအသစ်။ |
+| P1 — Core/WSV ဝါယာကြိုး | လိုင်းတန်းစီခြင်း + ပိတ်ဆို့တည်ဆောက်သူ လော့ဂျစ်၊ ဆက်နေသော အညွှန်းများနှင့် RPC ကိုင်တွယ်သူများကို ဖော်ထုတ်ပါ။ | `cargo test -p iroha_core`၊ `integration_tests/tests/da/commitments.rs` အတွဲလိုက် အထောက်အထား အခိုင်အမာ ပြောဆိုမှုများဖြင့် ကျော်သွားသည်။ |
+| P2 — အော်ပရေတာ tooling | သင်္ဘော CLI အကူအညီပေးသူများ၊ Grafana ဒက်ရှ်ဘုတ်၊ နှင့် အထောက်အထား စိစစ်ရေး စာရွက်စာတမ်း အပ်ဒိတ်များ။ | `iroha_cli app da prove-commitment` သည် devnet ကိုဆန့်ကျင်သည်။ ဒက်ရှ်ဘုတ်သည် တိုက်ရိုက်ဒေတာကို ပြသသည်။ |
+| P3 — အုပ်ချုပ်မှုတံခါး | `iroha_config::nexus` တွင် အလံပြထားသော လမ်းများပေါ်တွင် DA ကတိကဝတ်များ လိုအပ်သည့် ပိတ်ဆို့စစ်ဆေးခြင်းကို ဖွင့်ပါ။ | အဆင့်အတန်းဝင်ရောက်မှု + လမ်းပြမြေပုံအပ်ဒိတ်သည် DA-3 ကို 🈴 အဖြစ် အမှတ်အသားပြုပါ။ |
 
-## Open Questions
+## မေးခွန်းများဖွင့်ပါ။
 
-1. **KZG vs Merkle defaults** — Should small blobs always skip KZG commitments to
-   reduce block size? Proposal: keep `kzg_commitment` optional and gate via
-   `iroha_config::da.enable_kzg`.
-2. **Sequence gaps** — Do we allow out-of-order lanes? Current plan rejects gaps
-   unless governance toggles `allow_sequence_skips` for emergency replay.
-3. **Light-client cache** — SDK team requested a lightweight SQLite cache for
-   proofs; pending follow-up under DA-8.
+1. **KZG နှင့် Merkle ပုံသေများ** — သေးငယ်သော blobs များသည် KZG ကတိကဝတ်များကို အမြဲကျော်သွားသင့်သည်
+   ဘလောက်အရွယ်အစားကို လျှော့ချမလား။ အဆိုပြုချက်- `kzg_commitment` ကို ရွေးချယ်နိုင်ပြီး ဂိတ်မှတစ်ဆင့် ထားရှိပါ။
+   `iroha_config::da.enable_kzg`။
+2. **တစ်ဆက်တည်း ကွာဟချက်များ** — ကျွန်ုပ်တို့သည် အစီအစဥ်မရှိသော လမ်းကြောများကို ခွင့်ပြုပါသလား။ လက်ရှိအစီအစဉ်သည် ကွက်လပ်များကို ပယ်ချပါသည်။
+   အရေးပေါ်ပြန်ဖွင့်ရန်အတွက် အုပ်ချုပ်ရေးသည် `allow_sequence_skips` ကို ပြောင်းမထားပါ။
+3. **Light-client cache** — SDK အဖွဲ့သည် ပေါ့ပါးသော SQLite cache အတွက် တောင်းဆိုခဲ့သည်
+   အထောက်အထားများ; DA-8 အောက်တွင် ဆိုင်းငံ့ထားသော နောက်ဆက်တွဲ။
 
-Answering these in implementation PRs moves DA-3 from 🈸 (this document) to 🈺
-once code work begins.
+PR များကို အကောင်အထည်ဖော်ရာတွင် ယင်းတို့ကို ဖြေဆိုခြင်းဖြင့် DA-3 ကို 🈸 (ဤစာရွက်စာတမ်း) မှ 🈺 သို့ ရွှေ့သည်။
+ကုဒ်အလုပ်စတင်သည်နှင့်။

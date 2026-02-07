@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Registrar dominio e cunhar ativos
-description: Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+babosa: /norito/examples/register-and-mint
+título: Registrador de dominio y cunhar ativos
+descripción: Demostrar una criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
+fuente: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
+Demonstrar a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
 
 ## Roteiro do livro razao
 
-- Garanta que a conta de destino (por exemplo `ih58...`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
-- Invoque o entrypoint `register_and_mint` para criar a definicao do ativo ROSE e cunhar 250 unidades para Alice em uma unica transacao.
-- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` para confirmar que a cunhagem foi bem-sucedida.
+- Garantía de que existe una cuenta de destino (por ejemplo, `ih58...`), activando una fase de configuración en cada inicio rápido del SDK.
+- Invoque el punto de entrada `register_and_mint` para crear la definición del activo ROSE y cunhar 250 unidades para Alice en una única transacao.
+- Verifique os saldos vía `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account ih58...` para confirmar que a cunhagem foi bem-sucedida.
 
-## Guias de SDK relacionados
+## Guías de SDK relacionadas
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [Inicio rápido de SDK Rust](/sdks/rust)
+- [Inicio rápido del SDK Python](/sdks/python)
+- [Inicio rápido del SDK JavaScript](/sdks/javascript)
 
 [Baixe a fonte Kotodama](/norito-snippets/register-and-mint.ko)
 

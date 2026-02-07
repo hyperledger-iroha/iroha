@@ -6,36 +6,37 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: df3e3ac15baf47a6c53001acabcac7987a2386c2b772b1d8625eb60598f95a60
 source_last_modified: "2026-01-03T18:08:01.691568+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Iroha 3 SLO Harness
+% Iroha 3 Harnais SLO
 
-The Iroha 3 release line carries explicit SLOs for the critical Nexus paths:
+La ligne de version Iroha 3 comporte des SLO explicites pour les chemins critiques Nexus :
 
-- finality slot duration (NX‑18 cadence)
-- proof verification (commit certs, JDG attestations, bridge proofs)
-- proof endpoint handling (Axum path proxy via verification latency)
-- fee and staking paths (payer/sponsor and bond/slash flows)
+- durée du créneau de finalité (cadence NX‑18)
+- vérification des preuves (certificats de commit, attestations JDG, épreuves de pont)
+- gestion des points de terminaison de preuve (proxy de chemin Axum via latence de vérification)
+- parcours de frais et de jalonnement (flux payeur/sponsor et obligations/slash)
 
-## Budgets
+## Budget
 
-Budgets live in `benchmarks/i3/slo_budgets.json` and map directly to the bench
-scenarios in the I3 suite. Objectives are per‑call p99 targets:
+Les budgets résident dans `benchmarks/i3/slo_budgets.json` et sont directement mappés sur le banc
+scénarios dans la suite I3. Les objectifs sont des cibles p99 par appel :
 
-- Fee/staking: 50 ms per call (`fee_payer`, `fee_sponsor`, `staking_bond`, `staking_slash`)
-- Commit cert / JDG / bridge verify: 80 ms (`commit_cert_verify`, `jdg_attestation_verify`,
+- Frais/mise en jeu : 50 ms par appel (`fee_payer`, `fee_sponsor`, `staking_bond`, `staking_slash`)
+- Valider le certificat / JDG / vérifier le pont : 80 ms (`commit_cert_verify`, `jdg_attestation_verify`,
   `bridge_proof_verify`)
-- Commit cert assembly: 80 ms (`commit_cert_assembly`)
-- Access scheduler: 50 ms (`access_scheduler`)
-- Proof endpoint proxy: 120 ms (`torii_proof_endpoint`)
+- Valider l'assemblage du certificat : 80 ms (`commit_cert_assembly`)
+- Planificateur d'accès : 50 ms (`access_scheduler`)
+- Proxy de point de terminaison de preuve : 120 ms (`torii_proof_endpoint`)
 
-Burn-rate hints (`burn_rate_fast`/`burn_rate_slow`) encode the 14.4/6.0
-multi-window ratios for paging vs. ticket alerts.
+Les indices de taux de combustion (`burn_rate_fast`/`burn_rate_slow`) codent le 14,4/6,0
+ratios multi-fenêtres pour les alertes de radiomessagerie et de ticket.
 
-## Harness
+## Harnais
 
-Run the harness via `cargo xtask i3-slo-harness`:
+Exécutez le harnais via `cargo xtask i3-slo-harness` :
 
 ```bash
 cargo xtask i3-slo-harness \
@@ -44,30 +45,30 @@ cargo xtask i3-slo-harness \
   --out-dir artifacts/i3_slo/latest
 ```
 
-Outputs:
+Sorties :
 
-- `bench_report.json|csv|md` — raw I3 bench suite results (git hash + scenarios)
-- `slo_report.json|md` — SLO evaluation with pass/fail/budget-ratio per target
+- `bench_report.json|csv|md` — résultats bruts de la suite de bancs I3 (hash git + scénarios)
+- `slo_report.json|md` — Évaluation SLO avec rapport réussite/échec/budget par cible
 
-The harness consumes the budgets file and enforces `benchmarks/i3/slo_thresholds.json`
-during the bench run to fail fast when a target regresses.
+Le harnais consomme le fichier des budgets et applique `benchmarks/i3/slo_thresholds.json`
+pendant l'exécution sur banc pour échouer rapidement lorsqu'une cible régresse.
 
-## Telemetry and dashboards
+## Télémétrie et tableaux de bord
 
-- Finality: `histogram_quantile(0.99, rate(iroha_slot_duration_ms_bucket[5m]))`
-- Proof verification: `histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m])))`
+- Finalité : `histogram_quantile(0.99, rate(iroha_slot_duration_ms_bucket[5m]))`
+- Vérification de la preuve : `histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m])))`
 
-Grafana starter panels live in `dashboards/grafana/i3_slo.json`. Prometheus
-burn-rate alerts are provided in `dashboards/alerts/i3_slo_burn.yml` with the
-budgets above baked in (finality 2s, proof verify 80 ms, proof endpoint proxy
-120 ms).
+Les panneaux de démarrage Grafana sont installés dans `dashboards/grafana/i3_slo.json`. Prometheus
+des alertes de taux de combustion sont fournies dans `dashboards/alerts/i3_slo_burn.yml` avec le
+budgets ci-dessus intégrés (finalité 2 s, vérification de la preuve 80 ms, proxy du point de terminaison de preuve
+120 ms).
 
-## Operational notes
+## Notes opérationnelles
 
-- Run the harness in nightlies; publish `artifacts/i3_slo/<stamp>/slo_report.md`
-  alongside the bench artefacts for governance evidence.
-- If a budget fails, use the bench markdown to identify the scenario, then drill
-  into the matching Grafana panel/alert to correlate with live metrics.
-- Proof endpoint SLOs use the verification latency as a proxy to avoid per-route
-  cardinality blowup; the benchmark target (120 ms) matches the retention/DoS
-  guardrails on the proof API.
+- Faites passer le harnais en tenue de nuit ; publier `artifacts/i3_slo/<stamp>/slo_report.md`
+  aux côtés des artefacts de banc pour les preuves de gouvernance.
+- Si un budget échoue, utilisez la démarque de référence pour identifier le scénario, puis explorez
+  dans le panneau/alerte Grafana correspondant pour établir une corrélation avec les métriques en direct.
+- Les SLO de point de terminaison de preuve utilisent la latence de vérification comme proxy pour éviter les erreurs par route.
+  explosion de cardinalité ; la cible de référence (120 ms) correspond à la rétention/DoS
+  garde-fous sur l'API de preuve.

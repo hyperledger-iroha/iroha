@@ -7,55 +7,56 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 09567fc0280e726bdd1f2f1289dc98547ac70db9b19324ef5e413c2cff34de80
 source_last_modified: "2025-12-29T18:16:35.201180+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SF-2c Capacity Accrual Soak Report
+# SF-2c Capacity Accrual Soak အစီရင်ခံစာ
 
-Date: 2026-03-21
+ရက်စွဲ- 2026-03-21
 
-## Scope
+## နယ်ပယ်
 
-This report records the deterministic SoraFS capacity accrual and payout soak
-tests requested under the SF-2c roadmap track.
+ဤအစီရင်ခံစာသည် အဆုံးအဖြတ်ပေးသော SoraFS ပမာဏ တိုးမြင့်လာပြီး ပေးချေမှုစိမ်ခံမှုကို မှတ်တမ်းတင်သည်
+SF-2c လမ်းပြမြေပုံလမ်းကြောင်းအောက်တွင် တောင်းဆိုထားသော စမ်းသပ်မှုများ။
 
-- **30-day multi-provider soak:** Exercised by
+- **ရက် 30-ရက်ပေါင်းများစွာ ပံ့ပိုးပေးသည်-** လေ့ကျင့်ခန်းလုပ်ပါ။
   `capacity_fee_ledger_30_day_soak_deterministic` in
-  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  The harness instantiates five providers, spans 30 settlement windows, and
-  validates that ledger totals match an independently computed reference
-  projection. The test emits a Blake3 digest (`capacity_soak_digest=...`) so
-  CI can capture and diff the canonical snapshot.
-- **Under-delivery penalties:** Enforced by
+  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`။
+  ကြိုးသိုင်းသည် ပံ့ပိုးသူငါးဦးကို လှုံ့ဆော်ပေးသည်၊ အခြေချနေထိုင်သည့်ပြတင်းပေါက် 30 ကို ချဲ့ထွင်ကာ၊
+  စာရင်းဇယားစုစုပေါင်းသည် သီးခြားတွက်ချက်ထားသော ကိုးကားချက်နှင့် ကိုက်ညီကြောင်း အတည်ပြုသည်။
+  ဆွဲငင်ခြင်း။ စမ်းသပ်မှုသည် Blake3 digest (`capacity_soak_digest=...`) ကို ထုတ်လွှတ်သည်။
+  CI သည် canonical snapshot ကို ဖမ်းယူနိုင်ပြီး ကွဲပြားနိုင်သည်။
+- ** ပေးပို့မှုအောက် ပြစ်ဒဏ်များ-** ဖြင့် ပြဋ္ဌာန်းထားသည်။
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (same file). The test confirms strike thresholds, cooldowns, collateral slashes,
-  and ledger counters remain deterministic.
+  (ဖိုင်အတူတူပါပဲ)။ စမ်းသပ်မှုတွင် ဒဏ်ခတ်ကန့်သတ်ချက်များ၊ အအေးခန်းများ၊ အပေါင်ခံမျဥ်းစောင်းများကို အတည်ပြုပေးသည်
+  နှင့် လယ်ဂျာကောင်တာများသည် အဆုံးအဖြတ်အတိုင်း ကျန်ရှိနေပါသည်။
 
-## Execution
+## ကွပ်မျက်ခြင်း။
 
-Run the soak validations locally with:
+စိမ်ခံခြင်းဆိုင်ရာ အတည်ပြုချက်များကို စက်တွင်းတွင် လုပ်ဆောင်ပါ-
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-The tests complete in under one second on a standard laptop and require no
-external fixtures.
+ပုံမှန်လက်ပ်တော့တစ်လုံးတွင် စမ်းသပ်မှုများသည် တစ်စက္ကန့်အတွင်း ပြီးမြောက်ပြီး မလိုအပ်ပါ။
+ပြင်ပပစ္စည်းများ။
 
-## Observability
+## မြင်နိုင်စွမ်း
 
-Torii now exposes provider credit snapshots alongside fee ledgers so dashboards
-can gate on low balances and penalty strikes:
+ယခု Torii သည် အခကြေးငွေစာရင်းဇယားများနှင့်အတူ ဝန်ဆောင်မှုပေးသူ၏ ခရက်ဒစ်လျှပ်တစ်ပြက်ပုံများကို ပြသပေးသည် ထို့ကြောင့် ဒက်ရှ်ဘုတ်များ
+အနိမ့်ဆုံး ချိန်ခွင်လျှာနှင့် ပင်နယ်တီကို ဖြတ်ထုတ်နိုင်သည်-
 
-- REST: `GET /v1/sorafs/capacity/state` returns `credit_ledger[*]` entries that
-  mirror the ledger fields verified in the soak test. See
-  `crates/iroha_torii/src/sorafs/registry.rs`.
-- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` plots the
-  exported strike counters, penalty totals, and bonded collateral so on-call
-  staff can compare soak baselines with live environments.
+- REST- `GET /v1/sorafs/capacity/state` သည် ၎င်း `credit_ledger[*]` တို့ကို ပြန်ပေးသည်
+  စိမ်စမ်းသပ်မှုတွင် စစ်ဆေးထားသော လယ်ဂျာအကွက်များကို မှန်ကြည့်ပါ။ ကြည့်ပါ။
+  `crates/iroha_torii/src/sorafs/registry.rs`။
+- Grafana တင်သွင်းမှု- `dashboards/grafana/sorafs_capacity_penalties.json` မြေကွက်များ၊
+  တင်ပို့ထားသော သပိတ်ကောင်တာများ၊ ဒဏ်ငွေစုစုပေါင်းနှင့် စာချုပ်ပါစရံများကို ခေါ်ဆိုပါ။
+  ဝန်ထမ်းများသည် ရေစိမ်ထားသော အခြေခံလိုင်းများကို တိုက်ရိုက်ပတ်ဝန်းကျင်နှင့် နှိုင်းယှဉ်နိုင်သည်။
 
-## Follow-up
+## နောက်ဆက်တွဲ
 
-- Schedule weekly gate runs in CI to replay the soak test (smoke-tier).
-- Extend the Grafana board with Torii scrape targets once production telemetry
-  exports go live.
+- စိမ်ခံစမ်းသပ်မှု (မီးခိုးအဆင့်) ကို ပြန်လည်ပြသရန် အပတ်စဉ် ဂိတ်ပေါက်သည် CI တွင်လည်ပတ်နေမှုကို အချိန်ဇယားဆွဲပါ။
+- ထုတ်လုပ်မှု telemetry ပြီးသည်နှင့် Torii ပစ်မှတ်များကိုခြစ်ခြင်းဖြင့် Grafana ဘုတ်ကိုတိုးချဲ့ပါ
+  ပို့ကုန်များ အသက်ရှင်နေပါသည်။

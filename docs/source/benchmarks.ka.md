@@ -7,98 +7,97 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5a5420a123c456aad264ceb70d744b20b09848f7dca23700b4ee1370144bb57c
 source_last_modified: "2025-12-29T18:16:35.920013+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Benchmarking Report
+# ბენჩმარკინგის ანგარიში
 
-Detailed per-run snapshots and the FASTPQ WP5-B history live in
-[`benchmarks/history.md`](benchmarks/history.md); use that index when attaching
-artefacts to roadmap reviews or SRE audits. Regenerate it with
-`python3 scripts/fastpq/update_benchmark_history.py` whenever new GPU captures
-or Poseidon manifests land.
+გაშვების დეტალური კადრები და FASTPQ WP5-B ისტორია ცოცხალია
+[`benchmarks/history.md`](benchmarks/history.md); გამოიყენეთ ეს ინდექსი მიმაგრებისას
+არტეფაქტები საგზაო რუქის მიმოხილვისთვის ან SRE აუდიტებისთვის. განაახლეთ იგი
+`python3 scripts/fastpq/update_benchmark_history.py` როდესაც ახალი GPU იჭერს
+ან პოსეიდონი ავლენს მიწას.
 
-## Acceleration evidence bundle
+## აჩქარების მტკიცებულების ნაკრები
 
-Every GPU or mixed-mode benchmark must include the applied acceleration settings
-so WP6-B/WP6-C can prove configuration parity alongside the timing artefacts.
+ყველა GPU ან შერეული რეჟიმის საორიენტაციო ნიშანი უნდა შეიცავდეს გამოყენებული აჩქარების პარამეტრებს
+ასე რომ, WP6-B/WP6-C შეუძლია დაამტკიცოს კონფიგურაციის პარიტეტი დროის არტეფაქტებთან ერთად.
 
-- Capture the runtime snapshot before/after each run:
+- გადაიღეთ გაშვების სნეპშოტი ყოველი გაშვების წინ/შემდეგ:
   `cargo xtask acceleration-state --format json > artifacts/acceleration_state_<stamp>.json`
-  (use `--format table` for human-readable logs). This records `enable_{metal,cuda}`,
-  Merkle thresholds, SHA-2 CPU bias limits, the detected backend health bits, and any
-  sticky parity errors or disable reasons.
-- Store the JSON next to the wrapped benchmark output
+  (გამოიყენეთ `--format table` ადამიანის მიერ წასაკითხი ჟურნალებისთვის). ეს იწერს `enable_{metal,cuda}`,
+  Merkle-ის ზღურბლები, SHA-2 CPU მიკერძოებული ლიმიტები, აღმოჩენილი backend ჯანმრთელობის ბიტები და ნებისმიერი
+  წებოვანი პარიტეტის შეცდომები ან გამორთვის მიზეზები.
+- შეინახეთ JSON შეფუთული საორიენტაციო გამოსავლის გვერდით
   (`artifacts/fastpq_benchmarks/*.json`, `benchmarks/poseidon/*.json`, Merkle sweep
-  captures, etc.) so reviewers can diff timings and configuration together.
-- Knob definitions and defaults live in `docs/source/config/acceleration.md`; when
-  overrides are applied (e.g., `ACCEL_MERKLE_MIN_LEAVES_GPU`, `ACCEL_ENABLE_CUDA`),
-  note them in the run metadata to keep reruns reproducible across hosts.
+  გადაღებები და ა.შ.) ასე რომ, მიმომხილველებს შეუძლიათ განასხვავონ დრო და კონფიგურაცია ერთად.
+- ღილაკის განმარტებები და ნაგულისხმევი პარამეტრები ცხოვრობს `docs/source/config/acceleration.md`-ში; როცა
+  გამოიყენება უგულებელყოფა (მაგ., `ACCEL_MERKLE_MIN_LEAVES_GPU`, `ACCEL_ENABLE_CUDA`),
+  ჩანიშნეთ ისინი გაშვების მეტამონაცემებში, რათა განმეორებითი გაშვებები იყოს ჰოსტებში.
 
-## Norito stage-1 benchmark (WP5-B/C)
+## Norito ეტაპი-1 საორიენტაციო ნიშანი (WP5-B/C)
 
-- Command: `cargo xtask stage1-bench [--size <bytes|Nk|Nm>]... [--iterations <n>]`
-  emits JSON + Markdown under `benchmarks/norito_stage1/` with per-size timings
-  for the scalar vs accelerated structural-index builder.
-- Latest runs (macOS aarch64, dev profile) live at
-  `benchmarks/norito_stage1/latest.{json,md}` and the fresh cutover CSV from
-  `examples/stage1_cutover` (`benchmarks/norito_stage1/cutover.csv`) shows SIMD
-  wins from ~6–8 KiB onwards. GPU/parallel Stage-1 now defaults to a **192 KiB**
-  cutoff (`NORITO_STAGE1_GPU_MIN_BYTES=<n>` to override) to avoid launch thrash
-  on small documents while enabling accelerators for larger payloads.
+- ბრძანება: `cargo xtask stage1-bench [--size <bytes|Nk|Nm>]... [--iterations <n>]`
+  ასხივებს JSON + Markdown `benchmarks/norito_stage1/`-ის ქვეშ თითო ზომის დროებით
+  სკალარული წინააღმდეგ დაჩქარებული სტრუქტურული ინდექსის შემქმნელისთვის.
+- უახლესი გაშვებები (macOS aarch64, dev პროფილი) პირდაპირ ეთერში
+  `benchmarks/norito_stage1/latest.{json,md}` და ახალი cutover CSV-დან
+  `examples/stage1_cutover` (`benchmarks/norito_stage1/cutover.csv`) აჩვენებს SIMD-ს
+  იგებს ~ 6-8 KiB-დან. GPU/პარალელური ეტაპი-1 ახლა ნაგულისხმევია **192 KiB**
+  გათიშვა (`NORITO_STAGE1_GPU_MIN_BYTES=<n>` გადასალახად) გაშვების აცილების მიზნით
+  მცირე დოკუმენტებზე, ხოლო ამაჩქარებლების ჩართვა უფრო დიდი დატვირთვისთვის.
 
 ## Enum vs Trait Object Dispatch
 
-- Compile time (debug build): 16.58s
-- Runtime (Criterion, lower is better):
-  - `enum`: 386 ps (average)
-  - `trait_object`: 1.56 ns (average)
+- კომპილაციის დრო (გამართვის აგება): 16.58 წმ
+- გაშვების დრო (კრიტერიუმი, უფრო დაბალი უკეთესია):
+  - `enum`: 386 ps (საშუალო)
+  - `trait_object`: 1,56 ns (საშუალო)
 
-These measurements come from a microbenchmark comparing an enum-based dispatch against a boxed trait object implementation.
+ეს გაზომვები მომდინარეობს მიკრობენჩმარკიდან, რომელიც ადარებს რიცხოვნობაზე დაფუძნებულ დისპეტჩერს ყუთში ჩასმული ნიშნის ობიექტის განხორციელებასთან.
 
 ## Poseidon CUDA batching
 
-The Poseidon benchmark (`crates/ivm/benches/bench_poseidon.rs`) now includes workloads that exercise both single-hash permutations and the new batched helpers. Run the suite with:
+Poseidon-ის საორიენტაციო მაჩვენებელი (`crates/ivm/benches/bench_poseidon.rs`) ახლა მოიცავს სამუშაო დატვირთვას, რომელიც ახორციელებს როგორც ერთ ჰეშის პერმუტაციებს, ასევე ახალ ჯგუფურ დამხმარეებს. გაუშვით კომპლექტი:
 
 ```bash
 cargo bench -p ivm bench_poseidon -- --save-baseline poseidon_cuda
 ```
 
-Criterion will record results under `target/criterion/poseidon*_many`. When a GPU worker is available, export the JSON summaries (e.g., copy `target/criterion/**/new/benchmark.json` into `benchmarks/poseidon/criterion_poseidon2_many_cuda.json`) (e.g., copy `target/criterion/**/new/benchmark.json` into `benchmarks/poseidon/`) so downstream teams can compare CPU vs CUDA throughput for each batch size. Until the dedicated GPU lane goes live, the benchmark falls back to the SIMD/CPU implementation and still provides useful regression data for batch performance.
+კრიტერიუმი ჩაიწერს შედეგებს `target/criterion/poseidon*_many`-ის ქვეშ. როდესაც GPU მუშაკი ხელმისაწვდომია, JSON რეზიუმეების ექსპორტი (მაგ., დააკოპირეთ `target/criterion/**/new/benchmark.json` `benchmarks/poseidon/criterion_poseidon2_many_cuda.json`-ში) (მაგ., დააკოპირეთ `target/criterion/**/new/benchmark.json` `benchmarks/poseidon/`-ში), რათა ქვედა დინების გუნდებმა შეადარონ თითოეული ზომის baCUDA CPU v. სანამ გამოყოფილი GPU ხაზი გააქტიურდება, საორიენტაციო მაჩვენებელი ბრუნდება SIMD/CPU იმპლემენტაციაზე და კვლავ უზრუნველყოფს სასარგებლო რეგრესიის მონაცემებს სერიული მუშაობისთვის.
 
-For repeatable captures (and to keep parity evidence with timing data), run
+განმეორებადი გადაღებისთვის (და დროის მონაცემებით პარიტეტის მტკიცებულების შესანარჩუნებლად), გაუშვით
 
 ```bash
 cargo xtask poseidon-cuda-bench --json-out benchmarks/poseidon/poseidon_cuda_latest.json \
   --markdown-out benchmarks/poseidon/poseidon_cuda_latest.md --allow-overwrite
-```
+```რომელი თესავს დეტერმინისტულ პოსეიდონის 2/6 პარტიებს, აღრიცხავს CUDA-ს ჯანმრთელობის/გამორთვის მიზეზებს, ამოწმებს
+პარიტეტი სკალარული ბილიკის მიმართ და გამოსცემს ops/sec + სიჩქარის შეჯამებებს მეტალის გვერდით
+გაშვების სტატუსი (ფუნქციის დროშა, ხელმისაწვდომობა, ბოლო შეცდომა). მხოლოდ CPU-ის მასპინძლები მაინც წერენ სკალარს
+მიუთითეთ და შენიშნეთ დაკარგული ამაჩქარებელი, ასე რომ CI-ს შეუძლია გამოაქვეყნოს არტეფაქტები GPU-ს გარეშეც
+მორბენალი.
 
-which seeds deterministic Poseidon2/6 batches, records CUDA health/disable reasons, checks
-parity against the scalar path, and emits ops/sec + speedup summaries alongside the Metal
-runtime status (feature flag, availability, last error). CPU-only hosts still write the scalar
-reference and note the missing accelerator, so CI can publish artefacts even without a GPU
-runner.
+## FASTPQ ლითონის საორიენტაციო ნიშანი (Apple Silicon)
 
-## FASTPQ Metal benchmark (Apple Silicon)
+GPU ზოლმა დააფიქსირა `fastpq_metal_bench`-ის განახლებული პერსპექტივა macOS 14-ზე (arm64) ზოლში დაბალანსებული პარამეტრების კომპლექტით, 20000 ლოგიკური მწკრივით (დამატებული 32768-მდე) და 16 სვეტის ჯგუფით. შეფუთული არტეფაქტი ცხოვრობს `artifacts/fastpq_benchmarks/fastpq_metal_bench_20k_refresh.json`-ზე, ხოლო ლითონის კვალი ინახება წინა გადაღებებთან ერთად `traces/fastpq_metal_trace_*_rows20000_iter5.trace` ქვეშ. საშუალო დროები (`benchmarks.operations[*]`-დან) ახლა წაიკითხეთ:
 
-The GPU lane captured an updated end-to-end run of `fastpq_metal_bench` on macOS 14 (arm64) with the lane-balanced parameter set, 20,000 logical rows (padded to 32,768), and 16 column groups. The wrapped artefact lives at `artifacts/fastpq_benchmarks/fastpq_metal_bench_20k_refresh.json`, with the Metal trace stored alongside the previous captures under `traces/fastpq_metal_trace_*_rows20000_iter5.trace`. The averaged timings (from `benchmarks.operations[*]`) now read:
+| ოპერაცია | CPU საშუალო (ms) | ლითონის საშუალო (მმ) | აჩქარება (x) |
+|-----------|--------------|----------------|------------|
+| FFT (32,768 შეყვანა) | 83.29 | 79.95 | 1.04 |
+| IFFT (32,768 შეყვანა) | 93.90 | 78.61 | 1.20 |
+| LDE (262,144 შეყვანა) | 669.54 | 657.67 | 1.02 |
+| პოსეიდონის ჰეშის სვეტები (524,288 შეყვანა) | 29087.53 | 30,004.90 | 0.97 |
 
-| Operation | CPU mean (ms) | Metal mean (ms) | Speedup (x) |
-|-----------|---------------|-----------------|-------------|
-| FFT (32,768 inputs) | 83.29 | 79.95 | 1.04 |
-| IFFT (32,768 inputs) | 93.90 | 78.61 | 1.20 |
-| LDE (262,144 inputs) | 669.54 | 657.67 | 1.02 |
-| Poseidon hash columns (524,288 inputs) | 29,087.53 | 30,004.90 | 0.97 |
+დაკვირვებები:
 
-Observations:
+- FFT/IFFT ორივე სარგებლობს განახლებული BN254 ბირთვით (IFFT ასუფთავებს წინა რეგრესიას ~20%-ით).
+- LDE რჩება პარიტეტის მახლობლად; ნულოვანი შევსება ახლა აღრიცხავს 33,554,432 დამაგრებულ ბაიტს, საშუალოდ 18,66 ms, ასე რომ JSON პაკეტი აღიქვამს რიგის გავლენას.
+- Poseidon hashing კვლავ CPU-ით არის დაკავშირებული ამ მოწყობილობაზე; გააგრძელეთ შედარება პოსეიდონის მიკროსკოპის მანიფესტაციებთან, სანამ ლითონის გზა არ მიიღებს რიგის უახლეს კონტროლს.
+- ყოველი გადაღება ახლა იწერს `AccelerationSettings.runtimeState().metal.lastError`, გაქირავების
+  ინჟინრები ანოტაციას ახდენენ CPU-ს გამორთვის გამორთვის კონკრეტული მიზეზით (პოლიტიკის გადართვა,
+  პარიტეტის უკმარისობა, მოწყობილობა არ არის) პირდაპირ საორიენტაციო არტეფაქტში.
 
-- FFT/ IFFT both benefit from the refreshed BN254 kernels (IFFT clears the previous regression by ~20%).
-- LDE remains near parity; zero-fill now records 33,554,432 padded bytes with an 18.66 ms average so the JSON bundle captures the queue impact.
-- Poseidon hashing is still CPU-bound on this hardware; keep comparing against the Poseidon microbench manifests until the Metal path adopts the latest queue controls.
-- Each capture now records `AccelerationSettings.runtimeState().metal.lastError`, letting
-  engineers annotate CPU fallbacks with the specific disable reason (policy toggle,
-  parity failure, no device) directly in the benchmark artefact.
-
-To reproduce the run, build the Metal kernels and execute:
+გაშვების გასამრავლებლად, შექმენით ლითონის ბირთვები და შეასრულეთ:
 
 ```bash
 FASTPQ_METAL_LIB=target/release/build/fastpq_prover-*/out/fastpq.metallib \
@@ -107,11 +106,11 @@ cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_metal_bench --rele
   -- --rows 20000 --iterations 5 --output fastpq_metal_bench_20k.json
 ```
 
-Commit the resulting JSON under `artifacts/fastpq_benchmarks/` together with the Metal trace so the determinism evidence stays reproducible.
+ჩაიდინეთ მიღებული JSON `artifacts/fastpq_benchmarks/`-ის ქვეშ, მეტალის კვალთან ერთად, რათა დეტერმინიზმის მტკიცებულება დარჩეს გამეორებადი.
 
-## FASTPQ CUDA automation
+## FASTPQ CUDA ავტომატიზაცია
 
-CUDA hosts can run and wrap the SM80 benchmark in one step with:
+CUDA მასპინძლებს შეუძლიათ აწარმოონ და შეფუთონ SM80 ბენჩმარკი ერთ ნაბიჯში:
 
 ```bash
 cargo xtask fastpq-cuda-suite \
@@ -120,32 +119,30 @@ cargo xtask fastpq-cuda-suite \
   --label device_class=xeon-rtx --device rtx-ada
 ```
 
-The helper invokes `fastpq_cuda_bench`, threads through labels/device/notes, honours
-`--require-gpu`, and (by default) wraps/signs via `scripts/fastpq/wrap_benchmark.py`.
-Outputs include the raw JSON, the wrapped bundle under `artifacts/fastpq_benchmarks/`,
-and a `<name>_plan.json` next to the output that records the exact commands/env so
-Stage 7 captures stay reproducible across GPU runners. Add `--sign-output` and
-`--gpg-key <id>` when signatures are required; use `--dry-run` to emit only the
-plan/paths without executing the bench.
+დამხმარე იწვევს `fastpq_cuda_bench`-ს, გადადის ეტიკეტებზე/მოწყობილობაზე/შენიშვნებზე, აფასებს
+`--require-gpu` და (ნაგულისხმევად) ახვევს/ამოწერს `scripts/fastpq/wrap_benchmark.py`-ის მეშვეობით.
+შედეგები მოიცავს ნედლეულ JSON-ს, შეფუთულ პაკეტს `artifacts/fastpq_benchmarks/`-ის ქვეშ,
+და `<name>_plan.json` გამოსავლის გვერდით, რომელიც ჩაწერს ზუსტ ბრძანებებს/env ასე რომ
+მე-7 ეტაპის გადაღებები რჩება რეპროდუცირებადი GPU მორბენალებში. დაამატეთ `--sign-output` და
+`--gpg-key <id>` როდესაც საჭიროა ხელმოწერები; გამოიყენეთ `--dry-run` მხოლოდ გამოსაშვებად
+გეგმა/ბილიკები სკამის შესრულების გარეშე.
 
-### GA release capture (macOS 14 arm64, lane-balanced)
+### GA გამოშვების გადაღება (macOS 14 arm64, ზოლის დაბალანსებული)
 
-To satisfy WP2-D we also recorded a release build on the same host with GA-ready
-queue heuristics and published it as
-`fastpq_metal_bench_20k_release_macos14_arm64.json`. The artefact captures two
-column batches (lane-balanced, padded to 32,768 rows) and includes Poseidon
-microbench samples for dashboard consumption.
+WP2-D-ის დასაკმაყოფილებლად ჩვენ ასევე ჩავწერეთ გამოშვების build იმავე ჰოსტზე GA-ready-ით
+queue heuristics და გამოაქვეყნა როგორც
+`fastpq_metal_bench_20k_release_macos14_arm64.json`. არტეფაქტი იპყრობს ორს
+სვეტების პარტიები (ზოლის მიხედვით დაბალანსებული, 32,768 სტრიქონზე შეფუთული) და მოიცავს პოსეიდონს
+მიკროსკოპის ნიმუშები დაფის მოხმარებისთვის.| ოპერაცია | CPU საშუალო (ms) | ლითონის საშუალო (მმ) | აჩქარება | შენიშვნები |
+|-----------|--------------|----------------|--------|------|
+| FFT (32,768 შეყვანა) | 12.741 | 10.963 | 1.16× | GPU ბირთვები აკონტროლებენ განახლებულ რიგის ზღურბლებს. |
+| IFFT (32,768 შეყვანა) | 17.499 | 25.688 | 0.68× | რეგრესია მიკვლეული კონსერვატიული რიგის ფან-აუტამდე; გააგრძელეთ ევრისტიკის რეგულირება. |
+| LDE (262,144 შეყვანა) | 68.389 | 65.701 | 1.04× | ნულოვანი შევსების ჟურნალი 33,554,432 ბაიტი 9,651 ms-ში ორივე პარტიისთვის. |
+| პოსეიდონის ჰეშის სვეტები (524,288 შეყვანა) | 1,728.835 | 1,447.076 | 1.19× | GPU საბოლოოდ აჯობა CPU-ს პოსეიდონის რიგის შესწორების შემდეგ. |
 
-| Operation | CPU mean (ms) | Metal mean (ms) | Speedup | Notes |
-|-----------|---------------|-----------------|---------|-------|
-| FFT (32,768 inputs) | 12.741 | 10.963 | 1.16× | GPU kernels track the refreshed queue thresholds. |
-| IFFT (32,768 inputs) | 17.499 | 25.688 | 0.68× | Regression traced to conservative queue fan-out; keep tuning the heuristics. |
-| LDE (262,144 inputs) | 68.389 | 65.701 | 1.04× | Zero-fill logs 33,554,432 bytes in 9.651 ms for both batches. |
-| Poseidon hash columns (524,288 inputs) | 1,728.835 | 1,447.076 | 1.19× | GPU finally beats CPU after the Poseidon queue tweaks. |
-
-Poseidon microbench values embedded in the JSON show a 1.10× speedup (default lane
-596.229 ms vs scalar 656.251 ms across five iterations), so dashboards can now chart
-per-lane improvements alongside the main bench. Reproduce the run with:
+Poseidon microbench-ის მნიშვნელობები, რომლებიც ჩაშენებულია JSON-ში, აჩვენებს 1,10× სიჩქარეს (ნაგულისხმევი ხაზი
+596.229ms vs სკალარული 656.251ms ხუთ გამეორებაში), ასე რომ, დაფებს ახლა შეუძლიათ დიაგრამა
+თითო ზოლის გაუმჯობესება მთავარ სკამთან ერთად. გაშვების რეპროდუცირება:
 
 ```bash
 FASTPQ_METAL_LIB=target/release/build/fastpq_prover-*/out/fastpq.metallib \
@@ -155,62 +152,60 @@ cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_metal_bench --rele
   --output fastpq_metal_bench_20k_release_macos14_arm64.json
 ```
 
-Keep the wrapped JSON and `FASTPQ_METAL_TRACE_CHILD=1` traces checked in under
-`artifacts/fastpq_benchmarks/` so subsequent WP2-D/WP2-E reviews can diff the GA
-capture against earlier refresh runs without rerunning the workload.
+შეინახეთ შეფუთული JSON და `FASTPQ_METAL_TRACE_CHILD=1` კვალი შემოწმებული ქვემოთ
+`artifacts/fastpq_benchmarks/` ამიტომ WP2-D/WP2-E შემდგომი მიმოხილვები შეიძლება განსხვავდებოდეს GA-სგან
+გადაღება ადრინდელი განახლების გაშვების საწინააღმდეგოდ, სამუშაო დატვირთვის განმეორების გარეშე.
 
-Each fresh `fastpq_metal_bench` capture now also writes a `bn254_metrics` block,
-which exposes `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` entries for the CPU
-baseline and whichever GPU backend (Metal/CUDA) was active, **and** a
-`bn254_dispatch` block that records the observed threadgroup widths, logical thread
-counts, and pipeline limits for the single-column BN254 FFT/LDE dispatches. The
-benchmark wrapper copies both maps into `benchmarks.bn254_*`, so dashboards and
-Prometheus exporters can scrape labelled latencies and geometry without re-parsing
-the raw operations array. The `FASTPQ_METAL_THREADGROUP` override now applies to
-BN254 kernels as well, making threadgroup sweeps reproducible from one knob.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_benchmark.py:1037】
+ყოველი ახალი `fastpq_metal_bench` გადაღება ახლა ასევე წერს `bn254_metrics` ბლოკს,
+რომელიც ასახავს `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` ჩანაწერებს CPU-სთვის
+საბაზისო და რომელი GPU backend (მეტალი/CUDA) იყო აქტიური, **და** ა
+`bn254_dispatch` ბლოკი, რომელიც აღრიცხავს დაკვირვებულ ძაფთა ჯგუფის სიგანეებს, ლოგიკურ ძაფს
+თვლები და მილსადენის ლიმიტები ერთსვეტიანი BN254 FFT/LDE დისპეტჩერებისთვის. The
+საორიენტაციო შეფუთვა აკოპირებს ორივე რუკას `benchmarks.bn254_*`-ში, ასე რომ, დაფები და
+Prometheus ექსპორტიორებს შეუძლიათ ეტიკეტირებული შეყოვნება და გეომეტრია ხელახალი გაანალიზების გარეშე
+ნედლეული ოპერაციების მასივი. `FASTPQ_METAL_THREADGROUP` უგულებელყოფა ახლა ვრცელდება
+BN254 კერნელიც, რაც ხდის ძაფთა ჯგუფის გამეორებას ერთიდან knob.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq_metal_bench.rs:1448
 
-To keep downstream dashboards simple, run `python3 scripts/benchmarks/export_csv.py`
-after capturing a bundle. The helper flattens `poseidon_microbench_*.json` into
-matching `.csv` files so automation jobs can diff default and scalar lanes without
-custom parsers.
+ქვედა დინების დაფების მარტივი შესანარჩუნებლად, გაუშვით `python3 scripts/benchmarks/export_csv.py`
+შეკვრის დაჭერის შემდეგ. დამხმარე ასწორებს `poseidon_microbench_*.json`-ს
+შეესაბამება `.csv` ფაილებს, რათა ავტომატიზაციის სამუშაოებმა განასხვავოს ნაგულისხმევი და სკალარული ზოლები გარეშე
+საბაჟო პარსერები.
 
-## Poseidon microbench (Metal)
+## პოსეიდონის მიკროსკამი (ლითონი)
 
-`fastpq_metal_bench` now re-executes itself under `FASTPQ_METAL_POSEIDON_MICRO_MODE={default,scalar}` and promotes the timings into `benchmarks.poseidon_microbench`. We exported the latest Metal captures with `python3 scripts/fastpq/export_poseidon_microbench.py --bundle <wrapped_json>` and aggregated them via `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json`. The summaries below live under `benchmarks/poseidon/`:
+`fastpq_metal_bench` ახლა ხელახლა ახორციელებს თავს `FASTPQ_METAL_POSEIDON_MICRO_MODE={default,scalar}`-ის ქვეშ და ხელს უწყობს ვადებს `benchmarks.poseidon_microbench`-ში. ჩვენ გავიტანეთ უახლესი ლითონის გადაღებები `python3 scripts/fastpq/export_poseidon_microbench.py --bundle <wrapped_json>`-ით და გავაერთიანეთ ისინი `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json`-ის საშუალებით. ქვემოთ მოცემული შეჯამებები პირდაპირ ეთერშია `benchmarks/poseidon/`-ში:
 
-| Summary | Wrapped bundle | Default mean (ms) | Scalar mean (ms) | Speedup vs scalar | Columns x states | Iterations |
-|---------|----------------|-------------------|------------------|-------------------|------------------|------------|
-| `benchmarks/poseidon/poseidon_microbench_full.json` | `fastpq_metal_bench_full.json` | 1,990.49 | 1,994.53 | 1.002 | 64 x 262,144 | 5 |
-| `benchmarks/poseidon/poseidon_microbench_debug.json` | `fastpq_metal_bench_debug.json` | 2,167.66 | 2,152.18 | 0.993 | 64 x 262,144 | 5 |
+| რეზიუმე | შეფუთული შეკვრა | ნაგულისხმევი საშუალო (ms) | სკალარული საშუალო (ms) | სიჩქარის წინააღმდეგ სკალარული | სვეტები x სახელმწიფოები | გამეორებები |
+|---------|--------------|-----------------|----------- -------|------------------|----------------|------------|
+| `benchmarks/poseidon/poseidon_microbench_full.json` | `fastpq_metal_bench_full.json` | 1,990.49 | 1994.53 | 1.002 | 64 x 262,144 | 5 |
+| `benchmarks/poseidon/poseidon_microbench_debug.json` | `fastpq_metal_bench_debug.json` | 2167.66 | 2152.18 | 0.993 | 64 x 262,144 | 5 |ორივე აღბეჭდილმა ჰეშირდა 262,144 მდგომარეობა ერთ გაშვებაზე (კვალი log2 = 12) ერთი გახურების გამეორებით. "ნაგულისხმევი" ზოლი შეესაბამება მოწესრიგებულ მრავალ-მდგომარეობის ბირთვს, ხოლო "სკალარი" ბლოკავს ბირთვს თითო ზოლზე ერთ მდგომარეობაში შედარებისთვის.
 
-Both captures hashed 262,144 states per run (trace log2 = 12) with a single warm-up iteration. The "default" lane corresponds to the tuned multi-state kernel whereas "scalar" locks the kernel to one state per lane for comparison.
+## მერკლის ბარიერი გადადის
 
-## Merkle threshold sweeps
+`merkle_threshold` მაგალითი (`cargo run --release -p ivm --features metal --example merkle_threshold -- --json`) ხაზს უსვამს Metal-vs-CPU Merkle ჰეშირების ბილიკებს. AppleSilicon-ის უახლესი გადაღება (Darwin 25.0.0 arm64, `ivm::metal_available()=true`) ცხოვრობს `benchmarks/merkle_threshold/takemiyacStudio.lan_25.0.0_arm64.json`-ში შესაბამისი CSV ექსპორტით. მხოლოდ CPU-ზე მომუშავე macOS 14 საბაზისო ხაზები რჩება `benchmarks/merkle_threshold/macos14_arm64_{cpu,metal}.json` ქვეშ ჰოსტებისთვის ლითონის გარეშე.
 
-The `merkle_threshold` example (`cargo run --release -p ivm --features metal --example merkle_threshold -- --json`) stresses the Metal-vs-CPU Merkle hashing paths. The latest Apple Silicon capture (Darwin 25.0.0 arm64, `ivm::metal_available()=true`) lives in `benchmarks/merkle_threshold/takemiyacStudio.lan_25.0.0_arm64.json` with a matching CSV export. CPU-only macOS 14 baselines remain under `benchmarks/merkle_threshold/macos14_arm64_{cpu,metal}.json` for hosts without Metal.
-
-| Leaves | CPU best (ms) | Metal best (ms) | Speedup |
-|--------|---------------|-----------------|---------|
-| 1,024  | 23.01 | 19.69 | 1.17× |
-| 4,096  | 50.87 | 62.12 | 0.82× |
-| 8,192  | 95.77 | 96.57 | 0.99× |
-| 16,384 | 64.48 | 58.98 | 1.09× |
-| 32,768 | 109.49 | 87.68 | 1.25× |
+| ფოთლები | CPU საუკეთესო (მმ) | ლითონის საუკეთესო (მმ) | აჩქარება |
+|--------|--------------|---------------|---------|
+| 1024 | 23.01 | 19.69 | 1.17× |
+| 4096 | 50.87 | 62.12 | 0.82× |
+| 8192 | 95.77 | 96.57 | 0.99× |
+| 16384 | 64.48 | 58.98 | 1.09× |
+| 32768 | 109.49 | 87.68 | 1.25× |
 | 65,536 | 177.72 | 137.93 | 1.29× |
 
-Larger leaf counts benefit from Metal (1.09–1.29×); smaller buckets still run faster on CPU, so the CSV keeps both columns for analysis. The CSV helper preserves the `metal_available` flag beside each profile to keep GPU vs CPU regression dashboards aligned.
+ფოთლის დიდი რაოდენობა სარგებლობს ლითონისგან (1,09–1,29×); პატარა თაიგულები კვლავ უფრო სწრაფად მუშაობს CPU-ზე, ამიტომ CSV ინახავს ორივე სვეტს ანალიზისთვის. CSV დამხმარე ინახავს `metal_available` დროშას თითოეული პროფილის გვერდით, რათა შეინარჩუნოს GPU და CPU რეგრესიის დაფები გასწორებული.
 
-Reproduction steps:
+რეპროდუქციის ნაბიჯები:
 
 ```bash
 cargo run --release -p ivm --features metal --example merkle_threshold -- --json \
   > benchmarks/merkle_threshold/<hostname>_$(uname -r)_$(uname -m).json
 ```
 
-Set `FASTPQ_METAL_LIB`/`FASTPQ_GPU` if the host requires explicit Metal enabling, and keep both CPU + GPU captures checked in so WP1-F can chart the policy thresholds.
+დააყენეთ `FASTPQ_METAL_LIB`/`FASTPQ_GPU`, თუ მასპინძელი მოითხოვს ცალსახა Metal-ის ჩართვას და შეინახეთ ორივე CPU + GPU ჩაწერა შემოწმებული, რათა WP1-F-მა შეძლოს პოლიტიკის ზღვრების დიაგრამა.
 
-When running from a headless shell, set `IVM_DEBUG_METAL_ENUM=1` to log device enumeration and `IVM_FORCE_METAL_ENUM=1` to bypass `MTLCreateSystemDefaultDevice()`. The CLI warms up the CoreGraphics session **before** asking for the default Metal device and falls back to `MTLCreateSystemDefaultDevice()` when `MTLCopyAllDevices()` returns zero; if the host still reports no devices the capture will retain `metal_available=false` (useful CPU baselines live under `macos14_arm64_*`), while GPU hosts should keep `FASTPQ_GPU=metal` enabled so the bundle logs the chosen backend.
+უთავო ჭურვიდან გაშვებისას დააყენეთ `IVM_DEBUG_METAL_ENUM=1` მოწყობილობების აღრიცხვაზე და `IVM_FORCE_METAL_ENUM=1` `MTLCreateSystemDefaultDevice()`-ის გვერდის ავლით. CLI ათბობს CoreGraphics სესიას **სანამ** ითხოვს ნაგულისხმევ Metal მოწყობილობას და ბრუნდება `MTLCreateSystemDefaultDevice()`-ზე, როდესაც `MTLCopyAllDevices()` დააბრუნებს ნულს; თუ მასპინძელი კვლავ იტყობინება მოწყობილობების არარსებობის შესახებ, გადაღება შეინარჩუნებს `metal_available=false`-ს (CPU-ის სასარგებლო საბაზისო ხაზები ცხოვრობს `macos14_arm64_*`-ის ქვეშ), ხოლო GPU ჰოსტებმა უნდა დატოვონ ჩართული `FASTPQ_GPU=metal`, რათა პაკეტმა ჩაიწეროს არჩეული უკანა ნაწილი.
 
-`fastpq_metal_bench` exposes a similar knob via `FASTPQ_DEBUG_METAL_ENUM=1`, which prints the `MTLCreateSystemDefaultDevice`/`MTLCopyAllDevices` results before the backend decides whether to stay on the GPU path. Enable it whenever `FASTPQ_GPU=gpu` still reports `backend="none"` in the wrapped JSON so the capture bundle records exactly how the host enumerated Metal hardware; the harness aborts immediately when `FASTPQ_GPU=gpu` is set but no accelerator is detected, pointing at the debug knob so the release bundle never hides a CPU fallback behind a forced GPU run.【crates/fastpq_prover/src/backend.rs:665】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】
+`fastpq_metal_bench` ავლენს მსგავს ღილაკს `FASTPQ_DEBUG_METAL_ENUM=1`-ის მეშვეობით, რომელიც ბეჭდავს `MTLCreateSystemDefaultDevice`/`MTLCopyAllDevices` შედეგებს მანამ, სანამ backend გადაწყვეტს დარჩეს თუ არა GPU-ს გზაზე. ჩართეთ ის, როცა `FASTPQ_GPU=gpu` კვლავ იტყობინება `backend="none"` შეფუთულ JSON-ში, რათა გადაღების პაკეტმა ზუსტად ჩაიწეროს, თუ როგორ ჩამოთვალა მასპინძელმა Metal აპარატურა; აღკაზმულობა მაშინვე წყდება, როდესაც დაყენებულია `FASTPQ_GPU=gpu`, მაგრამ ამაჩქარებელი არ არის აღმოჩენილი, მიუთითებს გამართვის ღილაკზე, ასე რომ, გამოშვების ნაკრები არასოდეს მალავს CPU-ს უკან დაბრუნების იძულებით GPU-ს მიღმა. გაუშვით.【crates/fastpq_prover/src/backend.rs:665】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】
 
-The CSV helper emits per-profile tables (for example `macos14_arm64_*.csv` and `takemiyacStudio.lan_25.0.0_arm64.csv`), preserving the `metal_available` flag so regression dashboards can ingest the CPU and GPU measurements without bespoke parsers.
+CSV დამხმარე ასხივებს თითო პროფილის ცხრილებს (მაგალითად, `macos14_arm64_*.csv` და `takemiyacStudio.lan_25.0.0_arm64.csv`), ინარჩუნებს `metal_available` დროშას, რათა რეგრესიის დაფებმა შეძლონ CPU და GPU გაზომვები შეკვეთილი ანალიზატორების გარეშე.

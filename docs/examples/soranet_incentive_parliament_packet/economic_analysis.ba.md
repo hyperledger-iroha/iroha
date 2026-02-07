@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1b453559c05401edc11894e585c8d5ca4b678d4667c1cef0415582e1f7de8246
 source_last_modified: "2025-12-29T18:16:35.087502+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Economic Analysis - 2025-10 -> 2025-11 Shadow Run
+# Иҡтисади анализ - 2025-10 -> 2025-11 Күләгә йүгерә
 
-Source artefact: `docs/examples/soranet_incentive_shadow_run.json` (signature +
-public key in the same directory). The simulation replayed 60 epochs per relay
-with the reward engine pinned to `RewardConfig` recorded in
+Сығанаҡ артефакт: `docs/examples/soranet_incentive_shadow_run.json` (ҡултамға +
+бер каталогта асыҡ асҡыс). Моделләштереү 60 эпохаһын бер эстафета .
+менән бүләк двигателе I18NI000000002X 1990 йылда теркәлгән.
 `reward_config.json`.
 
-## Distribution Summary
+## Таратыу Йәмғеһе
 
-- **Total payouts:** 5,160 XOR over 360 rewarded epochs.
-- **Fairness envelope:** Gini coefficient 0.121; top relay share 23.26%
-  (well below the 30% governance guardrail).
-- **Availability:** fleet average 96.97%, all relays remained above 94%.
-- **Bandwidth:** fleet average 91.20%, with the lowest performer at 87.23%
-  during planned maintenance; penalties were applied automatically.
-- **Compliance noise:** 9 warning epochs and 3 suspensions were observed and
-  translated into payout reductions; no relay exceeded the 12-warning cap.
-- **Operational hygiene:** no metrics snapshots were skipped due to missing
-  config, bonds, or duplicates; no calculator errors were emitted.
+- **Дөйөм түләүҙәр:** 5,160 XOR 360-тан ашыу бүләкләнгән эпоха.
+- **Ғәҙел конверт:** Джини коэффициенты 0,121; өҫкө реле өлөшө 23,26%
+  (яҡшы түбән 30% идара итеү ҡоршау).
+- ** Доступность:** флот уртаса 96,97%, бөтә релелар 94% юғары ҡалды.
+- **Бөтөрөү:** флот уртаса 91,20%, иң түбән башҡарыусы менән 87,23%
+  планлы хеҙмәтләндереүҙең ваҡытында; штраф автоматик рәүештә ҡулланылған.
+- **Туған шау-шыу:** 9 иҫкәрткес эпоха һәм 3 аҫҡы өлөшө күҙәтелде һәм
+  түләүҙе кәметергә тәржемә ителә; 12-се иҫкәрткән ҡапҡасты бер ниндәй ҙә эстафета үтә алманы.
+- **Операцион гигиена:** юғалыу сәбәпле метрикалар үткәрелмәгән.
+  конфиг, облигациялар, йәки дубликаттар; бер ниндәй ҙә калькулятор хаталары сығарылмаған.
 
-## Observations
+## Күҙәтеүҙәр
 
-- Suspensions correspond to epochs where relays entered maintenance mode. The
-  payout engine emitted zero payouts for those epochs while preserving the
-  audit trail in the shadow-run JSON.
-- Warning penalties shaved 2% off the affected payouts; the resulting
-  distribution still converges thanks to the uptime/bandwidth weights (650/350
-  per mille).
-- Bandwidth variance tracks the anonymised guard heatmap. The lowest performer
-  (`6666...6666`) retained 620 XOR across the window, above the 0.6x floor.
-- Latency-sensitive alerts (`SoranetRelayLatencySpike`) remained below warning
-  thresholds throughout the window; correlated dashboards are captured under
+- Аҫҡылар релелар хеҙмәтләндереүҙең режимына ингән эпохаларға тура килә. 1990 й.
+  түләү двигателе нуль түләүҙәрҙе сығарҙы, шул эпохалар өсөн, шул уҡ ваҡытта һаҡлау,
+  аудит эҙ күләгә-йүгереп JSON.
+- Иҫкәртмә штрафтары 2% бритва ҡаза күргән түләүҙәр; һөҙөмтәлә
+  таралыу һаман да йыйыла рәхмәт өҫтөндә эшләү ваҡыты/үткәреүсәнлеге ауырлыҡтары (650/350
+  бер миллионға).
+- Взлом дисперсияһы аноним һаҡсылы йылылыҡ картаһын күҙәтә. Иң түбән башҡарыусы
+  (`6666...6666`) тәҙрә аша 620 XOR һаҡлап ҡалды, 0,6x ҡаттан юғарыраҡ.
+- Латентлыҡҡа һиҙгер иҫкәртмәләр (I18NI000000005X) иҫкәртмәнән түбәнерәк ҡалды.
+  бөтә тәҙрә буйлап сиктәр; корреляциялы приборҙар таҡталары аҫтында тотола.
   `dashboards/grafana/soranet_incentives.json`.
 
-## Recommended Actions Before GA
+## Г.А.
 
-1. Keep running monthly shadow replays and update the artefact set and this
-   analysis if the fleet composition changes.
-2. Gate automatic payouts on the Grafana alert suite referenced in the roadmap
-   (`dashboards/alerts/soranet_incentives_rules.yml`); copy screenshots into the
-   governance minutes when seeking renewal.
-3. Re-run the economic stress test if base reward, uptime/bandwidth weights, or
-   the compliance penalty changes by >=10%.
+1. Йүгереп айлыҡ күләгә реплей һәм яңыртыу артефакт комплекты һәм был
+   анализ, әгәр автопарк составы үҙгәрә.
+2. Ҡапҡа автоматик түләүҙәр I18NT0000000000000Х иҫкәртмә люкс һылтанма юл картаһы
+   (I18NI0000007X); скриншоттарҙы күсерергә
+   идара итеү минуттары яңыртыу эҙләгәндә.
+3. Ҡабаттан идара итеү иҡтисади стресс һынау, әгәр база бүләк, эш ваҡыты/үткәреүҙең ауырлыҡтары, йәки
+   үтәү штраф үҙгәрештәре >=10%.

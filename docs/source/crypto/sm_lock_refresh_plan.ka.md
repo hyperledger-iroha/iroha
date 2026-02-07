@@ -7,48 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3065571b34a226a5871c4fb68063f9419e48074b20096de215f440bdf54a4e59
 source_last_modified: "2025-12-29T18:16:35.943236+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Procedure for scheduling the Cargo.lock refresh required by the SM spike.
+//! Cargo.lock-ის განახლების დაგეგმვის პროცედურა, რომელიც საჭიროა SM მწვერვალისთვის.
 
-# SM Feature `Cargo.lock` Refresh Plan
+# SM ფუნქცია `Cargo.lock` განახლების გეგმა
 
-The `sm` feature spike for `iroha_crypto` originally could not complete `cargo check` while `--locked` was enforced. This note records the coordination steps for a sanctioned `Cargo.lock` update and tracks the current status of that need.
+`sm` ფუნქცია `iroha_crypto`-ისთვის თავდაპირველად ვერ დაასრულებდა `cargo check`-ს, ხოლო `--locked` იყო ამოქმედებული. ეს ჩანაწერი აღწერს საკოორდინაციო ნაბიჯებს სანქცირებული `Cargo.lock` განახლებისთვის და აკონტროლებს ამ საჭიროების მიმდინარე სტატუსს.
 
-> **2026-02-12 update:** Recent validation shows the optional `sm` feature now builds with the existing lockfile (`cargo check -p iroha_crypto --features sm --locked` succeeds in 7.9 s cold/0.23 s warm). The dependency set already contains `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`, so no immediate lock refresh is required. Keep the procedure below on standby for future dependency bumps or new optional crates.
+> **2026-02-12 განახლება:** ბოლო ვალიდაცია გვიჩვენებს არასავალდებულო `sm` ფუნქციას, რომელიც ახლა აშენებულია არსებული lockfile-ით (`cargo check -p iroha_crypto --features sm --locked` წარმატებას მიაღწევს 7.9 წამში ცივში/0.23 წამში თბილში). დამოკიდებულების ნაკრები უკვე შეიცავს `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, I18014X0, `Cargo.lock` `sm2`, `sm3`, `sm4` და `sm4-gcm`, ამიტომ საკეტის დაუყოვნებელი განახლება არ არის საჭირო. შეინახეთ ქვემოთ მოცემული პროცედურა მოლოდინის რეჟიმში მომავალი დამოკიდებულების მუწუკებისთვის ან ახალი სურვილისამებრ უჯრებისთვის.
 
-## Why the refresh is needed
-- Earlier iterations of the spike required adding optional crates that were missing from the lockfile. Current lock snapshots already include the RustCrypto stack (`sm2`, `sm3`, `sm4`, supporting codecs, and AES helpers).
-- Repository policy still blocks opportunistic lockfile edits; if a future dependency upgrade is necessary, the procedure below remains applicable.
-- Retain this plan so the team can execute a controlled refresh when new SM-related dependencies are introduced or existing ones need version bumps.
+## რატომ არის საჭირო განახლება
+- სპიკის ადრეული გამეორება მოითხოვდა არჩევითი ყუთების დამატებას, რომლებიც არ იყო ჩაკეტილი ფაილიდან. დაბლოკვის ამჟამინდელი სნეპშოტები უკვე მოიცავს RustCrypto დასტას (`sm2`, `sm3`, `sm4`, დამხმარე კოდეკებს და AES დამხმარეებს).
+- საცავის პოლიტიკა კვლავ ბლოკავს დაბლოკვის ფაილის ოპორტუნისტულ რედაქტირებას; თუ მომავალში დამოკიდებულების განახლებაა საჭირო, ქვემოთ მოცემული პროცედურა კვლავ მოქმედებს.
+- შეინარჩუნეთ ეს გეგმა, რათა გუნდმა განახორციელოს კონტროლირებადი განახლება, როდესაც SM-თან დაკავშირებული ახალი დამოკიდებულებები დაინერგება ან არსებულებს სჭირდებათ ვერსიის მუწუკები.
 
-## Proposed coordination steps
-1. **Raise request in Crypto WG + Release Eng sync (owner: @crypto-wg lead).**
-   - Reference `docs/source/crypto/sm_program.md` and note the optional nature of the feature.
-   - Confirm there are no concurrent lockfile change windows (e.g., dependency freezes).
-2. **Prepare patch with lock diff (owner: @release-eng).**
-   - Execute `scripts/sm_lock_refresh.sh` (after approval) to update only the required crates.
-   - Capture `cargo tree -p iroha_crypto --features sm` output (script emits `target/sm_dep_tree.txt`).
-3. **Security review (owner: @security-reviews).**
-   - Verify new crates/versions match the audit register and licensing expectations.
-   - Record hashes in supply-chain tracker.
-4. **Merge window execution.**
-   - Submit PR containing only the lockfile delta, dependency tree snapshot (attached as artifact), and updated audit notes.
-   - Ensure CI runs with `cargo check -p iroha_crypto --features sm` before merge.
-5. **Follow-up tasks.**
-   - Update `docs/source/crypto/sm_program.md` action item checklist.
-   - Notify SDK team that the feature can be compiled locally with `--features sm`.
-
-## Timeline & owners
-| Step | Target | Owner | Status |
+## შემოთავაზებული საკოორდინაციო ნაბიჯები
+1. **მოთხოვნის გაზრდა Crypto WG + Release Eng სინქრონიზაციაში (მფლობელი: @crypto-wg lead).**
+   - მიუთითეთ `docs/source/crypto/sm_program.md` და გაითვალისწინეთ ფუნქციის არჩევითი ბუნება.
+   - დაადასტურეთ, რომ არ არის ჩაკეტილი ფაილის ერთდროულად შეცვლის ფანჯრები (მაგ., დამოკიდებულების გაყინვა).
+2. ** მოამზადეთ პაჩი საკეტის განსხვავებულობით (მფლობელი: @release-eng).**
+   - შეასრულეთ `scripts/sm_lock_refresh.sh` (დამტკიცების შემდეგ) მხოლოდ საჭირო ყუთების განახლებისთვის.
+   - გადაიღეთ `cargo tree -p iroha_crypto --features sm` გამომავალი (სკრიპტი გამოსცემს `target/sm_dep_tree.txt`).
+3. **უსაფრთხოების მიმოხილვა (მფლობელი: @security-reviews).**
+   - შეამოწმეთ, რომ ახალი ყუთები/ვერსიები შეესაბამება აუდიტის რეესტრს და ლიცენზირების მოლოდინებს.
+   - ჩაწერეთ ჰეშები მიწოდების ჯაჭვის ტრეკერში.
+4. ** ფანჯრის შერწყმა. **
+   - გაგზავნეთ PR, რომელიც შეიცავს მხოლოდ lockfile delta-ს, დამოკიდებულების ხის სურათს (დართულია როგორც არტეფაქტი) და განახლებული აუდიტის შენიშვნები.
+   - დარწმუნდით, რომ CI მუშაობს `cargo check -p iroha_crypto --features sm`-ით შერწყმამდე.
+5. **შემდეგი დავალებები.**
+   - განაახლეთ `docs/source/crypto/sm_program.md` ქმედების ერთეულების საკონტროლო სია.
+   - აცნობეთ SDK გუნდს, რომ ფუნქციის ლოკალურად შედგენა შესაძლებელია `--features sm`-ით.## ქრონოლოგია და მფლობელები
+| ნაბიჯი | სამიზნე | მფლობელი | სტატუსი |
 |------|--------|-------|--------|
-| Request agenda slot in next Crypto WG call | 2025-01-22 | Crypto WG lead | ✅ Completed (review concluded spike can proceed without refresh) |
-| Draft selective `cargo update` command + sanity diff | 2025-01-24 | Release Engineering | ⚪ On standby (reactivate if new crates appear) |
-| Security review of new crates | 2025-01-27 | Security Reviews | ⚪ On standby (reuse audit checklist when refresh resumes) |
-| Merge lockfile update PR | 2025-01-29 | Release Engineering | ⚪ On standby |
-| Update SM program doc checklist | After merge | Crypto WG lead | ✅ Addressed via `docs/source/crypto/sm_program.md` entry (2026-02-12) |
+| მოითხოვეთ დღის წესრიგის სლოტი მომდევნო Crypto WG ზარში | 2025-01-22 | Crypto WG ტყვია | ✅ დასრულებულია (მიმოხილვა დასრულებული სპაიკი შეიძლება გაგრძელდეს განახლების გარეშე) |
+| შერჩევითი `cargo update` ბრძანების მონახაზი + საღი აზრის განსხვავება | 2025-01-24 | გამოშვების ინჟინერია | ⚪ ლოდინის რეჟიმში (ხელახალი გააქტიურება, თუ ახალი უჯრები გამოჩნდება) |
+| ახალი ყუთების უსაფრთხოების მიმოხილვა | 2025-01-27 | უსაფრთხოების მიმოხილვები | ⚪ ლოდინის რეჟიმში (ხელახლა გამოიყენეთ აუდიტის ჩამონათვალი, როდესაც განახლება განახლდება) |
+| შერწყმა lockfile განახლება PR | 2025-01-29 | გამოშვების ინჟინერია | ⚪ ლოდინის რეჟიმში |
+| განაახლეთ SM პროგრამის doc სია | შერწყმის შემდეგ | Crypto WG ტყვია | ✅ მიმართულია `docs/source/crypto/sm_program.md` ჩანაწერით (2026-02-12) |
 
-## Notes
-- Keep any future refresh restricted to the SM-related crates listed above (and supporting helpers like `rfc6979`), avoiding workspace-wide `cargo update`.
-- If any transitive dependencies introduce MSRV drift, surface it before merge.
-- Once merged, enable an ephemeral CI job to monitor build times for the `sm` feature.
+## შენიშვნები
+- შეინახეთ ნებისმიერი მომავალი განახლება შემოიფარგლება ზემოთ ჩამოთვლილი SM-თან დაკავშირებული ყუთებით (და დამხმარეების მხარდაჭერით, როგორიცაა `rfc6979`), თავიდან აიცილოთ სამუშაო სივრცის `cargo update`.
+- თუ რაიმე გარდამავალი დამოკიდებულებები შემოაქვს MSRV დრიფტს, მოათავსეთ იგი შერწყმამდე.
+- გაერთიანების შემდეგ, ჩართეთ ეფემერული CI სამუშაო `sm` ფუნქციის აშენების დროის მონიტორინგისთვის.

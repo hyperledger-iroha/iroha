@@ -4,20 +4,22 @@ direction: ltr
 source: docs/portal/docs/sorafs/capacity-simulation.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: capacity-simulation
-title: Ранбук симуляции емкости SoraFS
+id: simulación de capacidad
+título: Ранбук симуляции емкости SoraFS
 sidebar_label: Ранбук симуляции емкости
-description: Запуск набора симуляции рынка емкости SF-2c с воспроизводимыми фикстурами, экспортами Prometheus и дашбордами Grafana.
+descripción: Simuladores de teclados SF-2c con dispositivos integrados, accesorios Prometheus y tableros de instrumentos Grafana.
 ---
 
-:::note Канонический источник
-Эта страница зеркалирует `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Держите обе копии синхронизированными, пока устаревший набор документации Sphinx полностью не будет перенесен.
+:::nota Канонический источник
+Esta página contiene la letra `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Deje copias sincronizadas de los documentos de Sphinx no incluidos en el presupuesto.
 :::
 
-Этот ранбук объясняет, как запускать набор симуляции рынка емкости SF-2c и визуализировать полученные метрики. Он проверяет переговоры по квотам, обработку failover и ремедиацию slashing end-to-end, используя детерминированные фикстуры в `docs/examples/sorafs_capacity_simulation/`. Payloads емкости по-прежнему используют `sorafs_manifest_stub capacity`; используйте `iroha app sorafs toolkit pack` для потоков упаковки manifest/CAR.
+Esta opción se puede utilizar para insertar simulaciones de impresoras SF-2c y visualizar las métricas de alta calidad. En las actualizaciones de seguridad, implementamos conmutación por error y soluciones de corte de extremo a extremo, implementamos configuraciones determinadas en `docs/examples/sorafs_capacity_simulation/`. Cargas útiles емкости по-прежнему используют `sorafs_manifest_stub capacity`; Utilice `iroha app sorafs toolkit pack` para el manifiesto/CAR de los automóviles.
 
 ## 1. Сгенерировать CLI-артефакты
 
@@ -26,27 +28,25 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` оборачивает `sorafs_manifest_stub capacity`, чтобы выпускать Norito payloads, base64-блоб, тела запросов Torii и JSON-сводки для:
+`run_cli.sh` incluye `sorafs_manifest_stub capacity`, qué cargas útiles de Norito, bloques base64, archivos Torii y archivos JSON para:
 
 - Трех деклараций провайдеров, участвующих в сценарии переговоров по квотам.
-- Одного распоряжения о репликации, распределяющего staged‑манифест между провайдерами.
-- Снимков телеметрии для базовой линии до сбоя, интервала сбоя и восстановления failover.
-- Payload спора с запросом на slashing после смоделированного сбоя.
+- Одного распоряжения о репликации, распределяющего манифест между провайдерами.
+- Снимков телеметрии для базовой линии до сбоя, интервала сбоя and восстановления failover.
+- La carga útil se realiza mediante corte después del modo de corte.Estos artefactos se encuentran en `./artifacts` (puede consultarse según el catálogo de medicamentos según el argumento). Pruebe los archivos `_summary.json` para este contacto.
 
-Все артефакты помещаются в `./artifacts` (можно переопределить, передав другой каталог первым аргументом). Проверьте файлы `_summary.json` для читаемого контекста.
-
-## 2. Агрегировать результаты и выпустить метрики
+## 2. Agregar resultados y verificar métricas
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-Анализатор формирует:
+Formulario de analizador:
 
-- `capacity_simulation_report.json` - агрегированные распределения, дельты failover и метаданные спора.
-- `capacity_simulation.prom` - метрики textfile Prometheus (`sorafs_simulation_*`), подходящие для textfile collector node-exporter или отдельного scrape job.
+- `capacity_simulation_report.json`: configuración agregada, conmutación por error eliminada y metadatos esporádicos.
+- `capacity_simulation.prom`: archivo de texto métrico Prometheus (`sorafs_simulation_*`), que sirve para el exportador y nodo del recopilador de archivos de texto o para un trabajo de raspado.
 
-Пример конфигурации scrape Prometheus:
+Primeras configuraciones de scrape Prometheus:
 
 ```yaml
 scrape_configs:
@@ -61,22 +61,20 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Укажите textfile collector на `capacity_simulation.prom` (при использовании node-exporter скопируйте его в каталог, переданный через `--collector.textfile.directory`).
+Utilice el recopilador de archivos de texto en `capacity_simulation.prom` (para el exportador de nodos instalado en el catálogo, consulte `--collector.textfile.directory`).
 
-## 3. Импортировать дашборд Grafana
+## 3. Importar tablero Grafana
 
-1. В Grafana импортируйте `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Привяжите переменную datasource `Prometheus` к указанной выше цели scrape.
-3. Проверьте панели:
-   - **Quota Allocation (GiB)** показывает баланс commit/assign для каждого провайдера.
-   - **Failover Trigger** переключается на *Failover Active*, когда поступают метрики сбоя.
-   - **Uptime Drop During Outage** отображает процент потери для провайдера `alpha`.
-   - **Requested Slash Percentage** визуализирует коэффициент ремедиации из фикстуры спора.
+1. En Grafana importe `dashboards/grafana/sorafs_capacity_simulation.json`.
+2. Utilice la fuente de datos `Prometheus` para realizar el scrape.
+3. Proverte los paneles:
+   - **Asignación de cuota (GiB)** requiere compromiso/asignación de la cuenta del usuario.
+   - **Failover Trigger** activa *Failover Active*, que establece métricas.
+   - **Caída del tiempo de actividad durante una interrupción** está disponible actualmente en el controlador `alpha`.
+   - **Porcentaje de barra diagonal solicitada** Visualice las soluciones más efectivas en los dispositivos específicos.
 
-## 4. Ожидаемые проверки
+## 4. Ожидаемые проверки- `sorafs_simulation_quota_total_gib{scope="assigned"}` a partir de `600`, cuando el compromiso de confirmación es >=600.
+- `sorafs_simulation_failover_triggered` coloca `1`, un parámetro métrico proporcionado por `beta`.
+- `sorafs_simulation_slash_requested` coloca `0.15` (barra del 15%) para el identificador del proveedor `alpha`.
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` равен `600`, пока общий commit остаётся >=600.
-- `sorafs_simulation_failover_triggered` показывает `1`, а метрика заменяющего провайдера выделяет `beta`.
-- `sorafs_simulation_slash_requested` показывает `0.15` (15% slash) для идентификатора провайдера `alpha`.
-
-Запустите `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit`, чтобы подтвердить, что фикстуры по‑прежнему принимаются схемой CLI.
+Introduzca `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` para conectar los dispositivos conectados a la CLI.

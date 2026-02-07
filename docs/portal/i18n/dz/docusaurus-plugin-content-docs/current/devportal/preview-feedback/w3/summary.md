@@ -8,32 +8,34 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W3 beta feedback & status
 sidebar_label: W3 summary
 description: Live digest for the 2026 beta preview wave (finance, observability, SDK, and ecosystem cohorts).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| རྣམ་གྲངས་ | ཁ་གསལ་ |
 | --- | --- |
-| Wave | W3 — Beta cohorts (finance + ops + SDK partner + ecosystem advocate) |
-| Invite window | 2026‑02‑18 → 2026‑02‑28 |
-| Artefact tag | `preview-20260218` |
-| Tracker issue | `DOCS-SORA-Preview-W3` |
-| Participants | finance-beta-01, observability-ops-02, partner-sdk-03, ecosystem-advocate-04 |
+| རླབས་ | W3 — བེ་ཊ་སྡེ་ཚན་ (དངུལ་འབྲེལ་ + ops + SDK མཉམ་འབྲེལ་ + སྐྱེ་ལྡན་རིམ་ལུགས་ སྐུལ་སློང་འབད་མི་) |
+| མགྲོན་འབོད་སྒོ་སྒྲིག་ | ༢༠༢༦‐༠༢‐༡༨ → ༢༠༢༦‐༠༢‐༢༨ |
+| ཅ་རྙིང་ངོ་རྟགས། | I18NI0000000X |
+| བརྟག་ཞིབ་ཀྱི་གནད་དོན་ | I18NI0000006X |
+| བཅའ་མར་གཏོགས་མི་ཚུ་ | དངུལ་འབྲེལ་-བེ་ཊ་-༠༡ བལྟ་རྟོག་-ཨོཔ་-༠༢, མཉམ་འབྲེལ་-ཨེསི་ཌི་ཀེ་-༠༣, སྐྱེ་ལྡན་རིམ་ལུགས་-སྐུལ་སློང་-༠༤ |
 
-## Highlights
+## གཙོ་བསྟེན།
 
-1. **End-to-end evidence pipeline.** `npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` generates the per-wave summary (`artifacts/docs_portal_preview/preview-20260218-summary.json`), digest (`preview-20260218-digest.md`), and refreshes `docs/portal/src/data/previewFeedbackSummary.json` so governance reviewers can rely on a single command.
-2. **Telemetry + governance coverage.** All four reviewers acknowledged checksum-gated access, submitted feedback, and were revoked on time; the digest references the feedback issues (`docs-preview/20260218` set + `DOCS-SORA-Preview-20260218`) alongside the Grafana runs collected during the wave.
-3. **Portal surfacing.** The refreshed portal table now shows the closed W3 wave with latency and response-rate metrics, and the new log page below mirrors the event timeline for auditors who do not pull the raw JSON log.
+1. **མཇུག་ལས་མཇུག་ཚུན་ཚོད་ སྒྲུབ་བྱེད་ཀྱི་ པའིལ་ ** `npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` གིས་ རླབས་ཀྱི་ བཅུད་བསྡུས་ (I18NI0000008X) དང་ བཞུ་བཅུག་མི་ (I18NI0000000009X) དེ་ལས་ I18NI0000009X གིས་ བརྡ་བཀོད་གཅིག་གུ་ བསྐྱར་ཞིབ་པ་ཚུ་ དབང་འཛིན་འབད་ཚུགས།
+2. **Telemetry + གཞུང་སྐྱོང་ཁྱབ་ཁོངས།** བསྐྱར་ཞིབ་པ་བཞི་ཆ་ར་གིས་ ཅེག་སམ་-གཱེཊ་ འཛུལ་སྤྱོད་ལུ་ ངོས་ལེན་འབད་དེ་ བསམ་འཆར་ཚུ་ བཙུགས་ཞིནམ་ལས་ དུས་ཚོད་ཁར་ ཆ་མེད་བཏང་ཡོདཔ་ཨིན། ཟས་བཅུད་འདི་གིས་ བསམ་ལན་གྱི་གནད་དོན་ཚུ་ གཞི་བསྟུན་འབདཝ་ཨིན། (I18NI0000011X set + `DOCS-SORA-Preview-20260218`) རླབས་སྐབས་བསྡུ་སྒྲིག་འབད་མི་ I18NT000000000X གཡོག་བཀོལ་ཚུ་དང་གཅིག་ཁར་ཨིན།
+3. ** འདྲེན་བྱེད་ཀྱི་ ཁ་ཐོག་འདི་ གསརཔ་སྦེ་ གསརཔ་བཟོ་ཡོད་པའི་ ཌབ་ལུ་༣ རླབས་འདི་ འཕྲོ་མཐུད་དང་ ལན་འདེབས་ཚད་གཞི་ མེ་ཊིག་ཚུ་ སྟོན་ཡོདཔ་ད་ འོག་ལུ་ཡོད་པའི་ དྲན་ཐོ་ཤོག་ལེབ་གསརཔ་འདི་གིས་ རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ བྱུང་ལས་ཀྱི་དུས་ཚོད་ཐིག་འདི་ མེ་ལོང་མེ་ལོང་ནང་ སྟོནམ་ཨིན།
 
-## Action items
+## བྱ་བ་རྣམ་གྲངས།
 
-| ID | Description | Owner | Status |
+| ID | འགྲེལ་བཤད་ | ཇོ་བདག་ | གནས་ཚད་ |
 | --- | --- | --- | --- |
-| W3-A1 | Capture preview digest and attach to tracker. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
-| W3-A2 | Mirror invite/digest evidence into portal + roadmap/status. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
+| W3-A1 | སྔོན་ལྟའི་ བཞུ་བཅུག་ནི་དང་ བརྟག་ཞིབ་པ་ལུ་མཉམ་སྦྲགས་འབད། | ཡིག་ཆ་/ཌི་ཝི་རེལ་ལིཌ་ | ✅ མཇུག་བསྡུ་ ༢༠༢༦‐༠༢‐༢༨ |
+| W3-A2 | མེ་ལོང་གིས་ མགྲོན་བརྡ་/སྒྲུབ་བྱེད་ དྲྭ་ཚིགས་ + ལམ་སྟོན་/གནས་ཚད་ནང་ བཞུ་ནི། | ཡིག་ཆ་/ཌི་ཝི་རེལ་ལིཌ་ | ✅ མཇུག་བསྡུ་ ༢༠༢༦‐༠༢‐༢༨ |
 
-## Exit summary (2026-02-28)
+## ཐོན་པའི་བཅུད་དོན་ (༢༠༢༦-༠༢-༢༨)
 
-- Invites dispatched 2026‑02‑18 with acknowledgements logged minutes later; preview access revoked 2026‑02‑28 after the final telemetry check passed.
-- Digest + summary captured under `artifacts/docs_portal_preview/`, with the raw log anchored by `artifacts/docs_portal_preview/feedback_log.json` for replayability.
-- Issue follow-ups filed under `docs-preview/20260218` with the governance tracker `DOCS-SORA-Preview-20260218`; CSP/Try it notes routed to the observability/finance owners and linked from the digest.
-- Tracker row updated to 🈴 Completed and the portal feedback table reflects the closed wave, completing the remaining DOCS-SORA beta-readiness task.
+- སྐར་མ་གཅིག་གི་ཤུལ་ལས་ ངོས་ལེན་ཚུ་ ༢༠༢༦‐༠༢‐༡༨ ལུ་ བཏང་ཡོདཔ་ཨིན། མཐའ་མཇུག་གི་ ཊེ་ལི་མི་ཊི་ཞིབ་དཔྱད་འདི་ ཆ་འཇོག་འབད་བའི་ཤུལ་ལས་ སྔོན་ལྟའི་འཛུལ་སྤྱོད་འདི་ ༢༠༢༦‐༠༢‐༢༨ ཆ་མེད་བཏང་ཡོདཔ་ཨིན།
+- བསྐྱར་རྩེད་འབད་བཏུབ་པའི་དོན་ལུ་ I18NI0000000013X གི་འོག་ལུ་ བཅུད་བསྡུས་འདི་ `artifacts/docs_portal_preview/` གི་འོག་ལུ་ བསྐྱར་རྩེད་འབད་ནི་གི་དོན་ལུ་ I18NI000000014X གིས་ གཞི་བཙུགས་འབད་ཡོདཔ་ཨིན།
+- I18NI000000015X གི་འོག་ལུ་ གཞུང་སྐྱོང་རྗེས་འདེད་འབད་མི་ I18NI000000016X དང་ཅིག་ཁར་ གནད་དོན་རྗེས་འཇུག་ཚུ་; CSP/trie འདི་ བལྟ་བརྟོག་འབད་བཏུབ་པའི་/མ་དངུལ་གྱི་ཇོ་བདག་ཚུ་ལུ་ བཏང་ཞིནམ་ལས་ ཟས་བཅུད་ལས་ འབྲེལ་མཐུད་འབད་དགོ།
+- ཊེག་ཀར་གྱལ་དུས་མཐུན་བཟོ་མི་ 🈴 མཇུག་བསྡུ་ཞིནམ་ལས་ དྲྭ་ཐོག་བསམ་འཆར་ཐིག་ཁྲམ་འདི་གིས་ ཁ་བསྡམས་ཡོད་པའི་རླབས་འདི་ གསལ་སྟོན་འབདཝ་ཨིནམ་ད་ ལྷག་ལུས་འདི་ DOCS-SORA བེ་ཊ་-གྲ་སྒྲིག་ལས་འགན་འདི་ མཇུག་བསྡུ་ཡོདཔ་ཨིན།

@@ -11,51 +11,52 @@ id: chunker-registry-charter
 title: SoraFS Chunker Registry Charter
 sidebar_label: Chunker Registry Charter
 description: Governance charter for chunker profile submissions and approvals.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-# SoraFS Chunker Registry Governance Charter
+# SoraFS Chunker ռեգիստրի կառավարման կանոնադրություն
 
-> **Ratified:** 2025-10-29 by the Sora Parliament Infrastructure Panel (see
-> `docs/source/sorafs/council_minutes_2025-10-29.md`). Any amendments require a
-> formal governance vote; implementation teams must treat this document as
-> normative until a superseding charter is approved.
+> **Վավերացվել է.** 2025-10-29 Սորայի խորհրդարանի ենթակառուցվածքային հանձնաժողովի կողմից (տես
+> `docs/source/sorafs/council_minutes_2025-10-29.md`): Ցանկացած փոփոխություն պահանջում է ա
+> պաշտոնական կառավարման քվեարկություն; իրականացման թիմերը պետք է վերաբերվեն այս փաստաթղթին որպես
+> նորմատիվ, քանի դեռ փոխարինող կանոնադրությունը չի հաստատվել:
 
-This charter defines the process and roles for evolving the SoraFS chunker
-registry. It complements the [Chunker Profile Authoring Guide](./chunker-profile-authoring.md) by describing how new
+Այս կանոնադրությունը սահմանում է SoraFS բլոկների զարգացման գործընթացը և դերերը
+գրանցամատյան. Այն լրացնում է [Chunker Profile Authoring Guide] (./chunker-profile-authoring.md)՝ նկարագրելով, թե որքան նոր է
 
-## Scope
+## Շրջանակ
 
-The charter applies to every entry in `sorafs_manifest::chunker_registry` and
-to any tooling that consumes the registry (manifest CLI, provider-advert CLI,
-SDKs). It enforces the alias and handle invariants checked by
+Կանոնադրությունը վերաբերում է `sorafs_manifest::chunker_registry`-ի յուրաքանչյուր մուտքի և
+ցանկացած գործիքի վրա, որը սպառում է ռեեստրը (մանիֆեստ CLI, մատակարար-գովազդ CLI,
+SDK-ներ): Այն պարտադրում է alias-ը և handle-ի կողմից ստուգված ինվարիանտները
 `chunker_registry::ensure_charter_compliance()`:
 
-- Profile IDs are positive integers that increase monotonically.
-- The canonical handle `namespace.name@semver` **must** appear as the first
-- Alias strings are trimmed, unique, and do not collide with canonical handles
-  of other entries.
+- Պրոֆիլների ID-ները դրական ամբողջ թվեր են, որոնք միապաղաղ աճում են:
+- `namespace.name@semver` կանոնական բռնակը **պետք է** հայտնվի որպես առաջինը
+- Alias-ի տողերը կտրված են, յուրահատուկ և չեն բախվում կանոնական բռնակներին
+  այլ գրառումների մասին:
 
-## Roles
+## Դերեր
 
-- **Author(s)** – prepare the proposal, regenerate fixtures, and collect the
-  determinism evidence.
-- **Tooling Working Group (TWG)** – validates the proposal using the published
-  checklists and ensures the registry invariants hold.
-- **Governance Council (GC)** – reviews the TWG report, signs the proposal
-  envelope, and approves publication/deprecation timelines.
-- **Storage Team** – maintains the registry implementation and publishes
-  documentation updates.
+- **Հեղինակ(ներ)** – պատրաստել առաջարկը, վերարտադրել հարմարանքները և հավաքել դրանք
+  դետերմինիզմի ապացույց.
+- **Գործիքների աշխատանքային խումբ (TWG)** – վավերացնում է առաջարկը՝ օգտագործելով հրապարակվածը
+  ստուգաթերթեր և ապահովում է ռեեստրի անփոփոխների պահպանումը:
+- **Կառավարման խորհուրդ (GC)** – վերանայում է TWG հաշվետվությունը, ստորագրում առաջարկը
+  ծրարը և հաստատում է հրապարակման/չաշխատման ժամկետները:
+- **Storage Team** – պահպանում է ռեեստրի ներդրումը և հրապարակում
+  փաստաթղթերի թարմացումներ:
 
-## Lifecycle Workflow
+## Կյանքի ցիկլի աշխատանքային հոսք
 
-1. **Proposal Submission**
-   - Author runs the validation checklist from the authoring guide and creates
-     a `ChunkerProfileProposalV1` JSON under
+1. **Առաջարկի ներկայացում**
+   - Հեղինակը գործարկում է վավերացման ստուգաթերթը հեղինակային ուղեցույցից և ստեղծում
+     ա `ChunkerProfileProposalV1` JSON տակ
      `docs/source/sorafs/proposals/`.
-   - Include CLI output from:
+   - Ներառեք CLI ելքը հետևյալից.
      ```bash
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -63,61 +64,61 @@ SDKs). It enforces the alias and handle invariants checked by
      cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
-   - Submit a PR containing fixtures, proposal, determinism report, and registry
-     updates.
+   - Ներկայացրեք PR, որը պարունակում է հարմարանքներ, առաջարկ, դետերմինիզմի զեկույց և գրանցամատյան
+     թարմացումներ։
 
-2. **Tooling Review (TWG)**
-   - Replay the validation checklist (fixtures, fuzz, manifest/PoR pipeline).
-   - Run `cargo test -p sorafs_car --chunker-registry` and ensure
-     `ensure_charter_compliance()` passes with the new entry.
-   - Verify CLI behaviour (`--list-profiles`, `--promote-profile`, streaming
-     `--json-out=-`) reflects the updated aliases and handles.
-   - Produce a short report summarising findings and pass/fail status.
+2. **Գործիքների վերանայում (TWG)**
+   - Կրկնել վավերացման ստուգաթերթը (հարմարանքներ, fuzz, manifest/PoR խողովակաշար):
+   - Գործարկեք `cargo test -p sorafs_car --chunker-registry` և ապահովեք
+     `ensure_charter_compliance()`-ն անցնում է նոր մուտքով:
+   - Ստուգեք CLI-ի վարքը (`--list-profiles`, `--promote-profile`, հոսքային
+     `--json-out=-`) արտացոլում է թարմացված փոխանունները և բռնակները:
+   - Կազմեք կարճ զեկույց՝ ամփոփելով արդյունքները և անցած/անհաջող կարգավիճակը:
 
-3. **Council Approval (GC)**
-   - Review TWG report and proposal metadata.
-   - Sign the proposal digest (`blake3("sorafs-chunker-profile-v1" || bytes)`)
-     and append signatures to the council envelope maintained alongside the
-     fixtures.
-   - Record the vote outcome in the governance minutes.
+3. **Խորհրդի հաստատում (GC)**
+   - Վերանայեք TWG զեկույցը և առաջարկի մետատվյալները:
+   - Ստորագրեք առաջարկի ամփոփագիրը (`blake3("sorafs-chunker-profile-v1" || bytes)`)
+     և ստորագրությունները կցել ավագանու ծրարին, որը պահվում է կողքին
+     հարմարանքներ.
+   - Քվեարկության արդյունքները գրանցել կառավարման արձանագրության մեջ:
 
-4. **Publication**
-   - Merge the PR, updating:
+4. **Հրապարակում**
+   - Միավորել PR-ը, թարմացնելով.
      - `sorafs_manifest::chunker_registry_data`.
-     - Documentation (`chunker_registry.md`, authoring/conformance guides).
-     - Fixtures and determinism reports.
-   - Notify operators and SDK teams of the new profile and planned rollout.
+     - Փաստաթղթեր (`chunker_registry.md`, հեղինակային/համապատասխանության ուղեցույցներ):
+     - Հարմարանքներ և դետերմինիզմի հաշվետվություններ:
+   - Տեղեկացրեք օպերատորներին և SDK թիմերին նոր պրոֆիլի և պլանավորված թողարկման մասին:
 
-5. **Deprecation / Sunset**
-   - Proposals that supersede an existing profile must include a dual-publish
-     window (grace periods) and upgrade plan.
-     in the registry and update the migration ledger.
+5. **Անվտանգություն / Մայրամուտ **
+   - Առաջարկները, որոնք փոխարինում են գոյություն ունեցող պրոֆիլին, պետք է ներառեն կրկնակի հրապարակում
+     պատուհան (արտոնյալ ժամկետներ) և արդիականացման պլան:
+     ռեեստրում և թարմացնել միգրացիայի մատյանը:
 
-6. **Emergency Changes**
-   - Removal or hotfixes require a council vote with majority approval.
-   - TWG must document the risk mitigation steps and update the incident log.
+6. **Արտակարգ փոփոխություններ**
+   - Հեռացումը կամ թեժ շտկումները պահանջում են ավագանու քվեարկություն մեծամասնության հաստատմամբ:
+   - TWG-ն պետք է փաստաթղթավորի ռիսկի նվազեցման քայլերը և թարմացնի միջադեպերի գրանցամատյանը:
 
-## Tooling Expectations
+## Գործիքների ակնկալիքներ
 
-- `sorafs_manifest_chunk_store` and `sorafs_manifest_stub` expose:
-  - `--list-profiles` for registry inspection.
-  - `--promote-profile=<handle>` to generate the canonical metadata block used
-    when promoting a profile.
-  - `--json-out=-` to stream reports to stdout, enabling reproducible review
-    logs.
-- `ensure_charter_compliance()` is invoked at startup in relevant binaries
-  (`manifest_chunk_store`, `provider_advert_stub`). CI tests must fail if new
-  entries violate the charter.
+- `sorafs_manifest_chunk_store` և `sorafs_manifest_stub` բացահայտում են.
+  - `--list-profiles` ռեեստրի ստուգման համար:
+  - `--promote-profile=<handle>`՝ օգտագործված կանոնական մետատվյալների բլոկը ստեղծելու համար
+    պրոֆիլը խթանելիս:
+  - `--json-out=-` հաղորդումներ փոխանցելու համար stdout-ին՝ հնարավորություն տալով վերարտադրվող վերանայում
+    գերաններ.
+- `ensure_charter_compliance()`-ը կանչվում է գործարկման ժամանակ համապատասխան երկուական սարքերում
+  (`manifest_chunk_store`, `provider_advert_stub`): CI թեստերը պետք է ձախողվեն, եթե նոր են
+  գրառումները խախտում են կանոնադրությունը.
 
-## Record Keeping
+## Գրառումների պահպանում
 
-- Store all determinism reports in `docs/source/sorafs/reports/`.
-- Council minutes referencing chunker decisions live under
+- Պահպանեք բոլոր դետերմինիզմի հաշվետվությունները `docs/source/sorafs/reports/`-ում:
+- Խորհրդի արձանագրությունները, որոնք հղում են կատարում chunker որոշումներին, ապրում են տակ
   `docs/source/sorafs/migration_ledger.md`.
-- Update `roadmap.md` and `status.md` after each major registry change.
+- Թարմացրեք `roadmap.md` և `status.md` ռեեստրի յուրաքանչյուր հիմնական փոփոխությունից հետո:
 
-## References
+## Հղումներ
 
-- Authoring guide: [Chunker Profile Authoring Guide](./chunker-profile-authoring.md)
-- Conformance checklist: `docs/source/sorafs/chunker_conformance.md`
-- Registry reference: [Chunker Profile Registry](./chunker-registry.md)
+- Հեղինակային ուղեցույց. [Chunker Profile Authoring Guide] (./chunker-profile-authoring.md)
+- Համապատասխանության ստուգաթերթ՝ `docs/source/sorafs/chunker_conformance.md`
+- Ռեեստրի տեղեկանք՝ [Chunker Profile Registry] (./chunker-registry.md)

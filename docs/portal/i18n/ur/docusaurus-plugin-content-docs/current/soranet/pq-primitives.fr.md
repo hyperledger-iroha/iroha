@@ -4,28 +4,30 @@ direction: rtl
 source: docs/portal/docs/soranet/pq-primitives.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-primitives
-title: Primitives post-quantiques SoraNet
-sidebar_label: Primitives PQ
-description: Vue d'ensemble du crate `soranet_pq` et de la maniere dont le handshake SoraNet consomme les helpers ML-KEM/ML-DSA.
+ID: PQ-primitives
+عنوان: سورانیٹ پوسٹ کوانٹم قدیم
+سائڈبار_لیبل: پی کیو قدیم
+تفصیل: کریٹ `soranet_pq` کا جائزہ اور کس طرح سورانیٹ ہینڈ شیک ML-KEM/ML-DSA مددگاروں کو استعمال کرتا ہے۔
 ---
 
-:::note Source canonique
+::: نوٹ کینونیکل ماخذ
 :::
 
-Le crate `soranet_pq` contient les briques post-quantiques sur lesquelles reposent tous les relays, clients et composants de tooling SoraNet. Il encapsule les suites Kyber (ML-KEM) et Dilithium (ML-DSA) adossees a PQClean et ajoute des helpers HKDF et RNG hedged adaptes au protocole afin que toutes les surfaces partagent des implementations identiques.
+کریٹ `soranet_pq` میں پوسٹ کوانٹم اینٹوں پر مشتمل ہے جس پر تمام سورانیٹ ریلے ، کلائنٹ اور ٹولنگ اجزاء پر مبنی ہیں۔ اس میں پی کیو کلین کے تعاون سے کیبر (ایم ایل-کے ای ایم) اور دلیتھیم (ایم ایل-ڈی ایس اے) سوٹ کو شامل کیا گیا ہے اور اس میں ایچ کے ڈی ایف اور ہیجڈ آر این جی مددگار شامل ہیں جو پروٹوکول کے مطابق ڈھال گئے ہیں تاکہ تمام سطحیں ایک جیسی نفاذ کا اشتراک کریں۔
 
-## Ce qui est livre dans `soranet_pq`
+## `soranet_pq` میں کیا فراہم کیا جاتا ہے
 
-- **ML-KEM-512/768/1024:** generation deterministe de cles, encapsulation et decapsulation avec propagation d'erreurs en temps constant.
-- **ML-DSA-44/65/87:** signature/verif detachee avec transcriptions a separation de domaine.
-- **HKDF etiquete:** `derive_labeled_hkdf` applique un namespace a chaque derivation via l'etape du handshake (`DH/es`, `KEM/1`, ...) afin que les transcriptions hybrides restent sans collision.
-- **Aleatoire hedged:** `hedged_chacha20_rng` combine des seeds deterministes avec l'entropie du systeme et zeroise l'etat intermediaire a la destruction.
+۔
+-** ML-DSA-44/65/87: ** ڈومین سے الگ ٹرانسکرپشن کے ساتھ الگ الگ دستخط/توثیق۔
+۔
+۔
 
-Tous les secrets vivent dans des conteneurs `Zeroizing` et CI exerce les bindings PQClean sur toutes les plateformes supportees.
+تمام راز `Zeroizing` کنٹینرز میں رہتے ہیں اور CI تمام معاون پلیٹ فارمز پر PQCLEAN پابندیوں کی مشق کرتا ہے۔
 
 ```rust
 use soranet_pq::{
@@ -48,19 +50,19 @@ let okm = derive_labeled_hkdf(
 ).unwrap();
 ```
 
-## Comment l'utiliser
+## اسے کیسے استعمال کریں
 
-1. **Ajoutez la dependance** aux crates en dehors de la racine du workspace:
+1. ** ورک اسپیس روٹ کے باہر کریٹس میں انحصار ** شامل کریں:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **Selectionnez la suite correcte** aux points d'appel. Pour le travail initial du handshake hybride, utilisez `MlKemSuite::MlKem768` et `MlDsaSuite::MlDsa65`.
+2. ** کال پوائنٹس پر صحیح ترتیب ** منتخب کریں۔ ابتدائی ہائبرڈ ہینڈ شیک کام کے لئے ، `MlKemSuite::MlKem768` اور `MlDsaSuite::MlDsa65` استعمال کریں۔
 
-3. **Derivez les cles avec labels.** Utilisez `HkdfDomain::soranet("KEM/1")` (et equivalents) pour que l'enchainement des transcriptions reste deterministe entre les noeuds.
+3. ** لیبلوں کے ساتھ چابیاں اخذ کریں۔
 
-4. **Utilisez le RNG hedged** pour echantillonner les secrets de repli:
+4. ** نمونے کے لئے ہیجڈ آر این جی ** کا استعمال کریں فال بیک بیک راز:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -68,11 +70,11 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-Le handshake central de SoraNet et les helpers de blindage de CID (`iroha_crypto::soranet`) utilisent directement ces utilitaires, ce qui signifie que les crates downstream heritent des memes implementations sans lier les bindings PQClean eux-memes.
+سورانیٹ کے مرکزی مصافحہ اور سی آئی ڈی شیلڈنگ مددگار (`iroha_crypto::soranet`) ان افادیت کو براہ راست استعمال کرتے ہیں ، اس کا مطلب یہ ہے کہ بہاو کریٹ پی کیو کلین پابندیاں خود کو پابند کیے بغیر ایک ہی عمل درآمد کا وارث ہیں۔
 
-## Checklist de validation
+## توثیق چیک لسٹ
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`
-- Auditez les exemples d'usage du README (`crates/soranet_pq/README.md`)
-- Mettez a jour le document de conception du handshake SoraNet lorsque les hybrides arriveront
+- آڈٹ کے استعمال کی مثالوں (`crates/soranet_pq/README.md`)
+- جب ہائبرڈس آتے ہیں تو سورانیٹ ہینڈ شیک ڈیزائن دستاویز کو اپ ڈیٹ کریں

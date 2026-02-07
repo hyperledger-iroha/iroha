@@ -824,8 +824,8 @@ async fn ws_global_frame_cap_disconnects() {
                                 )));
                             }
                         }
-                        if let Err(err) = core::pin::Pin::new(&mut self.sink)
-                            .start_send(WsMessage::Close(None))
+                        if let Err(err) =
+                            core::pin::Pin::new(&mut self.sink).start_send(WsMessage::Close(None))
                         {
                             return core::task::Poll::Ready(Err(std::io::Error::new(
                                 std::io::ErrorKind::Other,

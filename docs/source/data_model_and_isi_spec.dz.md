@@ -7,229 +7,217 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 55ac770cf80229c23d6067ef1ab312422c76fb928a08e8cad8c040bdab396016
 source_last_modified: "2026-01-28T18:22:38.873410+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v2 Data Model and ISI — Implementation‑Derived Spec
+# Iroha v2 གནད་སྡུད་དཔེ་གཟུགས་དང་ཨའི་ཨེསི་ཨའི་ — བཀོལ་སྤྱོད་པ‑ ཕྱིར་འགྱངས་ཨིསི་པེཊ་
 
-This specification is reverse‑engineered from the current implementation across `iroha_data_model` and `iroha_core` to aid design review. Paths in backticks point to the authoritative code.
+འ་ནི་གསལ་བཀོད་འདི་ ད་རེས་ཀྱི་ `iroha_data_model` དང་ `iroha_core` ནང་ལུ་ གྲོགས་རམ་བཟོ་བཀོད་བསྐྱར་ཞིབ་འབད་ནི་གི་དོན་ལུ་ ཕྱིར་ལོག་འབད་མི་ བསྐྱར་ལོག་འབད་ཡོདཔ་ཨིན། རྒྱབ་བཤུད་ནང་ལམ་ཚུ་ དབང་ཚད་ཅན་གྱི་ཨང་རྟགས་ལུ་སྟོནམ་ཨིན།
 
-## Scope
-- Defines canonical entities (domains, accounts, assets, NFTs, roles, permissions, peers, triggers) and their identifiers.
-- Describes state‑changing instructions (ISI): types, parameters, preconditions, state transitions, emitted events, and error conditions.
-- Summarizes parameter management, transactions, and instruction serialization.
+## གོ་སྐབས
+- ཁྲིམས་ལུགས་ཀྱི་ངོ་བོ་ཚུ་ (མངའ་ཁོངས་དང་ རྩིས་ཁྲ་ རྒྱུ་དངོས་ ཨེན་ཨེཕ་ཊི་ འགན་ཁུར་ མཉམ་རོགས་ མཉམ་རོགས་ ཊི་རི་ཊི་ཚུ་) དང་ ངོས་འཛིན་འབད་མི་ཚུ་ ངེས་འཛིན་འབདཝ་ཨིན།
+- གནས་སྟངས་བསྒྱུར་བཅོས་འབད་ནིའི་བཀོད་རྒྱ་ (ISI): དབྱེ་བ་དང་ ཚད་གཞི་ སྔོན་སྒྲིག་གནས་སྟངས་ གནས་སྟངས་འགྱུར་བ་ བཏོན་པའི་བྱུང་ལས་ དེ་ལས་ འཛོལ་བ་གནས་སྟངས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+- ཚད་བཟུང་འཛིན་སྐྱོང་དང་ ཚོང་འབྲེལ་ དེ་ལས་ བཀོད་རྒྱ་རིམ་སྒྲིག་ཚུ་ བཅུད་བསྡུས་འབདཝ་ཨིན།
 
-Determinism: All instruction semantics are pure state transitions without hardware‑dependent behavior. Serialization uses Norito; VM bytecode uses the IVM and is validated host‑side before on‑chain execution.
-
----
-
-## Entities and Identifiers
-IDs have stable string forms with `Display`/`FromStr` round‑trip. Name rules forbid whitespace and the reserved `@ # $` characters.
-
-- `Name` — validated textual identifier. Rules: `crates/iroha_data_model/src/name.rs`.
-- `DomainId` — `name`. Domain: `{ id, logo, metadata, owned_by }`. Builders: `NewDomain`. Code: `crates/iroha_data_model/src/domain.rs`.
-- `AccountId` — canonical addresses are produced via `AccountAddress` (IH58 / `sora…` compressed / hex) and Torii normalises inputs through `AccountAddress::parse_any`. IH58 is the preferred account format; the `sora…` form is second-best for Sora-only UX. The familiar `alias@domain` string is retained as a routing alias only. Account: `{ id, metadata }`. Code: `crates/iroha_data_model/src/account.rs`.
-- Account admission policy — domains control implicit account creation by storing a Norito-JSON `AccountAdmissionPolicy` under metadata key `iroha:account_admission_policy`. When the key is absent, the chain-level custom parameter `iroha:default_account_admission_policy` provides the default; when that is also absent, the hard default is `ImplicitReceive` (first release). The policy tags `mode` (`ExplicitOnly` or `ImplicitReceive`) plus optional per-transaction (default `16`) and per-block creation caps, an optional `implicit_creation_fee` (burn or sink account), `min_initial_amounts` per asset definition, and an optional `default_role_on_create` (granted after `AccountCreated`, rejects with `DefaultRoleError` if missing). Genesis cannot opt in; disabled/invalid policies reject receipt-style instructions for unknown accounts with `InstructionExecutionError::AccountAdmission`. Implicit accounts stamp metadata `iroha:created_via="implicit"` before `AccountCreated`; default roles emit a follow-up `AccountRoleGranted`, and executor owner-baseline rules let the new account spend its own assets/NFTs without extra roles. Code: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — `asset#domain`. Definition: `{ id, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. Code: `crates/iroha_data_model/src/asset/definition.rs`.
-- `AssetId` — `asset#domain#account` or `asset##account` if domains match, where `account` is the canonical `AccountId` string (IH58 preferred). Asset: `{ id, value: Numeric }`. Code: `crates/iroha_data_model/src/asset/{id.rs,value.rs}`.
-- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Code: `crates/iroha_data_model/src/nft.rs`.
-- `RoleId` — `name`. Role: `{ id, permissions: BTreeSet<Permission> }` with builder `NewRole { inner: Role, grant_to }`. Code: `crates/iroha_data_model/src/role.rs`.
-- `Permission` — `{ name: Ident, payload: Json }`. Code: `crates/iroha_data_model/src/permission.rs`.
-- `PeerId`/`Peer` — peer identity (public key) and address. Code: `crates/iroha_data_model/src/peer.rs`.
-- `TriggerId` — `name`. Trigger: `{ id, action }`. Action: `{ executable, repeats, authority, filter, metadata }`. Code: `crates/iroha_data_model/src/trigger/`.
-- `Metadata` — `BTreeMap<Name, Json>` with checked insert/remove. Code: `crates/iroha_data_model/src/metadata.rs`.
-- Subscription pattern (application layer): plans are `AssetDefinition` entries with `subscription_plan` metadata; subscriptions are `Nft` records with `subscription` metadata; billing is executed by time triggers referencing subscription NFTs. See `docs/source/subscriptions_api.md` and `crates/iroha_data_model/src/subscription.rs`.
-- **Cryptographic primitives** (feature `sm`):
-  - `Sm2PublicKey` / `Sm2Signature` mirror the canonical SEC1 point + fixed-width `r∥s` encoding for SM2. Constructors enforce curve membership and distinguishing ID semantics (`DEFAULT_DISTID`), while verification rejects malformed or high-range scalars. Code: `crates/iroha_crypto/src/sm.rs` and `crates/iroha_data_model/src/crypto/mod.rs`.
-  - `Sm3Hash` exposes the GM/T 0004 digest as a Norito-serialisable `[u8; 32]` newtype used wherever hashes appear in manifests or telemetry. Code: `crates/iroha_data_model/src/crypto/hash.rs`.
-  - `Sm4Key` represents 128-bit SM4 keys and is shared between host syscalls and data-model fixtures. Code: `crates/iroha_data_model/src/crypto/symmetric.rs`.
-  These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and are available to data-model consumers (Torii, SDKs, genesis tooling) once the `sm` feature is enabled.
-
-Important traits: `Identifiable`, `Registered`/`Registrable` (builder pattern), `HasMetadata`, `IntoKeyValue`. Code: `crates/iroha_data_model/src/lib.rs`.
-
-Events: Every entity has events emitted on mutations (create/delete/owner changed/metadata changed, etc.). Code: `crates/iroha_data_model/src/events/`.
+གཏན་འབེབས་རིང་ལུགས་: བཀོད་རྒྱ་ཡིག་བརྡའི་ཆ་མཉམ་རང་ མཐུན་རྐྱེན་ལུ་བརྟེན་པའི་སྤྱོད་ལམ་མེད་པར་ གནས་སྟངས་ཀྱི་འགྱུར་བ་ངོ་མ་ཨིན། རིམ་སྒྲིག་གིས་ Norito ལག་ལེན་འཐབ་ཨིན། ཝི་ཨེམ་བཱའིཊི་ཀོཌི་གིས་ IVM ལག་ལེན་འཐབ་ཨིནམ་དང་ རིམ་སྒྲིག་ལག་ལེན་འཐབ་པའི་ཧེ་མ་ ཧོསཊི་ཕྱོགས་འདི་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
 
 ---
 
-## Parameters (Chain Configuration)
-- Families: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, `SmartContractParameters { fuel, memory, execution_depth }`, plus `custom: BTreeMap`.
-- Single enums for diffs: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. Aggregator: `Parameters`. Code: `crates/iroha_data_model/src/parameter/system.rs`.
+## ངོ་བོ་དང་ངོས་འཛིན།
+IDs ཚུ་ `Display`/`FromStr` སྐོར་རིམ་དང་གཅིག་ཁར་ བརྟན་ཏོག་ཏོ་ཡོད་པའི་ཡིག་རྒྱུན་འབྲི་ཤོག་ཚུ་ཡོདཔ་ཨིན། མིང་ལམ་ལུགས་ཚུ་གིས་ བར་སྟོང་དཀརཔོ་དང་ གསོག་འཇོག་འབད་ཡོད་པའི་ `@ # $` ཡིག་འབྲུ་ཚུ།- `Name` — བདེན་དཔྱད་འབད་ཡོད་པའི་ཚིག་ཡིག་ངོས་འཛིན་འབད་མི་འདི་ཨིན། ལམ་ལུགས་: `crates/iroha_data_model/src/name.rs`.
+- `DomainId` — `name`. ཌོ་མེན་: `{ id, logo, metadata, owned_by }`. བཟོ་སྐྲུན་པ་: `NewDomain`. གསང་གྲངས་: `crates/iroha_data_model/src/domain.rs`.
+- Norito — ཀེ་ནོ་ནིག་ཁ་བྱང་ཚུ་ `AccountAddress` (IH58 / `sora…` བསྡམ་བཞག་ཡོད་པའི་ / ཧེགསི་) དང་ `AccountAddress::parse_any` སྤྱིར་བཏང་ཨིན་པུཊི་ཚུ་བརྒྱུད་དེ་ བཏོན་ཡོདཔ་ཨིན། IH58 འདི་ གདམ་ཁ་ཅན་གྱི་རྩིས་ཐོའི་རྩ་སྒྲིག་ཨིན། `sora…` འབྲི་ཤོག་འདི་ སོ་ར་རྐྱངམ་ཅིག་ཡུ་ཨེགསི་གི་དོན་ལུ་ དྲག་ཤོས་གཉིས་པ་ཨིན། གོམས་འདྲིས་ཅན་གྱི་ `alias@domain` ཡིག་རྒྱུན་འདི་ འགྲུལ་ལམ་གཞན་ཅིག་སྦེ་ བཞག་སྟེ་ཡོདཔ་ཨིན། རྩིས་ཁྲ་: `{ id, metadata }`. གསང་གྲངས་: `crates/iroha_data_model/src/account.rs`.
+- རྩིས་ཁྲའི་འཛུལ་ཞུགས་སྲིད་བྱུས་ — མངའ་ཁོངས་ཚུ་གིས་ རྩིས་ཁྲའི་གསར་བསྐྲུན་འདི་ Norito-JSON `AccountAdmissionPolicy` གསོག་འཇོག་འབད་དེ་ མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ `iroha:account_admission_policy` གསོག་འཇོག་འབད་ཐོག་ལས་ ཚད་འཛིན་འབདཝ་ཨིན། ལྡེ་མིག་འདི་མེད་པའི་སྐབས་ རིམ་སྒྲིག་གནས་རིམ་གྱི་སྲོལ་སྒྲིག་ཚད་གཞི་ `iroha:default_account_admission_policy` གིས་ སྔོན་སྒྲིག་བྱིནམ་ཨིན། དེ་ཡང་མེད་པའི་སྐབས་ ཧརཌི་སྔོན་སྒྲིག་འདི་ `ImplicitReceive` (དང་པོ་གསར་བཏོན་) ཨིན། སྲིད་བྱུས་ངོ་རྟགས་ཚུ་ `mode` (`ExplicitOnly` ཡང་ན་ `ImplicitReceive`) དང་གདམ་ཁ་ཅན་གྱི་བརྒྱུད་ལམ་ (སྔོན་སྒྲིག་ `16`) དང་ བཀག་ཆ་རེ་རེ་གསར་བསྐྲུན་འབད་མི་ ཁབ་ལེན་དང་ གདམ་ཁ་ཅན་གྱི་ `implicit_creation_fee` (burn ཡང་ན་ secn count). `min_initial_amounts` རྒྱུ་དངོས་ངེས་ཚིག་དང་ གདམ་ཁ་ཅན་གྱི་ `default_role_on_create` (Norito གི་ཤུལ་ལས་ གྲོགས་རམ་ཡོདཔ་ཨིན་, Iroha དང་ཅིག་ཁར་ ངོས་ལེན་འབདཝ་ཨིན།) Genesis ནང་ལུ་ གདམ་ཁ་བརྐྱབ་མི་ཚུགས། བཀྲམ་སྟོན་/ནུས་མེད་སྲིད་བྱུས་ཚུ་གིས་ `InstructionExecutionError::AccountAdmission` དང་གཅིག་ཁར་ མ་ཤེས་པའི་རྩིས་ཐོ་ཚུ་གི་དོན་ལུ་ འཐོབ་ཐངས་ལམ་ལུགས་ཀྱི་བཀོད་རྒྱ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན། `iroha:created_via="implicit"` གི་ཧེ་མ་ `AccountCreated`; སྔོན་སྒྲིག་འགན་ཁུར་ཚུ་གིས་ རྗེས་འཇུག་ `AccountRoleGranted`, དང་ ལག་ལེན་འཐབ་མིའི་ཇོ་བདག་གཞི་རིམ་སྒྲིག་གཞི་གིས་ རྩིས་ཁྲ་གསརཔ་འདི་གིས་ འགན་ཁུར་ཁ་སྐོང་མེད་པར་ རང་སོའི་རྒྱུ་དངོས་/ཨེན་ཨེཕ་ཊི་ཚུ་ ཟད་འགྲོ་བཏང་བཅུགཔ་ཨིན། གསང་གྲངས་: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
+- `AssetDefinitionId` — `asset#domain`. ངེས་ཚིག་: `{ id, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. གསང་གྲངས་: `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetId` — `asset#domain#account` ཡང་ན་ Torii འདི་ མངའ་ཁོངས་ཚུ་མཐུན་སྒྲིག་འབད་བ་ཅིན་ `{ id, permissions: BTreeSet<Permission> }` འདི་ ཀེན་ནོ་ནིག་ `AccountId` ཡིག་རྒྱུན་ཨིན། རྒྱུ་དངོས་: `{ id, value: Numeric }`. གསང་གྲངས་: `crates/iroha_data_model/src/asset/{id.rs,value.rs}`.
+- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. གསང་གྲངས་: `crates/iroha_data_model/src/nft.rs`.
+- `RoleId` — `name`. འགན་ཁུར་: `{ id, permissions: BTreeSet<Permission> }` བཟོ་བསྐྲུན་པ་ `NewRole { inner: Role, grant_to }`. གསང་ཨང་: `crates/iroha_data_model/src/role.rs`.
+- `Permission` — `{ name: Ident, payload: Json }`. གསང་གྲངས་: `crates/iroha_data_model/src/permission.rs`.
+- `PeerId`/`Peer` — མཉམ་རོགས་ངོ་རྟགས་ (མི་མང་ལྡེ་མིག་) དང་ཁ་བྱང་། གསང་གྲངས་: `crates/iroha_data_model/src/peer.rs`.
+- `TriggerId` — `name`. ཊི་རི་གར་: `{ id, action }`. བྱ་བ་: `{ executable, repeats, authority, filter, metadata }`. གསང་གྲངས་: `crates/iroha_data_model/src/trigger/`.
+- `Metadata` — ཞིབ་དཔྱད་འབད་ཡོད་པའི་བཙུགས་/བཏོན་གཏང་ཐོག་ལས་ `BTreeMap<Name, Json>` . གསང་གྲངས་: `crates/iroha_data_model/src/metadata.rs`.
+- མཐུད་ལམ་གྱི་དཔེ་རིས་ (གློག་རིམ་བང་རིམ་): འཆར་གཞི་ཚུ་ `AssetDefinition` ཐོ་བཀོད་ཚུ་ `subscription_plan` མེ་ཊ་ཌེ་ཊ་དང་གཅིག་ཁར་ཨིན། མཁོ་སྒྲུབ་ཚུ་ `Nft` དྲན་ཐོ་ཚུ་ `subscription` མེ་ཊ་ཌེ་ཊ་དང་གཅིག་ཁར་ཨིན། briling འདི་ དུས་ཚོད་དང་འཁྲིལ་ཏེ་ ལག་ལེན་འཐབ་ཨིན། `docs/source/subscriptions_api.md` དང་ `crates/iroha_data_model/src/subscription.rs` ལུ་བལྟ།
+- **ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་གི་ གནའ་དུས་** (ཁྱད་རྣམ་ `sm`):- `Sm2PublicKey` / `Sm2Signature` གིས་ ཀེ་ནོ་ནིག་ཨེསི་ཨི་སི་༡ ས་ཚིགས་ + གཏན་བཟོས་-རྒྱ་ཚད་ `r∥s` ཨིན་ཀོ་ཌིང་འདི་ ཨེསི་ཨེམ་༢ གི་དོན་ལུ་ཨིན། བཟོ་བསྐྲུན་པ་ཚུ་གིས་ འཐུས་མི་དང་ ID ཡིག་བརྡའི་རིག་པ་ (`DEFAULT_DISTID`) དབྱེ་བ་ཕྱེ་ནི་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན་རུང་ བདེན་དཔྱད་འདི་གིས་ སྐྱོན་ཆ་ཅན་དང་ ཡང་ན་ ཁྱབ་ཚད་མཐོ་བའི་ འཇལ་ཚད་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན། གསང་གྲངས་: `crates/iroha_crypto/src/sm.rs` དང་ `crates/iroha_data_model/src/crypto/mod.rs`.
+  - `Sm3Hash` གིས་ GM/T 00004 ཟས་བཅུད་འདི་ Norito-serialiable `[u8; 32]` གིས་ གསལ་སྟོན་དང་ ཡང་ན་ བརྒྱུད་འཕྲིན་ནང་ ག་ཅི་བཟུམ་ཅིག་ཐོན་རུང་ དབྱེ་བ་གསརཔ་སྦེ་ གསལ་སྟོན་འབདཝ་ཨིན། གསང་ཨང་: `crates/iroha_data_model/src/crypto/hash.rs`.
+  - IVM གིས་ 128-bit SM4 ལྡེ་མིག་ཚུ་ངོ་བཏོནམ་ཨིནམ་དང་ ཧོསིཊི་སི་ཀཱལ་དང་ གནད་སྡུད་དཔེ་ཚད་སྒྲིག་ཆས་ཚུ་གི་བར་ན་ བརྗེ་སོར་འབད་ཡོདཔ་ཨིན། གསང་གྲངས་: `crates/iroha_data_model/src/crypto/symmetric.rs`.
+  འདི་བཟུམ་གྱི་དབྱེ་བ་ཡོད་པའི་ Ed25519/BLS/ML-DSA དང་མཉམ་དུ་སྡོད་དགོཔ་དང་ གནས་སྡུད་-དཔེ་ཚད་ཉོ་སྤྱོད་འབད་མི་ (Torii, SDKs, རིགས་མཚན་ལག་ཆས་) འདི་ `sm` གི་ཁྱད་རྣམ་འདི་ ལྕོགས་ཅན་བཟོ་ཚར་བའི་ཤུལ་ལས་ འཐོབ་ཚུགས།
 
-Setting parameters (ISI): `SetParameter(Parameter)` updates the corresponding field and emits `ConfigurationEvent::Changed`. Code: `crates/iroha_data_model/src/isi/transparent.rs`, executor in `crates/iroha_core/src/smartcontracts/isi/world.rs`.
+གལ་ཆེ་བའི་རང་གཤིས་: `Identifiable`, `Registered`/`Registrable` (བཟོ་བསྐྲུན་པའི་དཔེ་རིས་) `HasMetadata`, Torii. གསང་གྲངས་: `crates/iroha_data_model/src/lib.rs`.
 
----
-
-## Instruction Serialization and Registry
-- Core trait: `Instruction: Send + Sync + 'static` with `dyn_encode()`, `as_any()`, stable `id()` (defaults to concrete type name).
-- `InstructionBox`: `Box<dyn Instruction>` wrapper. Clone/Eq/Ord operate on `(type_id, encoded_bytes)` so equality is by value.
-- Norito serde for `InstructionBox` serializes as `(String wire_id, Vec<u8> payload)` (falls back to `type_name` if no wire ID). Deserialization uses a global `InstructionRegistry` mapping identifiers to constructors. Default registry includes all built‑in ISI. Code: `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`.
-
----
-
-## ISI: Types, Semantics, Errors
-Execution is implemented via `Execute for <Instruction>` in `iroha_core::smartcontracts::isi`. Below lists the public effects, preconditions, emitted events, and errors.
-
-### Register / Unregister
-Types: `Register<T: Registered>` and `Unregister<T: Identifiable>`, with sum types `RegisterBox`/`UnregisterBox` covering concrete targets.
-
-- Register Peer: inserts into world peers set.
-  - Preconditions: must not already exist.
-  - Events: `PeerEvent::Added`.
-  - Errors: `Repetition(Register, PeerId)` if duplicate; `FindError` on lookups. Code: `core/.../isi/world.rs`.
-
-- Register Domain: builds from `NewDomain` with `owned_by = authority`. Disallowed: `genesis` domain.
-  - Preconditions: domain non‑existence; not `genesis`.
-  - Events: `DomainEvent::Created`.
-  - Errors: `Repetition(Register, DomainId)`, `InvariantViolation("Not allowed to register genesis domain")`. Code: `core/.../isi/world.rs`.
-
-- Register Account: builds from `NewAccount`, disallowed in `genesis` domain; `genesis` account cannot be registered.
-  - Preconditions: domain must exist; account non‑existence; not in genesis domain.
-  - Events: `DomainEvent::Account(AccountEvent::Created)`.
-  - Errors: `Repetition(Register, AccountId)`, `InvariantViolation("Not allowed to register account in genesis domain")`. Code: `core/.../isi/domain.rs`.
-
-- Register AssetDefinition: builds from builder; sets `owned_by = authority`.
-  - Preconditions: definition non‑existence; domain exists.
-  - Events: `DomainEvent::AssetDefinition(AssetDefinitionEvent::Created)`.
-  - Errors: `Repetition(Register, AssetDefinitionId)`. Code: `core/.../isi/domain.rs`.
-
-- Register NFT: builds from builder; sets `owned_by = authority`.
-  - Preconditions: NFT non‑existence; domain exists.
-  - Events: `DomainEvent::Nft(NftEvent::Created)`.
-  - Errors: `Repetition(Register, NftId)`. Code: `core/.../isi/nft.rs`.
-
-- Register Role: builds from `NewRole { inner, grant_to }` (first owner recorded via account‑role mapping), stores `inner: Role`.
-  - Preconditions: role non‑existence.
-  - Events: `RoleEvent::Created`.
-  - Errors: `Repetition(Register, RoleId)`. Code: `core/.../isi/world.rs`.
-
-- Register Trigger: stores the trigger in the appropriate trigger set by filter kind.
-  - Preconditions: If filter is not mintable, `action.repeats` must be `Exactly(1)` (otherwise `MathError::Overflow`). Duplicate IDs prohibited.
-  - Events: `TriggerEvent::Created(TriggerId)`.
-  - Errors: `Repetition(Register, TriggerId)`, `InvalidParameterError::SmartContract(..)` on conversion/validation failures. Code: `core/.../isi/triggers/mod.rs`.
-
-- Unregister Peer/Domain/Account/AssetDefinition/NFT/Role/Trigger: removes the target; emits deletion events. Additional cascading removals:
-  - Unregister Domain: removes all accounts in domain, their roles, permissions, tx-sequence counters, account labels, and UAID bindings; deletes their assets (and per-asset metadata); removes all asset definitions in the domain; deletes NFTs in the domain and any NFTs owned by the removed accounts; removes triggers whose authority domain matches. Events: `DomainEvent::Deleted`, plus per-item deletion events. Errors: `FindError::Domain` if missing. Code: `core/.../isi/world.rs`.
-  - Unregister Account: removes account’s permissions, roles, tx-sequence counter, account label mapping, and UAID bindings; deletes assets owned by the account (and per-asset metadata); deletes NFTs owned by the account; removes triggers whose authority is that account. Events: `AccountEvent::Deleted`, plus `NftEvent::Deleted` per removed NFT. Errors: `FindError::Account` if missing. Code: `core/.../isi/domain.rs`.
-  - Unregister AssetDefinition: deletes all assets of that definition and their per-asset metadata. Events: `AssetDefinitionEvent::Deleted` and `AssetEvent::Deleted` per asset. Errors: `FindError::AssetDefinition`. Code: `core/.../isi/domain.rs`.
-  - Unregister NFT: removes NFT. Events: `NftEvent::Deleted`. Errors: `FindError::Nft`. Code: `core/.../isi/nft.rs`.
-  - Unregister Role: revokes the role from all accounts first; then removes the role. Events: `RoleEvent::Deleted`. Errors: `FindError::Role`. Code: `core/.../isi/world.rs`.
-  - Unregister Trigger: removes trigger if present; duplicate unregister yields `Repetition(Unregister, TriggerId)`. Events: `TriggerEvent::Deleted`. Code: `core/.../isi/triggers/mod.rs`.
-
-### Mint / Burn
-Types: `Mint<O, D: Identifiable>` and `Burn<O, D: Identifiable>`, boxed as `MintBox`/`BurnBox`.
-
-- Asset (Numeric) mint/burn: adjusts balances and definition’s `total_quantity`.
-  - Preconditions: `Numeric` value must satisfy `AssetDefinition.spec()`; mint allowed by `mintable`:
-    - `Infinitely`: always allowed.
-    - `Once`: allowed exactly once; the first mint flips `mintable` to `Not` and emits `AssetDefinitionEvent::MintabilityChanged`, plus a detailed `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` for auditability.
-    - `Limited(n)`: allows `n` additional mint operations. Each successful mint decrements the counter; when it reaches zero the definition flips to `Not` and emits the same `MintabilityChanged` events as above.
-    - `Not`: error `MintabilityError::MintUnmintable`.
-  - State changes: creates asset if missing on mint; removes asset entry if balance becomes zero on burn.
-  - Events: `AssetEvent::Added`/`AssetEvent::Removed`, `AssetDefinitionEvent::MintabilityChanged` (when `Once` or `Limited(n)` exhausts its allowance).
-  - Errors: `TypeError::AssetNumericSpec(Mismatch)`, `MathError::Overflow`/`NotEnoughQuantity`. Code: `core/.../isi/asset.rs`.
-
-- Trigger repetitions mint/burn: changes `action.repeats` count for a trigger.
-  - Preconditions: on mint, filter must be mintable; arithmetic must not overflow/underflow.
-  - Events: `TriggerEvent::Extended`/`TriggerEvent::Shortened`.
-  - Errors: `MathError::Overflow` on invalid mint; `FindError::Trigger` if missing. Code: `core/.../isi/triggers/mod.rs`.
-
-### Transfer
-Types: `Transfer<S: Identifiable, O, D: Identifiable>`, boxed as `TransferBox`.
-
-- Asset (Numeric): subtract from source `AssetId`, add to destination `AssetId` (same definition, different account). Delete zeroed source asset.
-  - Preconditions: source asset exists; value satisfies `spec`.
-  - Events: `AssetEvent::Removed` (source), `AssetEvent::Added` (destination).
-  - Errors: `FindError::Asset`, `TypeError::AssetNumericSpec`, `MathError::NotEnoughQuantity/Overflow`. Code: `core/.../isi/asset.rs`.
-
-- Domain ownership: changes `Domain.owned_by` to destination account.
-  - Preconditions: both accounts exist; domain exists.
-  - Events: `DomainEvent::OwnerChanged`.
-  - Errors: `FindError::Account/Domain`. Code: `core/.../isi/domain.rs`.
-
-- AssetDefinition ownership: changes `AssetDefinition.owned_by` to destination account.
-  - Preconditions: both accounts exist; definition exists; source must currently own it.
-  - Events: `AssetDefinitionEvent::OwnerChanged`.
-  - Errors: `FindError::Account/AssetDefinition`. Code: `core/.../isi/account.rs`.
-
-- NFT ownership: changes `Nft.owned_by` to destination account.
-  - Preconditions: both accounts exist; NFT exists; source must currently own it.
-  - Events: `NftEvent::OwnerChanged`.
-  - Errors: `FindError::Account/Nft`, `InvariantViolation` if source doesn’t own the NFT. Code: `core/.../isi/nft.rs`.
-
-### Metadata: Set/Remove Key‑Value
-Types: `SetKeyValue<T>` and `RemoveKeyValue<T>` with `T ∈ { Domain, Account, AssetDefinition, Nft, Trigger }`. Boxed enums provided.
-
-- Set: inserts or replaces `Metadata[key] = Json(value)`.
-- Remove: removes the key; error if missing.
-- Events: `<Target>Event::MetadataInserted` / `MetadataRemoved` with the old/new values.
-- Errors: `FindError::<Target>` if the target doesn’t exist; `FindError::MetadataKey` on missing key for removal. Code: `crates/iroha_data_model/src/isi/transparent.rs` and executor impls per target.
-
-### Permissions and Roles: Grant / Revoke
-Types: `Grant<O, D>` and `Revoke<O, D>`, with boxed enums for `Permission`/`Role` to/from `Account`, and `Permission` to/from `Role`.
-
-- Grant Permission to Account: adds `Permission` unless already inherent. Events: `AccountEvent::PermissionAdded`. Errors: `Repetition(Grant, Permission)` if duplicate. Code: `core/.../isi/account.rs`.
-- Revoke Permission from Account: removes if present. Events: `AccountEvent::PermissionRemoved`. Errors: `FindError::Permission` if absent. Code: `core/.../isi/account.rs`.
-- Grant Role to Account: inserts `(account, role)` mapping if absent. Events: `AccountEvent::RoleGranted`. Errors: `Repetition(Grant, RoleId)`. Code: `core/.../isi/account.rs`.
-- Revoke Role from Account: removes mapping if present. Events: `AccountEvent::RoleRevoked`. Errors: `FindError::Role` if absent. Code: `core/.../isi/account.rs`.
-- Grant Permission to Role: rebuilds role with permission added. Events: `RoleEvent::PermissionAdded`. Errors: `Repetition(Grant, Permission)`. Code: `core/.../isi/world.rs`.
-- Revoke Permission from Role: rebuilds role without that permission. Events: `RoleEvent::PermissionRemoved`. Errors: `FindError::Permission` if absent. Code: `core/.../isi/world.rs`.
-
-### Triggers: Execute
-Type: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
-- Behavior: enqueues an `ExecuteTriggerEvent { trigger_id, authority, args }` for the trigger subsystem. Manual execution is allowed only for by-call triggers (`ExecuteTrigger` filter); the filter must match and the caller must be the trigger action authority or hold `CanExecuteTrigger` for that authority. When a user-provided executor is active, trigger execution is validated by the runtime executor and consumes the transaction’s executor fuel budget (base `executor.fuel` plus optional metadata `additional_fuel`).
-- Errors: `FindError::Trigger` if not registered; `InvariantViolation` if called by non‑authority. Code: `core/.../isi/triggers/mod.rs` (and tests in `core/.../smartcontracts/isi/mod.rs`).
-
-### Upgrade and Log
-- `Upgrade { executor }`: migrates the executor using provided `Executor` bytecode, updates executor and its data model, emits `ExecutorEvent::Upgraded`. Errors: wrapped as `InvalidParameterError::SmartContract` on migration failure. Code: `core/.../isi/world.rs`.
-- `Log { level, msg }`: emits a node log with the given level; no state changes. Code: `core/.../isi/world.rs`.
-
-### Error Model
-Common envelope: `InstructionExecutionError` with variants for evaluation errors, query failures, conversions, entity not found, repetition, mintability, math, invalid parameter, and invariant violation. Enumerations and helpers are in `crates/iroha_data_model/src/isi/mod.rs` under `pub mod error`.
+བྱུང་ལས་: ངོ་བོ་ག་ར་གིས་ རིགས་འགྱུར་གྱི་བྱུང་རིམ་ཚུ་ བཏོན་ཡོདཔ་ཨིན། གསང་གྲངས་: `crates/iroha_data_model/src/events/`.
 
 ---
 
-## Transactions and Executables
-- `Executable`: either `Instructions(ConstVec<InstructionBox>)` or `Ivm(IvmBytecode)`; bytecode serializes as base64. Code: `crates/iroha_data_model/src/transaction/executable.rs`.
-- `TransactionBuilder`/`SignedTransaction`: constructs, signs, and packages an executable with metadata, `chain_id`, `authority`, `creation_time_ms`, optional `ttl_ms`, and `nonce`. Code: `crates/iroha_data_model/src/transaction/`.
-- At runtime, `iroha_core` executes `InstructionBox` batches via `Execute for InstructionBox`, downcasting to the appropriate `*Box` or concrete instruction. Code: `crates/iroha_core/src/smartcontracts/isi/mod.rs`.
-- Runtime executor validation budget (user-provided executor): base `executor.fuel` from parameters plus optional transaction metadata `additional_fuel` (`u64`), shared across instruction/trigger validations within the transaction.
+## ཚད་བཟུང་ཚུ་ (རིམ་སྒྲིག་རིམ་སྒྲིག་)།
+- བཟའ་ཚང་: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, Norito, `SmartContractParameters { fuel, memory, execution_depth }`, དང་ `custom: BTreeMap`.
+- ཁྱབ་སྤེལ་གྱི་དོན་ལུ་ གྱངས་ཁ་རྐྱངམ་གཅིག: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. བསྡོམས་རྩིས་: `Parameters`. གསང་གྲངས་: `crates/iroha_data_model/src/parameter/system.rs`.
+
+སྒྲིག་སྟངས་ཚད་བཟུང་ཚུ་ (ISI): `SetParameter(Parameter)` གིས་ མཐུན་སྒྲིག་ཡོད་པའི་ས་སྒོ་འདི་དུས་མཐུན་བཟོ་སྟེ་ `ConfigurationEvent::Changed` གིས་ བཏོནམ་ཨིན། གསང་གྲངས་: `crates/iroha_data_model/src/isi/transparent.rs`, བཀོལ་སྤྱོད་པ་ `crates/iroha_core/src/smartcontracts/isi/world.rs` ནང་།
 
 ---
 
-## Invariants and Notes (from tests and guards)
-- Genesis protections: cannot register the `genesis` domain or accounts in `genesis` domain; `genesis` account cannot be registered. Code/tests: `core/.../isi/world.rs`, `core/.../smartcontracts/isi/mod.rs`.
-- Numeric assets must satisfy their `NumericSpec` on mint/transfer/burn; spec mismatch yields `TypeError::AssetNumericSpec`.
-- Mintability: `Once` allows a single mint and then flips to `Not`; `Limited(n)` allows exactly `n` mints before flipping to `Not`. Attempts to forbid minting on `Infinitely` cause `MintabilityError::ForbidMintOnMintable`, and configuring `Limited(0)` yields `MintabilityError::InvalidMintabilityTokens`.
-- Metadata operations are key‑exact; removing a non‑existent key is an error.
-- Trigger filters can be non‑mintable; then `Register<Trigger>` only permits `Exactly(1)` repeats.
-- Trigger metadata key `__enabled` (bool) gates execution; missing defaults to enabled, and disabled triggers are skipped across data/time/by-call paths.
-- Determinism: all arithmetic uses checked operations; under/overflow returns typed math errors; zero balances drop asset entries (no hidden state).
+## བསླབ་སྟོན་རིམ་པ་དང་ཐོ་འགོད།
+- གཞི་རྩ།: `Instruction: Send + Sync + 'static` `dyn_encode()`, `as_any()`, བརྟན་ཏོག་ཏོ་ `id()` (ངེས་མེད་ཀྱི་དབྱེ་བ་མིང་ལུ་རྒྱབ་འགལ་འབདཝ་ཨིན།)།
+- `InstructionBox`: `Box<dyn Instruction>` wrapper. རིགས་མཚུངས་/Eq/Ord `(type_id, encoded_bytes)` གུ་ལག་ལེན་འཐབ་ཨིན། དེ་འབདཝ་ལས་ འདྲ་མཉམ་འདི་ གནས་གོང་དང་འཁྲིལ་ཏེ་ཨིན།
+- Norito གི་དོན་ལུ་ `InstructionBox` `(String wire_id, Vec<u8> payload)` ལུ་ རིམ་སྒྲིག་འབདཝ་ཨིན་ (གློག་ཐག་ཨའི་ཌི་མེད་པ་ཅིན་ Norito ལུ་ལོག་འགྱོཝ་ཨིན།) རིམ་འབྱུང་བཟོ་མི་འདི་གིས་ བཟོ་བསྐྲུན་པ་ཚུ་ལུ་ འཛམ་གླིང་ཡོངས་ཁྱབ་ཀྱི་ `InstructionRegistry` སབ་ཁྲ་བཟོ་ནི་གི་ངོས་འཛིན་ཚུ་ལག་ལེན་འཐབ་ཨིན། སྔོན་སྒྲིག་ཐོ་བཀོད་ནང་ ISI ནང་བཟོ་བསྐྲུན་ཆ་མཉམ་ཚུདཔ་ཨིན། གསང་ཨང་: `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`.
 
 ---
 
-## Practical Examples
-- Minting and transfer:
-  - `Mint::asset_numeric(10, asset_id)` → adds 10 if allowed by spec/mintability; events: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → moves 5; events for removal/addition.
-- Metadata updates:
-  - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → upsert; removal via `RemoveKeyValue::account(...)`.
-- Role/permission management:
-  - `Grant::account_role(role_id, account)`, `Grant::role_permission(perm, role)`, and their `Revoke` counterparts.
-- Trigger lifecycle:
-  - `Register::trigger(Trigger::new(id, Action::new(exec, repeats, authority, filter)))` with mintability check implied by filter; `ExecuteTrigger::new(id).with_args(&args)` must match configured authority.
-  - Triggers can be disabled by setting metadata key `__enabled` to `false` (missing defaults to enabled); toggle via `SetKeyValue::trigger` or the IVM `set_trigger_enabled` syscall.
-  - Trigger storage is repaired on load: duplicate ids, mismatched ids, and triggers referencing missing bytecode are dropped; bytecode reference counts are recomputed.
-  - If a trigger's IVM bytecode is missing at execution time, the trigger is removed and the execution is treated as a no-op with a failure outcome.
-  - Depleted triggers are removed immediately; if a depleted entry is encountered during execution it is pruned and treated as missing.
-- Parameter update:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` updates and emits `ConfigurationEvent::Changed`.
+## ISI: དབྱེ་བ། ཡིག་བརྡ། འཛོལ་བ།
+ལག་ལེན་འཐབ་ནི་འདི་ `Execute for <Instruction>` བརྒྱུད་དེ་ `iroha_core::smartcontracts::isi` ནང་ལུ་ལག་ལེན་འཐབ་ཨིན། འོག་ལུ་ མི་མང་གི་ནུས་པ་ཚུ་དང་ སྔོན་སྒྲིག་གནས་སྟངས་ཚུ་ བཏོན་མི་བྱུང་ལས་དང་འཛོལ་བ་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+
+### ཐོ་འགོད་ / ཐོ་འགོད་མེད་པ།
+དབྱེ་བ་ཚུ་: `Register<T: Registered>` དང་ `Unregister<T: Identifiable>`, བསྡོམས་རྩིས་དབྱེ་བ་ `RegisterBox`/Iroha གིས་ གསལ་སྟོན་དམིགས་གཏད་ཚུ་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+
+- ཐོ་བཀོད་པི་ཡར་: འཛམ་གླིང་མཉམ་རོགས་ཚུ་ནང་བཙུགས་ནི།
+  - སྔོན་སྒྲིག་ཚུ་: ཧེ་མ་ལས་གནས་མི་ཆོག།
+  - བྱུང་ལས་: `PeerEvent::Added`.
+  - འཛོལ་བ།: `Repetition(Register, PeerId)` གལ་ཏེ་འདྲ་བཤུས་; `FindError` བལྟ་སྟངས་ཚུ། གསང་ཨང་: `core/.../isi/world.rs`.
+
+- ཐོ་བཀོད་མངའ་ཁོངས་: `NewDomain` ལས་ `owned_by = authority` དང་བཅས་བཟོ་བསྐྲུན་འབདཝ་ཨིན། བཀག་ཆ་: `genesis` མངའ་ཁོངས།
+  - སྔོན་འགྲོའི་ཆ་རྐྱེན་: མངའ་ཁོངས་མེད་པའི་གནས་སྟངས།; not `genesis`.
+  - བྱུང་ལས་: `DomainEvent::Created`.
+  - འཛོལ་བ་: `Repetition(Register, DomainId)`, `InvariantViolation("Not allowed to register genesis domain")`. གསང་ཨང་: `core/.../isi/world.rs`.- ཐོ་བཀོད་རྩིས་ཐོ་: `NewAccount` ལས་ བཟོ་བསྐྲུན་འབདཝ་ཨིན། `genesis` རྩིས་ཁྲ་ཐོ་འགོད་མི་ཐུབ།
+  - སྔོན་སྒྲིག་ཚུ་: མངའ་ཁོངས་འདི་དགོཔ་ཨིན། རྩིས་ཁྲའི་མེད་པ།; རིགས་མཚན་གྱི་མངའ་ཁོངས་ནང་ལུ་མེན།
+  - བྱུང་ལས་: `DomainEvent::Account(AccountEvent::Created)`.
+  - འཛོལ་བ་: `Repetition(Register, AccountId)`, `InvariantViolation("Not allowed to register account in genesis domain")`. གསང་གྲངས་: `core/.../isi/domain.rs`.
+
+- ཐོ་བཀོད་ཨེ་ཨེསི་ཊི་ ངེས་འཛིན་: བཟོ་བསྐྲུན་པ་ལས་ བཟོ་བསྐྲུན་འབདཝ་ཨིན། sets `owned_by = authority`.
+  - སྔོན་འགྲོའི་ཆ་རྐྱེན་: ངེས་ཚིག་མེད་པའི་གནས་སྟངས། མངའ་ཁོངས་ཡོད།
+  - བྱུང་ལས་: `DomainEvent::AssetDefinition(AssetDefinitionEvent::Created)`.
+  - འཛོལ་བ།: `Repetition(Register, AssetDefinitionId)`. གསང་ཨང་: `core/.../isi/domain.rs`.
+
+- ཐོ་བཀོད་ཨེན་ཨེཕ་ཊི་: བཟོ་བསྐྲུན་པ་ལས་བཟོ་བསྐྲུན་འབདཝ་ཨིན། sets `owned_by = authority`.
+  - སྔོན་འགྲོའི་ཆ་རྐྱེན་: NFT མིན་པའི་ ཡོད། མངའ་ཁོངས་ཡོད།
+  - བྱུང་ལས་: `DomainEvent::Nft(NftEvent::Created)`.
+  - འཛོལ་བ།: `Repetition(Register, NftId)`. གསང་ཨང་: `core/.../isi/nft.rs`.
+
+- ཐོ་བཀོད་འགན་ཁུར་: `NewRole { inner, grant_to }` (ཇོ་བདག་དང་པོ་རྩིས་ཁྲའི་སབ་ཁྲ་བརྒྱུད་དེ་ཐོ་བཀོད་འབད་ཡོདཔ་) ལས་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+  - སྔོན་འགྲོའི་ཆ་རྐྱེན།: འགན་ཁུར་མེད་པའི་འགན་ཁུར་མེད།
+  - བྱུང་ལས་: `RoleEvent::Created`.
+  - འཛོལ་བ།: `Repetition(Register, RoleId)`. གསང་ཨང་: `core/.../isi/world.rs`.
+
+- ཐོ་བཀོད་ ཊི་རི་གར་: ཚགས་མ་རིགས་ཀྱི་སྦེ་ གཞི་སྒྲིག་འབད་ཡོད་པའི་ འོས་འབབ་ཅན་གྱི་ འབྱུང་ཁུངས་ནང་ ཊི་ཊི་འདི་ གསོག་འཇོག་འབདཝ་ཨིན།
+  - སྔོན་སྒྲིག་ཚུ་: ཚགས་མ་འདི་ མཚན་རྟགས་མ་བཀོད་པ་ཅིན་ `action.repeats` `Exactly(1)` (དེ་ལས་ `MathError::Overflow`) འོང་དགོཔ་ཨིན། ངོ་རྟགས་འདྲ་བཤུས་བཀག་ཆ་འབད་ཡོདཔ།
+  - བྱུང་ལས་: `TriggerEvent::Created(TriggerId)`.
+  - འཛོལ་བ་ཚུ་: `Repetition(Register, TriggerId)`, `InvalidParameterError::SmartContract(..)` བསྒྱུར་བཅོས་/བདེན་དཔྱད་འཐུས་ཤོར་ཚུ་ལུ། གསང་ཨང་: `core/.../isi/triggers/mod.rs`.
+
+- ཐོ་བཀོད་མ་འབད་བའི་ པི་ཡར་/མངའ་ཁོངས་/རྩིས་ཐོ་/ཨེ་སི་ཊི་ངེས་འཛིན་/ཨེན་ཨེཕ་ཊི་/རོ་ལི་/ཊི་རི་གཱར་: དམིགས་གཏད་འདི་རྩ་བསྐྲད་གཏངམ་ཨིན། བཏོན་གཏང་ནིའི་བྱུང་ལས་ཚུ་བཏོན་གཏངམ་ཨིན། ཁ་སྐོང་ ཀ་སི་ཀ་ཌིང་བཏོན་གཏང་ནི།
+  - ཐོ་བཀོད་མ་འབད་བའི་མངའ་ཁོངས་: མངའ་ཁོངས་དང་ཁོང་རའི་འགན་ཁུར་ ཊི་ཨེགསི་རིམ་སྒྲིག་རྩིས་ཐོ་ རྩིས་ཐོ་ཁ་ཡིག་དང་ ཡུ་ཨའི་ཨའི་ཌི་བཱའིན་ཌིང་ཚུ་ནང་ རྩིས་ཐོ་ཚུ་ཆ་མཉམ་རྩ་བསྐྲད་གཏངམ་ཨིན། བཏོན་གཏང་མི་འདི་གིས་ ཁོང་རའི་རྒྱུ་དངོས་ཚུ་ (དང་རྒྱུ་དངོས་རེ་ལུ་མེ་ཊ་ཌེ་ཊ་); མངའ་ཁོངས་ནང་ རྒྱུ་དངོས་ངེས་ཚིག་ཚུ་ཆ་མཉམ་རྩ་བསྐྲད་གཏངམ་ཨིན། བཏོན་གཏང་ཡོད་པའི་རྩིས་ཐོ་ཚུ་གིས་ བདག་དབང་འབད་མི་ མངའ་ཁོངས་ནང་ ཨེན་ཨེཕ་ཊི་ཚུ་ བཏོན་གཏང་། དབང་ཚད་མངའ་ཁོངས་དང་མཐུན་པའི་ གློག་ཐག་ཚུ་རྩ་བསྐྲད་གཏངམ་ཨིན། བྱུང་ལས་ཚུ་: `DomainEvent::Deleted`, རྣམ་གྲངས་རེ་རེ་བཏོན་གཏང་ནིའི་བྱུང་ལས་ཚུ་དང་། འཛོལ་བ།: `FindError::Domain` བརླག་སོང་ན། གསང་ཨང་: `core/.../isi/world.rs`.
+  - ཐོ་བཀོད་མ་འབད་བའི་རྩིས་ཐོ་: རྩིས་ཁྲའི་གནང་བ་དང་ འགན་ཁུར་ ཊི་ཨེགསི་རིམ་པ་ གྱངས་ཁ་ རྩིས་ཁྲའི་སབ་ཁྲ་བཟོ་ནི་ དེ་ལས་ ཡུ་ཨེ་ཨའི་ཌི་བཱའིན་ཌིང་ཚུ་ རྩ་བསྐྲད་གཏངམ་ཨིན། རྩིས་ཐོ་གིས་བདག་དབང་འབད་མི་རྒྱུ་དངོས་ཚུ་བཏོན་གཏང་ (དང་རྒྱུ་དངོས་རེ་ལུ་མེ་ཊ་ཌེ་ཊ་); རྩིས་ཐོ་གིས་བདག་དབང་འབད་མི་ ཨེན་ཨེཕ་ཊི་ཚུ་བཏོན་གཏང་། རྩིས་ཐོ་དེ་ ག་གི་དབང་ཚད་ཨིན་མི་ འབྱུང་ཁུངས་ཚུ་རྩ་བསྐྲད་གཏངམ་ཨིན། བྱུང་ལས་ཚུ་: `AccountEvent::Deleted`, དང་ `NftEvent::Deleted` བཏོན་བཏང་ཡོད་པའི་ཨེན་ཨེཕ་ཊི་རེ་ལུ་ `NftEvent::Deleted`. འཛོལ་བ།: `FindError::Account` བརླག་སོང་ན། གསང་ཨང་: `core/.../isi/domain.rs`.
+  - ཐོ་བཀོད་མ་འབད་བའི་ Asset Pefient: ངེས་ཚིག་དེ་གི་རྒྱུ་དངོས་ཚུ་ཆ་མཉམ་དང་ ཁོང་གི་རྒྱུ་དངོས་རེ་རེ་གི་མེ་ཊ་ཌེ་ཊ་ བཏོན་གཏང་དོ་ཡོདཔ་ཨིན། བྱུང་ལས་ཚུ་: `AssetDefinitionEvent::Deleted` དང་ `AssetEvent::Deleted` རྒྱུ་དངོས་རེ་ལུ་། འཛོལ་བ།: `FindError::AssetDefinition`. གསང་ཨང་: `core/.../isi/domain.rs`.
+  - ཐོ་བཀོད་མེད་པའི་ཨེན་ཨེཕ་ཊི་: ཨེན་ཨེཕ་ཊི་རྩ་བསྐྲད་གཏངམ་ཨིན། བྱུང་ལས་: `NftEvent::Deleted`. འཛོལ་བ།: `FindError::Nft`. གསང་གྲངས་: `core/.../isi/nft.rs`.
+  - ཐོ་བཀོད་མེད་པའི་འགན་ཁུར་: རྩིས་ཁྲ་ཆ་མཉམ་ལས་ འགན་ཁུར་འདི་ དང་པ་རང་ ཆ་མེད་གཏངམ་ཨིན། དེ་ལས་ འགན་ཁུར་འདི་རྩ་བསྐྲད་གཏངམ་ཨིན། བྱུང་ལས་: `RoleEvent::Deleted`. འཛོལ་བ།: `FindError::Role`. གསང་གྲངས་: `core/.../isi/world.rs`.
+  - ཐོ་བཀོད་མ་འབད་མི་ ཊི་གར་: ཡོད་ཚེ་ འབྱུང་ཁུངས་བཏོན་གཏང་། འདྲ་བཤུས་མེད་པའི་ཐོ་བཀོད་ཐོན་ཤུགས་ `Repetition(Unregister, TriggerId)`. བྱུང་ལས་: `TriggerEvent::Deleted`. གསང་གྲངས་: `core/.../isi/triggers/mod.rs`.
+
+###མའིནཊ / མེ་བཏེན།
+དབྱེ་བ་ཚུ་: `Mint<O, D: Identifiable>` དང་ `Burn<O, D: Identifiable>`, `MintBox`/`BurnBox` སྦེ་སྒྲོམ་ནང་བཙུགས་ཡོདཔ་ཨིན།- རྒྱུ་དངོས་ (ཨང་གྲངས་) མིན་ཊི་/བཱརན་: འདྲ་མཉམ་དང་ངེས་ཚིག་གི་ `total_quantity` བདེ་སྒྲིག་འབདཝ་ཨིན།
+  - སྔོན་འགྲོའི་ཆ་རྐྱེན་: `Numeric` གནས་གོང་འདི་ `AssetDefinition.spec()` འདི་ གྲུབ་དགོཔ་ཨིན། mint གིས་ `mintable` གིས་འབད་ཡོདཔ།
+    - `Infinitely`: རྟག་བུ་རང་ཆོགཔ་ཨིན།
+    - `Once`: གཅིག་ཏག་ཏག་གཅིག་འབད་བཅུག་ཡོདཔ། མིན་ཊི་ཕིལཔ་དང་པ་ `mintable` ལས་ `Not` ལུ་ `AssetDefinitionEvent::MintabilityChanged` དང་ རྩིས་ཞིབ་འབད་ནི་གི་དོན་ལུ་ ཁ་གསལ་ `AssetDefinitionEvent::MintabilityChanged` བཟོཝ་ཨིན།
+    - `Limited(n)`: ཁ་སྐོང་མིང་བཏགས་བཀོལ་སྤྱོད་འབད་བཅུགཔ་ཨིན། མཐར་འཁྱོལ་ཅན་གྱི་mint རེ་རེ་གིས་ གྱངས་ཁ་འདི་མར་ཕབ་འབདཝ་ཨིན། འདི་གིས་ ཀླད་ཀོར་ལུ་ལྷོད་པའི་སྐབས་ ངེས་ཚིག་འདི་ `Not` ལུ་ལྷོདཔ་ད་ གོང་འཁོད་བཟུམ་སྦེ་ `MintabilityChanged` བྱུང་ལས་ཚུ་ བཏོནམ་ཨིན།
+    - `Not`: འཛོལ་བ་ `MintabilityError::MintUnmintable`.
+  - མངའ་སྡེ་བསྒྱུར་བཅོས་: མིནཊི་གུ་མེད་པ་ཅིན་ རྒྱུ་དངོས་གསར་བསྐྲུན་འབདཝ་ཨིན། ག་དེམ་ཅིག་སྦེ་ ལྷག་ལུས་འདི་ ཀླད་ཀོར་ལུ་འགྱུརཝ་ཨིན་པ་ཅིན་ རྒྱུ་དངོས་ཐོ་བཀོད་རྩ་བསྐྲད་གཏངམ་ཨིན།
+  - བྱུང་ལས་ཚུ་: `AssetEvent::Added`/`AssetEvent::Removed`, `AssetDefinitionEvent::MintabilityChanged` (Iroha ཡང་ན་ `Limited(n)` གིས་ དེ་གི་འབད་ཆོག་པའི་འཐུས་ཚུ་ བཏོནམ་ཨིན།)
+  - འཛོལ་བ་: `TypeError::AssetNumericSpec(Mismatch)`, `MathError::Overflow`/`NotEnoughQuantity`. གསང་གྲངས་: `core/.../isi/asset.rs`.
+
+- ཊི་རི་གར་བསྐྱར་ལོག་ཚུ་ མིནཊི་/བཱརན་: བསྒྱུར་བཅོས་ `action.repeats` གིས་ ཊི་རི་ཊི་གི་དོན་ལུ་ གྱངས་ཁ་བརྐྱབ་ཨིན།
+  - སྔོན་སྒྲིག་ཚུ་: མིན་ཊི་གུ་ ཚགས་མ་འདི་ མིན་ཊི་འབད་དགོ། ཨང་རྩིས་རིག་པ་འདི་ འཕྱུར་/འོག་མ་/ཕོལོ་མ་དགོ།
+  - བྱུང་ལས་: `TriggerEvent::Extended`/`TriggerEvent::Shortened`.
+  - འཛོལ་བ་ཚུ་: ནུས་མེད་མིན་ཊི་གུ་ `MathError::Overflow`; `FindError::Trigger` མེད་ན། གསང་གྲངས་: `core/.../isi/triggers/mod.rs`.
+
+### གནས་སོར
+དབྱེ་བ་: `Transfer<S: Identifiable, O, D: Identifiable>`, སྒྲོམ་ནང་ `TransferBox`.
+
+- རྒྱུ་དངོས་ (ཨང་གྲངས་): འབྱུང་ཁུངས་ `AssetId` ལས་ཕབ་སྟེ་ འགྲོ་ཡུལ་ `AssetId` (ངེས་ཚིག་གཅིག་པ་, རྩིས་ཐོ་སོ་སོ་) ལུ་ཁ་སྐོང་འབད། ཀླད་ཀོར་གྱི་འབྱུང་ཁུངས་རྒྱུ་དངོས་བཏོན་གཏང་།
+  - སྔོན་སྒྲིག་ཚུ་: འབྱུང་ཁུངས་རྒྱུ་དངོས་ཡོདཔ་ཨིན། གནས་གོང་ཚུ་ `spec`.
+  - བྱུང་ལས་: `AssetEvent::Removed` (འབྱུང་ཁུངས་), `AssetEvent::Added` (གནས་ཚུལ།)
+  - འཛོལ་བ།: `FindError::Asset`, `TypeError::AssetNumericSpec`, `MathError::NotEnoughQuantity/Overflow`. གསང་གྲངས་: `core/.../isi/asset.rs`.
+
+- ཌོ་མེན་བདག་དབང་: འགྲོ་ཡུལ་རྩིས་ཐོ་ལུ་ `Domain.owned_by` བསྒྱུར་བཅོས་ཚུ།
+  - སྔོན་སྒྲིག་ཚུ་: རྩིས་ཐོ་གཉིས་ཆ་ར་ཡོདཔ་ཨིན། མངའ་ཁོངས་ཡོད།
+  - བྱུང་ལས་: `DomainEvent::OwnerChanged`.
+  - འཛོལ་བ།: `FindError::Account/Domain`. གསང་གྲངས་: `core/.../isi/domain.rs`.
+
+- Aset Definition བདག་དབང་: འགྲོ་ཡུལ་རྩིས་ཐོ་ལུ་ བསྒྱུར་བཅོས་ `AssetDefinition.owned_by` བསྒྱུར་བཅོས་འབདཝ་ཨིན།
+  - སྔོན་སྒྲིག་ཚུ་: རྩིས་ཐོ་གཉིས་ཆ་ར་ཡོདཔ་ཨིན། ངེས་ཚིག་ཡོདཔ་ཨིན། འབྱུང་ཁུངས་འདི་གིས་ ད་ལྟོ་འདི་ བདག་དབང་འབད་དགོཔ་ཨིན།
+  - བྱུང་ལས་: `AssetDefinitionEvent::OwnerChanged`.
+  - འཛོལ་བ།: `FindError::Account/AssetDefinition`. གསང་གྲངས་: `core/.../isi/account.rs`.
+
+- NFT བདག་དབང་: འགྲོ་ཡུལ་རྩིས་ཐོ་ལུ་ བསྒྱུར་བཅོས་ `Nft.owned_by` ཚུ།
+  - སྔོན་སྒྲིག་ཚུ་: རྩིས་ཐོ་གཉིས་ཆ་ར་ཡོདཔ་ཨིན། NFT ཡོད། འབྱུང་ཁུངས་འདི་གིས་ ད་ལྟོ་འདི་ བདག་དབང་འབད་དགོཔ་ཨིན།
+  - བྱུང་ལས་: `NftEvent::OwnerChanged`.
+  - འཛོལ་བ་ཚུ་: `FindError::Account/Nft`, `InvariantViolation` གིས་ འབྱུང་ཁུངས་ཨེན་ཨེཕ་ཊི་འདི་ བདག་དབང་མེད་པ་ཅིན་. གསང་གྲངས་: `core/.../isi/nft.rs`.
+
+### མེཊ་ཌ་: གཞི་སྒྲིག་/རྩ་བསྐྲད་གཏང་ ལྡེ་མིག་བཏོན་གཏང་།
+དབྱེ་བ་: `SetKeyValue<T>` དང་ `RemoveKeyValue<T>` དང་ `T ∈ { Domain, Account, AssetDefinition, Nft, Trigger }`. སྒྲོམ་ནང་བཙུགས་ཡོད་པའི་ གྱངས་ཁ་ཚུ།
+
+- གཞི་སྒྲིག་: བཙུགས་མི་ཡང་ན་ ཚབ་བཙུགསཔ་ཨིན།
+- བཏོན་གཏང་: ལྡེ་མིག་འདི་རྩ་བསྐྲད་གཏངམ་ཨིན། མེད་ན་འཛོལ་བ།
+- བྱུང་ལས་ཚུ་: `<Target>Event::MetadataInserted` / `MetadataRemoved` གནས་གོང་རྙིངམ་/གསརཔ་ཚུ་དང་གཅིག་ཁར་ཨིན།
+- འཛོལ་བ།: དམིགས་གཏད་འདི་མེད་པ་ཅིན་ `FindError::<Target>`; `FindError::MetadataKey` བཏོན་གཏང་ནིའི་དོན་ལུ་ ལྡེ་མིག་མེད་མི་ལུ་། གསང་གྲངས་: `crates/iroha_data_model/src/isi/transparent.rs` དང་ བཀོལ་སྤྱོད་པ་དམིགས་གཏད་རེ་ལུ་ འཇལཝ་ཨིན།### གནང་བ་དང་འགན་ཁུར་: གྲོགས་རམ་ / བཀོ་ནི།
+དབྱེ་བ་ཚུ་: `Grant<O, D>` དང་ `Revoke<O, D>`, `Permission`/`Role`, དང་ `Account`, དང་ `Permission` ལས་/from `Role`.
+
+- རྩིས་ཐོ་ལུ་ གྲོགས་རམ་གནང་བ་: ཧེ་མ་ལས་ རང་བཞིན་མེད་ཚུན་ཚོད་ `Permission` ཁ་སྐོང་འབདཝ་ཨིན། བྱུང་ལས་: `AccountEvent::PermissionAdded`. འཛོལ་བ།: `Repetition(Grant, Permission)` འདྲ་བཤུས་ན། གསང་གྲངས་: `core/.../isi/account.rs`.
+- རྩིས་ཐོ་ལས་གནང་བ་བཀག་ཆ་འབད་ནི་: ཡོད་ཚེ་བཏོན་གཏང་། བྱུང་ལས་: `AccountEvent::PermissionRemoved`. འཛོལ་བ་: `FindError::Permission` མེད་ན། གསང་གྲངས་: `core/.../isi/account.rs`.
+- རྩིས་ཐོ་ལུ་ གྲོགས་རམ་གྱི་འགན་ཁུར་: མེད་པ་ཅིན་ `(account, role)` སབ་ཁྲ་བཟོ་ནི་འདི་ མེད་པ་ཅིན་ བཙུགསཔ་ཨིན། བྱུང་ལས་: `AccountEvent::RoleGranted`. འཛོལ་བ།: `Repetition(Grant, RoleId)`. གསང་གྲངས་: `core/.../isi/account.rs`.
+- རྩིས་ཐོ་ནང་ལས་ རི་བོཀ་འགན་ཁུར་: ཡོད་ཚེ་ སབ་ཁྲ་བཟོ་ནི་འདི་བཏོན་གཏང་། བྱུང་ལས་: `AccountEvent::RoleRevoked`. འཛོལ་བ་: `FindError::Role` མེད་ན། གསང་གྲངས་: `core/.../isi/account.rs`.
+- འགན་ཁུར་ལུ་ གྲོགས་རམ་གནང་བ་: གནང་བ་ཁ་སྐོང་འབད་དེ་ འགན་ཁུར་འདི་ ལོག་བཟོ་བསྐྲུན་འབདཝ་ཨིན། བྱུང་ལས་: `RoleEvent::PermissionAdded`. འཛོལ་བ།: `Repetition(Grant, Permission)`. གསང་གྲངས་: `core/.../isi/world.rs`.
+- འགན་ཁུར་ལས་ ཆ་འཇོག་འབད་ནི་: གནང་བ་མེད་པར་ འགན་ཁུར་འདི་ ལོག་བཟོ་བསྐྲུན་འབདཝ་ཨིན། བྱུང་ལས་: `RoleEvent::PermissionRemoved`. འཛོལ་བ།: `FindError::Permission` མེད་ན། གསང་གྲངས་: `core/.../isi/world.rs`.
+
+### ཊི་རི་གར་: ལག་ལེན།
+དབྱེ་བ་: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
+- སྤྱོད་ལམ།: ཊི་གར་ཡན་ལག་ལམ་ལུགས་ཀྱི་དོན་ལུ་ `ExecuteTriggerEvent { trigger_id, authority, args }` ཅིག་བཙུགས་ཡོདཔ་ཨིན། ལག་ཐོག་ལས་ ལག་ལེན་འཐབ་ནི་འདི་ བརྒྱུད་འཕྲིན་ཚུ་ (`ExecuteTrigger` ཚགས་མ་) གི་དོན་ལུ་རྐྱངམ་ཅིག་ འབད་ཆོགཔ་ཨིན། ཚགས་མ་འདི་མཐུན་དགོཔ་ཨིནམ་དང་ འབོད་བརྡ་འདི་ ཊི་གར་བྱ་བ་གི་དབང་ཚད་ཅིག་ཨིན་ ཡང་ན་ དབང་འཛིན་དེ་གི་དོན་ལུ་ `CanExecuteTrigger` འདི་འཛིན་དགོ། ལག་ལེན་པ་གིས་བྱིན་མི་བཀོལ་སྤྱོད་པ་འདི་ ཤུགས་ལྡན་སྦེ་ཡོད་པའི་སྐབས་ འབྱུང་ཁུངས་ལག་ལེན་འཐབ་མི་འདི་གིས་ རན་ཊའིམ་ལག་ལེན་འཐབ་མི་འདི་གིས་ བདེན་དཔྱད་འབད་དེ་ ཚོང་འབྲེལ་གྱི་བཀོལ་སྤྱོད་པ་ ས་སྣུམ་འཆར་དངུལ་ (གཞི་རྟེན་ `executor.fuel` དང་ གདམ་ཁ་མེ་ཊ་ཌེ་ཊ་ `additional_fuel`) འདི་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
+- འཛོལ་བ་ཚུ་: ཐོ་བཀོད་མ་འབད་བ་ཅིན་ `FindError::Trigger`; `InvariantViolation` གལ་ཏེ་‑མིན་པའི་དབང་གིས་འབོད་པ་ཅིན། གསང་གྲངས་: `core/.../isi/triggers/mod.rs` (དང་ `core/.../smartcontracts/isi/mod.rs` ནང་བརྟག་དཔྱད་ཚུ་)།
+
+### ཡར་འཕེལ་དང་ལོག་པ།
+- Torii:: གིས་ ལག་ལེན་འཐབ་མི་འདི་ `Executor` བཱའིཊི་ཀོཌི་ལག་ལེན་འཐབ་ཐོག་ལས་ གནས་སྤོ་འབདཝ་ཨིན། འཛོལ་བ་ཚུ་: གནས་སྤོ་འགྱོ་མི་འཐུས་ཤོར་གྱི་ཐོག་ལུ་ `InvalidParameterError::SmartContract` སྦེ་བཤུབ་ཡོདཔ། གསང་གྲངས་: `core/.../isi/world.rs`.
+- `Log { level, msg }`: བྱིན་ཡོད་པའི་གནས་རིམ་དང་གཅིག་ཁར་ མཐུད་མཚམས་དྲན་དེབ་ཅིག་བཏོན་གཏངམ་ཨིན། གནས་སྟངས་བསྒྱུར་བཅོས་མེདཔ། གསང་གྲངས་: `core/.../isi/world.rs`.
+
+### འཛོལ་བའི་དཔེ་ཚད།
+སྤྱིར་བཏང་ཡིག་ཤུབས་: བརྟག་ཞིབ་ཀྱི་འཛོལ་བ་དང་ འདྲི་དཔྱད་འཐུས་ཤོར་ ངོ་བོ་འཚོལ་མ་ཐོབ། བསྐྱར་ཟློས་འབད་མི་ ཨང་རྩིས་ ཨང་རྩིས་ཆ་མེད་དང་ འགྱུར་ལྡོག་མེད་པའི་འགལ་འཛོལ་གྱི་དོན་ལུ་ `InstructionExecutionError` གིས་ དབྱེ་བ་ཡོདཔ་ཨིན། རྩིས་རྐྱབ་ནི་དང་གྲོགས་རམ་འབད་མི་ཚུ་ `crates/iroha_data_model/src/isi/mod.rs` ནང་ལུ་ `pub mod error` འོག་ལུ་ཡོདཔ་ཨིན།
+
+---## འགྲིག་དང་ལག་ལེན་པ།
+- `Executable`: ཡང་ན་ `Instructions(ConstVec<InstructionBox>)` ཡང་ན་ `Ivm(IvmBytecode)`; བཱའིཊི་ཀོཌི་གིས་ གཞི་འགྱམ་༦༤ སྦེ་ རིམ་སྒྲིག་འབདཝ་ཨིན། གསང་གྲངས་: `crates/iroha_data_model/src/transaction/executable.rs`.
+- `TransactionBuilder`/`SignedTransaction`: བཟོ་བཀོད་དང་བརྡ་མཚོན་ཚུ་ ཐུམ་སྒྲིལ་འབདཝ་ཨིན། དེ་ལས་ མེ་ཊ་ཌེ་ཊ་, Norito, `authority`, `creation_time_ms`, གདམ་ཁའི་ Torii, དང་ དེ་ལས་ དེ་མེན་པ་ `nonce`. གསང་གྲངས་: `crates/iroha_data_model/src/transaction/`.
+- རན་ཊའི་ནང་ `iroha_core` `InstructionBox` `Execute for InstructionBox` བརྒྱུད་དེ་ བརྡ་རྟགས་ཚུ་ འོས་འབབ་དང་ལྡནམ་སྦེ་ ལག་ལེན་འཐབ་ཨིན། གསང་གྲངས་: `crates/iroha_core/src/smartcontracts/isi/mod.rs`.
+- རཱན་ཊའིམ་ བཀོལ་སྤྱོད་པ་ བདེན་དཔྱད་འཆར་དངུལ་ (ལག་ལེན་པ་གིས་བྱིན་མི་ བཀོལ་སྤྱོད་པ་): གཞི་རྟེན་ `ImplicitReceive` གདམ་ཁ་ཅན་གྱི་ཚོང་འབྲེལ་མེ་ཊ་ཌེ་ཊ་ `additional_fuel` (`u64`) གིས་ ཚོང་འབྲེལ་ནང་འཁོད་ལུ་ བཀོད་རྒྱ་ཚུ་ བརྒྱུད་དེ་ བརྗེ་སོར་འབད་ཡོདཔ་ཨིན།
 
 ---
 
-## Traceability (selected sources)
- - Data model core: `crates/iroha_data_model/src/{account.rs,domain.rs,asset/**,nft.rs,role.rs,permission.rs,metadata.rs,trigger/**,parameter/**}`.
- - ISI definitions and registry: `crates/iroha_data_model/src/isi/{mod.rs,register.rs,transfer.rs,mint_burn.rs,transparent.rs,registry.rs}`.
- - ISI execution: `crates/iroha_core/src/smartcontracts/isi/{mod.rs,world.rs,domain.rs,account.rs,asset.rs,nft.rs,triggers/**}`.
- - Events: `crates/iroha_data_model/src/events/**`.
- - Transactions: `crates/iroha_data_model/src/transaction/**`.
+## འགྱུར་མེད་དང་དྲན་ཐོ་ (བརྟག་དཔྱད་དང་སྲུང་སྐྱོབཔ་ལས་)
+- རིགས་མཚན་ཉེན་སྲུང་: `genesis` མངའ་ཁོངས་ཐོ་བཀོད་འབད་མི་ཚུགས། `genesis` རྩིས་ཁྲ་ཐོ་འགོད་མི་ཐུབ། གསང་གྲངས་/བརྟག་དཔྱད་: `core/.../isi/world.rs`, `core/.../smartcontracts/isi/mod.rs`.
+- ཨང་གྲངས་ཀྱི་རྒྱུ་དངོས་ཚུ་གིས་ ཁོང་རའི་ `NumericSpec` འདི་ མིན་ཊི་/བརྗེ་སྒྱུར་/བརྐོ་སྟེ་ བསྒྲུབ་དགོཔ་ཨིན། spe མཐུན་པའི་ཐོན་འབབ་ `TypeError::AssetNumericSpec`.
+- Mitabilit: `Once` གིས་ mint གཅིག་བྱིན་ཞིནམ་ལས་ དེ་ལས་ `Not` ལུ་ ཕིལཔ་ཚུ་བྱིན་བཅུགཔ་ཨིན། `Limited(n)` གིས་ `Not` ལུ་མ་ལྷོད་པའི་ཧེ་མ་ `n` གི་ མིན་ཊི་ཚུ་ བྱིནམ་ཨིན། `Infinitely` ལུ་ བཀག་ཆ་འབད་ནི་གི་དཔའ་བཅམ་མི་འདི་གིས་ `MintabilityError::ForbidMintOnMintable` དང་ `Limited(0)` ཐོན་འབྲས་ཚུ་ རིམ་སྒྲིག་འབད་ནི།
+- མེ་ཊ་ཌེ་ཊ་བཀོལ་སྤྱོད་ཚུ་ ལྡེ་མིག་-ནུས་ཅན་ཨིན། ཡོད་པའི་ལྡེ་མིག་ཅིག་བཏོན་གཏང་ནི་འདི་འཛོལ་བ་ཨིན།
+- ཊི་རི་གར་ཚགས་མ་ཚུ་ མིན་པའི་ མིན་འོང་། དེ་ལས་ `Register<Trigger>` གིས་ `Exactly(1)` བསྐྱར་ལོག་འབད་ཆོགཔ་ཨིན།
+- ཊི་རི་གར་མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ `__enabled` (bool) gates བཀོལ་སྤྱོད་; ལྕོགས་ཅན་བཟོ་ཡོད་མི་ལུ་ བརླག་སྟོར་སྔོན་སྒྲིག་ཚུ་དང་ ལྕོགས་མིན་བཟོ་ཡོད་པའི་ ཊི་རི་ཊི་ཚུ་ གནད་སྡུད་/དུས་ཚོད་/དུས་ཚོད་དང་འཁྲིལ་ཏེ་ འགྲུལ་ལམ་ཚུ་ནང་ མཆོང་ལྡིང་འབདཝ་ཨིན།
+- གཏན་འབེབས་བཟོ་ནི: ཨང་རྩིས་རིག་པ་ཆ་མཉམ་གྱིས་ ཞིབ་དཔྱད་འབད་ཡོད་པའི་བཀོལ་སྤྱོད་ཚུ་ལག་ལེན་འཐབ་ཨིན། འོག་/ལྷག་པའི་སླར་ལོག་ཚུ་ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ཨང་རྩིས་འཛོལ་བ་ཚུ། ཀླད་ཀོར་གྱིས་ མར་ཕབ་རྒྱུ་དངོས་ཐོ་བཀོད་ཚུ་ (སྦ་བཞག་པའི་གནས་སྟངས་མེདཔ་ཨིན།)
 
-If you want this spec expanded into a rendered API/behavior table or cross‑linked to every concrete event/error, say the word and I’ll extend it.
+---## སྦྱོང་ལཱ་གི་དཔེ།
+- ས་གཏེར་དང་ སྤོ་བཤུད།
+  - `Mint::asset_numeric(10, asset_id)` → spec/mitability གིས་ གནང་བ་བྱིན་པ་ཅིན་ ༡༠ ཁ་སྐོང་འབདཝ་ཨིན། བྱུང་རིམ་: `AssetEvent::Added`.
+  - `Transfer::asset_numeric(asset_id, 5, to_account)` → འགུལ་སྐྱོད་ ༥; བཏོན་གཏང་ནི་/ཁ་སྐོང་འབད་ནིའི་དོན་ལུ་ བྱུང་ལས་ཚུ།
+- མེ་ཊ་ཌེ་ཊ་ དུས་མཐུན་ཚུ།
+  - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → ཡར་འཕར་; བཏོན་གཏང་ཐོག་ལས་ `RemoveKeyValue::account(...)`.
+- འགན་ཁུར་/གནང་བ་འཛིན་སྐྱོང་།
+  - `Grant::account_role(role_id, account)`, `Grant::role_permission(perm, role)`, དང་ཁོང་ཚོའི་`Revoke`, བཅས་ཡོད།
+- ཊི་རི་གར་གྱི་མི་ཚེ་འཁོར་ཆོས།
+  - `Register::trigger(Trigger::new(id, Action::new(exec, repeats, authority, filter)))` གིས་ ཚགས་མ་གིས་ བརྡ་སྟོན་མི་ བཅུད་ལྡན་ཞིབ་དཔྱད་དང་གཅིག་ཁར་; `ExecuteTrigger::new(id).with_args(&args)` རིམ་སྒྲིག་འབད་ཡོད་པའི་དབང་ཚད་དང་མཐུན་དགོ།
+  - མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ `__enabled` འདི་ `false` ལུ་གཞི་སྒྲིག་འབད་དེ་ ཊི་རི་གཱར་ཚུ་ ལྕོགས་མིན་བཟོ་ཚུགས། `SetKeyValue::trigger` ཡང་ན་ IVM `set_trigger_enabled` syscall བརྒྱུད་དེ་ བསྡུ་སྒྲིག་འབད།
+  - ཊི་རི་གར་གསོག་འཇོག་འདི་ མངོན་གསལ་གུ་ཉམས་བཅོས་འབདཝ་ཨིན་: འདྲ་མཚུངས་ཨའི་ཌི་དང་ མ་མཐུན་པའི་ཨའི་ཌི་ དེ་ལས་ བཱའིཊི་ཀོཌི་མེད་མི་ཚུ་ གཞི་བསྟུན་འབད་ནི་ འབྱུང་བཅུགཔ་ཨིན། བཱའིཊི་ཀོཌི་གཞི་བསྟུན་གྲངས་ཚུ་ ལོག་རྩིས་སྟོན་འབདཝ་ཨིན།
+  - གལ་སྲིད་ ཊི་གར་གྱི་ IVM bytecode འདི་ ལག་ལེན་འཐབ་པའི་དུས་ཚོད་ལུ་ མ་ཐོབ་པ་ཅིན་ ཊི་གར་འདི་བཏོན་བཏང་ཞིནམ་ལས་ ལག་ལེན་འཐབ་ནི་འདི་ འཐུས་ཤོར་གྱི་གྲུབ་འབྲས་དང་གཅིག་ཁར་ མེན་མི་ཅིག་སྦེ་ བརྩི་འཇོག་འབདཝ་ཨིན།
+  - མར་ཕབ་འབད་ཡོད་པའི་ ཊི་གར་ཚུ་ དེ་འཕྲོ་ལས་ བཏོན་གཏང་ཡོདཔ་ཨིན། ལག་ལེན་འཐབ་པའི་སྐབས་ མར་ཕབ་ཀྱི་ཐོ་བཀོད་ཅིག་ འཐོན་པ་ཅིན་ གཤག་བཅོས་འབད་དེ་ བརླག་སྟོར་ཞུགས་ཡོདཔ་སྦེ་ བརྩི་འཇོག་འབདཝ་ཨིན།
+- ཚད་བཟུང་དུས་མཐུན་བཟོ་ནི།
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` གིས་ དུས་མཐུན་བཟོ་སྟེ་ བཏོནམ་ཨིན།
+
+---
+
+## བགྲོད་ཐུབ་པ་(འདམ་ཁ་ཅན་གྱི་འབྱུང་ཁུངས)།
+ - གནས་སྡུད་དཔེ་ཚད་ལྟེ་བ་: `crates/iroha_data_model/src/{account.rs,domain.rs,asset/**,nft.rs,role.rs,permission.rs,metadata.rs,trigger/**,parameter/**}`.
+ - ISI ངེས་ཚིག་དང་ཐོ་བཀོད་: `crates/iroha_data_model/src/isi/{mod.rs,register.rs,transfer.rs,mint_burn.rs,transparent.rs,registry.rs}`.
+ - ཨའི་ཨེསི་ཨའི་ བཀོལ་སྤྱོད་: `crates/iroha_core/src/smartcontracts/isi/{mod.rs,world.rs,domain.rs,account.rs,asset.rs,nft.rs,triggers/**}`.
+ - བྱུང་ལས་: `crates/iroha_data_model/src/events/**`.
+ - ཚོང་འབྲེལ་: `crates/iroha_data_model/src/transaction/**`.
+
+ཁྱོད་ཀྱིས་ ཁྱད་རྣམ་འདི་ བརྡ་སྟོན་འབད་ཡོད་པའི་ API/སྤྱོད་ལམ་ཐིག་ཁྲམ་ ཡང་ན་ བརྡ་རྟགས་ཅན་གྱི་བྱུང་རིམ་/འཛོལ་བ་ག་ར་ལུ་ འབྲེལ་མཐུད་འབད་ཡོད་པའི་ ཕར་ཚུར་འགྱོ་དགོ་པ་ཅིན་ མིང་ཚིག་འདི་ ང་གིས་ རྒྱ་སྐྱེད་འབད་འོང་།

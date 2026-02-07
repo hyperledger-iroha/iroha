@@ -4,27 +4,29 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Recetas de CI de SoraFS
-sidebar_label: Recetas de CI
-description: Ejecuta el CLI de SoraFS en pipelines de GitHub y GitLab con firma sin claves.
+id: desenvolvedor-ci
+título: Receitas de CI de SoraFS
+sidebar_label: Receitas de CI
+description: Execute a CLI de SoraFS em pipelines de GitHub e GitLab com firma sem chaves.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/developer/ci.md`. Mantén ambas versiones sincronizadas hasta que los docs heredados se retiren.
+:::nota Fonte canônica
+Esta página reflete `docs/source/sorafs/developer/ci.md`. Mantenha ambas as versões sincronizadas até que os documentos herdados sejam retirados.
 :::
 
-# Recetas de CI
+#Recetas de CI
 
-Los pipelines de SoraFS se benefician del chunking determinista, la firma de manifests y la
-verificación de proofs. La superficie de comandos de `sorafs_cli` mantiene esos pasos
-portables entre proveedores de CI. Esta página resalta las recetas canónicas y apunta a
-plantillas listas para usar.
+Os pipelines de SoraFS são benéficos para o chunking determinista, a firma de manifestos e a
+verificação de provas. A superfície de comandos de `sorafs_cli` mantém esses passos
+portáteis entre provedores de CI. Esta página realça as receitas canônicas e apunta a
+listas de plantas para usar.
 
-## GitHub Actions (sin claves)
+## GitHub Actions (sem chaves)
 
 ```yaml
 name: sorafs-artifacts
@@ -97,13 +99,13 @@ jobs:
           path: artifacts/
 ```
 
-Puntos clave:
+Pontos chaves:
 
-- No se almacenan claves de firma estáticas; los tokens OIDC se obtienen bajo demanda.
-- Los artefactos (CAR, manifest, bundle, resúmenes de proofs) se suben para revisión.
-- El job reutiliza los mismos esquemas Norito usados en los rollouts de producción.
+- Não se armazenam chaves de firma estáticas; Os tokens OIDC são obtidos em baixa demanda.
+- Os artefatos (CAR, manifesto, pacote, resumos de provas) são submetidos para revisão.
+- O trabalho reutiliza os mesmos esquemas Norito usados ​​nos lançamentos de produção.
 
-## GitLab CI
+## CI do GitLab
 
 ```yaml
 stages:
@@ -137,15 +139,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Aprovisiona `SIGSTORE_ID_TOKEN` mediante la federación de identidad de workload de GitLab o un
-  secreto sellado antes de ejecutar la etapa de publish.
-- El fallo de cualquier paso del CLI hace que el pipeline se detenga, preservando
-  artefactos consistentes.
+- Aprovisionamento `SIGSTORE_ID_TOKEN` por meio da federação de identidade de carga de trabalho do GitLab ou de um
+  segredo vendido antes de executar a etapa de publicação.
+- A falha de qualquer passagem do CLI faz com que o pipeline seja detido, preservando
+  artefatos consistentes.
 
-## Recursos adicionales
+## Recursos adicionais
 
-- Plantillas end-to-end (incluye helpers Bash, configuración de identidad federada y
-  pasos de limpieza): `docs/examples/sorafs_ci.md`
-- Referencia del CLI con todas las opciones: `docs/source/sorafs_cli.md`
-- Requisitos de gobernanza/alias antes del envío:
+- Plantas ponta a ponta (incluem ajudantes Bash, configuração de identidade federada e
+  passos de limpeza): `docs/examples/sorafs_ci.md`
+- Referência da CLI com todas as opções: `docs/source/sorafs_cli.md`
+- Requisitos de governança/alias antes do envio:
   `docs/source/sorafs/provider_admission_policy.md`

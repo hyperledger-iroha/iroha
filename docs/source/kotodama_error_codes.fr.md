@@ -6,20 +6,21 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 5e0e4f16000f6a578fe9c9d6e204c01087e987ac3b46d70537a15b072df48a13
 source_last_modified: "2026-01-03T18:08:01.373878+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Compiler Error Codes
+# Codes d'erreur du compilateur Kotodama
 
-The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
-to print the corresponding hint.
+Le compilateur Kotodama émet des codes d'erreur stables afin que les utilisateurs d'outils et de CLI puissent
+comprendre rapidement la cause d'une panne. Utiliser `koto_compile --explain <code>`
+pour imprimer l'indice correspondant.
 
-| Code  | Description | Typical Fix |
+| Codes | Descriptif | Correction typique |
 |-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+| `E0001` | La cible de branchement est hors de portée pour le codage de saut IVM. | Divisez les fonctions très volumineuses ou réduisez l’inline afin que les distances des blocs de base restent inférieures à ± 1 Mo. |
+| `E0002` | Les sites d'appel font référence à une fonction qui n'a jamais été définie. | Recherchez les fautes de frappe, les modificateurs de visibilité ou les indicateurs de fonctionnalité qui ont supprimé l'appelé. |
+| `E0003` | Des appels système d’état durable ont été émis sans ABI v1 activé. | Définissez `CompilerOptions::abi_version = 1` ou ajoutez `meta { abi_version: 1 }` dans le contrat `seiyaku`. |
+| `E0004` | Les appels système liés aux actifs recevaient des pointeurs non littéraux. | Utilisez `account_id(...)`, `asset_definition(...)`, etc., ou transmettez 0 sentinelles pour les valeurs par défaut de l'hôte. |
+| `E0005` | L'initialiseur de boucle `for` est plus complexe que celui pris en charge aujourd'hui. | Déplacez la configuration complexe avant la boucle ; seuls les initialiseurs simples `let`/expression sont actuellement acceptés. |
+| `E0006` | La clause d’étape de boucle `for` est plus complexe que celle prise en charge aujourd’hui. | Mettez à jour le compteur de boucles avec une expression simple (par exemple `i = i + 1`). |

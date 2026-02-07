@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-conformance.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -17,7 +19,7 @@ description: متطلبات وتدفقات عمل للحفاظ على ملف chu
 تعكس هذه الصفحة `docs/source/sorafs/chunker_conformance.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
 :::
 
-يوثق هذا الدليل المتطلبات التي يجب على كل تطبيق اتباعها للبقاء متوافقاً مع ملف chunker الحتمي في SoraFS (SF1).
+يوثق هذا الدليل المتطلبات التي يجب على كل تطبيق اتباعها للبقاء متوافقاً مع ملف chunker الحتمي ב-SoraFS (SF1).
 كما يوثق سير إعادة التوليد، وسياسة التوقيع، وخطوات التحقق كي يبقى مستهلكو fixtures عبر SDKs متزامنين.
 
 ## الملف المعتمد
@@ -29,7 +31,7 @@ description: متطلبات وتدفقات عمل للحفاظ على ملف chu
 - الحجم الأقصى: 524288 bytes (512 KiB)
 - متعدد الحدود المتدحرج: `0x3DA3358B4DC173`
 - بذرة جدول gear: `sorafs-v1-gear`
-- قناع القطع: `0x0000FFFF`
+- מקור: `0x0000FFFF`
 
 التطبيق المرجعي: `sorafs_chunker::chunk_bytes_with_digests_profile`.
 يجب أن ينتج أي تسريع SIMD نفس الحدود والـ digests.
@@ -41,7 +43,7 @@ fixtures ويصدر الملفات التالية ضمن `fixtures/sorafs_chunke
 
 - `sf1_profile_v1.{json,rs,ts,go}` — حدود chunk المعتمدة لمستهلكي Rust و TypeScript و Go.
   يعلن كل ملف المقبض المعتمد كأول إدخال في `profile_aliases`، يتبعه أي بدائل قديمة (مثل
-  `sorafs.sf1@1.0.0` ثم `sorafs.sf1@1.0.0`). يتم فرض الترتيب بواسطة
+  `sorafs.sf1@1.0.0` ובין `sorafs.sf1@1.0.0`). يتم فرض الترتيب بواسطة
   `ensure_charter_compliance` ولا يجب تغييره.
 - `manifest_blake3.json` — manifest تم التحقق منه عبر BLAKE3 ويغطي كل ملفات fixtures.
 - `manifest_signatures.json` — توقيعات المجلس (Ed25519) على digest الخاص بالـ manifest.
@@ -54,7 +56,7 @@ fixtures ويصدر الملفات التالية ضمن `fixtures/sorafs_chunke
 الإخراج غير الموقّع ما لم يتم تمرير `--allow-unsigned` صراحة (مخصص
 للتجارب المحلية فقط). أظرف التوقيع append-only ويتم إزالة التكرارات حسب الموقّع.
 
-لإضافة توقيع من المجلس:
+מידע נוסף
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -66,11 +68,11 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
 
 يعيد مساعد CI `ci/check_sorafs_fixtures.sh` تشغيل المولد مع
 `--locked`. إذا انحرفت fixtures أو غابت التواقيع، تفشل المهمة. استخدم
-هذا السكربت في workflows الليلية وقبل إرسال تغييرات fixtures.
+זרימות עבודה של זרימות עבודה ותקשורת.
 
 خطوات التحقق اليدوية:
 
-1. شغّل `cargo test -p sorafs_chunker`.
+1. שאול `cargo test -p sorafs_chunker`.
 2. نفّذ `ci/check_sorafs_fixtures.sh` محلياً.
 3. تأكد أن `git status -- fixtures/sorafs_chunker` نظيف.
 
@@ -87,7 +89,7 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
 4. حدّث fixtures الخاصة بـ SDKs المتأثرة (Rust/Go/TS) وتأكد من التكافؤ عبر بيئات التشغيل.
 5. أعد توليد corpora fuzz إذا تغيرت المعلمات.
 6. حدّث هذا الدليل بالمقبض الجديد للملف والبذور وdigest.
-7. قدّم التغيير مع الاختبارات المحدثة وتحديثات roadmap.
+7. מפת הדרכים של מפת הדרכים של מפת דרכים.
 
 التغييرات التي تؤثر على حدود الـ chunk أو الـ digests دون اتباع هذه العملية
 غير صالحة ولا يجب دمجها.

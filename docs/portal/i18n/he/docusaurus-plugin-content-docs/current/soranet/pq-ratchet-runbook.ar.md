@@ -4,10 +4,12 @@ direction: rtl
 source: docs/portal/docs/soranet/pq-ratchet-runbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-ratchet-runbook
+מזהה: pq-ratchet-runbook
 title: تمرين PQ Ratchet في SoraNet
 sidebar_label: دليل PQ Ratchet
 description: خطوات تمرين المناوبة لترقية او خفض سياسة اخفاء الهوية PQ المرحلية مع تحقق telemetry حتمي.
@@ -115,14 +117,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetry و artefacts
+## טלמטריה וחפצי אמנות
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **تنبيهات Prometheus:** تاكد من ان تنبيه brownout لـ `sorafs_orchestrator_policy_events_total` يبقى دون SLO المعتمد (&lt;5% ضمن اي نافذة 10 دقائق).
+- **לוח מחוונים:** `dashboards/grafana/soranet_pq_ratchet.json`
+- **تنبيهات Prometheus:** تاكد من ان تنبيه brownout لـ `sorafs_orchestrator_policy_events_total` يبقى دون SLO المعتمد (<5% ضمن اي نافذة 10 دقائق).
 - **Incident log:** ارفق مقتطفات telemetry وملاحظات المشغل الى `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **التقاط موقع:** استخدم `cargo xtask soranet-rollout-capture` لنسخ drill log ولوحة النتائج الى `artifacts/soranet_pq_rollout/<timestamp>/`، وحساب BLAKE3 digests، وانتاج `rollout_capture.json` موقع.
+- **التقاط موقع:** استخدم `cargo xtask soranet-rollout-capture` لنسخ drill log ولوحة النتائج الى `artifacts/soranet_pq_rollout/<timestamp>/`، وحساب BLAKE3 digests، وانتاج טלפון `rollout_capture.json`.
 
-مثال:
+מיתאר:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -136,9 +138,7 @@ cargo xtask soranet-rollout-capture \
 
 ارفق البيانات المولدة والتوقيع بحزمة governance.
 
-## Rollback
-
-اذا كشف التمرين عن نقص PQ حقيقي، ابق على Stage A، اخطر Networking TL، وارفق المقاييس المجمعة مع فروقات guard directory الى متتبع الحوادث. استخدم تصدير guard directory الذي تم التقاطه سابقا لاستعادة الخدمة الطبيعية.
+## חזרה לאחורاذا كشف التمرين عن نقص PQ حقيقي، ابق على Stage A، اخطر Networking TL، وارفق المقاييس المجمعة مع فروقات guard directory الى متتبع الحوادث. استخدم تصدير guard directory الذي تم التقاطه سابقا لاستعادة الخدمة الطبيعية.
 
 :::tip تغطية الانحدار
 `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` يوفر التحقق الاصطناعي الذي يدعم هذا التمرين.

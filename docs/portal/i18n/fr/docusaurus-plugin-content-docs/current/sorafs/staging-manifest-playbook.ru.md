@@ -4,13 +4,15 @@ direction: ltr
 source: docs/portal/docs/sorafs/staging-manifest-playbook.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: Плейбук манифеста для staging
-sidebar_label: Плейбук манифеста для staging
-description: Чеклист для включения профиля chunker, ратифицированного парламентом, на staging-развертываниях Torii.
+identifiant : staging-manifest-playbook
+titre : Плейбук манифеста для mise en scène
+sidebar_label : Manifestation pour la mise en scène
+description : Liste de contrôle pour le chunker de profil de conversion, ratifiant le paramètre, pour la mise en scène Torii.
 ---
 
 :::note Канонический источник
@@ -18,11 +20,11 @@ description: Чеклист для включения профиля chunker, р
 
 ## Обзор
 
-Этот плейбук описывает включение профиля chunker, ратифицированного парламентом, на staging-развертывании Torii перед продвижением изменений в прод. Предполагается, что устав управления SoraFS ратифицирован, а канонические fixtures доступны в репозитории.
+Cet article propose de sélectionner un chunker de profil, ratifiant le paramètre de mise en scène et de conversion Torii avant la production. изменений в прод. Avant cela, pour la mise en œuvre de la certification SoraFS, les appareils canoniques sont téléchargés dans les dépôts.
 
-## 1. Предварительные условия
+## 1. Votre hôtel précédent
 
-1. Синхронизируйте канонические fixtures и подписи:
+1. Synchronisez les luminaires et les modules canoniques :
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -31,8 +33,8 @@ description: Чеклист для включения профиля chunker, р
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Подготовьте каталог admission envelopes, который Torii читает при старте (пример пути): `/var/lib/iroha/admission/sorafs`.
-3. Убедитесь, что конфиг Torii включает discovery cache и enforcement admission:
+2. Ajoutez les enveloppes d'admission du catalogue, selon le Torii, en commençant par le début (par exemple): `/var/lib/iroha/admission/sorafs`.
+3. Assurez-vous que la configuration Torii active le cache de découverte et l'admission d'application :
 
    ```toml
    [torii.sorafs.discovery]
@@ -50,42 +52,42 @@ description: Чеклист для включения профиля chunker, р
    enforce_capabilities = true
    ```
 
-## 2. Публикация admission envelopes
+## 2. Publication des enveloppes d'admission
 
-1. Скопируйте утвержденные provider admission envelopes в каталог, указанный в `torii.sorafs.discovery.admission.envelopes_dir`:
+1. Copiez les enveloppes d'admission du fournisseur dans le catalogue disponible dans `torii.sorafs.discovery.admission.envelopes_dir` :
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Перезапустите Torii (или отправьте SIGHUP, если вы обернули загрузчик hot reload).
+2. Utilisez Torii (ou activez SIGHUP, sinon vous activez le rechargement à chaud).
 3. Следите за логами admission:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Проверка распространения discovery
+## 3. Découverte de la province
 
-1. Опубликуйте подписанный provider advert payload (байты Norito), сформированный вашим pipeline провайдера:
+1. Publier la charge utile de l'annonce du fournisseur (par exemple Norito), pour former votre fournisseur de pipeline :
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Запросите endpoint discovery и убедитесь, что advert отображается с каноническими aliases:
+2. Lancez la découverte de points de terminaison et découvrez quelle annonce est associée aux alias canoniques :
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Убедитесь, что `profile_aliases` содержит `"sorafs.sf1@1.0.0"` первым элементом.
+   Assurez-vous que `profile_aliases` ajoute `"sorafs.sf1@1.0.0"` à l'élément principal.
 
-## 4. Проверка endpoints manifest и plan
+## 4. Vérifier le manifeste et le plan des points de terminaison
 
-1. Получите metadata manifest (требуется stream token, если admission enforced):
+1. Ouvrir le manifeste de métadonnées (activer le jeton de flux, si l'admission est forcée) :
 
    ```bash
    sorafs-fetch \
@@ -96,25 +98,25 @@ description: Чеклист для включения профиля chunker, р
      --json-out=reports/staging_manifest.json
    ```
 
-2. Проверьте JSON-вывод и убедитесь, что:
-   - `chunk_profile_handle` равен `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` совпадает с отчетом детерминизма.
-   - `chunk_digests_blake3` совпадают с регенерированными fixtures.
+2. Vérifiez le fichier JSON et vérifiez ce qui suit :
+   - `chunk_profile_handle` et `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` est compatible avec le dosage externe.
+   - `chunk_digests_blake3` est compatible avec les luminaires régénérés.
 
-## 5. Проверки телеметрии
+## 5. Tests de télémétrie
 
-- Убедитесь, что Prometheus публикует новые метрики профиля:
+- Veuillez noter que Prometheus publie de nouveaux profils de mesures :
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Дашборды должны показывать staging-провайдера под ожидаемым alias и держать счетчики brownout на нуле, пока профиль активен.
+- Les États-Unis doivent permettre de créer un alias de mise en scène et de supprimer une baisse de tension sur le nu, lorsque le profil est actif.
 
-## 6. Готовность к rollout
+## 6. Déploiement Готовность к
 
-1. Сформируйте короткий отчет с URL-адресами, ID manifest и snapshot телеметрии.
-2. Поделитесь отчетом в канале Nexus rollout вместе с запланированным окном активации в продакшене.
-3. Переходите к продакшен-чеклисту (Section 4 в `chunker_registry_rollout_checklist.md`) после согласования со стейкхолдерами.
+1. Formez la réponse à l'adresse URL, au manifeste d'identification et aux télémètres d'instantanés.
+2. Sélectionnez l'ouverture du canal de déploiement Nexus pour planifier l'activation du produit.
+3. Accédez à la liste des produits (Section 4 du `chunker_registry_rollout_checklist.md`) après l'installation des appareils de nettoyage.
 
-Поддержание этого плейбука в актуальном состоянии гарантирует, что каждый rollout chunker/admission следует одним и тем же детерминированным шагам между staging и production.
+Veuillez prendre en compte ce problème dans le cadre de la garantie actuelle, pour que chaque module de déploiement/admission soit défini et défini. между mise en scène et production.

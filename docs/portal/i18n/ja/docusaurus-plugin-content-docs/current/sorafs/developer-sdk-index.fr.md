@@ -4,72 +4,74 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-sdk-index.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-sdk-index
-title: Guides SDK SoraFS
-sidebar_label: Guides SDK
-description: Extraits par langage pour intégrer les artefacts SoraFS.
+ID: 開発者-SDK-インデックス
+title: ガイド SDK SoraFS
+サイドバーラベル: ガイド SDK
+説明: アーティファクト SoraFS を統合した言語による拡張機能。
 ---
 
-:::note Source canonique
+:::note ソースカノニク
 :::
 
-Utilisez ce hub pour suivre les helpers par langage livrés avec la toolchain SoraFS.
-Pour les snippets Rust, allez à [Rust SDK snippets](./developer-sdk-rust.md).
+ツールチェーン SoraFS を使用して、言語ライブラリのヘルパーをサポートするハブを利用します。
+Rust のスニペットをすべて注いでください。[Rust SDK スニペット](./developer-sdk-rust.md)。
 
-## Helpers par langage
+## 言語によるヘルパー
 
-- **Python** — `sorafs_multi_fetch_local` (tests smoke de l'orchestrateur local) et
-  `sorafs_gateway_fetch` (exercices E2E de gateway) acceptent désormais un
-  `telemetry_region` optionnel plus un override de `transport_policy`
-  (`"soranet-first"`, `"soranet-strict"` ou `"direct-only"`), en miroir des knobs de
-  rollout du CLI. Lorsqu'un proxy QUIC local démarre,
-  `sorafs_gateway_fetch` renvoie le manifest navigateur via
-  `local_proxy_manifest` afin que les tests transmettent le trust bundle aux
-  adaptateurs navigateur.
-- **JavaScript** — `sorafsMultiFetchLocal` reflète le helper Python, renvoyant les
-  bytes de payload et les résumés de reçus, tandis que `sorafsGatewayFetch` exerce
-  les gateways Torii, passe les manifests du proxy local et expose les mêmes
-  overrides télémétrie/transport que le CLI.
-- **Rust** — les services peuvent embarquer le scheduler directement via
-  `sorafs_car::multi_fetch` ; consultez la référence
-  [Rust SDK snippets](./developer-sdk-rust.md) pour les helpers proof-stream et
-  l'intégration de l'orchestrateur.
-- **Android** — `HttpClientTransport.sorafsGatewayFetch(…)` réutilise l'exécuteur HTTP
-  Torii et respecte `GatewayFetchOptions`. Combinez-le avec
-  `ClientConfig.Builder#setSorafsGatewayUri` et l'indice d'upload PQ
-  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) lorsque les uploads doivent
-  rester sur des chemins PQ-only.
+- **Python** — `sorafs_multi_fetch_local` (ローカルのオーケストラの煙をテスト)
+  `sorafs_gateway_fetch` (ゲートウェイの E2E 演習) 承認済みのデータ
+  `telemetry_region` オプションと `transport_policy` のオーバーライド解除
+  (`"soranet-first"`、`"soranet-strict"` または `"direct-only"`)、ノブの詳細
+  CLI によるロールアウト。 Lorsqu'un プロキシ QUIC ローカル デマーレ、
+  `sorafs_gateway_fetch` renvoie ファイル マニフェスト ナビゲーター経由
+  `local_proxy_manifest` 信頼バンドル補助の送信テストを完了します
+  適応者ナビゲーター。
+- **JavaScript** — `sorafsMultiFetchLocal` ヘルパー Python を参照、参照
+  ペイロードのバイトと履歴、タンディス QUE `sorafsGatewayFetch` 演習
+  ゲートウェイ Torii、プロキシ ローカルのマニフェストをパスし、ミームを公開します
+  CLI のテレメトリー/トランスポートをオーバーライドします。
+- **Rust** — スケジューラーの指示を介して、システムのサービスを公開します
+  `sorafs_car::multi_fetch` ;参照して相談する
+  [Rust SDK スニペット](./developer-sdk-rust.md) ヘルパーのプルーフストリームなどを注ぐ
+  オーケストラの統合。
+- **Android** — `HttpClientTransport.sorafsGatewayFetch(…)` HTTP を再利用
+  Torii および `GatewayFetchOptions`。コンバインル・アベック
+  `ClientConfig.Builder#setSorafsGatewayUri` およびアップロード PQ のインデックス
+  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) lorsque les アップロード doivent
+  Rester sur des chemins PQ のみ。
 
-## Scoreboard et knobs de politique
+## スコアボードと政治のノブ
 
-Les helpers Python (`sorafs_multi_fetch_local`) et JavaScript
-(`sorafsMultiFetchLocal`) exposent le scoreboard du scheduler basé télémétrie utilisé
-par le CLI :
+レスヘルパー Python (`sorafs_multi_fetch_local`) と JavaScript
+(`sorafsMultiFetchLocal`) スケジューラのベースとなるスコアボードの利用方法を公開
+CLI の場合:
 
-- Les binaires de production activent le scoreboard par défaut ; définissez
-  `use_scoreboard=True` (ou fournissez des entrées `telemetry`) lors du replay des
-  fixtures afin que le helper dérive l'ordre pondéré des providers à partir des
-  métadonnées d'advert et des snapshots de télémétrie récents.
-- Définissez `return_scoreboard=True` pour recevoir les poids calculés avec les
-  reçus de chunk afin que les logs CI capturent les diagnostics.
-- Utilisez les tableaux `deny_providers` ou `boost_providers` pour rejeter des peers
-  ou ajouter un `priority_delta` quand le scheduler sélectionne des providers.
-- Conservez la posture par défaut `"soranet-first"` sauf en cas de downgrade ; fournissez
-  `"direct-only"` seulement lorsqu'une région de conformité doit éviter les relays ou
-  lors d'une répétition du fallback SNNet-5a, et réservez `"soranet-strict"` aux pilotes
-  PQ-only avec approbation de gouvernance.
-- Les helpers gateway exposent aussi `scoreboardOutPath` et `scoreboardNowUnixSecs`.
-  Définissez `scoreboardOutPath` pour persister le scoreboard calculé (miroir du flag
-  CLI `--scoreboard-out`) afin que `cargo xtask sorafs-adoption-check` valide les artefacts
-  SDK, et utilisez `scoreboardNowUnixSecs` quand les fixtures ont besoin d'une valeur
-  `assume_now` stable pour des métadonnées reproductibles. Dans le helper JavaScript,
-  vous pouvez aussi définir `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata` ;
-  si le label est omis, il dérive `region:<telemetryRegion>` (avec fallback vers `sdk:js`).
-  Le helper Python émet automatiquement `telemetry_source="sdk:python"` chaque fois qu'il
-  persiste un scoreboard et garde les métadonnées implicites désactivées.
+- デフォルトのスコアボードでの生産活動のビネール。定義
+  `use_scoreboard=True` (メイン料理の 4 つ `telemetry`) 再生デス
+  備品は、プロバイダーとパートーレの順序を決定するためのヘルパーを提供します。
+  最近の広告やスナップショットの情報。
+- Définissez `return_scoreboard=True` は、平均的な計算結果を受け取ります
+  ログの CI キャプチャ ファイル診断に関するチャンクの調査。
+- テーブルを使用して `deny_providers` または `boost_providers` を注ぎます
+  `priority_delta` でプロバイダーのスケジューラーを選択してください。
+- ダウングレード時のデフォルト `"soranet-first"` の姿勢を維持します。フルニセ
+  `"direct-only"` seulement lorsqu'une 地域に準拠して、リレーを実行してください
+  フォールバック SNNet-5a の繰り返しと `"soranet-strict"` 補助パイロット
+  PQ のみの avec 承認と統治。
+- ヘルパー ゲートウェイがオーストラリア `scoreboardOutPath` および `scoreboardNowUnixSecs` を公開しています。
+  Définissez `scoreboardOutPath` 持続的なスコアボードの計算 (旗のミロワール)
+  CLI `--scoreboard-out`) `cargo xtask sorafs-adoption-check` の有効なアーティファクト
+  SDK および `scoreboardNowUnixSecs` を使用して、必要なフィクスチャが必要になります
+  `assume_now` 安定した pour des metadonnées の再生産可能。ヘルパー JavaScript については、
+  オーストラリアの定義 `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata` ;
+  ラベルが正しくなく、`region:<telemetryRegion>` を取得します (`sdk:js` に対する avec フォールバック)。
+  Le helper Python émet automatiquement `telemetry_source="sdk:python"` チャックフォワキル
+  スコアボードとメタドンの持続は、非アクティブ化を暗黙的に示します。
 
 ```python
 result = sorafs_multi_fetch_local(

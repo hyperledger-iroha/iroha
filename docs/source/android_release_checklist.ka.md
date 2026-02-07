@@ -7,107 +7,102 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ee3613b544a847953f5ec152092cb2fe1da35279c5482486513d6b8d6dddf02
 source_last_modified: "2026-01-05T09:28:11.999717+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Release Checklist (AND6)
+# Android გამოშვების ჩამონათვალი (AND6)
 
-This checklist captures the **AND6 — CI & Compliance Hardening** gates from
-`roadmap.md` (§Priority 5). It aligns Android SDK releases with the Rust
-release RFC expectations by spelling out the CI jobs, compliance artefacts,
-device-lab evidence, and provenance bundles that must be attached before a GA,
-LTS, or hotfix train moves forward.
+ამ საკონტროლო სიაში მოცემულია **AND6 — CI და შესაბამისობის გამკვრივება** კარიბჭეებიდან
+`roadmap.md` (§პრიორიტეტი 5). ის ასწორებს Android SDK გამოშვებებს Rust-თან
+გაათავისუფლეთ RFC მოლოდინები CI სამუშაოების, შესაბამისობის არტეფაქტების მართლწერით,
+მოწყობილობა-ლაბორატორიული მტკიცებულებები და წარმოშობის პაკეტები, რომლებიც უნდა დაერთოს GA-მდე,
+LTS, ან Hotfix მატარებელი წინ მიიწევს.
 
-Use this document together with:
+გამოიყენეთ ეს დოკუმენტი:
 
-- `docs/source/android_support_playbook.md` — release calendar, SLAs, and
-  escalation tree.
-- `docs/source/android_runbook.md` — day‑to‑day operational runbooks.
-- `docs/source/compliance/android/and6_compliance_checklist.md` — regulator
-  artefact inventory.
-- `docs/source/release_dual_track_runbook.md` — dual-track release governance.
+- `docs/source/android_support_playbook.md` — გამოშვების კალენდარი, SLA და
+  ესკალაციის ხე.
+- `docs/source/android_runbook.md` — ყოველდღიური ოპერაციული წიგნები.
+- `docs/source/compliance/android/and6_compliance_checklist.md` — რეგულატორი
+  არტეფაქტის ინვენტარი.
+- `docs/source/release_dual_track_runbook.md` — ორმაგი ტრეკის გამოშვების მართვა.
 
-## 1. Stage Gates at a Glance
+## 1. სცენის კარიბჭე ერთი შეხედვით
 
-| Stage | Required Gates | Evidence |
-|-------|----------------|----------|
-| **T−7 days (pre-freeze)** | Nightly `ci/run_android_tests.sh` green for 14 days; `ci/check_android_fixtures.sh`, `ci/check_android_samples.sh`, and `ci/check_android_docs_i18n.sh` passing; lint/dependency scans queued. | Buildkite dashboards, fixture diff report, sample screenshot snapshots. |
-| **T−3 days (RC promotion)** | Device-lab reservation confirmed; StrongBox attestation CI run (`scripts/android_strongbox_attestation_ci.sh`); Robolectric/instrumented suites exercised on scheduled hardware; `./gradlew lintRelease ktlintCheck detekt dependencyGuard` clean. | Device matrix CSV, attestation bundle manifest, Gradle reports archived under `artifacts/android/lint/<version>/`. |
-| **T−1 day (go/no-go)** | Telemetry redaction status bundle refreshed (`scripts/telemetry/check_redaction_status.py --write-cache`); compliance artefacts updated per `and6_compliance_checklist.md`; provenance rehearsal completed (`scripts/android_sbom_provenance.sh --dry-run`). | `docs/source/compliance/android/evidence_log.csv`, telemetry status JSON, provenance dry-run log. |
-| **T0 (GA/LTS cutover)** | `scripts/publish_android_sdk.sh --dry-run` completed; provenance + SBOM signed; release checklist exported and attached to go/no-go minutes; `ci/sdk_sorafs_orchestrator.sh` smoke job green. | Release RFC attachments, Sigstore bundle, adoption artefacts under `artifacts/android/`. |
-| **T+1 day (post-cutover)** | Hotfix readiness verified (`scripts/publish_android_sdk.sh --validate-bundle`); dashboard diffs reviewed (`ci/check_android_dashboard_parity.sh`); evidence packet uploaded to `status.md`. | Dashboard diff export, link to `status.md` entry, archived release packet. |
+| სცენა | საჭირო კარიბჭე | მტკიცებულება |
+|-------|---------------|----------|
+| **T−7 დღე (წინასწარ გაყინვა)** | ღამის `ci/run_android_tests.sh` მწვანე 14 დღე; `ci/check_android_fixtures.sh`, `ci/check_android_samples.sh` და `ci/check_android_docs_i18n.sh` გავლა; ლაქების/დამოკიდებულების სკანირება რიგშია. | Buildkite-ის დაფები, მოწყობილობების განსხვავების ანგარიში, სკრინშოტის სნეპშოტების ნიმუში. |
+| **T−3 დღე (RC აქცია)** | მოწყობილობა-ლაბორატორიის ჯავშანი დადასტურებულია; StrongBox ატესტაციის CI run (`scripts/android_strongbox_attestation_ci.sh`); რობოელექტრო/ინსტრუმენტული კომპლექტები განხორციელებული დაგეგმილ აპარატურაზე; `./gradlew lintRelease ktlintCheck detekt dependencyGuard` სუფთა. | მოწყობილობის მატრიცა CSV, ატესტაციის ნაკრების მანიფესტი, Gradle ანგარიშები დაარქივებულია `artifacts/android/lint/<version>/` ქვეშ. |
+| **T−1 დღე (გასვლა/არ-გასვლა)** | ტელემეტრიის რედაქციის სტატუსის ნაკრები განახლებულია (`scripts/telemetry/check_redaction_status.py --write-cache`); შესაბამისობის არტეფაქტები განახლებულია `and6_compliance_checklist.md`-ზე; დასრულებული წარმოშობის რეპეტიცია (`scripts/android_sbom_provenance.sh --dry-run`). | `docs/source/compliance/android/evidence_log.csv`, ტელემეტრიის სტატუსი JSON, წარმოშობის მშრალი გაშვების ჟურნალი. |
+| **T0 (GA/LTS cutover)** | `scripts/publish_android_sdk.sh --dry-run` დასრულებული; წარმოშობა + SBOM ხელმოწერილი; გამოშვების საკონტროლო სია ექსპორტირებული და მიმაგრებულია წასასვლელი/არ წასვლის წუთებზე; `ci/sdk_sorafs_orchestrator.sh` კვამლის სამუშაო მწვანე. | გამოუშვით RFC დანართები, Sigstore პაკეტები, შვილად აყვანის არტეფაქტები `artifacts/android/`-ის ქვეშ. |
+| **T+1 დღე (შეწყვეტის შემდგომ)** | Hotfix მზადყოფნა დამოწმებულია (`scripts/publish_android_sdk.sh --validate-bundle`); დაფის განსხვავებები განხილულია (`ci/check_android_dashboard_parity.sh`); მტკიცებულების პაკეტი ატვირთულია `status.md`-ზე. | დაფის განსხვავებების ექსპორტი, ბმული `status.md` ჩანაწერზე, დაარქივებული გამოშვების პაკეტი. |
 
-## 2. CI & Quality Gate Matrix
+## 2. CI & Quality Gate Matrix| კარიბჭე | ბრძანებ(ებ)ი / სკრიპტი | შენიშვნები |
+|------|-------------------|-------|
+| ერთეული + ინტეგრაციის ტესტები | `ci/run_android_tests.sh` (ახვევს `ci/run_android_tests.sh`) | გამოსცემს `artifacts/android/tests/test-summary.json` + ტესტის ჟურნალს. მოიცავს Norito კოდეკს, რიგს, StrongBox სარეზერვო და Torii კლიენტის აღკაზმულობის ტესტებს. საჭიროა ღამით და მონიშვნამდე. |
+| ფიქსურის პარიტეტი | `ci/check_android_fixtures.sh` (ახვევს `scripts/check_android_fixtures.py`) | უზრუნველყოფს რეგენერირებული Norito მოწყობილობების შესაბამისობას Rust-ის კანონიკურ კომპლექტთან; მიამაგრეთ JSON განსხვავება, როდესაც კარიბჭე ვერ ხერხდება. |
+| აპლიკაციების ნიმუში | `ci/check_android_samples.sh` | აშენებს `examples/android/{operator-console,retail-wallet}` და ამოწმებს ლოკალიზებულ ეკრანის სურათებს `scripts/android_sample_localization.py`-ის საშუალებით. |
+| Docs/I18N | `ci/check_android_docs_i18n.sh` | იცავს README + ლოკალიზებულ სწრაფ სტარტებს. ხელახლა გაშვება მას შემდეგ, რაც დოკუმენტის რედაქტირება ხდება გამოშვების ფილიალში. |
+| დაფის პარიტეტი | `ci/check_android_dashboard_parity.sh` | ადასტურებს CI/ექსპორტირებული მეტრიკის შესაბამისობას Rust-ის კოლეგებთან; საჭიროა T+1 ვერიფიკაციის დროს. |
+| SDK მიღების კვამლი | `ci/sdk_sorafs_orchestrator.sh` | ახორციელებს მრავალ წყაროს Sorafs-ის ორკესტრატორთან დაკავშირებას მიმდინარე SDK-ით. საჭიროა დადგმული არტეფაქტების ატვირთვამდე. |
+| ატესტაციის შემოწმება | `scripts/android_strongbox_attestation_ci.sh --summary-out artifacts/android/attestation/ci-summary.json` | აერთიანებს StrongBox/TEE ატესტაციის პაკეტებს `artifacts/android/attestation/**`-ში; მიამაგრეთ რეზიუმე GA პაკეტებს. |
+| მოწყობილობა-ლაბორატორიის სლოტის ვალიდაცია | `scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab/<slot> --json-out artifacts/android/device_lab/summary.json` | ამოწმებს ხელსაწყოების პაკეტებს პაკეტების გასაშვებად მტკიცებულებების მიმაგრებამდე; CI მუშაობს ნიმუშის სლოტზე `fixtures/android/device_lab/slot-sample`-ში (ტელემეტრია/ატესტაცია/რიგი/ლოგები + `sha256sum.txt`). |
 
-| Gate | Command(s) / Script | Notes |
-|------|--------------------|-------|
-| Unit + integration tests | `ci/run_android_tests.sh` (wraps `ci/run_android_tests.sh`) | Emits `artifacts/android/tests/test-summary.json` + test log. Includes Norito codec, queue, StrongBox fallback, and Torii client harness tests. Required nightly and before tagging. |
-| Fixture parity | `ci/check_android_fixtures.sh` (wraps `scripts/check_android_fixtures.py`) | Ensures regenerated Norito fixtures match the Rust canonical set; attach the JSON diff when the gate fails. |
-| Sample apps | `ci/check_android_samples.sh` | Builds `examples/android/{operator-console,retail-wallet}` and validates localized screenshots via `scripts/android_sample_localization.py`. |
-| Docs/I18N | `ci/check_android_docs_i18n.sh` | Guards README + localized quickstarts. Run again after doc edits land in the release branch. |
-| Dashboard parity | `ci/check_android_dashboard_parity.sh` | Confirms CI/exported metrics align with the Rust counterparts; required during T+1 verification. |
-| SDK adoption smoke | `ci/sdk_sorafs_orchestrator.sh` | Exercises the multi-source Sorafs orchestrator bindings with the current SDK. Required before uploading staged artefacts. |
-| Attestation verification | `scripts/android_strongbox_attestation_ci.sh --summary-out artifacts/android/attestation/ci-summary.json` | Aggregates the StrongBox/TEE attestation bundles under `artifacts/android/attestation/**`; attach the summary to GA packets. |
-| Device-lab slot validation | `scripts/check_android_device_lab_slot.py --root artifacts/android/device_lab/<slot> --json-out artifacts/android/device_lab/summary.json` | Validates instrumentation bundles before attaching evidence to release packets; CI runs against the sample slot in `fixtures/android/device_lab/slot-sample` (telemetry/attestation/queue/logs + `sha256sum.txt`). |
+> **მინიშნება:** დაამატეთ ეს სამუშაოები `android-release` Buildkite მილსადენში, რათა
+> გაყინვის კვირები ავტომატურად ხელახლა გაუშვით ყველა კარიბჭე გამოშვების ტოტის წვერით.
 
-> **Tip:** add these jobs to the `android-release` Buildkite pipeline so that
-> freeze weeks automatically re-run every gate with the release branch tip.
-
-The consolidated `.github/workflows/android-and6.yml` job runs the lint,
-test-suite, attestation-summary, and device-lab slot checks on every PR/push
-touching Android sources, uploading evidence under `artifacts/android/{lint,tests,attestation,device_lab}/`.
+კონსოლიდირებული `.github/workflows/android-and6.yml` სამუშაო გადის ლინტზე,
+სატესტო კომპლექტი, ატესტაცია-შეჯამება და მოწყობილობა-ლაბორატორიის სლოტის შემოწმება ყოველი PR/Push-ზე
+Android წყაროების შეხება, მტკიცებულებების ატვირთვა `artifacts/android/{lint,tests,attestation,device_lab}/` ქვეშ.
 
 ## 3. Lint & Dependency Scans
 
-Run `scripts/android_lint_checks.sh --version <semver>` from the repo root. The
-script executes:
+გაუშვით `scripts/android_lint_checks.sh --version <semver>` რეპო ძირიდან. The
+სკრიპტი ახორციელებს:
 
 ```
 lintRelease ktlintCheck detekt dependencyGuardBaseline \
 :operator-console:lintRelease :retail-wallet:lintRelease
 ```
 
-- Reports and dependency-guard outputs are archived under
-  `artifacts/android/lint/<label>/` and a `latest/` symlink for release
-  pipelines.
-- Failing lint findings require either remediation or an entry in the release
-  RFC documenting the accepted risk (approved by Release Engineering + Program
-  Lead).
-- `dependencyGuardBaseline` regenerates the dependency lock; attach the diff
-  to the go/no-go packet.
+- ანგარიშები და დამოკიდებულების დაცვის შედეგები არქივდება ქვეშ
+  `artifacts/android/lint/<label>/` და `latest/` სიმბლინკი გამოსაშვებად
+  მილსადენები.
+- ლაქის აღმოჩენის წარუმატებლობა მოითხოვს ან გამოსწორებას ან ჩანაწერს გამოშვებაში
+  მიღებული რისკის დოკუმენტირება RFC (დამტკიცებულია Release Engineering + პროგრამის მიერ
+  ტყვია).
+- `dependencyGuardBaseline` აღადგენს დამოკიდებულების საკეტს; მიამაგრეთ განსხვავება
+  go/no-go პაკეტზე.
 
-## 4. Device Lab & StrongBox Coverage
+## 4. Device Lab & StrongBox დაფარვა
 
-1. Reserve Pixel + Galaxy devices using the capacity tracker referenced in
-   `docs/source/compliance/android/device_lab_contingency.md`. Blocks releases
-   if <70 % availability.
-2. Execute `scripts/android_strongbox_attestation_ci.sh --report \
-   artifacts/android/attestation/<version>` to refresh the attestation report.
-3. Run the instrumentation matrix (document the suite/ABI list in the device
-   tracker). Capture failures in the incident log even if retries succeed.
-4. File a ticket if fallback to Firebase Test Lab is required; link the ticket
-   in the checklist below.
+1. დაჯავშნეთ Pixel + Galaxy მოწყობილობები მოყვანილი სიმძლავრის ტრეკერის გამოყენებით
+   `docs/source/compliance/android/device_lab_contingency.md`. ბლოკავს გამოშვებებს
+   თუ ` ატესტაციის ანგარიშის განახლებისთვის.
+3. გაუშვით ინსტრუმენტული მატრიცა (მოწყობილობაში დააკონკრეტეთ კომპლექტი/ABI სია
+   ტრეკერი). დააფიქსირეთ წარუმატებლობები ინციდენტების ჟურნალში, თუნდაც განმეორებითი მცდელობები წარმატებული იყოს.
+4. შეიტანეთ ბილეთი, თუ საჭიროა Firebase Test Lab-ზე დაბრუნება; ბილეთის დაკავშირება
+   ქვემოთ მოცემულ საკონტროლო სიაში.
 
-## 5. Compliance & Telemetry Artefacts
-
-- Follow `docs/source/compliance/android/and6_compliance_checklist.md` for EU
-  and JP submissions. Update `docs/source/compliance/android/evidence_log.csv`
-  with hashes + Buildkite job URLs.
-- Refresh telemetry redaction evidence via
+## 5. შესაბამისობისა და ტელემეტრიის არტეფაქტები- მიჰყევით `docs/source/compliance/android/and6_compliance_checklist.md` ევროკავშირისთვის
+  და JP წარდგინებები. განაახლეთ `docs/source/compliance/android/evidence_log.csv`
+  ჰეშებით + Buildkite სამუშაო URL-ებით.
+- განაახლეთ ტელემეტრიული რედაქციის მტკიცებულებები მეშვეობით
   `scripts/telemetry/check_redaction_status.py --write-cache \
    --status-url https://android-observability.example/status.json`.
-  Store the resulting JSON under
+  შეინახეთ მიღებული JSON ქვეშ
   `artifacts/android/telemetry/<version>/status.json`.
-- Record the schema diff output from
+- ჩაწერეთ სქემის განსხვავების გამომავალი
   `scripts/telemetry/run_schema_diff.sh --android-config ... --rust-config ...`
-  to prove parity with Rust exporters.
+  Rust-ის ექსპორტიორებთან თანასწორობის დასამტკიცებლად.
 
-## 6. Provenance, SBOM, and Publishing
+## 6. წარმოშობა, SBOM და გამოცემა
 
-1. Dry-run the publish pipeline:
+1. მშრალად გაუშვით გამოქვეყნების მილსადენი:
 
    ```bash
    scripts/publish_android_sdk.sh \
@@ -116,7 +111,7 @@ lintRelease ktlintCheck detekt dependencyGuardBaseline \
      --dry-run
    ```
 
-2. Generate SBOM + Sigstore provenance:
+2. შექმენით SBOM + Sigstore წარმოშობა:
 
    ```bash
    scripts/android_sbom_provenance.sh \
@@ -124,39 +119,39 @@ lintRelease ktlintCheck detekt dependencyGuardBaseline \
      --out artifacts/android/provenance/<semver>
    ```
 
-3. Attach `artifacts/android/provenance/<semver>/manifest.json` and signed
-   `checksums.sha256` to the release RFC.
-4. When promoting to the real Maven repository, rerun
-   `scripts/publish_android_sdk.sh` without `--dry-run`, capture the console
-   log, and upload the resulting artefacts to `artifacts/android/maven/<semver>`.
+3. მიამაგრეთ `artifacts/android/provenance/<semver>/manifest.json` და ხელმოწერილი
+   `checksums.sha256` RFC გამოშვებამდე.
+4. Maven-ის რეალურ საცავში დაწინაურებისას ხელახლა გაუშვით
+   `scripts/publish_android_sdk.sh` `--dry-run`-ის გარეშე, გადაიღეთ კონსოლი
+   შედით სისტემაში და ატვირთეთ მიღებული არტეფაქტები `artifacts/android/maven/<semver>`-ზე.
 
-## 7. Submission Packet Template
+## 7. წარდგენის პაკეტის შაბლონი
 
-Every GA/LTS/hotfix release should include:
+ყოველი GA/LTS/hotfix გამოშვება უნდა შეიცავდეს:
 
-1. **Completed checklist** — copy this file’s table, tick each item, and link
-   to supporting artefacts (Buildkite run, logs, doc diffs).
-2. **Device lab evidence** — attestation report summary, reservation log, and
-   any contingency activations.
-3. **Telemetry packet** — redaction status JSON, schema diff, link to
-   `docs/source/sdk/android/telemetry_redaction.md` updates (if any).
-4. **Compliance artefacts** — entries added/updated in the compliance folder
-   plus the refreshed evidence log CSV.
-5. **Provenance bundle** — SBOM, Sigstore signature, and `checksums.sha256`.
-6. **Release summary** — one‑page overview attached to `status.md` summarising
-   the above (date, version, highlight of any waived gates).
+1. **შესრულებული საკონტროლო სია** — დააკოპირეთ ამ ფაილის ცხრილი, მონიშნეთ თითოეული ელემენტი და ბმული
+   არტეფაქტების მხარდასაჭერად (Buildkite run, ჟურნალები, doc diffs).
+2. **მოწყობილობის ლაბორატორიის მტკიცებულება** — ატესტაციის ანგარიშის შეჯამება, დაჯავშნის ჟურნალი და
+   ნებისმიერი საგანგებო გააქტიურება.
+3. **ტელემეტრიის პაკეტი** — რედაქციის სტატუსი JSON, სქემის განსხვავება, ბმული
+   `docs/source/sdk/android/telemetry_redaction.md` განახლებები (ასეთის არსებობის შემთხვევაში).
+4. **შესაბამისობის არტეფაქტები** — ჩანაწერები დამატებულია/განახლებულია შესაბამისობის საქაღალდეში
+   პლუს განახლებული მტკიცებულების ჟურნალი CSV.
+5. **წარმოშობის ნაკრები ** — SBOM, Sigstore ხელმოწერა და `checksums.sha256`.
+6. **გამოცემის შეჯამება** — ერთგვერდიანი მიმოხილვა დართულია `status.md` შეჯამებაზე
+   ზემოთ (თარიღი, ვერსია, ნებისმიერი მოხსნილი კარიბჭის ხაზგასმა).
 
-Store the packet under `artifacts/android/releases/<version>/` and reference it
-in `status.md` and the release RFC.
+შეინახეთ პაკეტი `artifacts/android/releases/<version>/` ქვეშ და მიმართეთ მას
+`status.md`-ში და RFC გამოშვებაში.
 
-- `scripts/run_release_pipeline.py --publish-android-sdk ...` automatically
-  copies the latest lint archive (`artifacts/android/lint/latest`) and the
-  compliance evidence log into `artifacts/android/releases/<version>/` so the
-  submission packet always has a canonical location.
+- `scripts/run_release_pipeline.py --publish-android-sdk ...` ავტომატურად
+  კოპირებს უახლეს ლინტ არქივს (`artifacts/android/lint/latest`) და
+  შესაბამისობის მტკიცებულება შედით `artifacts/android/releases/<version>/`-ში, ასე რომ
+  წარდგენის პაკეტს ყოველთვის აქვს კანონიკური მდებარეობა.
 
 ---
 
-**Reminder:** update this checklist whenever new CI jobs, compliance artefacts,
-or telemetry requirements are added. Roadmap item AND6 stays open until the
-checklist and associated automation prove stable for two consecutive release
-trains.
+**შეხსენება:** განაახლეთ ეს სია, როდესაც ახალი CI სამუშაოები, შესაბამისობის არტეფაქტები,
+ან ტელემეტრიის მოთხოვნები ემატება. საგზაო რუკის პუნქტი AND6 ღია რჩება მანამ
+საკონტროლო სია და მასთან დაკავშირებული ავტომატიზაცია სტაბილურია ზედიზედ ორი გამოშვებისთვის
+მატარებლები.

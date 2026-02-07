@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8b937a75e50aa77c02fcab0a11dae1b1cc182f88c179d6f90aa69181afa80d1b
 source_last_modified: "2026-01-05T18:22:23.394597+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Integrating NoritoBridgeKit in an Xcode iOS Project
+## NoritoBridgeKit-ті Xcode iOS жобасына біріктіру
 
-This guide shows how to integrate the Rust Norito bridge (XCFramework) and the Swift wrappers into an iOS app, then exchange Iroha Connect frames over WebSocket using the same Norito codecs as the Rust host.
+Бұл нұсқаулық Rust Norito көпірін (XCFramework) және Swift орауыштарын iOS қолданбасына біріктіруді, содан кейін Rust хосты сияқты Norito кодектерін пайдаланып WebSocket арқылы Iroha Connect жақтауларын алмасу жолын көрсетеді.
 
-Prerequisites
-- A NoritoBridge.xcframework zip (built by CI workflow) and the Swift helper `NoritoBridgeKit.swift` (copy the version under `examples/ios/NoritoDemo/Sources` if you are not consuming the demo project directly).
-- Xcode 15+, iOS 13+ target.
+Алғы шарттар
+- NoritoBridge.xcframework zip (CI жұмыс процесі арқылы құрастырылған) және Swift көмекшісі `NoritoBridgeKit.swift` (демонстрациялық жобаны тікелей пайдаланбасаңыз, `examples/ios/NoritoDemo/Sources` астындағы нұсқаны көшіріңіз).
+- Xcode 15+, iOS 13+ мақсаты.
 
-Option A: Swift Package Manager (recommended)
-1) Publish a binary SPM using the `Package.swift.template` in `crates/connect_norito_bridge/` (fill URL and checksum from CI).
-2) In Xcode: File → Add Packages… → Enter the SPM repo URL → Add the `NoritoBridge` product to your target.
-3) Add `NoritoBridgeKit.swift` to your app target (drag into your project, ensure “Copy if needed” is ticked).
+А нұсқасы: Swift пакет менеджері (ұсынылады)
+1) `crates/connect_norito_bridge/` ішіндегі `Package.swift.template` көмегімен екілік SPM жариялаңыз (URL және CI-дан бақылау сомасын толтырыңыз).
+2) Xcode ішінде: Файл → Пакеттерді қосу… → SPM репо URL мекенжайын енгізіңіз → `NoritoBridge` өнімін мақсатыңызға қосыңыз.
+3) `NoritoBridgeKit.swift` қолданбасын мақсатқа қосыңыз (жобаңызға сүйреңіз, «Қажет болса көшіру» құсбелгі қойылғанына көз жеткізіңіз).
 
-Option B: CocoaPods
-1) Create a Podspec from `NoritoBridge.podspec.template` (fill the `s.source` zip URL).
+В нұсқасы: CocoaPods
+1) `NoritoBridge.podspec.template` ішінен Podspec жасаңыз (`s.source` zip URL мекенжайын толтырыңыз).
 2) `pod trunk push NoritoBridge.podspec`.
-3) In your Podfile: `pod 'NoritoBridge'` → `pod install`.
-4) Add `NoritoBridgeKit.swift` to your app target.
+3) Подфайлыңызда: `pod 'NoritoBridge'` → `pod install`.
+4) `NoritoBridgeKit.swift` қолданбасын мақсатқа қосыңыз.
 
-Imports
+Импорттар
 ```swift
 import Foundation
 import CryptoKit               // ChaChaPoly / HKDF
@@ -37,11 +38,11 @@ import NoritoBridge            // Clang module from the XCFramework
 // Ensure NoritoBridgeKit.swift is part of the target
 ```
 
-### Bootstrapping a Connect session
+### Қосылу сеансын жүктеу
 
-`ConnectClient` handles the WebSocket, while `ConnectSession` orchestrates control
-frames and ciphertext envelopes. The snippet below shows how a dApp would open a session,
-derive Connect keys, and wait for an approval response.
+`ConnectClient` WebSocket өңдейді, ал `ConnectSession` басқаруды реттейді
+жақтаулар мен шифрлы мәтін конверттері. Төмендегі үзінді dApp сеансты қалай ашатынын көрсетеді,
+Connect пернелерін шығарып, мақұлдау жауабын күтіңіз.
 
 ```swift
 let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
@@ -76,10 +77,10 @@ Task {
 }
 ```
 
-### Sending ciphertext frames (sign requests, etc.)
+### Шифрлық мәтін кадрларын жіберу (қол қою сұраулары, т.б.)
 
-When the dApp needs to request a signature it uses the Norito bridge helpers to encode
-an envelope, encrypts the payload with ChaChaPoly, and wraps it in a `ConnectFrame`.
+dApp қолтаңбаны сұрау қажет болғанда кодтау үшін Norito көпір көмекшілерін пайдаланады.
+конверт, пайдалы жүктемені ChaChaPoly арқылы шифрлайды және оны `ConnectFrame` ішіне орады.
 
 ```swift
 let bridge = NoritoBridgeKit()
@@ -101,9 +102,9 @@ let frame = ConnectFrame(sessionID: sessionID,
 try await connectClient.send(frame: frame)
 ```
 
-`ConnectAEAD.header` / `ConnectAEAD.nonce` are convenience helpers (see the snippet in
-`docs/connect_swift_ios.md`) built from the shared `connect:v1` header definition. They
-are easy to inline if you prefer not to add another utility:
+`ConnectAEAD.header` / `ConnectAEAD.nonce` ыңғайлы көмекшілер (үзіндіні қараңыз).
+`docs/connect_swift_ios.md`) ортақ `connect:v1` тақырып анықтамасынан құрастырылған. Олар
+басқа қызметтік бағдарламаны қоспауды қаласаңыз, кірістіру оңай:
 
 ```swift
 enum ConnectAEAD {
@@ -127,11 +128,11 @@ enum ConnectAEAD {
 }
 ```
 
-### Receiving / decrypting frames
+### Фреймдерді қабылдау/шифрын шешу
 
-`ConnectSession` already exposes `nextEnvelope()`, which decrypts payloads when direction
-keys are configured. If you need manual access (for example to match an existing decoder
-pipeline), you can call the lower-level helper:
+`ConnectSession` `nextEnvelope()`-ны ашады, ол бағытты анықтау кезінде пайдалы жүктемелердің шифрын ашады.
+пернелері конфигурацияланған. Қолмен кіру қажет болса (мысалы, бар декодермен сәйкестендіру үшін
+құбыр), сіз төменгі деңгейдегі көмекшіге қоңырау шала аласыз:
 
 ```swift
 func decryptFrame(_ frame: ConnectFrame,
@@ -150,24 +151,24 @@ func decryptFrame(_ frame: ConnectFrame,
 }
 ```
 
-`NoritoBridgeKit` also exposes helpers such as `decodeCiphertextFrame`, `decodeEnvelopeJson`,
-and `decodeSignResultAlgorithm` for debugging or interoperability testing. For production
-apps, rely on `ConnectSession` and `ConnectEnvelope` so behaviour matches the Rust and
-Android SDKs exactly.
+`NoritoBridgeKit` сонымен қатар `decodeCiphertextFrame`, `decodeEnvelopeJson` сияқты көмекшілерді көрсетеді.
+және `decodeSignResultAlgorithm` отладтау немесе өзара әрекеттесу сынағы үшін. Өндіріс үшін
+қолданбалар, мінез-құлық Rust және
+Android SDK дәл.
 
-## CI validation
+## CI валидациясы
 
-- Before publishing updated bridge artifacts or pushing Connect integrations, run:
+- Жаңартылған көпір артефактілерін жарияламас бұрын немесе Connect біріктірулерін баспас бұрын, іске қосыңыз:
 
   ```bash
   make swift-ci
   ```
 
-  The target validates fixture parity, checks the dashboard feeds, and renders the CLI
-  summaries locally. In Buildkite the same workflow depends on metadata keys such as
-  `ci/xcframework-smoke:<lane>:device_tag`; confirm the metadata is present after editing
-  pipelines or agent tags so dashboards can attribute results to the correct simulator or
-  StrongBox lane.
-- If the command fails, follow the parity playbook (`docs/source/swift_parity_triage.md`)
-  and inspect the rendered `mobile_ci` output to identify which lane requires regeneration
-  or incident follow-up before retrying.
+  Мақсат бекіту тепе-теңдігін тексереді, бақылау тақтасының арналарын тексереді және CLI көрсетеді
+  жергілікті қорытындылар. Buildkite бағдарламасында бірдей жұмыс процесі сияқты метадеректер кілттеріне байланысты
+  `ci/xcframework-smoke:<lane>:device_tag`; өңдеуден кейін метадеректер бар екенін растаңыз
+  бақылау тақталары нәтижелерді дұрыс симуляторға немесе
+  StrongBox жолағы.
+- Егер пәрмен орындалмаса, паритеттік ойын кітабын орындаңыз (`docs/source/swift_parity_triage.md`)
+  және қай жолақ регенерацияны қажет ететінін анықтау үшін көрсетілген `mobile_ci` шығысын тексеріңіз
+  немесе қайталаудан бұрын оқиғаны бақылау.

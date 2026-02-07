@@ -8,20 +8,22 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CLI Cookbook
 sidebar_label: CLI Cookbook
 description: Task-focused walkthrough of the consolidated `sorafs_cli` surface.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-The consolidated `sorafs_cli` surface (provided by the `sorafs_car` crate with
-the `cli` feature enabled) exposes every step required to prepare SoraFS
-artifacts. Use this cookbook to jump directly to common workflows; pair it with
-the manifest pipeline and orchestrator runbooks for operational context.
+ပေါင်းစပ်ထားသော `sorafs_cli` မျက်နှာပြင် (`sorafs_car` သေတ္တာဖြင့် ပံ့ပိုးပေးသည်
+`cli` လုပ်ဆောင်ချက်ကို ဖွင့်ထားသည်) SoraFS ပြင်ဆင်ရန် လိုအပ်သော အဆင့်တိုင်းကို ဖော်ထုတ်ပေးသည်
+ရှေးဟောင်းပစ္စည်း။ အများသုံး အလုပ်အသွားအလာများဆီသို့ တိုက်ရိုက်တက်ရန် ဤဟင်းချက်စာအုပ်ကို အသုံးပြုပါ။ ၎င်းကိုတွဲပါ။
+လုပ်ငန်းလည်ပတ်မှုဆိုင်ရာ အကြောင်းအရာအတွက် ထင်ရှားသော ပိုက်လိုင်းနှင့် တီးမှုတ်ခြင်းဆိုင်ရာ စာအုပ်များ။
 
-## Package payloads
+## အထုပ်ဝန်ပိုးများ
 
-Use `car pack` to produce deterministic CAR archives and chunk plans. The
-command automatically selects the SF-1 chunker unless a handle is provided.
+အဆုံးအဖြတ်ပေးသော CAR မော်ကွန်းတိုက်များနှင့် အတုံးအခဲအစီအစဥ်များကို ထုတ်လုပ်ရန် `car pack` ကို အသုံးပြုပါ။ ဟိ
+လက်ကိုင်ကို ပေးမထားပါက command သည် SF-1 chunker ကို အလိုအလျောက် ရွေးချယ်သည်။
 
 ```bash
 sorafs_cli car pack \
@@ -31,13 +33,13 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs are walked in lexicographic order so checksums stay stable
-  across platforms.
-- The JSON summary includes payload digests, per-chunk metadata, and the root
-  CID recognised by the registry and orchestrator.
+- ပုံသေချန်းကာလက်ကိုင်- `sorafs.sf1@1.0.0`။
+- လမ်းညွှန်ထည့်သွင်းမှုများကို အဘိဓာန်အစီအစဥ်အတိုင်း လုပ်ဆောင်ထားသောကြောင့် checksum များသည် တည်ငြိမ်နေမည်ဖြစ်သည်။
+  ပလက်ဖောင်းများတစ်လျှောက်။
+- JSON အနှစ်ချုပ်တွင် payload digests၊ per-chunk metadata နှင့် root တို့ ပါဝင်ပါသည်။
+  CID သည် မှတ်ပုံတင်ခြင်းနှင့် တီးမှုတ်သူမှ အသိအမှတ်ပြုသည်။
 
-## Construct manifests
+## သရုပ်ဖော်သည်။
 
 ```bash
 sorafs_cli manifest build \
@@ -49,15 +51,15 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- `--pin-*` options map directly to `PinPolicy` fields in
-  `sorafs_manifest::ManifestBuilder`.
-- Provide `--chunk-plan` when you want the CLI to recompute the SHA3 chunk
-  digest before submission; otherwise it reuses the digest embedded in the
-  summary.
-- The JSON output mirrors the Norito payload for straightforward diffs during
-  reviews.
+- `--pin-*` ရွေးချယ်စရာများကို `PinPolicy` အကွက်များသို့ တိုက်ရိုက်မြေပုံဆွဲပါ။
+  `sorafs_manifest::ManifestBuilder`။
+- သင် CLI ကို SHA3 အပိုင်းကို ပြန်လည်တွက်ချက်လိုပါက `--chunk-plan` ပေးပါ။
+  တင်ပြခြင်းမပြုမီ ချေဖျက်ပါ။ သို့မဟုတ်ပါက ၎င်းတွင် ထည့်သွင်းထားသော ချေဖျက်မှုကို ပြန်လည်အသုံးပြုသည်။
+  အနှစ်ချုပ်။
+- JSON output သည် Norito payload ကို အချိန်အတွင်း ရိုးရှင်းသောကွဲပြားမှုများအတွက် ထင်ဟပ်စေသည်။
+  သုံးသပ်ချက်
 
-## Sign manifests without long-lived keys
+## ဆိုင်းဘုတ်သည် ကြာရှည်သောသော့များမပါဘဲ ထင်ရှားသည်။
 
 ```bash
 sorafs_cli manifest sign \
@@ -67,13 +69,13 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Accepts inline tokens, environment variables, or file-based sources.
-- Adds provenance metadata (`token_source`, `token_hash_hex`, chunk digest)
-  without persisting the raw JWT unless `--include-token=true`.
-- Works well in CI: combine with GitHub Actions OIDC by setting
-  `--identity-token-provider=github-actions`.
+- အတွင်းပိုင်းတိုကင်များ၊ ပတ်ဝန်းကျင်ပြောင်းလွဲမှုများ သို့မဟုတ် ဖိုင်အခြေခံအရင်းအမြစ်များကို လက်ခံသည်။
+- သက်သေပြချက် မက်တာဒေတာ (`token_source`၊ `token_hash_hex`၊ အတုံးအခဲအကြေ)
+  `--include-token=true` မဟုတ်လျှင် JWT အကြမ်းကို မတည်မြဲပါ။
+- CI တွင် ကောင်းမွန်စွာလုပ်ဆောင်နိုင်သည်- setting ဖြင့် GitHub Actions OIDC နှင့် ပေါင်းစပ်ပါ။
+  `--identity-token-provider=github-actions`။
 
-## Submit manifests to Torii
+## မန်နီးဖက်စ်များကို Torii သို့ တင်ပြပါ။
 
 ```bash
 sorafs_cli manifest submit \
@@ -88,13 +90,13 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Performs Norito decoding for alias proofs and verifies they match the
-  manifest digest before POSTing to Torii.
-- Recomputes the chunk SHA3 digest from the plan to prevent mismatch attacks.
-- Response summaries capture HTTP status, headers, and registry payloads for
-  later auditing.
+- alias အထောက်အထားများအတွက် Norito ကုဒ်ကုဒ်ကို လုပ်ဆောင်ပြီး ၎င်းတို့နှင့် ကိုက်ညီကြောင်း အတည်ပြုသည်။
+  Torii သို့ မတင်မီ ထုတ်ဖော်ပြသပါ။
+- မတိုက်ဆိုင်သောတိုက်ခိုက်မှုများကိုကာကွယ်ရန် အစီအစဉ်မှ SHA3 အတုံးအခဲများကို ပြန်လည်တွက်ချက်သည်။
+- တုံ့ပြန်မှုအနှစ်ချုပ်များသည် HTTP အခြေအနေ၊ ခေါင်းစီးများနှင့် မှတ်ပုံတင်ကြေးများကို ဖမ်းယူသည်။
+  နောက်ပိုင်း စာရင်းစစ်။
 
-## Verify CAR contents and proofs
+## CAR အကြောင်းအရာနှင့် အထောက်အထားများကို စစ်ဆေးပါ။
 
 ```bash
 sorafs_cli proof verify \
@@ -103,11 +105,11 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Rebuilds the PoR tree and compares payload digests with the manifest summary.
-- Captures counts and identifiers required when submitting replication proofs
-  to governance.
+- PoR သစ်ပင်ကို ပြန်လည်တည်ဆောက်ပြီး payload digest များကို manifest အကျဉ်းချုပ်နှင့် နှိုင်းယှဉ်ပါ။
+- ပုံတူပွားခြင်းဆိုင်ရာ အထောက်အထားများ တင်ပြသည့်အခါ လိုအပ်သော အရေအတွက်နှင့် အထောက်အထားများကို ဖမ်းယူပါ။
+  အုပ်ချုပ်မှုဆီသို့။
 
-## Stream proof telemetry
+## တိုက်ရိုက်ဓာတ်ခံတယ်လီမီတာ
 
 ```bash
 sorafs_cli proof stream \
@@ -120,24 +122,24 @@ sorafs_cli proof stream \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
 ```
 
-- Emits NDJSON items for each streamed proof (disable replay with
-  `--emit-events=false`).
-- Aggregates success/failure counts, latency histograms, and sampled failures in
-  the summary JSON so dashboards can plot outcomes without scraping logs.
-- Exits non-zero when the gateway reports failures or local PoR verification
-  (via `--por-root-hex`) rejects proofs. Adjust the thresholds with
-  `--max-failures` and `--max-verification-failures` for rehearsal runs.
-- Supports PoR today; PDP and PoTR reuse the same envelope once SF-13/SF-14
-  land.
-- `--governance-evidence-dir` writes the rendered summary, metadata (timestamp,
-  CLI version, gateway URL, manifest digest), and a copy of the manifest into
-  the supplied directory so governance packets can archive the proof-stream
-  evidence without replaying the run.
+- တိုက်ရိုက်ထုတ်လွှင့်မှုအထောက်အထားတစ်ခုစီအတွက် NDJSON ပစ္စည်းများကို ထုတ်လွှတ်သည် (ဖြင့် ပြန်လည်ကစားခြင်းကို ပိတ်ပါ။
+  `--emit-events=false`)။
+- အောင်မြင်မှု/ကျရှုံးမှု အရေအတွက်၊ latency histograms နှင့် နမူနာပြထားသော ကျရှုံးမှုများကို စုစည်းပေးသည်
+  အကျဉ်းချုပ် JSON သည် မှတ်တမ်းများကို မခြစ်ဘဲ ဒိုင်ခွက်များမှ ရလဒ်များကို ကြံစည်နိုင်သည်။
+- gateway သည် ပျက်ကွက်မှုများ သို့မဟုတ် ဒေသဆိုင်ရာ PoR အတည်ပြုခြင်းအား အစီရင်ခံသည့်အခါ သုညမဟုတ်သော ထွက်သွားပါသည်။
+  (`--por-root-hex`) မှ အထောက်အထားများကို ငြင်းပယ်သည်။ တံခါးခုံများဖြင့် ချိန်ညှိပါ။
+  အစမ်းလေ့ကျင့်မှုများအတွက် `--max-failures` နှင့် `--max-verification-failures`။
+- ယနေ့ PoR ကိုပံ့ပိုးသည်; PDP နှင့် PoTR သည် SF-13/SF-14 တစ်ကြိမ် တူညီသောစာအိတ်ကို ပြန်သုံးသည်။
+  မြေ။
+- `--governance-evidence-dir` သည် ပြန်ဆိုထားသော အကျဉ်းချုပ်၊ မက်တာဒေတာ (အချိန်တံဆိပ်၊
+  CLI ဗားရှင်း၊ ဂိတ်ဝ URL၊ မန်နီးဖက်စ် ချေဖျက်မှု) နှင့် မန်နီးဖက်စ်၏ မိတ္တူ
+  စီမံအုပ်ချုပ်မှုပက်ကတ်များသည် အထောက်အထား-စီးကြောင်းကို မော်ကွန်းတင်နိုင်စေရန် ပံ့ပိုးပေးထားသောလမ်းညွှန်
+  ပြေးခြင်းမပြုဘဲ အထောက်အထားများ။
 
-## Additional references
+## ထပ်လောင်းကိုးကား
 
-- `docs/source/sorafs_cli.md` — exhaustive flag documentation.
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema and Grafana
-  dashboard template.
-- `docs/source/sorafs/manifest_pipeline.md` — deep dive on chunking, manifest
-  composition, and CAR handling.
+- `docs/source/sorafs_cli.md` — အပြည့်အစုံ အလံစာရွက်စာတမ်း။
+- `docs/source/sorafs_proof_streaming.md` — အထောက်အထား တယ်လီမီတာစနစ် နှင့် Grafana
+  ဒက်ရှ်ဘုတ် နမူနာပုံစံ။
+- `docs/source/sorafs/manifest_pipeline.md` — အတုံးလိုက်အခဲလိုက်၊ ထင်ရှားစွာ နက်ရှိုင်းစွာ ငုပ်လျှိုးနေသည်။
+  ဖွဲ့စည်းမှုနှင့် CAR ကိုင်တွယ်မှု။

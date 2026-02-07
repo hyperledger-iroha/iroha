@@ -4,63 +4,61 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: AI Moderation Calibration Report (2026-02)
-summary: MINFO-1 کے پہلے governance release کے لئے baseline calibration dataset، thresholds اور scoreboard۔
+título: Informe de calibración de moderación de IA (2026-02)
+resumen: MINFO-1 کے پہلے lanzamiento de gobernanza کے لئے conjunto de datos de calibración de referencia, umbrales اور marcador۔
 ---
 
-# AI Moderation Calibration Report - فروری 2026
+# Informe de calibración de moderación de IA: enero de 2026
 
-یہ رپورٹ **MINFO-1** کے لئے ابتدائی calibration artefacts کو پیک کرتی ہے۔ dataset، manifest اور scoreboard
-2026-02-05 کو تیار کیے گئے، 2026-02-10 کو Ministry council نے ریویو کیا، اور governance DAG میں height
-`912044` پر anchor کیے گئے۔
+یہ رپورٹ **MINFO-1** کے لئے ابتدائی artefactos de calibración کو پیک کرتی ہے۔ conjunto de datos, manifiesto y marcador
+2026-02-05 کو تیار کیے گئے، 2026-02-10 کو Consejo ministerial نے ریویو کیا، اور gobernanza DAG میں altura
+`912044` پر ancla کیے گئے۔
 
-## Dataset Manifest
+## Manifiesto del conjunto de datos
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **Referencia del conjunto de datos:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **Babosa:** `ai-moderation-calibration-202602`
+- **Entradas:** manifiesto 480, fragmento 12.800, metadatos 920, audio 160
+- **Mezcla de etiquetas:** seguro 68%, sospechoso 19%, escalado 13%
+- **Resumen de artefactos:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- **Distribución:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-مکمل manifest `docs/examples/ai_moderation_calibration_manifest_202602.json` میں موجود ہے
-اور اس میں governance signature کے ساتھ release کے وقت captured runner hash شامل ہے۔
+Manifiesto مکمل `docs/examples/ai_moderation_calibration_manifest_202602.json` میں موجود ہے
+اور اس میں firma de gobernanza کے ساتھ lanzamiento کے وقت hash de corredor capturado شامل ہے۔
 
-## Scoreboard Summary
+## Resumen del marcador
 
-Calibrations opset 17 اور deterministic seed pipeline کے ساتھ چلائی گئیں۔ مکمل scoreboard JSON
-(`docs/examples/ai_moderation_calibration_scorecard_202602.json`) hashes اور telemetry digests ریکارڈ کرتا ہے؛
-نیچے دی گئی table اہم metrics دکھاتی ہے۔
-
-| Model (family) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
+Calibraciones opset 17 اور tubería de semillas determinista کے ساتھ چلائی گئیں۔ Marcador JSON
+(`docs/examples/ai_moderation_calibration_scorecard_202602.json`) hashes اور resúmenes de telemetría ریکارڈ کرتا ہے؛
+نیچے دی گئی tabla de métricas دکھاتی ہے۔| Modelo (familia) | Zarzo | CEPE | AURÓC | Precisión@Cuarentena | Recordar@Escalar |
 | ------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ViT-H/14 Seguridad (visión) | 0,141 | 0,031 | 0,987 | 0,964 | 0,912 |
+| LLaVA-1.6 34B Seguridad (multimodal) | 0,118 | 0,028 | 0,978 | 0,942 | 0,904 |
+| Conjunto perceptual (perceptivo) | 0,162 | 0,047 | 0,953 | 0,883 | 0,861 |
 
-Combined metrics: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. Calibration window میں verdict distribution
-pass 91.2%, quarantine 6.8%, escalate 2.0% تھا، جو manifest summary میں درج policy expectations سے match کرتا ہے۔
-False-positive backlog صفر رہا، اور drift score (7.1%) 20% alert threshold سے کافی نیچے تھا۔
+Métricas combinadas: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. Ventana de calibración میں distribución de veredicto
+pasar 91,2%, cuarentena 6,8%, escalar 2,0% تھا، جو resumen manifiesto میں درج expectativas políticas سے coinciden کرتا ہے۔
+Acumulación de falsos positivos صفر رہا، اور puntuación de deriva (7,1%) Umbral de alerta del 20% سے کافی نیچے تھا۔
 
-## Thresholds اور sign-off
+## Umbrales y aprobación
 
 - `thresholds.quarantine = 0.42`
 - `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+- Moción de gobernanza: `MINFO-2026-02-07`
+- Firmado por `ministry-council-seat-03` en `2026-02-10T11:33:12Z`
 
-CI نے signed bundle کو `artifacts/ministry/ai_moderation/2026-02/` میں moderation runner binaries کے ساتھ محفوظ کیا۔
-اوپر دیے گئے manifest digest اور scoreboard hashes کو audits اور appeals کے دوران refer کرنا ضروری ہے۔
+CI نے paquete firmado کو `artifacts/ministry/ai_moderation/2026-02/` میں binarios del corredor de moderación کے ساتھ محفوظ کیا۔
+اوپر دیے گئے resumen de manifiesto اور hashes del marcador کو auditorías اور apelaciones کے دوران referir کرنا ضروری ہے۔
 
-## Dashboards & Alerts
-
-Moderation SREs کو Grafana dashboard
-`dashboards/grafana/ministry_moderation_overview.json` اور Prometheus alert rules
+## Paneles y alertasModeración SRE en el panel Grafana
+Reglas de alerta `dashboards/grafana/ministry_moderation_overview.json` y Prometheus
 `dashboards/alerts/ministry_moderation_rules.yml` امپورٹ کرنے چاہئیں
-(test coverage `dashboards/alerts/tests/ministry_moderation_rules.test.yml` میں ہے)۔ یہ artifacts
-ingest stalls، drift spikes اور quarantine queue کی growth کے لئے alerts emit کرتے ہیں، اور
-[AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md) میں بیان کردہ monitoring
-requirements پوری کرتے ہیں۔
+(cobertura de prueba `dashboards/alerts/tests/ministry_moderation_rules.test.yml` میں ہے)۔ یہ artefactos
+puestos de ingesta, picos de deriva اور cola de cuarentena کی crecimiento کے لئے alertas emitidas کرتے ہیں، اور
+[Especificación del corredor de moderación AI](../../ministry/ai-moderation-runner.md) Monitoreo de میں بیان کردہ
+requisitos پوری کرتے ہیں۔

@@ -7,44 +7,45 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 79a048e6061f7054e14a471004cf7da0dddd3f9bf627d9f1d20ff63803cb0979
 source_last_modified: "2026-01-05T09:28:11.997191+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Quickstart
+# SoraFS სწრაფი გაშვება
 
-This hands-on guide walks through the deterministic SF-1 chunker profile,
-manifest signing, and multi-provider fetch flow that underpin the SoraFS
-storage pipeline. Pair it with the [manifest pipeline deep dive](manifest-pipeline.md)
-for design notes and CLI flag reference material.
+ეს პრაქტიკული სახელმძღვანელო გადის დეტერმინისტულ SF-1 ცუნკერის პროფილში,
+მანიფესტის ხელმოწერა და მრავალ პროვაიდერთან მოპოვების ნაკადი, რომელიც ემყარება SoraFS-ს
+შენახვის მილსადენი. დააწყვილეთ იგი [მანიფესტური მილსადენის ღრმა ჩაყვინთვის] (manifest-pipeline.md)
+დიზაინის შენიშვნებისთვის და CLI დროშის საცნობარო მასალისთვის.
 
-## Prerequisites
+## წინაპირობები
 
-- Rust toolchain (`rustup update`), workspace cloned locally.
-- Optional: [OpenSSL-generated Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  for signing manifests.
-- Optional: Node.js ≥ 18 if you plan to preview the Docusaurus portal.
+- Rust toolchain (`rustup update`), სამუშაო ადგილი ადგილობრივად კლონირებული.
+- სურვილისამებრ: [OpenSSL გენერირებული Ed25519 გასაღებების წყვილი] (https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  მანიფესტების ხელმოწერისთვის.
+- არასავალდებულო: Node.js ≥ 18 თუ გეგმავთ Docusaurus პორტალის წინასწარ გადახედვას.
 
-Set `export RUST_LOG=info` while experimenting to surface helpful CLI messages.
+დააყენეთ `export RUST_LOG=info` ექსპერიმენტების დროს გამოსადეგ CLI შეტყობინებებზე.
 
-## 1. Refresh the deterministic fixtures
+## 1. განაახლეთ დეტერმინისტული მოწყობილობები
 
-Regenerate the canonical SF-1 chunking vectors. The command also emits signed
-manifest envelopes when `--signing-key` is supplied; use `--allow-unsigned`
-during local development only.
+აღადგინეთ კანონიკური SF-1 დაქუცმაცებული ვექტორები. ბრძანება ასევე გამოსცემს ხელმოწერილს
+მანიფესტის კონვერტები `--signing-key`-ის მიწოდებისას; გამოიყენეთ `--allow-unsigned`
+მხოლოდ ადგილობრივი განვითარების დროს.
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-Outputs:
+შედეგები:
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (if signed)
+- `fixtures/sorafs_chunker/manifest_signatures.json` (თუ ხელმოწერილია)
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Chunk a payload and inspect the plan
+## 2. დაჭერით ტვირთი და შეამოწმეთ გეგმა
 
-Use `sorafs_chunker` to chunk an arbitrary file or archive:
+გამოიყენეთ `sorafs_chunker` თვითნებური ფაილის ან არქივის დასაჭრელად:
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -52,23 +53,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Key fields:
+ძირითადი ველები:
 
-- `profile` / `break_mask` – confirms the `sorafs.sf1@1.0.0` parameters.
-- `chunks[]` – ordered offsets, lengths, and chunk BLAKE3 digests.
+- `profile` / `break_mask` - ადასტურებს `sorafs.sf1@1.0.0` პარამეტრებს.
+- `chunks[]` – უბრძანა ოფსეტები, სიგრძე და BLAKE3-ის ნაწილაკები.
 
-For larger fixtures, run the proptest-backed regression to ensure streaming and
-batch chunking stay in sync:
+უფრო დიდი მოწყობილობებისთვის, აწარმოეთ პროტესტით მხარდაჭერილი რეგრესია, რათა უზრუნველყოთ ნაკადი და
+სერიული დანაწევრება სინქრონში რჩება:
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Build and sign a manifest
+## 3. შექმენით და მოაწერეთ ხელი მანიფესტს
 
-Wrap the chunk plan, aliases, and governance signatures into a manifest using
-`sorafs-manifest-stub`. The command below showcases a single-file payload; pass
-a directory path to package a tree (the CLI walks it lexicographically).
+შეფუთეთ ბლოკის გეგმა, მეტსახელები და მმართველობის ხელმოწერები მანიფესტში, გამოყენებით
+`sorafs-manifest-stub`. ქვემოთ მოყვანილი ბრძანება გვიჩვენებს ერთი ფაილის დატვირთვას; გაივლის
+დირექტორია გზა ხის შესაფუთად (CLI მას ლექსიკოგრაფიულად უვლის).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -80,21 +81,21 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Review `/tmp/docs.report.json` for:
+გადახედეთ `/tmp/docs.report.json`:
 
-- `chunking.chunk_digest_sha3_256` – SHA3 digest of offsets/lengths, matches the
-  chunker fixtures.
-- `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
-- `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
+- `chunking.chunk_digest_sha3_256` - SHA3 ოფსეტების/სიგრძეების შეჯამება, ემთხვევა
+  ჩუნკერის მოწყობილობები.
+- `manifest.manifest_blake3` – BLAKE3 დაიჯესტი ხელმოწერილია მანიფესტის კონვერტში.
+- `chunk_fetch_specs[]` – შეუკვეთა მოტანის ინსტრუქციები ორკესტრებისთვის.
 
-When ready to supply real signatures, add `--signing-key` and `--signer`
-arguments. The command verifies every Ed25519 signature before writing the
-envelope.
+როდესაც მზად ხართ რეალური ხელმოწერების მიწოდებისთვის, დაამატეთ `--signing-key` და `--signer`
+არგუმენტები. ბრძანება ამოწმებს ყველა Ed25519 ხელმოწერას დაწერამდე
+კონვერტი.
 
-## 4. Simulate multi-provider retrieval
+## 4. მრავალპროვაიდერის მოძიების სიმულაცია
 
-Use the developer fetch CLI to replay the chunk plan against one or more
-providers. This is ideal for CI smoke tests and orchestrator prototyping.
+გამოიყენეთ დეველოპერი, რომ მოიტანოს CLI, რათა ხელახლა დაუკრათ ნაწილის გეგმა ერთი ან მეტის წინააღმდეგ
+პროვაიდერები. ეს იდეალურია CI კვამლის ტესტებისა და ორკესტრის პროტოტიპებისთვის.
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -104,27 +105,27 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Assertions:
+განცხადებები:
 
-- `payload_digest_hex` must match the manifest report.
-- `provider_reports[]` surfaces success/failure counts per provider.
-- Non-zero `chunk_retry_total` highlights back-pressure adjustments.
-- Pass `--max-peers=<n>` to limit the number of providers scheduled for a run
-  and keep CI simulations focused on the primary candidates.
-- `--retry-budget=<n>` overrides the default per-chunk retry count (3) so you
-  can surface orchestrator regressions faster when injecting failures.
+- `payload_digest_hex` უნდა ემთხვეოდეს manifest-ის ანგარიშს.
+- `provider_reports[]` ზედაპირების წარმატება/მარცხი ითვლის თითო პროვაიდერს.
+- არა-ნულოვანი `chunk_retry_total` ხაზს უსვამს უკანა წნევის კორექტირებას.
+- გაიარეთ `--max-peers=<n>`, რათა შეზღუდოთ პროვაიდერების რაოდენობა, რომლებიც დაგეგმილია გასაშვებად
+  და შეინახეთ CI სიმულაციები ფოკუსირებული პირველად კანდიდატებზე.
+- `--retry-budget=<n>` უგულებელყოფს ნაგულისხმევი ნაგულისხმევი განმეორებითი ცდის რაოდენობას (3), ასე რომ თქვენ
+  შეუძლია ორკესტრის რეგრესია უფრო სწრაფად მოახდინოს წარუმატებლობის ინექციისას.
 
-Add `--expect-payload-digest=<hex>` and `--expect-payload-len=<bytes>` to fail
-fast when the reconstructed payload deviates from the manifest.
+მარცხისთვის დაამატეთ `--expect-payload-digest=<hex>` და `--expect-payload-len=<bytes>`
+სწრაფი, როდესაც რეკონსტრუქციული დატვირთვა გადახრის მანიფესტს.
 
-## 5. Next steps
+## 5. შემდეგი ნაბიჯები
 
-- **Governance integration** – pipe the manifest digest and
-  `manifest_signatures.json` into the council workflow so the Pin Registry can
-  advertise availability.
-- **Registry negotiation** – consult [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  before registering new profiles. Automation should prefer canonical handles
-  (`namespace.name@semver`) over numeric IDs.
-- **CI automation** – add the commands above to release pipelines so docs,
-  fixtures, and artifacts publish deterministic manifests alongside signed
-  metadata.
+- **მმართველობის ინტეგრაცია** - მიიტანეთ მანიფესტის დაიჯესტი და
+  `manifest_signatures.json` შევიდა საბჭოს სამუშაო პროცესში, რათა Pin Registry-მა შეძლოს
+  ხელმისაწვდომობის რეკლამა.
+- **რეესტრის შესახებ მოლაპარაკება** – გაიარეთ კონსულტაცია [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  ახალი პროფილების რეგისტრაციამდე. ავტომატიზაციას უპირატესობას ანიჭებს კანონიკურ სახელურებს
+  (`namespace.name@semver`) რიცხვით ID-ებზე.
+- **CI ავტომატიზაცია** - დაამატეთ ზემოთ მოცემული ბრძანებები მილსადენების გასათავისუფლებლად, რათა დოკუმენტები,
+  მოწყობილობები და არტეფაქტები ხელმოწერილებთან ერთად აქვეყნებენ დეტერმინისტულ მანიფესტებს
+  მეტამონაცემები.

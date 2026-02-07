@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ee9b1be07edfee6d71031362a5ea95138a6b743a7e596537c1b1c02ce8edef9f
 source_last_modified: "2026-01-22T14:45:02.068538+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM Configuration Migration
+//！ SM配置遷移
 
-# SM Configuration Migration
+# SM配置遷移
 
-Rolling out the SM2/SM3/SM4 feature set requires more than compiling with the
-`sm` feature flag. Nodes gate the functionality behind the layered
-`iroha_config` profiles and expect the genesis manifest to carry matching
-defaults. This note captures the recommended workflow when promoting an
-existing network from “Ed25519-only” to “SM-enabled”.
+推出 SM2/SM3/SM4 功能集需要的不僅僅是使用
+`sm` 功能標誌。節點控制分層背後的功能
+`iroha_config` 配置文件並期望創世清單攜帶匹配
+默認值。本說明捕獲了推廣時推薦的工作流程
+現有網絡從“僅 Ed25519”到“啟用 SM”。
 
-## 1. Verify the Build Profile
+## 1. 驗證構建配置文件
 
-- Compile the binaries with `--features sm`; add `sm-ffi-openssl` only when you
-  plan to exercise the OpenSSL/Tongsuo preview path. Builds without the `sm`
-  feature reject `sm2` signatures during admission even if the config enables
-  them.
-- Confirm CI publishes the `sm` artefacts and that all validation steps (`cargo
-  test -p iroha_crypto --features sm`, integration fixtures, fuzz suites) pass
-  on the exact binaries you intend to deploy.
+- 使用 `--features sm` 編譯二進製文件；僅當您添加 `sm-ffi-openssl`
+  計劃行使OpenSSL/Tongsuo預覽路徑。無需 `sm` 即可構建
+  即使配置啟用，功能也會在准入期間拒絕 `sm2` 簽名
+  他們。
+- 確認 CI 發布 `sm` 工件並且所有驗證步驟（“cargo
+  測試 -p iroha_crypto --features sm`、集成裝置、模糊套件）通過
+  關於您打算部署的確切二進製文件。
 
-## 2. Layer Configuration Overrides
+## 2. 層配置覆蓋
 
-`iroha_config` applies three tiers: `defaults` → `user` → `actual`. Ship the SM
-overrides in the `actual` profile that operators distribute to validators and
-leave `user` at Ed25519-only so the developer defaults remain unchanged.
+`iroha_config` 應用三層：`defaults` → `user` → `actual`。運送 SM
+覆蓋運營商分發給驗證者的 `actual` 配置文件中的內容
+僅將 `user` 保留為 Ed25519，以便開發人員默認值保持不變。
 
 ```toml
 # defaults/actual/config.toml
@@ -44,49 +45,47 @@ allowed_signing = ["ed25519", "sm2"]      # keep sorted for deterministic manife
 sm2_distid_default = "CN12345678901234"   # organisation-specific distinguishing identifier
 ```
 
-Copy the same block into the `defaults/genesis` manifest via `kagami genesis
-generate …` (add `--allowed-signing sm2 --default-hash sm3-256` if you need
-overrides) so the `parameters` block and injected metadata agree with the
-runtime configuration. Peers refuse to start when the manifest and config
-snapshots diverge.
+通過“kagami genesis”將相同的塊複製到 `defaults/genesis` 清單中
+如果需要，生成…` (add `--allowed-signing sm2 --default-hash sm3-256`
+覆蓋），因此 `parameters` 塊和注入的元數據與
+運行時配置。當清單和配置相同時，對等點拒絕啟動
+快照存在分歧。
 
-## 3. Regenerate Genesis Manifests
+## 3. 重新生成創世清單
 
-- Run `kagami genesis generate --consensus-mode <mode>` for every
-  environment and commit the updated JSON alongside the TOML overrides.
-- Sign the manifest (`kagami genesis sign …`) and distribute the `.nrt` payload.
-  Nodes that bootstrap from an unsigned JSON manifest derive the runtime crypto
-  configuration directly from the file—still subject to the same consistency
-  checks.
+- 為每個運行 `kagami genesis generate --consensus-mode <mode>`
+  環境並提交更新的 JSON 以及 TOML 覆蓋。
+- 簽署清單 (`kagami genesis sign …`) 並分發 `.nrt` 有效負載。
+  從未簽名的 JSON 清單引導的節點派生運行時加密
+  直接從文件進行配置——仍然具有相同的一致性
+  檢查。
 
-## 4. Validate Before Traffic
+## 4. 流量前驗證
 
-- Provision a staging cluster with the new binaries and config, then verify:
-  - `/status` exposes `crypto.sm_helpers_available = true` once peers restart.
-  - Torii admission still rejects SM2 signatures while `sm2` is absent from
-    `allowed_signing` and accepts mixed Ed25519/SM2 batches when the list
-    includes both algorithms.
-  - `iroha_cli tools crypto sm2 export …` round-trips key material seeded via the new
-    defaults.
-- Run the integration smoke scripts that cover SM2 deterministic signatures and
-  SM3 hashing to confirm host/VM consistency.
+- 使用新的二進製文件和配置配置臨時集群，然後驗證：
+  - 一旦對等點重新啟動，`/status` 就會公開 `crypto.sm_helpers_available = true`。
+  - Torii 入場仍然拒絕 SM2 簽名，而 `sm2` 不存在
+    `allowed_signing` 並接受混合 Ed25519/SM2 批次時列表
+    包括這兩種算法。
+  - `iroha_cli tools crypto sm2 export …` 往返密鑰材料通過新種子播種
+    默認值。
+- 運行涵蓋 SM2 確定性簽名的集成煙霧腳本
+  SM3 哈希用於確認主機/VM 一致性。
 
-## 5. Rollback Plan
+## 5. 回滾計劃- 記錄逆轉：從 `allowed_signing` 中刪除 `sm2` 並恢復
+  `default_hash = "blake2b-256"`。通過相同的 `actual` 推送更改
+  配置文件管道，以便每個驗證器單調翻轉。
+- 將 SM 清單保存在磁盤上；看到配置和創世不匹配的同行
+  數據拒絕啟動，這可以防止部分回滾。
+- 如果涉及OpenSSL/Tongsuo預覽版，請包含禁用步驟
+  `crypto.enable_sm_openssl_preview` 並從
+  運行時環境。
 
-- Document the reversal: remove `sm2` from `allowed_signing` and restore
-  `default_hash = "blake2b-256"`. Push the change through the same `actual`
-  profile pipeline so every validator flips monotonically.
-- Keep the SM manifests on disk; peers that see mismatched config and genesis
-  data refuse to start, which protects against partial rollbacks.
-- If the OpenSSL/Tongsuo preview is involved, include the steps for disabling
-  `crypto.enable_sm_openssl_preview` and removing the shared objects from the
-  runtime environment.
+## 參考資料
 
-## Reference Material
-
-- [`docs/genesis.md`](../../genesis.md) – structure of the genesis manifest and
-  the `crypto` block.
+- [`docs/genesis.md`](../../genesis.md) – 創世清單的結構和
+  `crypto` 塊。
 - [`docs/source/references/configuration.md`](../references/configuration.md) –
-  overview of `iroha_config` sections and defaults.
-- [`docs/source/crypto/sm_operator_rollout.md`](sm_operator_rollout.md) – end to
-  end operator checklist for shipping SM cryptography.
+  `iroha_config` 部分和默認值的概述。
+- [`docs/source/crypto/sm_operator_rollout.md`](sm_operator_rollout.md) – 結束
+  用於運輸 SM 加密的最終操作員清單。

@@ -4,41 +4,43 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/summary.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-summary
-title: W2 فيڈبیک اور اسٹیٹس خلاصہ
-sidebar_label: W2 خلاصہ
-description: community preview wave (W2) کے لئے live digest۔
+المعرف: ملخص المعاينة W2
+العنوان: W2 فيبي وخلاصته
+Sidebar_label: خلاصة W2
+الوصف: موجة معاينة المجتمع (W2) کے لئے ملخص مباشر۔
 ---
 
-| آئٹم | تفصیل |
+| ئٹم | تفاصيل |
 | --- | --- |
-| لہر | W2 - community reviewers |
-| دعوتی ونڈو | 2025-06-15 -> 2025-06-29 |
-| آرٹیفیکٹ ٹیگ | `preview-2025-06-15` |
+| لہر | W2 - مراجعو المجتمع |
+| دعوةی ونڈو | 15-06-2025 -> 29-06-2025 |
+| المقالة القادمة `preview-2025-06-15` |
 | ٹریکر ایشو | `DOCS-SORA-Preview-W2` |
-| شرکا | comm-vol-01...comm-vol-08 |
+| شرکا | كوم-المجلد-01...كوم-المجلد-08 |
 
-## نمایاں نکات
+## نماياں نکات
 
-1. **Governance اور tooling** - community intake پالیسی 2025-05-20 کو متفقہ طور پر منظور ہوئی؛ motivation/timezone فیلڈز کے ساتھ اپ ڈیٹ request template `docs/examples/docs_preview_request_template.md` میں موجود ہے۔
-2. **Preflight evidence** - Try it proxy change `OPS-TRYIT-188` 2025-06-09 کو چلایا گیا، Grafana dashboards کیپچر کیے گئے، اور `preview-2025-06-15` کے descriptor/checksum/probe outputs `artifacts/docs_preview/W2/` میں archive کیے گئے۔
-3. **Invite wave** - آٹھ community reviewers کو 2025-06-15 کو مدعو کیا گیا، acknowledgements tracker invite table میں لاگ ہوئے؛ سب نے browsing سے پہلے checksum verification مکمل کیا۔
-4. **Feedback** - `docs-preview/w2 #1` (tooltip wording) اور `#2` (localization sidebar order) 2025-06-18 کو فائل ہوئے اور 2025-06-21 تک حل ہو گئے (Docs-core-04/05)؛ لہر کے دوران کوئی incidents نہیں ہوئے۔
+1. **الحوكمة والأدوات** - استيعاب المجتمع باليس 2025-05-20 كما اتفقنا على المنظور الصحيح؛ الدافع/المنطقة الزمنية قم بتنزيل قالب الطلب `docs/examples/docs_preview_request_template.md` الموجود حاليًا.
+2. **دليل الاختبار المبدئي** - جرب تغيير الوكيل `OPS-TRYIT-188` 2025-06-09 كليا گيا، Grafana لوحات المعلومات کیپجر، و`preview-2025-06-15` مخرجات الواصف/المجموع الاختباري/المسبار `artifacts/docs_preview/W2/` موجود في الأرشيف.
+3. **موجة الدعوة** - جميع مراجعي المجتمع في 15/06/2025 مدعوون إلى جدول دعوة تعقب الشكر والتقدير؛ أسلوب التصفح سے پہلے التحقق من المجموع الاختباري مکمل کیا۔
+4. **التعليقات** - `docs-preview/w2 #1` (صياغة تلميح الأداة) و`#2` (ترتيب الشريط الجانبي للترجمة) 18-06-2025 و2025-06-21 حل المشكلة (Docs-core-04/05)؛ لا تزال الأحداث مستمرة.
 
-## ایکشن آئٹمز
+## ایکشن آئمز
 
-| ID | وضاحت | مالک | اسٹیٹس |
+| معرف | وضاحت | مالك | ٹیٹس |
 | --- | --- | --- | --- |
-| W2-A1 | `docs-preview/w2 #1` (tooltip wording) حل کرنا۔ | Docs-core-04 | ✅ مکمل (2025-06-21). |
-| W2-A2 | `docs-preview/w2 #2` (localization sidebar) حل کرنا۔ | Docs-core-05 | ✅ مکمل (2025-06-21). |
-| W2-A3 | exit evidence archive کرنا + roadmap/status اپ ڈیٹ کرنا۔ | Docs/DevRel lead | ✅ مکمل (2025-06-29). |
+| W2-A1 | `docs-preview/w2 #1` (صياغة تلميح الأداة) حل کرنا۔ | مستندات-core-04 | ✅ مكمل (2025-06-21). |
+| W2-A2 | `docs-preview/w2 #2` (الشريط الجانبي للترجمة) حل کرنا۔ | مستندات-core-05 | ✅ مكمل (2025-06-21). |
+| W2-A3 | الخروج من أرشيف الأدلة + خريطة الطريق/الحالة | مستندات/DevRel الرصاص | ✅ مكمل (29-06-2025). |
 
-## اختتامی خلاصہ (2025-06-29)
+## اختتامی خلاصہ (29-06-2025)
 
-- تمام آٹھ community reviewers نے تکمیل کی تصدیق کی اور preview access واپس لے لیا گیا؛ acknowledgements tracker invite log میں ریکارڈ ہوئے۔
-- آخری telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) green رہے؛ logs اور Try it proxy transcripts `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہیں۔
-- evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) `artifacts/docs_preview/W2/preview-2025-06-15/` میں archive ہوا۔
-- tracker کا W2 checkpoint log exit تک اپ ڈیٹ کیا گیا تاکہ roadmap W3 planning شروع ہونے سے پہلے audit-ready ریکارڈ رکھے۔
+- جميع المراجعين المجتمعيين لا يقومون بالمسح ومعاينة الوصول إلى الواتساب؛ إقرارات تعقب سجل الدعوة
+- آخری لقطات القياس عن بعد (`docs.preview.integrity`، `TryItProxyErrors`، `DocsPortal/GatewayRefusals`) رہے؛ السجلات وجرب نسخ الوكيل `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہیں۔
+- حزمة الأدلة (الواصف، سجل المجموع الاختباري، مخرجات التحقيق، تقرير الارتباط، لقطات شاشة Grafana، إقرارات الدعوة) `artifacts/docs_preview/W2/preview-2025-06-15/` أرشيف ہوا۔
+- تم إنشاء تعقب خروج سجل نقطة تفتيش W2 من خلال خريطة الطريق الخاصة ببدء تخطيط W3 والتي بدأت منذ فترة طويلة في تسجيل جاهز للتدقيق.

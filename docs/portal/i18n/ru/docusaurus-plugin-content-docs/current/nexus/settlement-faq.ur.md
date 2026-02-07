@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/nexus/settlement-faq.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-settlement-faq
-title: Settlement FAQ
-description: آپریٹرز کے لیے جوابات جو settlement routing، XOR conversion، ٹیلی میٹری، اور آڈٹ ثبوت کا احاطہ کرتے ہیں۔
+идентификатор: nexus-settlement-faq
+title: Часто задаваемые вопросы по урегулированию
+описание: Создание маршрутизации расчетов, преобразование XOR, преобразование XOR, а также возможность выполнения расчетов. کرتے ہیں۔
 ---
 
-یہ صفحہ اندرونی settlement FAQ (`docs/source/nexus_settlement_faq.md`) کی عکاسی کرتا ہے تاکہ پورٹل کے قارئین اسی رہنمائی کو mono-repo میں تلاش کیے بغیر دیکھ سکیں۔ یہ وضاحت کرتا ہے کہ Settlement Router ادائیگیوں کو کیسے پروسیس کرتا ہے، کن میٹرکس کی نگرانی کرنی ہے، اور SDKs کو Norito payloads کیسے ضم کرنے چاہیئیں۔
+Часто задаваемые вопросы по урегулированию (`docs/source/nexus_settlement_faq.md`) Как использовать монорепозиторий для различных целей Доступ к расчетному маршрутизатору или доступ к маршрутизатору для расчетов Используйте SDK для полезных нагрузок Norito, а также дополнительные возможности.
 
 ## نمایاں نکات
 
-1. **lane میپنگ** — ہر dataspace ایک `settlement_handle` کا اعلان کرتا ہے (`xor_global`، `xor_lane_weighted`، `xor_hosted_custody` یا `xor_dual_fund`)۔ `docs/source/project_tracker/nexus_config_deltas/` میں تازہ ترین lane catalog دیکھیں۔
-2. **متعین تبدیلی** — router تمام settlements کو governance سے منظور شدہ liquidity sources کے ذریعے XOR میں تبدیل کرتا ہے۔ نجی lanes پہلے سے XOR buffers کو فنڈ کرتی ہیں؛ haircuts صرف تب لاگو ہوتے ہیں جب buffers پالیسی سے باہر جائیں۔
-3. **ٹیلی میٹری** — `nexus_settlement_latency_seconds`، conversion counters، اور haircut gauges مانیٹر کریں۔ dashboards `dashboards/grafana/nexus_settlement.json` میں اور alerts `dashboards/alerts/nexus_audit_rules.yml` میں ہیں۔
-4. **ثبوت** — audits کے لیے configs، router logs، telemetry exports، اور reconciliation reports محفوظ کریں۔
-5. **SDK ذمہ داریاں** — ہر SDK کو settlement helpers، lane IDs، اور Norito payload encoders فراہم کرنے ہوں گے تاکہ router کے ساتھ برابری رہے۔
+1. **lane میپنگ** — пространство данных `settlement_handle` или `xor_global`, `xor_lane_weighted`, `xor_hosted_custody` یا `xor_dual_fund`)۔ `docs/source/project_tracker/nexus_config_deltas/` میں تازہ ترین каталог дорожек دیکھیں۔
+2. **Функция** — маршрутизатор обеспечивает расчеты и управление, а также источники ликвидности и XOR для обеспечения безопасности. ہے۔ Дорожки и буферы XOR и другие возможности стрижки صرف تب لاگو ہوتے ہیں جب буферы پالیسی سے باہر جائیں۔
+3. **ٹیلی میٹری** — `nexus_settlement_latency_seconds`, счетчики преобразования, а также датчики стрижки. информационные панели `dashboards/grafana/nexus_settlement.json` میں اور alerts `dashboards/alerts/nexus_audit_rules.yml` میں ہیں۔
+4. **ثبوت** — аудит конфигураций, журналов маршрутизатора, экспорта телеметрии, отчетов о сверке и т. д.
+5. **Поддержка SDK** — SDK позволяет использовать помощников по расчету, идентификаторы полос, а также кодеры полезной нагрузки Norito и маршрутизаторы. کے ساتھ برابری رہے۔
 
 ## مثال کے بہاؤ
 
-| lane کی قسم | جمع کرنے والا ثبوت | یہ کیا ثابت کرتا ہے |
+| переулок کی قسم | جمع کرنے والا ثبوت | یہ کیا ثابت کرتا ہے |
 |-----------|--------------------|----------------|
-| نجی `xor_hosted_custody` | router log + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | CBDC buffers متعین XOR ڈیبٹ کرتے ہیں اور haircuts پالیسی کے اندر رہتے ہیں۔ |
-| عوامی `xor_global` | router log + DEX/TWAP حوالہ + latency/conversion metrics | مشترکہ liquidity راستے نے منتقل شدہ رقم کو شائع شدہ TWAP پر zero haircut کے ساتھ قیمت دی۔ |
-| ہائبرڈ `xor_dual_fund` | router log جو public بمقابلہ shielded تقسیم دکھائے + telemetry counters | shielded/public امتزاج نے governance ratios کی پابندی کی اور ہر حصے پر لاگو haircut کو ریکارڈ کیا۔ |
+| Сообщение `xor_hosted_custody` | журнал роутера + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | Буферы CBDC для XOR и стрижки для волос |
+| عوامی `xor_global` | журнал маршрутизатора + поддержка DEX/TWAP + показатели задержки/конверсии | Высокая ликвидность и возможность использования TWAP с нулевым дисконтом |
+| ہائبرڈ `xor_dual_fund` | журнал маршрутизатора общедоступный экранированный экранированный доступ + счетчики телеметрии | экранированный/публичный امتزاج и коэффициенты управления |
 
 ## مزید تفصیل چاہیے؟
 
-- مکمل FAQ: `docs/source/nexus_settlement_faq.md`
-- Settlement router spec: `docs/source/settlement_router.md`
-- CBDC پالیسی playbook: `docs/source/cbdc_lane_playbook.md`
-- Operations runbook: [Nexus operations](./nexus-operations)
+- Часто задаваемые вопросы: `docs/source/nexus_settlement_faq.md`.
+- Спецификация расчетного маршрутизатора: `docs/source/settlement_router.md`
+- Учебное пособие по CBDC: `docs/source/cbdc_lane_playbook.md`
+- Книга операций операций: [Nexus операции](./nexus-operations)

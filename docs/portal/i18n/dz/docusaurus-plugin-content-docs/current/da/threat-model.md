@@ -4,267 +4,267 @@ direction: ltr
 source: docs/portal/docs/da/threat-model.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-title: Data Availability Threat Model
-sidebar_label: Threat Model
-description: Threat analysis, mitigations, and residual risks for Sora Nexus data availability.
+tempt: གནད་སྡུད་ཐོབ་ཚུལ་ཉེན་ཁ་དཔེ་སྟོན།
+sarebar_label: ཉེན་ཁའི་དཔེ་སྟོན།
+འགྲེལ་བཤད་: ཉེན་ཁ་དབྱེ་དཔྱད་དང་ མར་ཕབ་ དེ་ལས་ སོ་ར་ I18NT0000019X གནས་སྡུད་ཐོབ་ཚུགས་པའི་ ལྷག་ལུས་ཉེན་ཁ་ཚུ་ ཐོབ་ཚུགས།
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# Sora Nexus Data Availability Threat Model
+# Sora Nexus གནས་སྡུད་ཐོབ་ཚུལ་ཉེན་ཁ་དཔེ་སྟོན།
 
-_Last reviewed: 2026-01-19 — Next scheduled review: 2026-04-19_
+_མཇུག་བསྐྱར་ཞིབ་: ༢༠༢༦-༠༡-༡༩ — ཤུལ་མམ་གྱི་དུས་ཚོད་བསྐྱར་ཞིབ་: ༢༠༢༦-༠༤-༡༩_
 
-Maintenance cadence: Data Availability Working Group (<=90 days). Every revision must
-appear in `status.md` with links to active mitigation tickets and simulation artefacts.
+བདག་འཛིན་གྱི་ གདམ་ཁ།: གནད་སྡུད་ཐོབ་ཚུགས་པའི་ལཱ་སྡེ་ཚན་ (<=90 ཉིནམ་)། བསྐྱར་ཞིབ་རེ་རེ་བཞིན་དགོས།
+`status.md` ནང་ལུ་ མར་ཕབ་ཀྱི་ཤོག་འཛིན་དང་ བརྡ་སྟོན་གྱི་ཅ་ཆས་ཚུ་གི་མཐུད་ལམ་ཚུ་དང་གཅིག་ཁར་ འབྱུངམ་ཨིན།
 
-## Purpose and Scope
+## དམིགས་ཡུལ་དང་ཁྱབ་ཁོངས།
 
-The Data Availability (DA) program keeps Taikai broadcasts, Nexus lane blobs, and
-governance artefacts retrievable under Byzantine, network, and operator faults.
-This threat model anchors engineering work for DA-1 (architecture and threat model)
-and serves as the baseline for downstream DA tasks (DA-2 through DA-10).
+གནད་སྡུད་འཐོབ་ཚུགས་པའི་ (DA) ལས་རིམ་གྱིས་ ཐའེ་ཀའི་རྒྱང་བསྒྲགས་དང་ I18NT0000021X ལམ་གྱི་བང་སྒྲོམ་ཚུ་བཞགཔ་ཨིན།
+Byzantine དང་ ཡོངས་འབྲེལ་ དེ་ལས་ བཀོལ་སྤྱོད་པའི་འཛོལ་བ་ཚུ་གི་འོག་ལུ་ གཞུང་སྐྱོང་གི་ཅ་ཆས་ཚུ་ ལོག་ཐོབ་ཚུགསཔ་ཨིན།
+འ་ནི་ཉེན་ཁ་དཔེ་ཚད་ཀྱི་ཨེན་ཀོར་ཚུ་ DA-1 གི་དོན་ལས་ ༼བཟོ་བཀོད་དང་ཉེན་ཁ་གི་དཔེ་ཚད།༽
+དང་ མར་གྱི་DA ལས་འགན་ཚུ་གི་དོན་ལུ་ གཞི་རྟེན་ཅིག་སྦེ་ལཱ་འབདཝ་ཨིན། (DA-2 ལས་ DA-10)
 
-In-scope components:
-- Torii DA ingest extension and Norito metadata writers.
-- SoraFS-backed blob storage trees (hot/cold tiers) and replication policies.
-- Nexus block commitments (wire formats, proofs, light-client APIs).
-- PDP/PoTR enforcement hooks specific to DA payloads.
-- Operator workflows (pinning, eviction, slashing) and observability pipelines.
-- Governance approvals that admit or evict DA operators and content.
+ཁྱབ་ཁོངས་ཆ་ཤས་ཚུ་:
+- Torii ཌི་ཨེ་ བཅུད་བསྡུས་རྒྱ་བསྐྱེད་དང་ Norito མེ་ཊ་ཌེ་ཊ་རྩོམ་པ་པོ་ཚུ།
+- I18NT000000011X རྒྱབ་རྟེན་ཅན་གྱི་ བོལ་བ་གསོག་འཇོག་ཤིང་ (hot/cold tiers) དང་ འདྲ་བཤུས་སྲིད་བྱུས།
+- I18NT0000022X སྡེབ་ཚན་བཀག་ཆ་ (wire རྩ་སྒྲིག་དང་ བདེན་ཁུངས་ དེ་ལས་ འོད་--མཁོ་མངགས་འབད་མི་ APIs)།
+- PDP/PoTR དམིགས་བསལ་ DA payloads ལུ་དམིགས་བསལ་གྱི་བཀག་ཆ་འབད་ཡོདཔ།
+- བཀོལ་སྤྱོད་པའི་ལཱ་གི་རྒྱུན་རིམ་ཚུ་ (པིན་ནིང་དང་ བཏོན་གཏང་ནི་ གཡོ་ཤད་) དང་ བལྟ་བརྟོག་འབད་ཚུགས་པའི་ མདོང་ལམ་ཚུ།
+- ཌི་ཨེ་བཀོལ་སྤྱོད་པ་དང་ ནང་དོན་ཚུ་ བཀག་ཆ་འབད་མི་དང་ ཡང་ན་ བཏོན་བཏང་མི་ གཞུང་སྐྱོང་གནང་བ་ཚུ།
 
-Out-of-scope for this document:
-- Full economics modelling (captured in DA-7 workstream).
-- SoraFS base protocols already covered by the SoraFS threat model.
-- Client SDK ergonomics beyond threat-surface considerations.
+ཡིག་ཆ་འདི་གི་དོན་ལུ་ ཁྱབ་ཁོངས།
+- དཔལ་འབྱོར་གྱི་དཔེ་སྟོན་ཆ་ཚང་ (DA-7 ལས་ཀ་ནང་ བཟུང་ཡོདཔ་ཨིན།)
+- I18NT000000012X ཧེ་མ་ལས་རང་ SoraFS ཉེན་ཁ་དཔེ་ཚད་ཀྱིས་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+- ཉེན་ཁ་དང་ཁ་ཐོག་བརྩི་འཇོག་ལས་ལྷག་པའི་ མཁོ་སྤྲོད་འབད་མི་ SDK ergonomics.
 
-## Architectural Overview
+## བཟོ་རིག་སྤྱི་འཚོལ།
 
-1. **Submission:** Clients submit blobs via the Torii DA ingest API. The node
-   chunks blobs, encodes Norito manifests (blob type, lane, epoch, codec flags),
-   and stores chunks in the hot SoraFS tier.
-2. **Advertisement:** Pin intents and replication hints propagate to storage
-   providers through the registry (SoraFS marketplace) with policy tags that
-   state hot/cold retention targets.
-3. **Commitment:** Nexus sequencers include blob commitments (CID + optional KZG
-   roots) in the canonical block. Light clients rely on the commitment hash and
-   advertised metadata to verify availability.
-4. **Replication:** Storage nodes pull assigned shares/chunks, satisfy PDP/PoTR
-   challenges, and promote data between hot and cold tiers per policy.
-5. **Fetch:** Consumers fetch data through SoraFS or DA-aware gateways, verifying
-   proofs and raising repair requests when replicas disappear.
-6. **Governance:** Parliament and the DA oversight committee approve operators,
-   rent schedules, and enforcement escalations. Governance artefacts are stored
-   via the same DA path to ensure process transparency.
+1. **བསྡོམས་:** མཁོ་མངགས་འབད་མི་ཚུ་གིས་ I18NT0000026X DA inseges API བརྒྱུད་དེ་ བོལ་ཚུ་བཙུགསཔ་ཨིན། མཐུད་མཚམས་འདི།
+   ཆུམ་བོབ་བི་, ཨིན་ཀོ་ཌིསི་ I1NT00000002X གསལ་སྟོན་ (blob type, lane, epoch, codec དར་ཚད།)
+   དང་ཚོང་ཁང་ཚུ་ ཚ་དྲོད་ཀྱི་ SoraFS གི་རིམ་པ་ནང་ཡོདཔ་ཨིན།
+2. **བྱ་བའི་དམིགས་ཡུལ་དང་ འདྲ་བཤུས་བརྡ་རྟགས་ཚུ་ གསོག་འཇོག་ལུ་ ཁྱབ་སྤེལ་འབདཝ་ཨིན།
+   མཁོ་སྤྲོད་པ་ ཐོ་བཀོད་བརྒྱུད་དེ་ (SoraFS ཚོང་ལས་) སྲིད་བྱུས་ཀྱི་ངོ་རྟགས་ཚུ་ དེ་དང་འཁྲིལ་ཏེ་ཨིན།
+   མངའ་སྡེའི་ཚ་དྲོད་/བསིལ་དྲོད་བཀག་བཞག་དམིགས་ཚད།
+3. **ཚད་གཞི:** Nexus རིམ་པ་ནང་ བློ་སྤོབས་ཀྱི་ཁས་བླངས་ (CID + གདམ་ཁ་ཅན་ KZG
+   trosts) ནང་ན་ ཀེ་ནོ་ནིག་སྡེབ་ཚན་ནང་། འོད་མདངས་ཅན་གྱི་མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ཁས་བླངས་ཧེ་ཤི་དང་ བརྟེན་དོ་ཡོདཔ་ཨིན།
+   ཁྱབ་བསྒྲགས་འབད་ཡོད་པའི་མེ་ཊ་ཌེ་ཊ་ འཐོབ་ཚུགསཔ་ བདེན་དཔྱད་འབད་ནི་ལུ་ཨིན།
+4. ** འདྲ་དཔེ་:** གསོག་འཇོག་མཛུབ་གནོན་སྤྲོད་པའི་བགོ་བཤའ་/ཆུ།, PDP/PoTR བསྒྲུབ་ཡོདཔ།
+   གདོང་ལེན་དང་ སྲིད་བྱུས་རེ་ལུ་ ཚ་དྲོད་དང་བསིལ་དྲོད་ཀྱི་བར་ན་ གནས་སྡུད་ཚུ་ ཁྱབ་སྤེལ་འབདཝ་ཨིན།
+5. **Fech:** ཉོ་སྤྱོད་པ་ཚུ་གིས་ I18NT0000016X ཡང་ན་ DA-afor gateways བརྒྱུད་དེ་ གནད་སྡུད་ལེན་དོ་ཡོདཔ་ཨིན།
+   བདེན་ཁུངས་དང་ འདྲ་དཔེ་ཚུ་ ཡལ་འགྱོ་བའི་སྐབས་ ཉམས་བཅོས་འབད་ནི་གི་ ཞུ་བ་ཚུ་ འབད་ཚུགས།
+༦. **གཞུང་སྐྱོང་:** སྤྱི་ཚོགས་དང་ DA ལྟ་རྟོག་ཚོགས་ཆུང་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ཆ་འཇོག་འབད་ཡོདཔ།
+   ཁང་གླའི་དུས་ཚོད་དང་ བསྟར་སྤྱོད་ཡར་སེང་། གཞུང་སྐྱོང་ལེགས་ལྡན་ཚུ་ བསག་བཞག་ཡོདཔ།
+   བརྒྱུད་རིམ་དྭངས་གསལ་ངེས་གཏན་བཟོ་ནི་ལུ་ DA གི་འགྲུལ་ལམ་གཅིག་པ་བརྒྱུད་དེ་ཨིན།
 
-## Assets and Owners
+## རྒྱུ་དང་བདག་པོ།
 
-Impact scale: **Critical** breaks ledger safety/liveness; **High** blocks DA
-backfill or clients; **Moderate** degrades quality but remains recoverable;
-**Low** limited effect.
+ཕན་གནོད་ཀྱི་ཚད་གཞི།: **ཀིརི་ཊིག་** ལེ་ཇར་ཉེན་སྲུང་/འཚོ་བ་བརྡུངས།; **མཐོ་** སྡེབ་ཚན་ DA
+ཕྱིར་ལོག་འབད་མི་ཡང་ན་ མཁོ་མངགས་འབད་མི་ཚུ་; **བར་མཚམས་** སྤུས་ཚད་མར་ཕབ་འབདཝ་ཨིན་རུང་ ལོག་ཐོབ་ཚུགསཔ་ཨིན།
+**དམའ་བ་** ཚད་འཛིན་ནུས་པ།
 
-| Asset | Description | Integrity | Availability | Confidentiality | Owner |
+| རྒྱུ་དངོས་ | འགྲེལ་བཤད་ | ཆ་ཚང་ | ཐོབ་ཚུལ། | གསང་བའི་གནས་ཚུལ། | ཇོ་བདག་ |
 | --- | --- | --- | --- | --- | --- |
-| DA blobs (chunks + manifests) | Taikai, lane, governance blobs stored in SoraFS | Critical | Critical | Moderate | DA WG / Storage Team |
-| Norito DA manifests | Typed metadata describing blobs | Critical | High | Moderate | Core Protocol WG |
-| Block commitments | CIDs + KZG roots inside Nexus blocks | Critical | High | Low | Core Protocol WG |
-| PDP/PoTR schedules | Enforcement cadence for DA replicas | High | High | Low | Storage Team |
-| Operator registry | Approved storage providers & policies | High | High | Low | Governance Council |
-| Rent and incentive records | Ledger entries for DA rent & penalties | High | Moderate | Low | Treasury WG |
-| Observability dashboards | DA SLOs, replication depth, alerts | Moderate | High | Low | SRE / Observability |
-| Repair intents | Requests to rehydrate missing chunks | Moderate | Moderate | Low | Storage Team |
+| DA blobbs (ཆན་ + གསལ་སྟོན་) | Taikai, ལམ་དང་ གཞུང་སྐྱོང་ བླུག་སྟེ་ SoraFS ནང་ གསོག་འཇོག་འབད་ཡོདཔ། | གལ་ཆེན། | གལ་ཆེན། | བར་མཚམས་ | Da WG / གསོག་འཇོག་སྡེ་ཚན། |
+| Norito ཌི་ཨེ་གིས་ གསལ་སྟོན་འབདཝ་ཨིན། བློ་སྤོབས་འགྲེལ་བཤད་རྐྱབ་མི་ ཡིག་དཔར་རྐྱབས། | གལ་ཆེན། | མཐོ་ཚད་ | བར་མཚམས་ | Core མཐུན་གྲོས་ WG |
+| བཀག་ཆ་ཁས་བླངས་ | སི་ཨའི་ཌི་ཚུ་ + ཀེ་ཛེ་ཇི་ རྩ་ཚུ་ Nexus སྡེབ་ཚན་ཚུ་ནང་ལུ་ | གལ་ཆེན། | མཐོ་ཚད་ | དམའ་བ་ | Core མཐུན་གྲོས་ WG |
+| PDP/PoTR ལས་རིམ། | DA འདྲ་དཔེ་ཚུ་གི་དོན་ལུ་ བསྟར་དཔྱད་ཀྱི་ གདམ་ཁ། | མཐོ་ཚད་ | མཐོ་ཚད་ | དམའ་བ་ | བསག་མཛོད་སྡེ་ཚན། |
+| བཀོལ་སྤྱོད་ཐོ་གཞུང་ | ཆ་འཇོག་འབད་ཡོད་པའི་ གསོག་འཇོག་འབད་མི་དང་ སྲིད་བྱུས་ཚུ་ | མཐོ་ཚད་ | མཐོ་ཚད་ | དམའ་བ་ | གཞུང་སྐྱོང་ལྷན་ཚོགས། |
+| ཁང་གླ་དང་སྐུལ་སློང་ཐོ་བཀོད་ཚུ་ | DA ཁང་གླ་དང་ཉེས་ཆད་ཚུ་གི་དོན་ལུ་ Ledger ཐོ་བཀོད་ཚུ་ | མཐོ་ཚད་ | བར་མཚམས་ | དམའ་བ་ | དངུལ་ཁང་ WG |
+| བལྟ་རྟོག་འབད་བཏུབ་པའི་ བརྡ་བཀོད་བཀོད་སྒྲིག་ཚུ། | DA SLOs, འདྲ་བཤུས་གཏིང་ཚད་, དྲན་སྐུལ་ | བར་མཚམས་ | མཐོ་ཚད་ | དམའ་བ་ | SRE / བལྟ་རྟོག་འབད་ཚུགསཔ་ |
+| ཉམས་བཅོས་དམིགས་ཡུལ་ | བརླག་སྟོར་ཤོར་བའི་ ཆ་ཤས་ཚུ་ ལོག་སྟེ་ཆུ་བཏང་དགོ་པའི་ ཞུ་བ་ | བར་མཚམས་ | བར་མཚམས་ | དམའ་བ་ | བསག་མཛོད་སྡེ་ཚན། |
 
-## Adversaries and Capabilities
+## བྱང་ཕྱད་དང་ནུས་པ།
 
-| Actor | Capabilities | Motivations | Notes |
+| འཁྲབ་རྩེདཔ་ | ལྕོགས་གྲུབ་ | སེམས་ཤུགས་ | དྲན་ཐོ། |
 | --- | --- | --- | --- |
-| Malicious client | Submit malformed blobs, replay stale manifests, attempt DoS on ingest. | Disrupt Taikai broadcasts, inject invalid data. | No privileged keys. |
-| Byzantine storage node | Drop assigned replicas, forge PDP/PoTR proofs, collude with others. | Cut DA retention, avoid rent, hold data hostage. | Possesses valid operator credentials. |
-| Compromised sequencer | Omit commitments, equivocate on blocks, reorder blob metadata. | Hide DA submissions, create inconsistency. | Limited by consensus majority. |
-| Insider operator | Abuse governance access, tamper with retention policies, leak credentials. | Economic gain, sabotage. | Access to hot/cold tier infrastructure. |
-| Network adversary | Partition nodes, delay replication, inject MITM traffic. | Reduce availability, degrade SLOs. | Cannot break TLS but can drop/slow links. |
-| Observability attacker | Tamper dashboards/alerts, suppress incidents. | Hide DA outages. | Requires access to telemetry pipeline. |
+| ངན་ལྷད་ཅན་གྱི་ཚོང་རོགས་ | ནོར་འཁྲུལ་ཅན་གྱི་ བློ་སྤོབས་ཚུ་ བཙུགས་ཏེ་ བསྐྱར་རྩེད་ཀྱི་ གསལ་སྟོན་ཚུ་ བསྐྱར་རྩེད་འབད་ཞིནམ་ལས་ ནང་ན་ལུ་ DoS འབད་རྩོལ་བསྐྱེད། | ཐའི་ཀཱའི་རྒྱང་བསྒྲགས་ལུ་ བར་ཆད་བྱུང་སྟེ་ གནས་སྡུད་ནུས་མེད་བཙུགས་དགོ། | ཐོབ་དབང་ལྡེ་མིག་ཚུ་མེད། |
+| བཱའི་ཛཱན་ཊིན་གསོག་འཇོག་མཛུབ་གནོད། | Drop གིས་ འདྲ་དཔེ་ཚུ་ བཀོད་སྒྲིག་འབད་ཡོདཔ་ད་ PDP/PoTR བདེན་ཁུངས་ཚུ་ གཞན་དང་གཅིག་ཁར་ མཉམ་སྡེབ་འབད་ཡོདཔ། | DA བཀག་བཞག་སྟེ་ ཁང་གླ་ལས་འཛེམ་ གནད་སྡུད་ཚུ་ བཙོན་ནང་བཞག་དགོ། | ནུས་ཅན་བཀོལ་སྤྱོད་པའི་ངོ་རྟགས་ཚུ་ བདག་དབང་། |
+| མོས་མཐུན་བྱུང་བའི་གོ་བསྡུར། | ཁས་བླངས་ཚུ་ བཏོན་བཏང་ནི་དང་ བཀག་ཆ་ཚུ་གི་ཐོག་ལུ་ ཚོད་དཔག་འབད་ནི། བློ་སྤོབས་མེ་ཊ་ཌེ་ཊ་ བསྐྱར་སྒྲིག་འབད། | DA བཙུགས་ནི་འདི་ སྦ་བཞག་ཞིནམ་ལས་ མ་མཐུནམ་བཟོ། | མོས་མཐུན་མང་ཤོས་ཀྱིས་ཚད་འཛིན་འབད་ཡོདཔ། |
+| ནང་འཁོད་བཀོལ་སྤྱོད་པ་ | ལོག་སྤྱོད་གཞུང་སྐྱོང་འཛུལ་སྤྱོད་ བཀག་འཛིན་སྲིད་བྱུས་ཚུ་ བཀག་ཆ་འབད་ནི། | དཔལ་འབྱོར་ཁེ་ཕན། | ཚ་དྲོད་/བསིལ་དྲོད་ཀྱི་ རིམ་པ་གི་གཞི་རྟེན་ཚུ་ འཛུལ་སྤྱོད་འབད་ནི། |
+| ཡོངས་འབྲེལ་དོ་འགྲན་ | བར་བཅད་ཀྱི་མཐུད་མཚམས་ཚུ་ ཕྱིར་འགྱངས་འདྲ་དཔེ་གིས་ ཨེམ་ཨའི་ཊི་ཨེམ་འགྲུལ་སྐྱོད་བཙུགསཔ་ཨིན། | འཐོབ་ཚུགས་ཚད་མར་ཕབ་འབད། SLOs མར་ཕབ་འབད། | ཊི་ཨེལ་ཨེསི་བཀག་མི་ཚུགས་ དེ་འབདཝ་ད་ འབྲེལ་ལམ་ཚུ་བཀོག་བཞག་ནི་/མགྱོགས་པ་འབད་ཚུགས། |
+| བལྟ་རྟོག་འབད་ཚུགས་པའི་འཇབ་རྒོལ་པ་ | Tamper dashboards/ཉེན་བརྡ་ཚུ་, བྱུང་རྐྱེན་ཚུ་ མར་ཕབ་འབད། | DA སྦ་སྦ་བཞག། | བརྡ་འཕྲིན་བརྒྱུད་ལམ་ནང་ འཛུལ་སྤྱོད་འབད་དགོ། |
 
-## Trust Boundaries
+## བློ་གཏད།
 
-- **Ingress boundary:** Client to Torii DA extension. Requires request-level auth,
-  rate limiting, and payload validation.
-- **Replication boundary:** Storage nodes exchanging chunks and proofs. Nodes are
-  mutually authenticated but may behave Byzantine.
-- **Ledger boundary:** Committed block data vs off-chain storage. Consensus guards
-  integrity, but availability requires off-chain enforcement.
-- **Governance boundary:** Council/Parliament decisions approving operators,
-  budgets, and slashing. Breaks here directly impact DA deployment.
-- **Observability boundary:** Metrics/log collection exported to dashboards/alert
-  tooling. Tampering hides outages or attacks.
+- ** དབུགས་གཏོང་ལེན་གྱི་མཚམས་:** མཁོ་མངགས་འབད་མི་ Torii ཌི་ཨེ་རྒྱ་བསྐྱེད་. ཞུ་བ་གནས་རིམ་གྱི་བདེན་བཤད་དགོཔ་ཨིན།
+  ཚད་གཞི་ཚད་འཛིན་དང་ འབབ་ཁུངས་བདེན་དཔྱད།
+- ** འདྲ་བཤུས་མཐའ་མཚམས་:** ཆ་ཤས་དང་བདེན་ཁུངས་བརྗེ་སོར་འབད་བའི་ གསོག་འཇོག་མཐུད་མཚམས་ཚུ། མཐུད་མཚམས་ཚུ་ཨིན།
+  ཕན་ཚུན་བདེན་དཔྱད་འབད་རུང་ Byzantine གིས་ སྤྱོད་ལམ་བཏོན་ཚུགས།
+- **Ledger bound:** ཁས་ལེན་འབད་ཡོད་པའི་སྡེབ་ཚན་གནས་སྡུད་དང་ རྒྱུན་རིམ་གསོག་འཇོག་འབད་ནི། མོས་མཐུན་སྲུང་སྐྱོབ།
+  གཅིག་མཐུན་ཨིན་རུང་ ཐོབ་ཚུགས་མི་ལུ་ བསྟར་སྤྱོད་འབད་དགོཔ་ཨིན།
+- **གཞུང་སྐྱོང་ས་མཚམས་:** ཚོགས་སྡེ་/སྤྱི་ཚོགས་གྲོས་ཐག་ཚུ་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ཆ་འཇོག་འབད་ནི།
+  འཆར་དངུལ་དང་ བརྡལ་བཤིག་གཏང་ནི། ནཱ་ལུ་ བརྡ་བཀོད་ཚུ་གིས་ ཐད་ཀར་དུ་ ཌི་ཨེ་བཀྲམ་སྤེལ་ལུ་ ཕན་གནོད་ཡོདཔ་ཨིན།
+- **བལྟ་བརྟོག་འབད་བཏུབ་པའི་མཐའ་མཚམས་:** མེ་ཊིགསི་/དྲན་ཐོ་བསྡུ་གསོག་འབད་ཡོདཔ་ ཌེཤ་བོརཌི་/ཉེན་བརྡ་ལུ་ཕྱིར་འདྲེན་འབད་ཡོདཔ།
+  ལག་ཆས་བཟོ་ནི། གཡིབ་དམག་ཚུ་ བརྡབ་གསིག་ཡང་ན་ གནོདཔ་བཀལ་ནི།
 
-## Threat Scenarios and Controls
+## ཉེན་ཁག་གི་ཚད་དང་ཚོད་འཛིན།
 
-### Ingest Path Attacks
+### བཞུར་ལམ་གནོདཔ་བཀལ་ནི།
 
-**Scenario:** Malicious client submits malformed Norito payloads or oversized
-blobs to exhaust resources or smuggle invalid metadata.
+**གནས་སྟངས་:** གནོད་འཚེ་ཅན་གྱི་མཁོ་མངགས་འབད་མི་གིས་ I18NT0000004X གླ་ཆ་ ཡང་ན་ ཚད་ལས་བརྒལ་བའི་ སྐྱོན་བརྗོད་འབད་ཡོདཔ།
+ཐོན་ཁུངས་ཐོན་པའི་ཐོན་ཁུངས་ ཡང་ན་ ནག་ཚོང་གི་ མེ་ཊ་ཌེ་ཊ་ལུ་ བཤུབ་བཤུབ།
 
-**Controls**
-- Norito schema validation with strict version negotiation; reject unknown flags.
-- Rate limiting and authentication at the Torii ingest endpoint.
-- Chunk size bounds and deterministic encoding enforced by SoraFS chunker.
-- Admission pipeline only persists manifests after integrity checksum matches.
-- Deterministic replay cache (`ReplayCache`) tracks `(lane, epoch, sequence)` windows, persists high-water marks on disk, and rejects duplicates/stale replays; property and fuzz harnesses cover divergent fingerprints and out-of-order submissions.【crates/iroha_core/src/da/replay_cache.rs:1】【fuzz/da_replay_cache.rs:1】【crates/iroha_torii/src/da/ingest.rs:1】
+**ཚད་འཛིན་ཚུ་**
+- Norito ཐོན་རིམ་དམ་དྲག་ཅན་གྱི་གྲོས་སྟོན་དང་བཅས་ ལས་རིམ་བདེན་དཔྱད་འབད་ནི། མ་ཤེས་པའི་དར་ཆ་ཚུ་ བཀག་ཆ་འབད་ཡོདཔ།
+- I18NT0000028X ནང་གསེས་ལུ་ཚད་འཛིན་དང་བདེན་བཤད་ཀྱི་ཚད་གཞི་དང་ བདེན་བཤད་འབད་ནི།
+- ཆུང་བའི་ཚད་མཚམས་དང་ གཏན་འབེབས་ཨེན་ཀོ་ཌིང་འདི་ I18NT0000018X གི་ཆར་ཁ་གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ།
+- འཛུལ་ཞུགས་པའིཔ་ལའིན་འདི་ ཆིག་སྒྲིལ་ཞིབ་དཔྱད་སམ་མཐུན་སྒྲིག་ཚུ་གི་ཤུལ་ལས་རྐྱངམ་ཅིག་ མངོན་གསལ་འབདཝ་ཨིན།
+- གཏན་འབེབས་བཟོ་ནིའི་འདྲ་མཛོད་ (I18NI0000036X) གི་རྗེས་འདེད་ I18NI000000037X སྒོ་སྒྲིག་ཚུ་ ཌིཀསི་གུ་ཆུ་མཐོ་བའི་རྟགས་ཚུ་ རྟག་བུ་རང་ གནས་ཏེ་ཡོདཔ་ཨིན། འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༤ རིག་པ།(༡)
 
-**Residual gaps**
-- Torii ingest must thread the replay cache into admission and persist sequence cursors across restarts.
-- Norito DA schemas now have a dedicated fuzz harness (`fuzz/da_ingest_schema.rs`) to stress encode/decode invariants; coverage dashboards should alert if the target regresses.
+**ལྷག་ལུས་བར་སྟོང་**།
+- I18NT000000029X གིས་ བསྐྱར་རྩེད་ཀྱི་འདྲ་མཛོད་འདི་ འཛུལ་ཞུགས་ནང་བཙུགས་དགོཔ་དང་ ལོག་འགོ་བཙུགས་པའི་སྐབས་ལུ་ གོ་རིམ་གྱི་འོད་རྟགས་ཚུ་ རྟག་བརྟན་སྦེ་བཞག་དགོ།
+- Norito DA ལུ་ ད་ལྟོ་ བརྩོན་ཤུགས་ཅན་གྱི་ Fuzz harness (I18NI000000038X) ལུ་ གནོན་ཤུགས་ཀྱི་ཨེན་ཀོཌ་/ཌི་ཀོཌ་ འགྱུར་ལྡོག་ཅན་ཚུ་ཡོདཔ་ཨིན། དམིགས་གཏད་འདི་ ལོག་འགྱོ་བ་ཅིན་ ཁྱབ་ཚད་ཀྱི་ བརྡ་བཀོད་ཚུ་གིས་ དྲན་བསྐུལ་འབད་དགོ།
 
-### Replication Withholding
+### འགྲིག་འཆམ་འཐབ།
 
-**Scenario:** Byzantine storage operators accept pin assignments but drop chunks,
-passing PDP/PoTR challenges via forged responses or collusion.
+**Scenario:** བཱའི་ཛཱན་ཊིན་གསོག་འཇོག་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ པིན་ལས་འགན་ཚུ་ངོས་ལེན་འབདཝ་ཨིན་རུང་ ཆ་ཤས་ཚུ་བཀོདཔ་ཨིན།
+PDP/PoTR གི་གདོང་ལེན་ཚུ་ གྲུབ་པའི་ལན་ཚུ་ ཡང་ན་ མཉམ་སྡེབ་ཐོག་ལས་ བརྒྱུད་དེ་འགྱོཝ་ཨིན།
 
-**Controls**
-- PDP/PoTR challenge schedule extends to DA payloads with per-epoch coverage.
-- Multi-source replication with quorum thresholds; fetch orchestrator detects
-  missing shards and triggers repair.
-- Governance slashing linked to failed proofs and missing replicas.
-- Automated reconciliation job (`cargo xtask da-commitment-reconcile`) compares
-  ingest receipts with DA commitments (SignedBlockWire, `.norito`, or JSON),
-  emits a JSON evidence bundle for governance, and fails on missing/mismatched
-  tickets so Alertmanager can page on omission/tampering.
+**ཚད་འཛིན་ཚུ་**
+- PDP/PoTR གདོང་ལེན་ལས་རིམ་འདི་ དུས་མཚམས་རེ་གི་ཁྱབ་ཚད་དང་གཅིག་ཁར་ DA payloads ཚུན་ཚོད་ ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+- ཀོར་རམ་ཚད་གཞི་ཚུ་དང་གཅིག་ཁར་ སྣ་མང་འབྱུང་ཁུངས་འདྲ་བཤུས་; འཁྲིལ་བའི་རོལ་དབྱངས་རྟགས་བཀོད།
+  བརླག་སྟོར་ཞུགས་པའི་ཤརཌ་དང་ བསྐྱར་བཟོ་འབདཝ་ཨིན།
+- གཞུང་སྐྱོང་འདི་ འཐུས་ཤོར་གྱི་བདེན་ཁུངས་དང་ འདྲ་དཔེ་མེད་པའི་བདེན་ཁུངས་ཚུ་དང་ འབྲེལ་མཐུད་འབད་ཡོདཔ།
+- རང་འགུལ་མཐུན་སྒྲིག་ལས་ཀ་ (`cargo xtask da-commitment-reconcile`) བསྡུར་ན།
+  DA ཁས་བླངས་དང་གཅིག་ཁར་ འོང་འབབ་ཐོབ་ཐངས་ (མཚན་རྟགས་བཀོད་མི་ BlockWire, `.norito`, ཡང་ན་ JSON)
+  གཞུང་སྐྱོང་གྱི་དོན་ལུ་ JSON སྒྲུབ་བྱེད་ཀྱི་སྡེ་ཚན་ཅིག་བཏོན་ཞིནམ་ལས་ བརླག་སྟོར་ཤོར་མི་/མ་མཐུན་པའི་ཐོག་ལུ་ འཐུས་ཤོར་འགྱོཝ་ཨིན།
+  ཤོག་འཛིན་ཚུ་ དེ་འབདཝ་ལས་ དྲན་ཤེས་བཏོན་མི་གིས་ བཏོན་བཏང་ནི་/ཊ་རམ་རིང་གི་སྐོར་ལས་ ཤོག་ལེབ་བཟོ་ཚུགས།
 
-**Residual gaps**
-- Simulation harness in `integration_tests/src/da/pdp_potr.rs` (covered by
-  `integration_tests/tests/da/pdp_potr_simulation.rs`) now exercises collusion
-  and partition scenarios, validating that the PDP/PoTR schedule detects
-  Byzantine behaviour deterministically. Continue extending it alongside DA-5 to
-  cover new proof surfaces.
-- Cold-tier eviction policy requires signed audit trail to prevent covert drops.
+**ལྷག་ལུས་བར་སྟོང་**།
+- `integration_tests/src/da/pdp_potr.rs` ནང་ (གིས་གསལ་བསྒྲགས།
+  `integration_tests/tests/da/pdp_potr_simulation.rs`) ད་ལྟ་མཉམ་སྡེབ་སྤྱོད་ཡོད།
+  དང་ བར་བཅད་ཀྱི་གནས་སྟངས་ཚུ་ པི་ཌི་པི་/པི་ཨོ་པི་ཨར་ ལས་རིམ་གྱིས་ ཤེས་རྟོགས་འབད་དོ་ཡོདཔ་ཨིན་ན་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  Byzantine གི་སྤྱོད་ལམ་འདི་ གཏན་འབེབས་བཟོ་ནི། འཕྲོ་མཐུད་དེ་ DA-5 ལས་ 2 གི་བར་ན་ རྒྱ་བསྐྱེད་འབད་དོ།
+  བདེན་ཁུངས་གསརཔ་གི་ཁ་ཐོག་ཚུ་ བཀབ་དགོ།
+- ཀོལཌ་ཊི་ཡར་བཏོན་བཏང་ནི་གི་སྲིད་བྱུས་འདི་གིས་ གསང་བའི་ཐིགས་པ་ཚུ་ བཀག་ཐབས་ལུ་ མཚན་རྟགས་བཀོད་པའི་རྩིས་ཞིབ་ལམ་དགོཔ་ཨིན།
 
-### Commitment Tampering
+### ཁས་ལེན་འབད་ནི།
 
-**Scenario:** Compromised sequencer publishes blocks omitting or altering DA
-commitments, causing fetch failures or light-client inconsistencies.
+**གནས་སྟངས་:** བདེ་སྒྲིག་འབད་ཡོད་པའི་རིམ་སྒྲིག་གིས་ བཀག་ཆ་ཚུ་ བཏོན་གཏང་ནི་ཡང་ན་ ཌི་ཨེ་བསྒྱུར་བཅོས་འབད་ནི་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
+ཁས་བླངས་དང་ འཐུས་ཤོར་བྱུང་མི་ ཡང་ན་ འོད་ཀྱི་མཁོ་མངགས་འབད་མི་ མ་མཐུནམ་ཚུ་ འབྱུང་བཅུག་ནི།
 
-**Controls**
-- Consensus cross-checks block proposals with DA submission queues; peers reject
-  proposals missing required commitments.
-- Light clients verify commitment inclusion proofs before surfacing fetch handles.
-- Audit trail comparing submission receipts with block commitments.
-- Automated reconciliation job (`cargo xtask da-commitment-reconcile`) compares
-  ingest receipts with DA commitments (SignedBlockWire, `.norito`, or JSON),
-  emits a JSON evidence bundle for governance, and fails on missing or
-  mismatched tickets so Alertmanager can page on omission/tampering.
+**ཚད་འཛིན་ཚུ་**
+- མོས་མཐུན་བརྟག་དཔྱད་ཚུ་གིས་ DA ཕུལ་བའི་གྲལ་ཐིག་ཚུ་དང་གཅིག་ཁར་ གྲོས་འཆར་ཚུ་བཀག་ཆ་འབད་ནི། མཉམ་རོགས་ཚུ་གིས་ ཁས་མ་ལེན།
+  དགོས་མཁོའི་ཁས་བླངས་མེད་པའི་གྲོས་འཆར་ཚུ།
+- མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ཁས་བླངས་ཀྱི་བདེན་ཁུངས་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+- བཀག་ཆ་ཁས་བླངས་ཚུ་དང་ ཕུལ་བའི་འོང་འབབ་ཚུ་ ག་བསྡུར་འབད་ནི།
+- རང་འགུལ་མཐུན་སྒྲིག་ལས་ཀ་ (`cargo xtask da-commitment-reconcile`) བསྡུར་ན།
+  DA ཁས་བླངས་དང་གཅིག་ཁར་ འོང་འབབ་ཐོབ་ཐངས་ཚུ་ (མཚན་རྟགས་བཀོད་མི་ BlockWire, `.norito`, ཡང་ན་ JSON)
+  གཞུང་སྐྱོང་གྱི་དོན་ལུ་ JSON སྒྲུབ་བྱེད་ཀྱི་བསྡུ་སྒྲིག་ཅིག་བཏོན་ཞིནམ་ལས་ མེདཔ་ཐལ་ཡོདཔ་ཨིན།
+  མ་མཐུན་པའི་ཤོག་བྱང་ཚུ་ ཉེན་བརྡ་བཏང་མི་གིས་ བཏོན་བཏང་/ཊེམ་པེ་རིང་གི་སྐོར་ལས་ ཤོག་ལེབ་བཟོ་ཚུགས།
 
-**Residual gaps**
-- Covered by the reconciliation job + Alertmanager hook; governance packets now
-  ingest the JSON evidence bundle by default.
+**ལྷག་ལུས་བར་སྟོང་**།
+- མཐུན་སྒྲིག་ལཱ་གིས་ བསྒྲིགས་ཡོདཔ་ + དྲན་སྐུལ་མ་ནར་ཧུཀ་; ད་ལྟོ་ གཞུང་སྐྱོང་སྦུང་ཚན་ཚུ།
+  སྔོན་སྒྲིག་གིས་ ཇེ་ཨེསི་ཨོ་ཨེན་ སྒྲུབ་བྱེད་ཚུ་ བཙུགསཔ་ཨིན།
 
-### Network Partition and Censorship
+### ཡོངས་འབྲེལ་བར་བཅད་དང་བརྟག་དཔྱད།**གནས་སྟངས་:** བྱང་ཕྱད་བར་བཅད་ཚུ་ འདྲ་བཤུས་བརྐྱབ་ནིའི་ཡོངས་འབྲེལ་, མཐུད་མཚམས་ལས་ བཀག་ཐབས་འབདཝ་ཨིན།
+བཀོད་སྒྲིག་འབད་ཡོད་པའི་ཆ་ཤས་ཚུ་ཐོབ་ནི་དང་ ཡང་ན་ PDP/PoTR གདོང་ལེན་ཚུ་ལུ་ལན་འཇལ་ནི།
 
-**Scenario:** Adversary partitions replication network, preventing nodes from
-obtaining assigned chunks or responding to PDP/PoTR challenges.
+**ཚད་འཛིན་ཚུ་**
+- ལུང་ཕྱོགས་སྣ་མང་བྱིན་མི་དགོས་མཁོ་ཚུ་གིས་ ཡོངས་འབྲེལ་འགྲུལ་ལམ་སྣ་ཚོགས་ངེས་གཏན་བཟོཝ་ཨིན།
+- གདོང་ལེན་སྒོ་སྒྲིག་ཚུ་ནང་ ཇི་ཊར་དང་ ཕྱི་ཁའི་ཉམས་བཅོས་འབད་ནིའི་ རྒྱུན་ལམ་ཚུ་ ཚུདཔ་ཨིན་པས།
+- བལྟ་རྟོག་འབད་བཏུབ་པའི་ ཌེཤ་བོརཌ་ཚུ་གིས་ ལྟ་རྟོག་འདྲ་བཤུས་གཏིང་ཚད་དང་ གདོང་ལེན་གྱི་ མཐར་འཁྱོལ་ དེ་ལས་ དང་།
+  དྲན་སྐུལ་གྱི་ཚད་གཞི་ཚུ་དང་གཅིག་ཁར་ འཕྲོ་བརླག་གཏངམ་ཨིན།
 
-**Controls**
-- Multi-region provider requirements ensure diverse network paths.
-- Challenge windows include jitter and fallback to out-of-band repair channels.
-- Observability dashboards monitor replication depth, challenge success, and
-  fetch latency with alert thresholds.
+**ལྷག་ལུས་བར་སྟོང་**།
+- ཐའི་ཀཱའི་ཐད་གཏོང་ལས་རིམ་ཚུ་གི་དོན་ལུ་ བགོ་བཤའ་རྐྱབ་ཚད་ཚུ་ ད་ལྟོ་ཡང་མེདཔ་ཨིན། བཙོ་བའི་བརྟག་དཔྱད་དགོས།
+- བང་སྒྲིག་བཱན་ཝིཌི་བཀག་ཆ་སྲིད་བྱུས་འདི་ད་ལྟོ་ཡང་ བཅོས་སྒྲིག་མ་འབད་བས།
 
-**Residual gaps**
-- Partition simulations for Taikai live events still missing; need soak tests.
-- Repair bandwidth reservation policy not yet codified.
+### ནང་མིའི་རྒྱབ་སྐྱོར།
 
-### Insider Abuse
+**གནས་སྟངས་:** ཐོ་བཀོད་འཛུལ་སྤྱོད་ཡོད་མི་ བཀོལ་སྤྱོད་པ་འདི་གིས་ བཀག་བཞག་སྲིད་བྱུས་ཚུ་ གཡོ་བཅོས་འབདཝ་ཨིན།
+དཀརཔོ་ཐོ་ཡིག་གིས་ གནོདཔ་ཅན་གྱི་བྱིན་མི་ཚུ་ ཉེན་བརྡ་ཚུ་ ཡང་ན་ བཀག་འཛིན་འབདཝ་ཨིན།
 
-**Scenario:** Operator with registry access manipulates retention policies,
-whitelists malicious providers, or suppresses alerts.
+**ཚད་འཛིན་ཚུ་**
+- གཞུང་སྐྱོང་བྱ་བ་ཚུ་ལུ་ སྣ་མང་ཚོགས་པ་གི་མིང་རྟགས་དང་ Norito-notarised དྲན་ཐོ་ཚུ་དགོཔ་ཨིན།
+- སྲིད་བྱུས་བསྒྱུར་བཅོས་ཀྱིས་ ལྟ་རྟོག་དང་ གཏན་མཛོད་དྲན་ཐོ་ཚུ་ལུ་ བྱུང་རིམ་ཚུ་ བཏོནམ་ཨིན།
+- བལྟ་རྟོག་འབད་བཏུབ་པའི་ པའིཔ་ལའིན་ཕོརཊི་ཚུ་ ཟུར་ཐོ་ I18NT0000008X གིས་ ཧེཤ་རིམ་སྒྲིག་དང་གཅིག་ཁར་ དྲན་ཐོ་བཀོདཔ་ཨིན།
+- ཟླཝ་བཞི་པའི་ནང་ བསྐྱར་ཞིབ་རང་བཞིན་ (`cargo xtask da-privilege-audit`) འགྲུལ་བསྐྱོད་འབདཝ་ཨིན།
+  ཌི་ཨེ་ གསལ་སྟོན་/སླར་འབྱུང་སྣོད་ཐོ་ཚུ་ (པཱལསི་བཀོལ་སྤྱོད་པ་-བཀྲམ་སྤེལ་འབད་ཡོད་པའི་འགྲུལ་ལམ་) དར་ཆ་ཚུ།
+  བརླག་སྟོར་/སྣོད་ཐོ་མེན་པའི་/འཛམ་གླིང་འབྲི་བཏུབ་པའི་ཐོ་བཀོད་ཚུ་ དེ་ལས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ JSON བང་རིམ་ཅིག་ བཏོནམ་ཨིན།
+  for གཞུང་སྐྱོང་གི་ བརྡ་བཀོད་བཀོད་ཚོགས།
 
-**Controls**
-- Governance actions require multi-party signatures and Norito-notarised records.
-- Policy changes emit events to monitoring and archival logs.
-- Observability pipeline enforces append-only Norito logs with hash chaining.
-- Quarterly access review automation (`cargo xtask da-privilege-audit`) walks
-  the DA manifest/replay directories (plus operator-supplied paths), flags
-  missing/non-directory/world-writable entries, and emits a signed JSON bundle
-  for governance dashboards.
+**ལྷག་ལུས་བར་སྟོང་**།
+- ཌེཤ་བོརཌ་ ཊམ་པར་-མངོན་གསལ་ལུ་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ པར་ཆས་ཚུ་དགོ།
 
-**Residual gaps**
-- Dashboard tamper-evidence requires signed snapshots.
+## ལྷག་ལུས་ཉེན་ཁ་ཐོ་འགོད།
 
-## Residual Risk Register
-
-| Risk | Likelihood | Impact | Owner | Mitigation Plan |
+| ཉེན་ཁ། དགའ་བ་ | ཕན་གནོད་ | ཇོ་བདག་ | མར་ཕབ་འཆར་གཞི། |
 | --- | --- | --- | --- | --- |
-| Replay of DA manifests before DA-2 sequence cache lands | Possible | Moderate | Core Protocol WG | Implement sequence cache + nonce validation in DA-2; add regression tests. |
-| PDP/PoTR collusion when >f nodes compromise | Unlikely | High | Storage Team | Derive new challenge schedule with cross-provider sampling; validate via simulation harness. |
-| Cold-tier eviction audit gap | Possible | High | SRE / Storage Team | Attach signed audit logs & on-chain receipts for evictions; monitor via dashboards. |
-| Sequencer omission detection latency | Possible | High | Core Protocol WG | Nightly `cargo xtask da-commitment-reconcile` compares receipts vs commitments (SignedBlockWire/`.norito`/JSON) and pages governance on missing or mismatched tickets. |
-| Partition resilience for Taikai live streams | Possible | Critical | Networking TL | Execute partition drills; reserve repair bandwidth; document failover SOP. |
-| Governance privilege drift | Unlikely | High | Governance Council | Quarterly `cargo xtask da-privilege-audit` run (manifest/replay dirs + extra paths) with signed JSON + dashboard gate; anchor audit artefacts on-chain. |
+| DA-2 གོ་རིམ་འདྲ་མཛོད་ས་ཆ་མ་ཐོན་པའི་ཧེ་མ་ DA གི་མངོན་རྟགས་ཚུ་ | སྲིད་པ་ | བར་མཚམས་ | Core མཐུན་གྲོས་ WG | ཌི་ཨེ་-༢ ནང་ གོ་རིམ་འདྲ་མཛོད་ + ནོན་སི་བདེན་དཔྱད་ལག་ལེན་འཐབ། ཁ་སྐོང་འགྱུར་ལྡོག་བརྟག་དཔྱད་ཚུ། |
+| PDP/PoTR collusion > མཐུད་མཚམས་བདེ་སྒྲིག་འབད་བའི་སྐབས་ | མི་འདོད་པ་ | མཐོ་ཚད་ | བསག་མཛོད་སྡེ་ཚན། | དཔེ་ཚད་བཏོན་པའི་ཐོག་ལས་ གདོང་ལེན་གསརཔ་ཐོན་ནི། བརྗོད་ཚབ་ཀྱི་ ཧར་ནིསི་བརྒྱུད་དེ་ བདེན་དཔྱད་འབད། |
+| ཀླད་ཀོར་གྱི་ ཕྱིར་ཐོན་རྩིས་ཞིབ་བར་སྟོང་ | སྲིད་པ་ | མཐོ་ཚད་ | SRE / གསོག་འཇོག་སྡེ་ཚན། | མཉམ་སྦྲགས་མིང་རྟགས་བཀོད་པའི་རྩིས་ཞིབ་དྲན་ཐོ་ཚུ་དང་ བཏོན་བཏང་ནིའི་དོན་ལུ་ རིམ་ཐིག་ཐོབ་ཚུལ། བརྡ་བཀོད་ཚུ་བརྒྱུད་དེ་ བལྟ་རྟོག་འབད། |
+| གོ་རིམ་བཞིན་དུ་ བཏོན་གཏང་ནི་གི་ བར་ཆད་ | སྲིད་པ་ | མཐོ་ཚད་ | Core མཐུན་གྲོས་ WG | མཚན་མོ་ I18NI000000046X གིས་ འོང་འབབ་དང་ཁས་བླངས་ཚུ་ ག་བསྡུར་རྐྱབ་ཨིན། (SignedBlockWire/I18NI0000004X/JSON) དང་ ཤོག་ལེབ་གཞུང་གིས་ མ་ཐོབ་མི་དང་ མ་མཐུན་པའི་ ཤོག་འཛིན་ཚུ་ ག་བསྡུར་འབདཝ་ཨིན། |
+| ཐའེ་ཀའི་ཐད་གཏོང་ཚུ་གི་དོན་ལུ་ བགོ་བཤའ་རྐྱབ་ཚུགས་པའི་ བཟོད་བསྲན། | སྲིད་པ་ | གལ་ཆེན། | ཡོངས་འབྲེལ་ TL | བར་བཅད་སྦྱོང་བརྡར་ཚུ་ལག་ལེན་འཐབ། གསོག་འཇོག་ཉམས་བཅོས་བཱན་ཝིཌི་; ཡིག་ཆ་འཐུས་ཤོར་ SOP. |
+| གཞུང་སྐྱོང་ཐོབ་དབང་ ཌིཕཊ། | མི་འདོད་པ་ | མཐོ་ཚད་ | གཞུང་སྐྱོང་ལྷན་ཚོགས། | བཞི་པ་ `cargo xtask da-privilege-audit` གཡོག་བཀོལ་ (མན་ངག་/བསྐྱར་རྩེད་ + འགྲུལ་ལམ་ཁ་སྐོང་) མཚན་རྟགས་བཀོད་ཡོད་པའི་ JSON + ཌེཤ་བོརཌ་གཱེཊི་དང་གཅིག་ཁར་; anchor རྩིས་ཞིབ་ཀྱི་ ཅ་ཆས་ཚུ་ རིམ་ཐེངས་ཅིག་གུ་ཨིན། |
 
-## Required Follow-Ups
+## དགོས་མཁོའི་རྗེས་སུ་འབྲང་།
 
-1. Publish DA ingest Norito schemas and example vectors (carried into DA-2).
-2. Thread the replay cache through Torii DA ingest and persist sequence cursors across node restarts.
-3. **Completed (2026-02-05):** PDP/PoTR simulation harness now exercises collusion + partition scenarios with QoS backlog modelling; see `integration_tests/src/da/pdp_potr.rs` (with tests under `integration_tests/tests/da/pdp_potr_simulation.rs`) for the implementation and deterministic summaries captured below.
-4. **Completed (2026-05-29):** `cargo xtask da-commitment-reconcile` compares ingest receipts against DA commitments (SignedBlockWire/`.norito`/JSON), emits `artifacts/da/commitment_reconciliation.json`, and is wired into Alertmanager/governance packets for omission/tampering alerts (`xtask/src/da.rs`).
-5. **Completed (2026-05-29):** `cargo xtask da-privilege-audit` walks the manifest/replay spool (plus operator-supplied paths), flags missing/non-directory/world-writable entries, and produces a signed JSON bundle for dashboards/governance reviews (`artifacts/da/privilege_audit.json`), closing the access-review automation gap.
+1. DA བཙུགས་ཏེ་ I18NT0000000X ལས་འཆར་དང་དཔེ་མཚོན་ཚུ་ (DA-2 ནང་ལུ་འབག་ཡོདཔ་ཨིན།)
+2. ཐིག་ལེ་བསྐྱར་རྩེད་འདི་ Torii བརྒྱུད་དེ་ Torii བརྒྱུད་དེ་ བསྐྱར་རྩེད་དང་ མཐུད་མཚམས་ལོག་འགོ་བཙུགས་པའི་སྐབས་ལུ་ གོ་རིམ་གྱི་འོད་རྟགས་ཚུ་ཨིན།
+3. **མཇུག་བསྡུ་ཡོདཔ། (2026-02-05):** PDP/PoTR བརྡ་སྟོན་འཕྲུལ་ཆས་ ད་ལྟ་ ཀོའི་ཨེསི་ རྒྱབ་ལོག་དཔེ་ཚད་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་ + བར་བཅད་གནས་སྟངས་ཚུ་ ལག་ལེན་འཐབ་ཨིན། བལྟ་ `integration_tests/src/da/pdp_potr.rs` (I18NI0000000050X གི་འོག་ལུ་ཡོད་པའི་བརྟག་དཔྱད་ཚུ་) གཤམ་གསལ་ལྟར་དུ་བཟུང་ཡོད་པའི་ གཏན་འབེབས་བཅུད་དོན་གྱི་དོན་ལུ་ཨིན།
+4. **མཇུག་བསྡུ་ཡོདཔ། (༢༠༢༦-༠༥-༢༩):** `cargo xtask da-commitment-reconcile` ཌི་ཨེ་ཁས་བླངས་ལུ་ གཞི་བསྟུན་ག་བསྡུར་འབདཝ་ཨིན། (མཚན་རྟགས་བཀོད་པ་/ཨའི་༠༠༠༠༠༠༥༢ཨེགསི་/ཇེ་ཨེསི་ཨོན།), ཕྱིར་འདྲེན་ I༡༨NI00000003X, འདི་ Atertmanager/gounger spects, བཤོལ་བཞག་/ཊེམ་པེ་རིང་ཉེན་བརྡ་ (`xtask/src/da.rs`).
+༥. **མཇུག་བསྡུ་ཡོདཔ་ (༢༠༢༦-༠༥-༢༩):** `cargo xtask da-privilege-audit` གསལ་སྟོན་/སླར་འབྱུང་གི་ མགྱོགས་ཚད་ (plus བཀོལ་སྤྱོད་པ་-རྒྱབ་སྐྱོར་འགྲུལ་ལམ་ཚུ་) དར་ཆ་མེད་མི་/སྣོད་ཐོ་མེན་པའི་/འཛམ་གླིང་འབྲི་བཏུབ་པའི་ཐོ་བཀོད་ཚུ་ དང་ དེ་ལས་ བརྡ་བཀོད་སྒྲོམ་/གོམས་འདྲིས་བསྐྱར་ཞིབ་ཀྱི་དོན་ལུ་ མིང་རྟགས་བཀོད་ཡོད་པའི་ JSON བཱན་ཌལ་ཅིག་བཟོ་བསྐྲུན་འབདཝ་ཨིན། (`artifacts/da/privilege_audit.json`), འཛུལ་སྤྱོད་-བསྐྱར་ཞིབ་རང་བཞིན་གྱི་བར་སྟོང་འདི་ཁ་བསྡམས།
 
-**Where to look next:**
+**ཤུལ་མམ་ལུ་བལྟ་ནི་:**
 
-- The DA replay cache and cursor persistence landed in DA-2. See the
-  implementation in `crates/iroha_core/src/da/replay_cache.rs` (cache logic) and
-  the Torii integration in `crates/iroha_torii/src/da/ingest.rs`, which threads the
-  fingerprint checks through `/v1/da/ingest`.
-- PDP/PoTR streaming simulations are exercised via the proof-stream harness in
-  `crates/sorafs_car/tests/sorafs_cli.rs`, covering PoR/PDP/PoTR request flows
-  and failure scenarios animated in the threat model.
-- Capacity and repair soak results live under
-  `docs/source/sorafs/reports/sf2c_capacity_soak.md`, while the broader
-  Sumeragi soak matrix is tracked in `docs/source/sumeragi_soak_matrix.md`
-  (localized variants included). These artefacts capture the long-running drills
-  referenced in the residual risk register.
-- Reconciliation + privilege-audit automation lives in
-  `docs/automation/da/README.md` and the new `cargo xtask da-commitment-reconcile`
-  / `cargo xtask da-privilege-audit` commands; use the default outputs under
-  `artifacts/da/` when attaching evidence to governance packets.
+- DA བསྐྱར་རྩེད་ཀྱི་འདྲ་མཛོད་དང་ འོད་རྟགས་ཀྱི་ བརྩོན་ཤུགས་འདི་ DA-2 ནང་ལུ་ལྷོད་ཡོདཔ་ཨིན། བལྟ།
+  ལག་ལེན་འཐབ་ཐངས་ I18NI000000057X (cache ཚད་མ་) དང་།
+  I18NI000000058X ནང་ Torii མཉམ་བསྡོམས་འདི་ དེ་གིས་ ཐགཔ་བཏགསཔ་ཨིན།
+  མཛུབ་མོ་གི་བརྟག་དཔྱད་ I18NI000000059X བརྒྱུད་དེ།
+- PDP/PoTR རྒྱུན་སྤེལ་གྱི་བརྡ་སྟོན་ཚུ་ ༢༠༠༨ ལུ་ བདེན་ཁུངས་-རྒྱུན་ལམ་བརྒྱུད་དེ་ ལག་ལེན་འཐབ་ཨིན།
+  I18NI00000060, གིས་ PoR/PDP/PoTR ཞུ་བ་ཚུ་ ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+  དང་ཉེན་ཁ་དཔེ་སྟོན་ནང་ བསྒུལ་ཅན་བཟོ་ཡོད་པའི་ འཐུས་ཤོར་གྱི་གནས་སྟངས་ཚུ་ཨིན།
+- ལྕོགས་གྲུབ་དང་ ཉམས་བཅོས་ཀྱི་གྲུབ་འབྲས་ཚུ་ གཤམ་གསལ་གྱི་ འོག་ལུ་ཡོདཔ་ཨིན།
+  `docs/source/sorafs/reports/sf2c_capacity_soak.md` དང་རྒྱ་ཆེ་བ།
+  Sumeragi `docs/source/sumeragi_soak_matrix.md` ནང་ལུ་ བརྟག་ཞིབ་འབད་ཡོདཔ་ཨིན།
+  (ས་གནས་ཀྱི་དབྱེ་བ་ཚུ་ཚུད་ཡོདཔ་ཨིན།)། འ་ནི་ཅ་རྙིང་ཚུ་གིས་ ཡུན་རིངམོ་སྦེ་འགྱོ་མི་ སྦྱོང་བརྡར་ཚུ་ བཟུང་དོ་ཡོདཔ་ཨིན།
+  ལྷག་ལུས་ཉེན་ཁ་ཐོ་བཀོད་ནང་ གཞི་བསྟུན་འབད་ཡོདཔ།
+- མཐུན་སྒྲིག + ཁེ་དབང་-རྩིས་ཞིབ་འཕྲུལ་ཆས་རང་བཞིན་གྱིས་ ༢༠༠༨ ལུ་གནས་ཚུལ།
+  `docs/automation/da/README.md` དང་ `cargo xtask da-commitment-reconcile` གསར་པ་ནི།
+  / `cargo xtask da-privilege-audit` བརྡ་བཀོད་ཚུ། འོག་ལུ་སྔོན་སྒྲིག་ཨའུཊི་པུཊི་ཚུ་ལག་ལེན་འཐབ།
+  `artifacts/da/` གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ཚུ་ལུ་ སྒྲུབ་བྱེད་ཚུ་ མཉམ་སྦྲགས་འབད་བའི་སྐབས་ཨིན།
 
-## Simulation Evidence & QoS Modelling (2026-02)
+## བཟོས་པའི་སྒྲུབ་བྱེད་དང་ QoS དཔེ་བཟོ་ (༢༠༢༦-༠༢)
 
-To close DA-1 follow-up #3, we codified a deterministic PDP/PoTR simulation
-harness under `integration_tests/src/da/pdp_potr.rs` (covered by
-`integration_tests/tests/da/pdp_potr_simulation.rs`). The harness
-allocates nodes across three regions, injects partitions/collusion according to
-the roadmap probabilities, tracks PoTR lateness, and feeds a repair-backlog
-model that mirrors the hot-tier repair budget. Running the default scenario
-(12 epochs, 18 PDP challenges + 2 PoTR windows per epoch) produced the
-following metrics:
+DA-1 རྗེས་འཇུག་ #3 ཁ་བསྡམས་ནིའི་དོན་ལུ་ ང་བཅས་ཀྱིས་ གཏན་འབེབས་ PDP/PoTR དཔེ་སྟོན་ཅིག་ བཀོད་སྒྲིག་འབད་ཡི།
+I18NI000000067X འོག་ལུ་ (གིས་གསལ་སྟོན་འབད་ཡོདཔ།
+`integration_tests/tests/da/pdp_potr_simulation.rs`). ཧརཀནས་འདི།
+ལུང་ཕྱོགས་གསུམ་ནང་ མཐུད་མཚམས་ཚུ་ བགོ་བཀྲམ་འབདཝ་ཨིན།
+ལམ་སྟོན་གྱི་འབྱུང་འགྱུར་དང་ PoTR ཕྱི་འགྱུར་ དེ་ལས་ ཉམས་བཅོས་འབད་བའི་རྒྱབ་ལོག་ལུ་ ལྟོ་བྱིནམ་ཨིན།
+དཔེ་སྟོན་འདི་གིས་ ཧོཊ་ཊི་ཡར་ཉམས་བཅོས་ཀྱི་འཆར་དངུལ་མེ་ལོང་བཟོཝ་ཨིན། སྔོན་སྒྲིག་གནས་སྟངས་གཡོག་བཀོལ་དོ།
+(དུས་སྐབས་ ༡༢ དང་ ༡༨ PDP གདོང་ལེན་ + ༢ པོ་ཊི་ཨར་ སྒོ་སྒྲིག་ཚུ་ དུས་སྐབས་རེ་ལུ་ སྒོ་སྒྲིག་ཚུ་) གིས་ བཟོ་ཡོདཔ་ཨིན།
+གཤམ་གསལ་གྱི་མེཊིཀ།
 
 <!-- BEGIN_DA_SIM_TABLE -->
 <!-- AUTO-GENERATED by scripts/docs/render_da_threat_model_tables.py; do not edit manually. -->
-| Metric | Value | Notes |
+| མེ་ཊིག་ | གནས་གོང་ | དྲན་ཐོ། |
 | --- | --- | --- |
-| PDP failures detected | 48 / 49 (98.0%) | Partitions still trigger detection; a single undetected failure comes from honest jitter. |
-| PDP mean detection latency | 0.0 epochs | Failures are surfaced within the originating epoch. |
-| PoTR failures detected | 28 / 77 (36.4%) | Detection fires once a node misses ≥2 PoTR windows, leaving most events in the residual-risk register. |
-| PoTR mean detection latency | 2.0 epochs | Matches the two-epoch lateness threshold baked into archival escalation. |
-| Repair queue peak | 38 manifests | Backlog spikes when partitions stack faster than the four repairs available per epoch. |
-| Response latency p95 | 30,068 ms | Mirrors the 30 s challenge window with the ±75 ms jitter applied for QoS sampling. |
-<!-- END_DA_SIM_TABLE -->
+| PDP གི་འཐུས་ཤོར་ཚུ་ བརྟག་དཔྱད་འབད་ཡོདཔ། | ༤༨ / ༤༩ (༩༨.༠%) | བར་བཅད་ཚུ་གིས་ ད་ལྟོ་ཡང་ ཊི་ཊི་ཊི་ བརྟག་ཞིབ་འབདཝ་ཨིན། མ་ཤེས་པའི་ འཐུས་ཤོར་གཅིག་ དྲང་བདེན་གྱི་ ཇི་ཊར་ལས་འོངམ་ཨིན། |
+| PDP སྤྱིར་སྙོམས་བརྟག་དཔྱད་འཕྲོ་མཐུད་ | ༠.༠ དུས་སྐབས་ | འཐུས་ཤོར་ཚུ་ འབྱུང་ཁུངས་དུས་སྐབས་ཀྱི་ནང་འཁོད་ལུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན། |
+| པོ་ཊི་ཨར་ འཐུས་ཤོར་ཚུ་ བརྟག་དཔྱད་འབད་ཡོདཔ། | ༢༨ / ༧༧ (༣༦.༤%) | བརྟག་དཔྱད་འདི་གིས་ མཐུད་མཚམས་ཅིག་གིས་ ≥2 པོ་ཊི་ཨར་སྒོ་སྒྲིག་ཚུ་ མ་ཐོབ་པར་ བྱུང་ལས་མང་ཤོས་ཅིག་ ལྷག་ལུས་-ཉེན་ཁ་ཐོ་བཀོད་ནང་ བཞགཔ་ཨིན། |
+| PoTR སྤྱིར་སྙོམས་བརྟག་དཔྱད་འཕྲོ་མཐུད་ | 2.0 དུས་སྐབས་ | དུས་སྐབས་གཉིས་ཀྱི་ཕྱི་འགྱུར་གྱི་ཚད་གཞི་འདི་ གཏན་མཛོད་ཡར་སེང་འབད་ནི་ལུ་ མཐུན་སྒྲིག་འབདཝ་ཨིན། |
+| ཉམས་བཅོས་བང་རིམ་གྱི་མཐོ་ཚད་ | 38 མངོན་རྟགས་ | དུས་སྐབས་རེ་ལུ་ཐོབ་ཚུགས་པའི་ ཉམས་བཅོས་བཞི་ལས་ མགྱོགས་དྲགས་སྦེ་ བགོ་བཤའ་རྐྱབ་པའི་སྐབས་ རྒྱབ་ལོག་འདི་ ཡར་སེང་འགྱོཝ་ཨིན། |
+| ལན་འདེབས་འབྱུང་རིམ་ p95 | ༣༠,༠༦༨ ms | 30 s གདོང་ལེན་སྒོ་སྒྲིག་འདི་ QoS དཔེ་ཚད་ཀྱི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་ ±75 ms ཇི་ཊར་དང་གཅིག་ཁར་ མེ་ལོང་འབདཝ་ཨིན། |
+I18NH0000034X
 
-These outputs now drive the DA dashboard prototypes and satisfy the “simulation
-harness + QoS modelling” acceptance criteria referenced in the roadmap.
+འདི་ཚུ་གིས་ ད་ལྟོ་ ཌི་ཨེ་ ཌེཤ་བོརཌི་ བཟོ་དཔེ་ཚུ་ འདྲེན་འབད་ཞིནམ་ལས་ “བརྟག་དཔྱད་འདི་ བསྒྲུབ་ཚུགསཔ་ཨིན།
+harness + QoS དཔེ་སྟོན་” ལམ་གྱི་ས་ཁྲ་ནང་ གཞི་བསྟུན་འབད་ཡོད་པའི་ ངོས་ལེན་གྱི་ཁྱད་ཆོས།
 
-Automation now lives behind `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`, which calls the shared harness and
-emits Norito JSON to `artifacts/da/threat_model_report.json` by default. Nightly
-jobs consume this file to refresh the matrices in this document and to alert on
-drift in detection rates, repair queues, or QoS samples.
+ད་ལྟ་རང་བཞིན་གྱིས་ `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]` གི་རྒྱབ་ལུ་སྡོད་དོ་ཡོདཔ་ད་ དེ་གིས་ བརྗེ་སོར་གྱི་ harness དང་ ཟེར་སླབ་ཨིན།
+སྔོན་སྒྲིག་གིས་ Norito JSON ལུ་ བཏོན་གཏང་ཡོདཔ་ཨིན། མཚན་མོ་
+ལཱ་གཡོག་ཚུ་གིས་ ཡིག་ཆ་འདི་ནང་ མེ་ཊི་སི་ཚུ་ གསར་བསྐྲུན་འབད་ནི་ལུ་ ཡིག་སྣོད་འདི་ བཀོལ་སྤྱོད་འབདཝ་ཨིན་ དེ་ལས་ གུ་ཉེན་བརྡ་འབད་ནི་ལུ་ ཉེན་བརྡ་འབདཝ་ཨིན།
+བརྟག་དཔྱད་ཀྱི་ཚད་གཞི་དང་ ཉམས་བཅོས་བང་རིམ་ ཡང་ན་ QoS དཔེ་ཚད་ཚུ་ནང་ བཞུར་འོང་།
 
-To refresh the table above for docs, run `make docs-da-threat-model`, which
-invokes `cargo xtask da-threat-model-report`, regenerates
-`docs/source/da/_generated/threat_model_report.json`, and rewrites this section
-via `scripts/docs/render_da_threat_model_tables.py`. The `docs/portal` mirror
-(`docs/portal/docs/da/threat-model.md`) is updated in the same pass so both
-copies stay in sync.
+ཌོཀ་གི་དོན་ལུ་ གོང་འཁོད་ཀྱི་ཐིག་ཁྲམ་གསར་བསྐྲུན་འབད་ནི་ལུ་ I18NI000000071X གཡོག་བཀོལ།
+`cargo xtask da-threat-model-report`, བསྐྱར་གསོ་འབདཝ་ཨིན།
+I18NI000000073X, དང་དོན་ཚན་འདི་བསྐྱར་དུ་བྲིས།
+བརྒྱུད་དེ་ `scripts/docs/render_da_threat_model_tables.py`. `docs/portal` མེ་ལོང་།
+(I18NI000000076X) འདི་ ཆོག་ཡིག་གཅིག་ནང་ དུས་མཐུན་བཟོ་ཡོདཔ་ལས་ གཉིས་ཆ་ར་ཨིན།
+copies མཉམ་མཐུན་སྦེ་སྡོད།

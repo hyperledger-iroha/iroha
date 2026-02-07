@@ -11,113 +11,114 @@ id: address-display-guidelines
 title: Sora Address Display Guidelines
 sidebar_label: Address display
 description: UX and CLI requirements for IH58 vs compressed (`sora`) Sora address presentation (ADDR-6).
+translator: machine-google-reviewed
 ---
 
-import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
+ExplorerAddressCard-г '@site/src/components/ExplorerAddressCard'-оос импортлох;
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
-as the canonical portal copy. The source file sticks around for translation PRs.
+::: Каноник эх сурвалжийг анхаарна уу
+Энэ хуудас нь `docs/source/sns/address_display_guidelines.md`-г тусгаж, одоо үйлчилж байна
+каноник портал хуулбар болгон. Эх файл нь орчуулгын PR-д зориулагдсан байдаг.
 :::
 
-Wallets, explorers, and SDK samples must treat account addresses as immutable
-payloads. The Android retail wallet sample in
-`examples/android/retail-wallet` now demonstrates the required UX pattern:
+Түрийвч, судлаач, SDK дээжүүд нь дансны хаягийг өөрчлөх боломжгүй гэж үзэх ёстой
+ачаалал. Android жижиглэнгийн түрийвчний жишээ
+`examples/android/retail-wallet` одоо шаардлагатай UX загварыг харуулж байна:
 
-- **Dual copy targets.** Ship two explicit copy buttons—IH58 (preferred) and the
-  compressed Sora-only form (`sora…`, second-best). IH58 is always safe to share externally
-  and powers the QR payload. The compressed variant must include an inline
-  warning because it only works inside Sora-aware apps. The Android retail
-  wallet sample wires both Material buttons and their tooltips in
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and
-  the iOS SwiftUI demo mirrors the same UX via `AddressPreviewCard` inside
+- **Хос хуулбарлах зорилтууд.** Хоёр тодорхой хуулбарлах товчлуурыг илгээх—IH58 (давуу) ба
+  шахсан Sora зөвхөн хэлбэр (`sora…`, хоёр дахь шилдэг). IH58 нь гаднаас хуваалцахад үргэлж аюулгүй байдаг
+  мөн QR ачааллыг идэвхжүүлдэг. Шахсан хувилбар нь заавал мөр агуулсан байх ёстой
+  Энэ нь зөвхөн Sora-aware програмууд дотор ажилладаг тул анхааруулж байна. Android жижиглэн худалдаа
+  түрийвчний дээжийн утаснууд Материалын товчлуурууд болон тэдгээрийн зөвлөмжийг хоёуланг нь суулгана
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, ба
+  iOS SwiftUI демо нь доторх `AddressPreviewCard`-ээр дамжуулан ижил UX-г тусгадаг.
   `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, selectable text.** Render both strings with a monospace font and
-  `textIsSelectable="true"` so users can inspect values without invoking an IME.
-  Avoid editable fields: IMEs can rewrite kana or inject zero-width code points.
-- **Implicit default domain hints.** When the selector points at the implicit
-  `default` domain, surface a caption reminding operators no suffix is required.
-  Explorers should also highlight the canonical domain label when the selector
-  encodes a digest.
-- **IH58 QR payloads.** QR codes must encode the IH58 string. If QR generation
-  fails, display an explicit error instead of a blank image.
-- **Clipboard messaging.** After copying the compressed form, emit a toast or
-  snackbar reminding users that it is Sora-only and prone to IME mangling.
+- **Monospace, сонгох боломжтой текст.** Хоёр мөрийг нэг орон зай фонтоор буулгаж,
+  `textIsSelectable="true"` тул хэрэглэгчид IME дуудахгүйгээр утгыг шалгах боломжтой.
+  Засварлах боломжтой талбаруудаас зайлсхий: IME нь кана дахин бичих эсвэл тэг өргөнтэй кодын цэгүүдийг оруулах боломжтой.
+- **Далд өгөгдмөл домэйны зөвлөмжүүд.** Сонгогч нь далдыг зааж өгөх үед
+  `default` домэйн, операторуудад дагавар шаардлагагүй гэдгийг сануулсан тайлбар бичнэ үү.
+  Судлаачид мөн сонгогчийг сонгохдоо каноник домэйн шошгыг тодруулах хэрэгтэй
+  задаргааг кодлодог.
+- **IH58 QR ачаалал.** QR кодууд нь IH58 мөрийг кодлох ёстой. Хэрэв QR үүсгэх
+  амжилтгүй бол хоосон зургийн оронд тодорхой алдаа гаргана.
+- **Clipboard мессеж.** Шахсан маягтыг хуулж авсны дараа шарсан талх эсвэл
+  snackbar нь хэрэглэгчдэд зөвхөн Sora-д зориулагдсан бөгөөд IME-ийн эвдрэлд өртөмтгий гэдгийг сануулдаг.
 
-Following these guardrails prevents Unicode/IME corruption and satisfies the
-ADDR-6 roadmap acceptance criteria for wallet/explorer UX.
+Эдгээр хашлагыг дагаж мөрдөх нь Юникод/IME-ийн эвдрэлээс сэргийлж, шаардлагыг хангана
+Түрийвч / судлаач UX-д зориулсан ADDR-6 замын зураглалыг хүлээн авах шалгуур.
 
-## Screenshot fixtures
+## Дэлгэцийн зургийн хэрэгсэл
 
-Use the following fixtures during localization reviews to ensure button labels,
-tooltips, and warnings stay aligned across platforms:
+Товчлуурын шошгыг баталгаажуулахын тулд нутагшуулах шалгалтын явцад дараах бэхэлгээг ашиглана уу.
+Зөвлөмж, сэрэмжлүүлэг нь платформд нийцсэн хэвээр байна:
 
-- Android reference: `/img/sns/address_copy_android.svg`
+- Android лавлагаа: `/img/sns/address_copy_android.svg`
 
-  ![Android dual copy reference](/img/sns/address_copy_android.svg)
+  ![Android давхар хуулбарын лавлагаа](/img/sns/address_copy_android.svg)
 
-- iOS reference: `/img/sns/address_copy_ios.svg`
+- iOS лавлагаа: `/img/sns/address_copy_ios.svg`
 
-  ![iOS dual copy reference](/img/sns/address_copy_ios.svg)
+  ![iOS давхар хуулбар лавлагаа](/img/sns/address_copy_ios.svg)
 
-## SDK helpers
+## SDK туслахууд
 
-Each SDK exposes a convenience helper that returns the IH58 (preferred) and compressed (`sora`, second-best)
-forms alongside the warning string so UI layers can stay consistent:
+SDK бүр нь IH58 (давуу) болон шахсан (`sora`, хоёрдугаарт) буцаах тохиромжтой туслахыг гаргадаг.
+UI давхаргууд тогтвортой байхын тулд анхааруулах мөрийн хажууд хэлбэрүүд:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` returns the compressed warning
-  string and appends it to `warnings` whenever callers provide a `sora…`
-  literal, so explorers/wallet dashboards can surface the Sora-only notice
-  during paste/validation flows instead of only when they generate the
-  compressed form themselves.
+- JavaScript шалгагч: `inspectAccountId(...)` шахагдсан анхааруулгыг буцаана
+  стринг залгаж, залгагчид `sora…` өгөх болгонд үүнийг `warnings`-д нэмнэ.
+  шууд утгаараа, тиймээс судлаачид/түрийвчний хяналтын самбарууд нь зөвхөн Сорагийн мэдэгдлийг харуулах боломжтой
+  зөвхөн үүсгэх үед биш харин оо/баталгаажуулалтын урсгалын үед
+  шахсан хэлбэр нь өөрсдөө.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Хурдан: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-Use these helpers instead of reimplementing the encode logic in UI layers.
-The JavaScript helper also exposes a `selector` payload on `domainSummary`
-(`tag`, `digest_hex`, `registry_id`, `label`) so UIs can indicate whether a
-selector is Local-12 or registry-backed without re-parsing the raw payload.
+UI давхаргууд дахь кодчилолын логикийг дахин хэрэгжүүлэхийн оронд эдгээр туслахуудыг ашиглаарай.
+JavaScript туслах нь мөн `domainSummary` дээр `selector` ачааллыг илрүүлдэг.
+(`tag`, `digest_hex`, `registry_id`, `label`) тул UI нь
+сонгогч нь Local-12 буюу түүхий ачааг дахин задлан шинжлэхгүйгээр бүртгэлээр дэмжигдсэн.
 
-## Explorer instrumentation demo
+## Explorer багаж хэрэгслийн демо
 
 <ExplorerAddressCard />
 
-Explorers should mirror the wallet telemetry and accessibility work:
+Судлаачид түрийвчний телеметр болон хүртээмжийн ажлыг тусгах ёстой:
 
-- Apply `data-copy-mode="ih58|compressed|qr"` to copy buttons so front-ends can emit usage counters
-  alongside the Torii-side `torii_address_format_total` metric. The demo component above dispatches
-  an `iroha:address-copy` event with `{mode,timestamp}`—wire this into your analytics/telemetry
-  pipeline (e.g., push to Segment or a NORITO-backed collector) so dashboards can correlate server
-  address-format usage with client copy behaviour. Also mirror the Torii domain counters
-  (`torii_address_domain_total{domain_kind}`) in the same feed so Local-12 retirement reviews can
-  export a 30-day `domain_kind="local12"` zero-usage proof directly from the `address_ingest`
-  Grafana board.
-- Pair every control with distinct `aria-label`/`aria-describedby` hints that explain whether a
-  literal is safe to share (`IH58`) or Sora-only (compressed `sora`). Include the implicit-domain caption in
-  the description so assistive technology surfaces the same context shown visually.
-- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
-  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
+- `data-copy-mode="ih58|compressed|qr"`-г хуулах товчлууруудыг ашигласнаар урд тал нь ашиглалтын тоолуур гаргах боломжтой.
+  Torii талын `torii_address_format_total` хэмжүүрийн хажууд. Дээрх демо бүрэлдэхүүн хэсэг нь илгээгддэг
+  `iroha:address-copy` үйл явдал нь `{mode,timestamp}`-тэй үүнийг аналитик/телеметрийн утсанд оруулна уу
+  дамжуулах хоолой (жишээ нь, Segment эсвэл NORITO-д тулгуурласан коллектор руу түлхэх) ингэснээр хяналтын самбар нь сервертэй холбоотой байх боломжтой.
+  харилцагчийн хуулбарлах үйлдэлтэй хаягийн форматын хэрэглээ. Мөн Torii домэйн тоолуурыг тусга
+  (`torii_address_domain_total{domain_kind}`) нь ижил тэжээлд байгаа тул Орон нутгийн-12 тэтгэвэрт гарах тойм
+  `address_ingest`-ээс 30 хоногийн `domain_kind="local12"` тэг ашиглалтын нотолгоог шууд экспортлох
+  Grafana самбар.
+- Хяналт бүрийг `aria-label`/`aria-describedby` тодорхой заавруудтай хослуул.
+  literal-ыг хуваалцахад аюулгүй (`IH58`) эсвэл зөвхөн Sora (шахсан `sora`). Домэйн далд тайлбарыг оруулна уу
+  Туслах технологийн тайлбар нь нүдээр харуулсан ижил контекстийг харуулж байна.
+- Хуулбарын үр дүнг зарлаж буй шууд бүсийг (жишээ нь, `<output aria-live="polite">…</output>`) харуулах ба
+  VoiceOver/TalkBack-ийн үйлдэлтэй таарч байгаа сэрэмжлүүлэг нь одоо Swift/Android загварт холбогдсон байна.
 
-This instrumentation satisfies ADDR-6b by proving operators can observe both Torii ingestion and
-client-side copy modes before Local selectors are disabled.
+Энэхүү багаж нь ADDR-6b-ийн шаардлагыг хангасан бөгөөд операторууд Torii залгих болон
+Орон нутгийн сонгогчийг идэвхгүй болгохоос өмнө клиент талын хуулах горимууд.
 
-## Local → Global migration toolkit
+## Орон нутгийн → Глобал шилжилт хөдөлгөөний хэрэгсэл
 
-Use the [Local → Global toolkit](local-to-global-toolkit.md) to automate
-JSON audit report and the converted preferred IH58 / second-best compressed (`sora`) list that operators attach
-to readiness tickets, while the accompanying runbook links the Grafana
-dashboards and Alertmanager rules that gate the strict-mode cutover.
+Автоматжуулахын тулд [Local → Global toolkit](local-to-global-toolkit.md) ашиглана уу.
+JSON аудитын тайлан ба хөрвүүлсэн илүүд үздэг IH58 / операторуудын хавсаргасан хоёр дахь хамгийн сайн шахсан (`sora`) жагсаалт
+бэлэн байдлын тасалбар руу, харин дагалдах runbook нь Grafana-г холбосон.
+Хатуу горимын таслалтыг хаадаг хяналтын самбар болон Alertmanager дүрмүүд.
 
-## Binary layout quick reference (ADDR-1a)
+## Хоёртын байршлын шуурхай лавлагаа (ADDR-1a)
 
-When SDKs surface advanced address tooling (inspectors, validation hints,
-manifest builders), point developers at the canonical wire format captured in
-`docs/account_structure.md`. The layout is always
-`header · selector · controller`, where the header bits are:
+SDK нь хаягийн дэвшилтэт хэрэгслийг (хянагч, баталгаажуулалтын зөвлөмж,
+манифест бүтээгчид)-д авсан каноник утсан формат руу хөгжүүлэгчид зааж өгнө
+`docs/account_structure.md`. Зохион байгуулалт нь үргэлж байдаг
+`header · selector · controller`, толгойн битүүд нь:
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -126,14 +127,14 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-- `addr_version = 0` (bits 7‑5) today; non-zero values are reserved and must
-  raise `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class` distinguishes single (`0`) vs multisig (`1`) controllers.
-- `norm_version = 1` encodes the Norm v1 selector rules. Future norms will reuse
-  the same 2-bit field.
-- `ext_flag` is always `0`—set bits indicate unsupported payload extensions.
+- `addr_version = 0` (бит 7‑5) өнөөдөр; тэгээс бусад утгууд хадгалагдсан бөгөөд заавал байх ёстой
+  `AccountAddressError::InvalidHeaderVersion` өсгөх.
+- `addr_class` нь дан (`0`) ба multisig (`1`) хянагчуудыг ялгадаг.
+- `norm_version = 1` Normv1 сонгогчийн дүрмийг кодлодог. Ирээдүйн хэм хэмжээг дахин ашиглах болно
+  ижил 2 битийн талбар.
+- `ext_flag` үргэлж `0` - тохируулсан битүүд нь дэмжигдээгүй ачааллын өргөтгөлүүдийг илэрхийлдэг.
 
-The selector immediately follows the header:
+Сонгогч нь толгой хэсгийг шууд дагаж мөрддөг.
 
 ```
 ┌──────────┬──────────────────────────────────────────────┐
@@ -141,35 +142,35 @@ The selector immediately follows the header:
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-UI and SDK surfaces should be ready to display the selector kind:
+UI болон SDK гадаргуу нь сонгогчийн төрлийг харуулахад бэлэн байх ёстой:
 
-- `0x00` = implicit default domain (no payload).
-- `0x01` = local digest (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = global registry entry (big-endian `registry_id:u32`).
+- `0x00` = далд өгөгдмөл домэйн (ажилгүй).
+- `0x01` = орон нутгийн дижест (12 байт `blake2s_mac("SORA-LOCAL-K:v1", label)`).
+- `0x02` = дэлхийн бүртгэлийн бичилт (том-endian `registry_id:u32`).
 
-Canonical hex examples that wallet tooling can link or embed in docs/tests:
+Түрийвчний хэрэглүүрийг баримт бичиг/тестэд холбох эсвэл оруулах боломжтой каноник зургаан талт жишээнүүд:
 
-| Selector kind | Canonical hex |
-|---------------|---------------|
-| Implicit default | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Global registry (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
+| Сонгогч төрөл | Каноник зургаан өнцөгт |
+|-------------|---------------|
+| Далд өгөгдмөл | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Орон нутгийн тойм (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
+| Глобал бүртгэл (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
-Refer to `docs/source/references/address_norm_v1.md` for the full selector/state
-table and `docs/account_structure.md` for the complete byte diagram.
+Бүрэн сонгогч/төлөвийг `docs/source/references/address_norm_v1.md`-с харна уу
+хүснэгт болон `docs/account_structure.md` бүрэн байт диаграмм.
 
-## Enforcing canonical forms
+## Каноник маягтуудыг хэрэгжүүлэх
 
-strings must follow the CLI workflow documented under ADDR-5:
+стрингүүд нь ADDR-5-ын дагуу бичигдсэн CLI ажлын урсгалыг дагаж мөрдөх ёстой:
 
-1. `iroha tools address inspect` now emits a structured JSON summary with IH58,
-   compressed, and canonical hex payloads. The summary also includes a `domain`
-   object with `kind`/`warning` fields and echoes any provided domain via the
-   `input_domain` field. When `kind` is `local12`, the CLI prints a warning to
-   stderr and the JSON summary echoes the same guidance so CI pipelines and SDKs
-   can surface it. Pass `--append-domain` whenever you want the converted
-   encoding replayed as `<ih58>@<domain>`.
-2. SDKs can surface the same warning/summary via the JavaScript helper:
+1. `iroha tools address inspect` одоо IH58-тай бүтэцлэгдсэн JSON хураангуйг гаргадаг.
+   шахсан, болон каноник зургаан өнцөгт ачаалал. Хураангуйд мөн `domain` орно
+   `kind`/`warning` талбар бүхий объект ба өгөгдсөн домэйныг
+   `input_domain` талбар. `kind` `local12` үед CLI нь анхааруулга хэвлэдэг.
+   stderr болон JSON хураангуй нь ижил зааварчилгаатай тул CI дамжуулах хоолой болон SDK-ууд
+   гадаргуу дээр гаргаж чадна. Хөрвүүлэхийг хүссэн үедээ `--append-domain`-г дамжуулаарай
+   кодчилол `<ih58>@<domain>` гэж дахин тоглуулсан.
+2. SDK-ууд нь JavaScript-н туслагчаар ижил анхааруулга/хураангуйг гаргаж чадна:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -180,69 +181,67 @@ strings must follow the CLI workflow documented under ADDR-5:
    }
    console.log(summary.ih58.value, summary.compressed);
    ```
-  The helper preserves the IH58 prefix detected from the literal unless you
-  explicitly provide `networkPrefix`, so summaries for non-default networks do
-  not silently re-render with the default prefix.
+  Туслагч нь таныг биш л бол шууд утгаас илрүүлсэн IH58 угтварыг хадгална
+  `networkPrefix`-ийг тодорхой зааж өгсөн тул өгөгдмөл бус сүлжээнүүдийн хураангуй
+  анхдагч угтвараар чимээгүйхэн дахин дүрслэхгүй.
 
-3. Convert the canonical payload by reusing the `ih58.value` or `compressed`
-   fields from the summary (or request another encoding via `--format`). These
-   strings are already safe to share externally.
-4. Update manifests, registries, and customer-facing documents with the
-   canonical form and notify counterparties that Local selectors will be
-   rejected once the cutover completes.
-5. For bulk data sets, run
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
-   reads newline-separated literals (comments starting with `#` are ignored, and
-   `--input -` or no flag uses STDIN), emits a JSON report with
-   canonical/preferred IH58/second-best compressed (`sora`) summaries for every entry, and counts both parse
-   dumps that contain junk rows, and gate automation with `--fail-on-warning`
-   once operators are ready to block Local selectors in CI.
-6. When you need a newline-to-newline rewrite, use
-  For Local-selector remediation spreadsheets, use
-  to export a `input,status,format,…` CSV that highlights canonical encodings, warnings, and parse failures in one pass.
-   The helper skips non-Local rows by default, converts every remaining entry
-   into the requested encoding (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the
-   original domain when `--append-domain` is set. Pair it with `--allow-errors`
-   to keep scanning even when a dump contains malformed literals.
-7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts
-   the Local selectors from `fixtures/account/address_vectors.json`, converts
-   them via `iroha tools address normalize`, and replays
-   `iroha tools address audit --fail-on-warning` to prove releases no longer emit
-   Local digests.
-
-`torii_address_local8_total{endpoint}` plus
+3. `ih58.value` эсвэл `compressed`-г дахин ашиглах замаар каноник ачааллыг хөрвүүлнэ.
+   хураангуйгаас талбарууд (эсвэл `--format`-ээр дамжуулан өөр кодчилол хүсэх). Эдгээр
+   стрингүүд нь гаднаас хуваалцахад аль хэдийн аюулгүй болсон.
+4. Манифестууд, бүртгэлүүд болон харилцагчдад зориулсан баримт бичгүүдийг шинэчлэх
+   каноник маягт гаргаж, Орон нутгийн сонгогчид байх болно гэдгийг эсрэг талуудад мэдэгдэнэ
+   тасалбар дууссаны дараа татгалзсан.
+5. Бөөн өгөгдлийн багцын хувьд ажиллуулна
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. Тушаал
+   шинэ мөрөөр тусгаарлагдсан литералуудыг уншдаг (`#`-ээр эхэлсэн тайлбарыг үл тоомсорлож,
+   `--input -` эсвэл ямар ч туг STDIN ашигладаггүй) JSON тайланг гаргадаг
+   Бичлэг бүрийн каноник/давуу IH58/хоёр дахь хамгийн сайн шахсан (`sora`) хураангуй, задлан шинжилгээг хоёуланг нь тооцдог
+   хог мөр агуулсан овоолго, `--fail-on-warning` бүхий хаалганы автоматжуулалт
+   операторууд CI доторх локал сонгогчийг хаахад бэлэн болмогц.
+6. Шинэ мөрийг шинэ мөрөнд дахин бичих шаардлагатай үед ашиглана уу
+  Орон нутгийн сонгогчийн засварын хүснэгтийн хувьд ашиглана уу
+  Каноник кодчилол, анхааруулга, задлан шинжлэлийн алдааг нэг дамжуулалтаар онцолсон `input,status,format,…` CSV-г экспортлох.
+   Туслагч нь өгөгдмөлөөр Орон нутгийн бус мөрүүдийг алгасаж, үлдсэн оруулга бүрийг хөрвүүлдэг
+   хүссэн кодчилолд (IH58 давуу/шахсан (`sora`) хоёр дахь шилдэг/hex/JSON) оруулж,
+   `--append-domain` тохируулагдсан үед анхны домэйн. Үүнийг `--allow-errors`-тэй хослуул
+   Дамп нь алдаатай литерал агуулсан байсан ч сканнердсан хэвээр байх.
+7. CI/lint автоматжуулалт нь олборлодог `ci/check_address_normalize.sh`-г ажиллуулж болно.
+   `fixtures/account/address_vectors.json`-ийн локал сонгогчид хөрвүүлдэг
+   тэдгээрийг `iroha tools address normalize`-ээр дамжуулж, дахин тоглуулна
+   `iroha tools address audit --fail-on-warning` хувилбарууд ялгарахаа больсон гэдгийг батлах
+   Орон нутгийн задаргаа.`torii_address_local8_total{endpoint}` нэмэх
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, and the
-Grafana board `dashboards/grafana/address_ingest.json` provide the enforcement
-signal: once production dashboards show zero legitimate Local submissions and
-zero Local-12 collisions for 30 consecutive days, Torii will flip the Local-8
-gate to hard-fail on mainnet, followed by Local-12 once global domains have
-matching registry entries. Consider the CLI output the operator-facing notice
-for this freeze—the same warning string is used across SDK tooltips and
-automation to keep parity with the roadmap exit criteria. Torii now defaults to
-when diagnosing regressions. Keep mirroring `torii_address_domain_total{domain_kind}`
-into Grafana (`dashboards/grafana/address_ingest.json`) so the ADDR-7 evidence pack
-can prove `domain_kind="local12"` stayed at zero for the required 30-day window before
-(`dashboards/alerts/address_ingest_rules.yml`) adds three guardrails:
+`torii_address_collision_domain_total{endpoint,domain}`, мөн
+Grafana самбар `dashboards/grafana/address_ingest.json` хэрэгжилтийг хангана
+дохио: нэг удаа үйлдвэрлэлийн хяналтын самбар тэг хууль ёсны Орон нутгийн ирүүлсэн харуулах ба
+30 хоног дараалан орон нутгийн-12 мөргөлдөөн тэг, Torii нь Local-8-ыг эргүүлнэ
+mainnet дээр хатуу бүтэлгүйтлийн gate, дараа нь глобал домэйнтэй бол Local-12
+тохирох бүртгэлийн бичилтүүд. Оператор руу чиглэсэн мэдэгдэл CLI гаралтыг авч үзье
+Энэ хөлдөлтөд- SDK хэрэгслийн зөвлөмж болон дээр ижил анхааруулах мөрийг ашигладаг
+замын зураглалаас гарах шалгууртай тэнцэх автоматжуулалт. Torii одоо өгөгдмөл байна
+регрессийг оношлох үед. `torii_address_domain_total{domain_kind}` толин тусгалыг үргэлжлүүлээрэй
+Grafana (`dashboards/grafana/address_ingest.json`) руу оруулснаар ADDR-7 нотлох баримтын багц
+өмнө шаардлагатай 30 хоногийн цонхонд `domain_kind="local12"` тэг хэвээр байсныг баталж чадна
+(`dashboards/alerts/address_ingest_rules.yml`) гурван хамгаалалтын хашлага нэмсэн:
 
-- `AddressLocal8Resurgence` pages whenever a context reports a fresh Local-8
-  increment. Halt strict-mode rollouts, locate the offending SDK surface in the
-  until the signal returns to zero—then restore the default (`true`).
-- `AddressLocal12Collision` fires when two Local-12 labels hash to the same
-  digest. Pause manifest promotions, run the Local → Global toolkit to audit
-  the digest mapping, and coordinate with Nexus governance before reissuing the
-  registry entry or re-enabling downstream rollouts.
-- `AddressInvalidRatioSlo` warns when the fleet-wide invalid ratio (excluding
-  Local-8/strict-mode rejections) exceeds the 0.1 % SLO for ten minutes. Use
-  `torii_address_invalid_total` to pinpoint the responsible context/reason and
-  coordinate with the owning SDK team before re-enabling strict mode.
+- Контекст шинэ Local-8-г мэдээлэх бүрт `AddressLocal8Resurgence` хуудас
+  өсөлт. Хатуу горимын шилжүүлэлтийг зогсоож, SDK-ийн зөрчилтэй гадаргууг олоорой
+  дохио нь тэг рүү буцах хүртэл—дараа нь анхдагч тохиргоог (`true`) сэргээнэ.
+- Хоёр Local-12 шошго ижил байх үед `AddressLocal12Collision` ажилладаг.
+  шингээх. Манифест сурталчилгааг түр зогсоож, Орон нутгийн → Глобал хэрэглүүрийг ажиллуулж аудит хийнэ үү
+  дижестийн зураглалыг хийж, дахин гаргахаас өмнө Nexus засаглалтай зохицуулна.
+  бүртгэлийн оруулга эсвэл доод урсгалыг дахин идэвхжүүлэх.
+- `AddressInvalidRatioSlo` нь флотын хэмжээнд хүчингүй харьцаа (үүнээс бусад) үед анхааруулдаг.
+  Орон нутгийн-8/хатуу горимын татгалзалт) нь арван минутын турш 0.1% SLO-г давсан. Ашиглах
+  `torii_address_invalid_total` хариуцлагатай нөхцөл/шалтгаан ба
+  хатуу горимыг дахин идэвхжүүлэхийн өмнө эзэмшигч SDK багтай хамтран ажиллах.
 
-### Release note snippet (wallet & explorer)
+### Тэмдэглэлийн хэсгүүдийг гаргах (түрийвч болон судлаач)
 
-Include the following bullet in the wallet/explorer release notes when shipping
-the cutover:
+Тээвэрлэхдээ түрийвч/судлагчийн хувилбарын тэмдэглэлд дараах сумыг оруулна уу
+зүсэлт:
 
-> **Addresses:** Added the `iroha tools address normalize --only-local --append-domain`
-> helper and wired it into CI (`ci/check_address_normalize.sh`) so wallet/explorer
-> before Local-8/Local-12 are blocked on mainnet. Update any custom exports to
-> run the command and attach the normalized list to the release evidence bundle.
+> **Хаяг:** `iroha tools address normalize --only-local --append-domain` нэмсэн
+> туслагч болон үүнийг CI (`ci/check_address_normalize.sh`) руу холбосон тул түрийвч/судлагч
+> Local-8/Local-12 үндсэн сүлжээнд хаагдахаас өмнө. Захиалгат экспортыг шинэчилнэ үү
+> тушаалыг ажиллуулж, нормчлогдсон жагсаалтыг гаргах нотлох баримтын багцад хавсаргана уу.

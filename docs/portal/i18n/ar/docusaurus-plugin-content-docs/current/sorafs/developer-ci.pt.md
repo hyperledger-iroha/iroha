@@ -4,25 +4,27 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-ci.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Receitas de CI da SoraFS
-sidebar_label: Receitas de CI
-description: Execute o CLI da SoraFS em pipelines do GitHub e GitLab com assinatura sem chaves.
+المعرف: المطور-ci
+العنوان: Receitas de CI da SoraFS
+Sidebar_label: إيصالات CI
+الوصف: قم بتنفيذ سطر الأوامر من SoraFS عبر خطوط الأنابيب في GitHub وGitLab مع عملية الدمج.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/ci.md`. Mantenha ambas as copias sincronizadas.
+:::ملاحظة فونتي كانونيكا
+هذه الصفحة espelha `docs/source/sorafs/developer/ci.md`. Mantenha ambas as copias sincronzadas.
 :::
 
-# Receitas de CI
+# إيصالات CI
 
-Pipelines da SoraFS se beneficiam de chunking deterministico, assinatura de manifests e verificacao de proofs. A superficie de comandos
-`sorafs_cli` mantem esses passos portaveis entre provedores de CI. Esta pagina destaca as receitas canonicas e aponta para templates prontos para uso.
+تستفيد خطوط الأنابيب من SoraFS من القطع الحتمي وتجميع البيانات والتحقق من الأدلة. سطح الأوامر
+`sorafs_cli` mantem passos portaveis entreproveores de CI. تم حذف هذه الصفحة من الإيصالات الكنسي والضغط على قوالب مناسبة للاستخدام.
 
-## GitHub Actions (sem chaves)
+## إجراءات GitHub (sem chaves)
 
 ```yaml
 name: sorafs-artifacts
@@ -95,13 +97,13 @@ jobs:
           path: artifacts/
 ```
 
-Pontos chave:
+بونتوس تشافي:
 
-- Nenhuma chave de assinatura estatica e armazenada; tokens OIDC sao obtidos sob demanda.
-- Artefatos (CAR, manifest, bundle, resumos de proofs) sao enviados para revisao.
-- O job reutiliza os mesmos esquemas Norito usados nos rollouts de producao.
+- Nenhuma chave de assinatura estatica e armazenada؛ الرموز المميزة OIDC sao obtidos sob requesta.
+- Artefatos (CAR، Manifest، Bundle، Resumos de Prophes) إرسالها للمراجعة.
+- قم بإعادة استخدام نفس النوع من Norito أثناء عمليات طرح الإنتاج.
 
-## GitLab CI
+## جيتلاب سي آي
 
 ```yaml
 stages:
@@ -135,12 +137,10 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provisione `SIGSTORE_ID_TOKEN` via federacao de identidade de workload do GitLab ou um segredo selado antes de executar a etapa de publish.
-- A falha de qualquer etapa do CLI faz o pipeline parar, preservando artefatos consistentes.
+- توفير `SIGSTORE_ID_TOKEN` عبر توحيد معرف عبء العمل في GitLab أو عزله قبل التنفيذ وبدء النشر.
+- فشل أي خطوة من CLI أو خط الأنابيب، والحفاظ على ثبات القطع الأثرية.
 
-## Recursos adicionais
-
-- Templates end-to-end (inclui helpers Bash, configuracao de identidade federada e passos de limpeza): `docs/examples/sorafs_ci.md`
-- Referencia do CLI cobrindo todas as opcoes: `docs/source/sorafs_cli.md`
-- Requisitos de governanca/alias antes do envio:
+## الموارد الإضافية- القوالب الشاملة (بما في ذلك مساعدات Bash وتكوين الهوية الموحدة وبطاقات المرور): `docs/examples/sorafs_ci.md`
+- المرجع إلى CLI cobrindo todas كـ opcoes: `docs/source/sorafs_cli.md`
+- متطلبات الحوكمة/الاسم المستعار قبل إرسالها:
   `docs/source/sorafs/provider_admission_policy.md`

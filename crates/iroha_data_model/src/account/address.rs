@@ -1811,6 +1811,7 @@ mod tests {
 
     #[test]
     fn chain_discriminant_guard_scopes_override() {
+        let _outer = ChainDiscriminantGuard::enter(42);
         let original = chain_discriminant();
         {
             let _guard = ChainDiscriminantGuard::enter(original.wrapping_add(1));

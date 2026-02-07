@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 56951fb1e07d90ed062c24f6ef80b8e211b37be008becba9a1fdb16d522d5230
 source_last_modified: "2026-01-21T19:17:13.230513+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Comment Audit Notes
+# አስተያየት የኦዲት ማስታወሻዎች
 
-Checked the following IVM modules and confirmed their inline/docs comments match the current behaviour (no code edits required):
+የሚከተሉትን የI18NT0000000X ሞጁሎች አረጋግጠዋል እና የእነርሱ የመስመር/የሰነድ አስተያየቶች ከአሁኑ ባህሪ ጋር እንደሚዛመዱ አረጋግጠዋል (ምንም የኮድ ማረም አያስፈልግም)
 
-- `crates/ivm/src/runtime.rs`
+- I18NI0000001X
 
 - `crates/ivm/src/memory.rs`
 - `crates/ivm/src/register_file.rs`
@@ -39,4 +40,4 @@ Checked the following IVM modules and confirmed their inline/docs comments match
 - `crates/ivm_abi/src/pointer_abi.rs`
 - `crates/ivm/src/ivm_cache.rs`
 
-Remaining workspace crates still need a pass if further comment updates become necessary.
+ተጨማሪ የአስተያየት ማሻሻያዎች አስፈላጊ ከሆኑ ቀሪ የስራ ቦታ ሳጥኖች አሁንም ማለፊያ ያስፈልጋቸዋል።

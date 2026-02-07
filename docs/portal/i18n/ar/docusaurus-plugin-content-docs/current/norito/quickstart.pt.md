@@ -4,45 +4,45 @@ direction: rtl
 source: docs/portal/docs/norito/quickstart.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Inicio rapido do Norito
-description: Construa, valide e faca deploy de um contrato Kotodama com o tooling de release e a rede padrao de um unico peer.
-slug: /norito/quickstart
+العنوان: Inicio Rapido do Norito
+الوصف: تم إنشاء عقد Kotodama وصلاحيته ونشره باستخدام أدوات الإصدار ومنصة إعادة التدوير من نظير فريد.
+سبيكة: /norito/quickstart
 ---
 
-Este passo a passo espelha o fluxo que esperamos que desenvolvedores sigam ao aprender Norito e Kotodama pela primeira vez: iniciar uma rede deterministica de um unico peer, compilar um contrato, fazer dry-run localmente e depois enviar via Torii com o CLI de referencia.
+هذه الخطوة هي عبارة عن تدفق يتطلع المطورون إلى تعلمه Norito و Kotodama من البداية: بدء حتمية جديدة من نظير واحد، وتجميع عقد، وتنفيذ التشغيل الجاف محليًا ثم إرساله عبر Torii مع سطر الأوامر المرجعي.
 
-O contrato de exemplo grava um par chave/valor na conta do chamador para que voce possa verificar o efeito colateral imediatamente com `iroha_cli`.
+عقد نموذجي محسوب على أساس الشجاعة/القيمة في حساب الدعوة حتى تتمكن من التحقق من تأثير الضمان على الفور مع `iroha_cli`.
 
-## Pre-requisitos
+## المتطلبات المسبقة
 
-- [Docker](https://docs.docker.com/engine/install/) com Compose V2 habilitado (usado para iniciar o peer de exemplo definido em `defaults/docker-compose.single.yml`).
-- Toolchain Rust (1.76+) para compilar os binarios auxiliares se voce nao baixar os publicados.
-- Binarios `koto_compile`, `ivm_run` e `iroha_cli`. Voce pode compila-los a partir do checkout do workspace como mostrado abaixo ou baixar os artifacts de release correspondentes:
+- [Docker](https://docs.docker.com/engine/install/) com Compose V2 habilitado (يُستخدم لبدء أو نظير نموذج محدد في `defaults/docker-compose.single.yml`).
+- Toolchain Rust (1.76+) لتجميع الثنائيات المساعدة دون حذف المنشورات.
+- ثنائيات `koto_compile`، `ivm_run` و`iroha_cli`. يمكن تجميع العناصر من الخروج من مساحة العمل كما هو موضح أو يخفض عناصر الإصدار المقابلة:
 
 ```sh
 cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
-> Os binarios acima sao seguros para instalar junto com o resto do workspace.
-> Eles nunca fazem link com `serde`/`serde_json`; os codecs Norito sao aplicados de ponta a ponta.
+> الثنائيات هنا آمنة لتثبيتها مع بقية مساحة العمل.
+> Eles nunca fazem link com `serde`/`serde_json`; برنامج الترميز Norito هو تطبيق من نقطة إلى نقطة.
 
-## 1. Inicie uma rede dev de um unico peer
-
-O repositorio inclui um bundle Docker Compose gerado por `kagami swarm` (`defaults/docker-compose.single.yml`). Ele conecta a genesis padrao, a configuracao do cliente e os health probes para que Torii fique acessivel em `http://127.0.0.1:8080`.
+## 1. ابدأ تطويرًا من نظير فريديشتمل المستودع على حزمة Docker قم بتكوينها بواسطة `kagami swarm` (`defaults/docker-compose.single.yml`). يتم توصيله بسجل التكوين وتكوين العميل وتحقيقات الصحة حتى يتمكن Torii من الوصول إلى `http://127.0.0.1:8080`.
 
 ```sh
 docker compose -f defaults/docker-compose.single.yml up --build
 ```
 
-Deixe o container rodando (em primeiro plano ou detached). Todas as chamadas de CLI posteriores apontam para esse peer via `defaults/client.toml`.
+Deixe o حاوية روداندو (سواء كانت أولية أو منفصلة). جميع المكالمات من CLI اللاحقة يمكن مقارنتها عبر `defaults/client.toml`.
 
-## 2. Escreva o contrato
+## 2.اكتب العقد
 
-Crie um diretorio de trabalho e salve o exemplo minimo de Kotodama:
+قم بإنشاء دليل العمل وحفظه أو الحد الأدنى من نموذج Kotodama:
 
 ```sh
 mkdir -p target/quickstart
@@ -67,11 +67,11 @@ seiyaku Hello {
 KO
 ```
 
-> Prefira manter os fontes Kotodama em controle de versao. Exemplos hospedados no portal tambem estao disponiveis na [galeria de exemplos Norito](./examples/) se voce quiser um ponto de partida mais rico.
+> قم باختيار الخطوط Kotodama من خلال التحكم بالعكس. تم توفير نماذج المستضافات على البوابة أيضًا في [معرض النماذج Norito](./examples/) إذا كنت تبحث عن نقطة من الجزء الأكبر من ريكو.
 
-## 3. Compile e faca dry-run com IVM
+## 3. قم بتجميع التشغيل الجاف مع IVM
 
-Compile o contrato para bytecode IVM/Norito (`.to`) e execute-o localmente para confirmar que os syscalls do host funcionam antes de tocar a rede:
+قم بتجميع عقد للرمز الثانوي IVM/Norito (`.to`) وتنفيذه محليًا للتأكد من أن مكالمات النظام تعمل قبل إعادة التشغيل:
 
 ```sh
 koto_compile target/quickstart/hello.ko \
@@ -82,16 +82,14 @@ koto_compile target/quickstart/hello.ko \
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-O runner imprime o log `info("Hello from Kotodama")` e executa o syscall `SET_ACCOUNT_DETAIL` contra o host mockado. Se o binario opcional `ivm_tool` estiver disponivel, `ivm_tool inspect target/quickstart/hello.to` mostra o ABI header, os feature bits e os entrypoints exportados.
+يقوم المشغل بطباعة السجل `info("Hello from Kotodama")` وتنفيذ أو استدعاء النظام `SET_ACCOUNT_DETAIL` ضد المضيف المقلدة. إذا تم توفير خيار ثنائي اختياري `ivm_tool`، أو `ivm_tool inspect target/quickstart/hello.to` أو رأس ABI، فإن وحدات البت الخاصة بنظام التشغيل ونقاط الدخول المصدرة.
 
-## 4. Envie o bytecode via Torii
-
-Com o nodo ainda rodando, envie o bytecode compilado para Torii usando o CLI. A identidade de desenvolvimento padrao e derivada da chave publica em `defaults/client.toml`, portanto o ID de conta e
+## 4. قم بإرسال الرمز الثانوي عبر Toriiبعقد اجتماع جديد، يمكنك إرسال الرمز الثانوي المترجم إلى Torii باستخدام CLI. معرف تطوير الموقع ومشتق من نشره على `defaults/client.toml`، يحمل أو معرف الحساب
 ```
 ih58...
 ```
 
-Use o arquivo de configuracao para fornecer a URL de Torii, o chain ID e a chave de assinatura:
+استخدم ملف التكوين لإنشاء عنوان URL لـ Torii أو معرف السلسلة ومفتاح الاختراق:
 
 ```sh
 iroha --config defaults/client.toml \
@@ -99,11 +97,11 @@ iroha --config defaults/client.toml \
   --path target/quickstart/hello.to
 ```
 
-O CLI codifica a transacao com Norito, assina com a chave de dev e envia ao peer em execucao. Observe os logs do Docker para o syscall `set_account_detail` ou monitore a saida do CLI para o hash da transacao committed.
+يتم ترميز CLI للمعاملات باستخدام Norito، ويتم تنفيذها بمهمة التطوير وإرسالها إلى نظير التنفيذ. راقب سجلات Docker لـ syscall `set_account_detail` أو راقب رسالة CLI لتجزئة المعاملات الملتزم بها.
 
-## 5. Verifique a mudanca de estado
+## 5. التحقق من حالة الوضع
 
-Use o mesmo perfil do CLI para buscar o account detail que o contrato gravou:
+استخدم نفس ملف CLI للبحث عن تفاصيل الحساب التي تعقدها:
 
 ```sh
 iroha --config defaults/client.toml \
@@ -112,7 +110,7 @@ iroha --config defaults/client.toml \
   --key example | jq .
 ```
 
-Voce deve ver o payload JSON suportado por Norito:
+تم تطوير إصدار الحمولة النافعة JSON المدعومة لـ Norito:
 
 ```json
 {
@@ -120,13 +118,11 @@ Voce deve ver o payload JSON suportado por Norito:
 }
 ```
 
-Se o valor estiver ausente, confirme que o servico Docker compose ainda esta rodando e que o hash da transacao reportado por `iroha` chegou ao estado `Committed`.
+إذا كانت القيمة موجودة، فتأكد من أن الخدمة Docker تقوم بتكوين هذه الخدمة وأن تجزئة المعاملة التي تم الإبلاغ عنها بواسطة `iroha` قد انتقلت إلى الحالة `Committed`.
 
-## Proximos passos
-
-- Explore a [galeria de exemplos](./examples/) gerada automaticamente para ver
-  como snippets Kotodama mais avancados se mapeiam para syscalls Norito.
-- Leia o [guia de inicio do Norito](./getting-started) para uma explicacao
-  mais profunda do tooling de compilador/runner, do deploy de manifests e dos metadados IVM.
-- Ao iterar nos seus contratos, use `npm run sync-norito-snippets` no workspace para
-  regenerar snippets baixaveis e manter os docs do portal e artifacts sincronizados com as fontes em `crates/ivm/docs/examples/`.
+## بروكسيموس باسوس- استكشاف [معرض الأمثلة](./examples/) الذي يتم عرضه تلقائيًا للعرض
+  مثل المقتطفات Kotodama الأكثر تقدمًا يتم تعيينها لـ syscalls Norito.
+- Leia o [دليل البداية Norito](./getting-started) للشرح
+  أكثر عمقًا في أدوات المترجم/المشغل، قم بنشر البيانات والبيانات التعريفية IVM.
+- للرجوع إلى عقودنا، استخدم `npm run sync-norito-snippets` بدون مساحة عمل
+  قم بإعادة إنشاء المقتطفات بشكل مخفي وإدارة المستندات إلى البوابة الإلكترونية والعناصر المتزامنة كخطوط في `crates/ivm/docs/examples/`.

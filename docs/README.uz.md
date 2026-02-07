@@ -7,83 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 26e6f90205e98b5db87d442eb7e4e7691cce47e1c33ef3d11c9bfba25269294e
 source_last_modified: "2026-01-14T17:53:24.552406+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Documentation
+# Iroha Hujjatlar
 
-日本語版の概要は [`README.ja.md`](./README.ja.md) を参照してください。
+`README.ja.md`](./README.ja.md)
 
-The workspace ships two release lines from the same codebase: **Iroha 2** (self-hosted deployments) and
-**Iroha 3 / SORA Nexus** (the single global Nexus ledger). Both reuse the same Iroha Virtual Machine (IVM) and
-Kotodama toolchain, so contracts and bytecode remain portable between deployment targets. Documentation applies
-to both unless otherwise noted.
+Ish maydoni bir xil kod bazasidan ikkita reliz qatorini jo'natadi: **Iroha 2** (o'z-o'zidan joylashtirilgan joylashtirishlar) va
+**Iroha 3 / SORA Nexus** (yagona global Nexus daftar). Ikkalasi ham bir xil Iroha virtual mashinasini (IVM) qayta ishlatadi va
+Kotodama asboblar zanjiri, shuning uchun shartnomalar va bayt-kod joylashtirish maqsadlari orasida ko'chma bo'lib qoladi. Hujjatlar amal qiladi
+agar boshqacha ko'rsatilmagan bo'lsa, ikkalasiga ham.
 
-In the [main Iroha documentation](https://docs.iroha.tech/) you will find:
+[Asosiy Iroha hujjatlarida](https://docs.iroha.tech/) quyidagilarni topasiz:
 
-- [Get Started Guide](https://docs.iroha.tech/get-started/)
-- [SDK Tutorials](https://docs.iroha.tech/guide/tutorials/) for Rust, Python, Javascript, and Java/Kotlin
-- [API Reference](https://docs.iroha.tech/reference/torii-endpoints.html)
+- [Boshlash uchun qo'llanma](https://docs.iroha.tech/get-started/)
+- Rust, Python, Javascript va Java/Kotlin uchun [SDK Tutorials](https://docs.iroha.tech/guide/tutorials/)
+- [API ma'lumotnomasi](https://docs.iroha.tech/reference/torii-endpoints.html)
 
-Release-specific whitepapers and specs:
+Chiqarish uchun maxsus oq qog'ozlar va texnik xususiyatlar:
 
-- [Iroha 2 Whitepaper](./source/iroha_2_whitepaper.md) — self-hosted network specification.
-- [Iroha 3 (SORA Nexus) Whitepaper](./source/iroha_3_whitepaper.md) — Nexus multi-lane and data-space design.
-- [Data Model & ISI Spec (implementation‑derived)](./source/data_model_and_isi_spec.md) — reverse-engineered behavior reference.
-- [ZK Envelopes (Norito)](./source/zk_envelopes.md) — native IPA/STARK Norito envelopes and verifier expectations.
+- [Iroha 2 Whitepaper](./source/iroha_2_whitepaper.md) — oʻz-oʻzidan joylashtirilgan tarmoq spetsifikatsiyasi.
+- [Iroha 3 (SORA Nexus) Whitepaper](./source/iroha_3_whitepaper.md) — Nexus koʻp tarmoqli va maʼlumotlar maydoni dizayni.
+- [Ma'lumotlar modeli va ISI Spec (amalga oshirishdan olingan)](./source/data_model_and_isi_spec.md) - teskari ishlab chiqilgan xatti-harakatlar ma'lumotnomasi.
+- [ZK konvertlari (Norito)](./source/zk_envelopes.md) — mahalliy IPA/STARK Norito konvertlari va tasdiqlovchi taxminlari.
 
-## Localization
+## Mahalliylashtirish
 
-Japanese (`*.ja.*`), Hebrew (`*.he.*`), Spanish (`*.es.*`), Portuguese
-(`*.pt.*`), French (`*.fr.*`), Russian (`*.ru.*`), Arabic (`*.ar.*`), and Urdu
-(`*.ur.*`) documentation stubs live next to each English source file. See
-[`docs/i18n/README.md`](./i18n/README.md) for details on generating and
-maintaining translations, as well as guidance for adding new languages in the
-future.
+Yapon (`*.ja.*`), ibroniy (`*.he.*`), ispan (`*.es.*`), portugal
+(`*.pt.*`), frantsuz (`*.fr.*`), rus (`*.ru.*`), arab (`*.ar.*`) va urdu
+(`*.ur.*`) hujjat stublari har bir ingliz manba fayli yonida joylashgan. Qarang
+[`docs/i18n/README.md`](./i18n/README.md) yaratish va yaratish haqida batafsil ma'lumot uchun
+tarjimalarni saqlash, shuningdek, yangi tillarni qo'shish bo'yicha ko'rsatmalar
+kelajak.
 
-## Tools
+## Asboblar
 
-In this repository you can find documentation for Iroha 2 tools:
+Ushbu omborda siz Iroha 2 vositalari uchun hujjatlarni topishingiz mumkin:
 
 - [Kagami](../crates/iroha_kagami/README.md)
-- [`iroha_derive`](../crates/iroha_derive/) macros for configuration structs (see the `config_base` feature)
-- [Profiling build steps](./profile_build.md) for identifying slow `iroha_data_model` compilation tasks
+- [`iroha_derive`](../crates/iroha_derive/) konfiguratsiya tuzilmalari uchun makroslar (`config_base` xususiyatiga qarang)
+- [Profillash bosqichlari](./profile_build.md) sekin `iroha_data_model` kompilyatsiya vazifalarini aniqlash uchun
 
-## Swift / iOS SDK References
+## Swift / iOS SDK havolalari
 
-- [Swift SDK overview](./source/sdk/swift/index.md) — pipeline helpers, acceleration toggles, and Connect/WebSocket APIs.
-- [Connect quickstart](./connect_swift_ios.md) — SDK-first walkthrough plus the CryptoKit reference.
-- [Xcode integration guide](./connect_swift_integration.md) — wiring NoritoBridgeKit/Connect into an app, with ChaChaPoly and frame helpers.
-- [SwiftUI demo contributor guide](./norito_demo_contributor.md) — running the iOS demo against a local Torii node, plus acceleration notes.
-- Run `make swift-ci` before publishing Swift artifacts or Connect changes; it verifies fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata.
+- [Swift SDK umumiy ko'rinishi](./source/sdk/swift/index.md) — quvur liniyasi yordamchilari, tezlashtirish tugmalari va Connect/WebSocket API.
+- [Tezkor ishga tushirishni ulash](./connect_swift_ios.md) — SDK-birinchi koʻrsatma va CryptoKit maʼlumotnomasi.
+- [Xcode integratsiya qoʻllanmasi](./connect_swift_integration.md) — ChaChaPoly va ramka yordamchilari bilan NoritoBridgeKit/Connect-ni ilovaga ulash.
+- [SwiftUI demo ishtirokchisi uchun qoʻllanma](./norito_demo_contributor.md) — iOS demosini mahalliy Torii tuguniga qarshi ishga tushirish, shuningdek, tezlashtirish qaydlari.
+- Swift artefaktlarini yoki Connect o'zgarishlarini nashr qilishdan oldin `make swift-ci` ni ishga tushiring; u armatura pariteti, asboblar paneli tasmasi va Buildkite `ci/xcframework-smoke:<lane>:device_tag` metamaʼlumotlarini tekshiradi.
 
-## Norito (Serialization Codec)
+## Norito (Serializatsiya kodek)
 
-Norito is the workspace serialization codec. We do not use `parity-scale-codec`
-(SCALE). Where documentation or benchmarks compare to SCALE, it is only for
-context; all production paths use Norito. The `norito::codec::{Encode, Decode}`
-APIs provide a headerless ("bare") Norito payload for hashing and wire
-efficiency — it is Norito, not SCALE.
+Norito - bu ish maydonini ketma-ketlashtirish kodekidir. Biz `parity-scale-codec` dan foydalanmaymiz
+(SCALE). Hujjatlar yoki ko'rsatkichlar SCALE bilan solishtirganda, u faqat uchun
+kontekst; barcha ishlab chiqarish yo'llari Norito dan foydalanadi. `norito::codec::{Encode, Decode}`
+API'lar xeshlash va simlar uchun sarlavhasiz ("yalang'och") Norito foydali yukini ta'minlaydi.
+samaradorlik - bu SCALE emas, Norito.
 
-Latest state:
+Oxirgi holat:
 
-- Deterministic encoding/decoding with a fixed header (magic, version, 16‑byte schema, compression, length, CRC64, flags).
-- CRC64-XZ checksum with runtime‑selected acceleration:
-  - x86_64 PCLMULQDQ (carry‑less multiply) + Barrett reduction, folded over 32‑byte chunks.
-  - aarch64 PMULL with matching folding.
-  - Slicing‑by‑8 and bitwise fallbacks for portability.
-- Encoded length hints implemented by derives and core types to reduce allocations.
-- Larger streaming buffers (64 KiB) and incremental CRC update during decode.
-- Optional zstd compression; GPU acceleration is feature‑gated and deterministic.
-- Adaptive path selection: `norito::to_bytes_auto(&T)` chooses among no
-  compression, CPU zstd, or GPU‑offloaded zstd (when compiled and available)
-  based on payload size and cached hardware capabilities. Selection only affects
-  performance and the header's `compression` byte; payload semantics are unchanged.
+- Ruxsat etilgan sarlavha bilan deterministik kodlash/dekodlash (sehrli, versiya, 16 baytli sxema, siqish, uzunlik, CRC64, bayroqlar).
+- Ish vaqti bo'yicha tanlangan tezlashtirish bilan CRC64-XZ nazorat summasi:
+  - x86_64 PCLMULQDQ (ko'tarishdan kam ko'paytma) + Barrettni qisqartirish, 32 baytdan ortiq bo'laklarga katlanmış.
+  - mos buklama bilan aarch64 PMULL.
+  - Portativlik uchun 8 ga bo'lingan va bit bo'yicha qayta tiklash.
+- Ajratishlarni kamaytirish uchun hosilalar va asosiy turlar tomonidan amalga oshiriladigan kodlangan uzunlik bo'yicha maslahatlar.
+- Kattaroq oqim buferlari (64 KiB) va dekodlash vaqtida qo'shimcha CRC yangilanishi.
+- ixtiyoriy zstd siqish; GPU tezlashuvi xususiyatga ega va deterministikdir.
+- Moslashuvchan yo'lni tanlash: `norito::to_bytes_auto(&T)` raqamlar orasidan tanlaydi
+  siqish, CPU zstd yoki GPUdan yuklangan zstd (kompilyatsiya qilingan va mavjud bo'lganda)
+  foydali yuk hajmi va keshlangan apparat imkoniyatlariga asoslangan. Tanlov faqat ta'sir qiladi
+  ishlash va sarlavhaning `compression` bayti; foydali yuk semantikasi o'zgarmadi.
 
-See `crates/norito/README.md` for parity tests, benchmarks, and usage examples.
+Parite testlari, ko'rsatkichlar va foydalanish misollari uchun `crates/norito/README.md` ga qarang.
 
-Note: Some subsystem docs (e.g., IVM acceleration and ZK circuits) are evolving. Where functionality is incomplete, the files call out the work that remains and the direction of travel.
+Eslatma: Ba'zi quyi tizim hujjatlari (masalan, IVM tezlashtirish va ZK sxemalari) rivojlanmoqda. Funktsionallik to'liq bo'lmasa, fayllar qolgan ishni va sayohat yo'nalishini chaqiradi.
 
-Status endpoint encoding notes
-- Torii `/status` body uses Norito by default with a headerless ("bare") payload for compactness. Clients should attempt Norito decode first.
-- Servers may return JSON when requested; clients fall back to JSON if the `content-type` is `application/json`.
-- The wire format is Norito, not SCALE. The `norito::codec::{Encode,Decode}` APIs are used for the bare variant.
+Holat so‘nggi nuqtasini kodlash qaydlari
+- Torii `/status` korpusi ixchamlik uchun sarlavhasiz (“yalangʻoch”) foydali yuk bilan sukut boʻyicha Norito dan foydalanadi. Mijozlar avval Norito kodini dekodlashga harakat qilishlari kerak.
+- Serverlar so'ralganda JSONni qaytarishi mumkin; Agar `content-type` `application/json` bo'lsa, mijozlar JSONga qaytadilar.
+- Sim formati SCALE emas, Norito. Yalang'och variant uchun `norito::codec::{Encode,Decode}` API ishlatiladi.

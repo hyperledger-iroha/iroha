@@ -11,38 +11,39 @@ id: multi-source-rollout
 title: Multi-Source Client Rollout & Blacklisting Runbook
 sidebar_label: Multi-Source Rollout Runbook
 description: Operational checklist for staged multi-source rollouts and emergency provider blacklisting.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-## Purpose
+## 目的
 
-This runbook guides SRE and on-call engineers through two critical workflows:
+本操作手册指导 SRE 和待命工程师完成两个关键工作流程：
 
-1. Rolling out the multi-source orchestrator in controlled waves.
-2. Blacklisting or de-prioritising misbehaving providers without destabilising existing sessions.
+1. 在受控波浪中推出多源协调器。
+2. 在不破坏现有会话稳定性的情况下将行为不当的提供商列入黑名单或取消优先级。
 
-It assumes the orchestration stack delivered under SF-6 is already deployed (`sorafs_orchestrator`, gateway chunk-range API, telemetry exporters).
+它假设已经部署了 SF-6 下交付的编排堆栈（`sorafs_orchestrator`、网关块范围 API、遥测导出器）。
 
-> **See also:** The [Orchestrator Operations Runbook](./orchestrator-ops.md) dives into per-run procedures (scoreboard capture, staged rollout toggles, rollback). Use both references together during live changes.
+> **另请参阅：** [Orchestrator Operations Runbook](./orchestrator-ops.md) 深入探讨每次运行的过程（记分板捕获、分阶段推出切换、回滚）。在实时更改期间一起使用这两个参考。
 
-## 1. Pre-flight Validation
+## 1. 飞行前验证
 
-1. **Confirm governance inputs.**
-   - All candidate providers must publish `ProviderAdvertV1` envelopes with range capability payloads and stream budgets. Validate via `/v1/sorafs/providers` and compare against the expected capability fields.
-   - Telemetry snapshots supplying latency/failure rates should be < 15 minutes old before each canary run.
-2. **Stage configuration.**
-   - Persist the orchestrator JSON config in the layered `iroha_config` tree:
+1. **确认治理投入。**
+   - 所有候选提供商必须发布包含范围能力有效负载和流预算的 `ProviderAdvertV1` 信封。通过 `/v1/sorafs/providers` 进行验证并与预期的功能字段进行比较。
+   - 在每次金丝雀运行之前，提供延迟/故障率的遥测快照应小于 15 分钟。
+2. **舞台配置。**
+   - 将 Orchestrator JSON 配置保留在分层 `iroha_config` 树中：
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     Update the JSON with rollout-specific limits (`max_providers`, retry budgets). Feed the same file to staging/production so diffs stay small.
-3. **Exercise canonical fixtures.**
-   - Populate the manifest/token environment variables and run the deterministic fetch:
+     使用特定于部署的限制更新 JSON（`max_providers`，重试预算）。将相同的文件提供给暂存/生产，以便差异保持较小。
+3. **练习规范装置。**
+   - 填充清单/令牌环境变量并运行确定性提取：
 
      ```bash
      sorafs_cli fetch \
@@ -57,55 +58,55 @@ It assumes the orchestration stack delivered under SF-6 is already deployed (`so
        --json-out artifacts/canary.fetch.json
      ```
 
-     Environment variables should contain the manifest payload digest (hex) and base64-encoded stream tokens for each provider participating in the canary.
-   - Diff `artifacts/canary.scoreboard.json` against the previous release. Any new ineligible provider or weight shift >10 % requires review.
-4. **Verify telemetry is wired.**
-   - Open the Grafana export in `docs/examples/sorafs_fetch_dashboard.json`. Ensure the `sorafs_orchestrator_*` metrics populate in staging before progressing.
+     环境变量应包含参与金丝雀的每个提供者的清单有效负载摘要（十六进制）和 Base64 编码的流令牌。
+   - `artifacts/canary.scoreboard.json` 与先前版本的差异。任何新的不合格提供者或体重转移 >10% 都需要审查。
+4. **验证遥测是否已接线。**
+   - 在 `docs/examples/sorafs_fetch_dashboard.json` 中打开 Grafana 导出。确保在继续操作之前在暂存中填充 `sorafs_orchestrator_*` 指标。
 
-## 2. Emergency Provider Blacklisting
+## 2. 紧急服务提供商黑名单
 
-Follow this procedure when a provider serves corrupt chunks, times out persistently, or fails compliance checks.
+当提供程序提供损坏的块、持续超时或未通过合规性检查时，请遵循此过程。
 
-1. **Capture evidence.**
-   - Export the latest fetch summary (`--json-out` output). Record failing chunk indices, provider aliases, and digest mismatches.
-   - Save relevant log excerpts from `telemetry::sorafs.fetch.*` targets.
-2. **Apply an immediate override.**
-   - Mark the provider penalised in the telemetry snapshot distributed to the orchestrator (set `penalty=true` or clamp `token_health` to `0`). The next scoreboard build will exclude the provider automatically.
-   - For ad-hoc smoke tests, pass `--deny-provider gw-alpha` to `sorafs_cli fetch` so the failure path is exercised without waiting for telemetry propagation.
-   - Redeploy the updated telemetry/config bundle to the affected environment (staging → canary → production). Document the change in the incident log.
-3. **Validate the override.**
-   - Re-run the canonical fixture fetch. Confirm the scoreboard marks the provider as ineligible with reason `policy_denied`.
-   - Inspect `sorafs_orchestrator_provider_failures_total` to ensure the counter stops incrementing for the denied provider.
-4. **Escalate long-lived bans.**
-   - If the provider will remain blocked for >24 h, raise a governance ticket to rotate or suspend its advert. Until the vote passes, keep the deny list in place and refresh telemetry snapshots so the provider does not re-enter the scoreboard.
-5. **Rollback protocol.**
-   - To reinstate the provider, remove it from the deny list, redeploy, and capture a fresh scoreboard snapshot. Attach the change to the incident postmortem.
+1. **获取证据。**
+   - 导出最新的获取摘要（`--json-out` 输出）。记录失败的块索引、提供者别名和摘要不匹配。
+   - 保存 `telemetry::sorafs.fetch.*` 目标的相关日志摘录。
+2. **应用立即覆盖。**
+   - 在分发给编排器的遥测快照中标记受到处罚的提供商（设置 `penalty=true` 或将 `token_health` 限制为 `0`）。下一个记分板构建将自动排除提供商。
+   - 对于临时烟雾测试，将 `--deny-provider gw-alpha` 传递到 `sorafs_cli fetch`，以便在不等待遥测传播的情况下执行故障路径。
+   - 将更新后的遥测/配置包重新部署到受影响的环境（暂存 → 金丝雀 → 生产）。在事件日志中记录更改。
+3. **验证覆盖。**
+   - 重新运行规范夹具获取。确认记分板将提供商标记为不合格，原因为 `policy_denied`。
+   - 检查 `sorafs_orchestrator_provider_failures_total` 以确保被拒绝的提供商的计数器停止递增。
+4. **升级长期禁令。**
+   - 如果提供商将被阻止超过 24 小时，请提出治理票以轮换或暂停其广告。在投票通过之前，保留拒绝列表并刷新遥测快照，以便提供商不会重新进入记分板。
+5. **回滚协议。**
+   - 要恢复提供程序，请将其从拒绝列表中删除、重新部署并捕获新的记分板快照。将更改附加到事件事后分析中。
 
-## 3. Staged Rollout Plan
+## 3. 分阶段推出计划
 
-| Phase | Scope | Required Signals | Go/No-Go Criteria |
-|-------|-------|------------------|-------------------|
-| **Lab** | Dedicated integration cluster | Manual CLI fetch against fixture payloads | All chunks succeed, provider failure counters stay at 0, retry rate < 5 %. |
-| **Staging** | Full control-plane staging | Grafana dashboard connected; alert rules in warning-only mode | `sorafs_orchestrator_active_fetches` returns to zero after each test run; no `warn/critical` alert firings. |
-| **Canary** | ≤10 % of production traffic | Pager muted but telemetry monitored in real time | Retry ratio < 10 %, provider failures isolated to known noisy peers, latency histogram matches staging baseline ±20 %. |
-| **General Availability** | 100 % roll-out | Pager rules active | Zero `NoHealthyProviders` errors for 24 h, retry ratio stable, dashboard SLA panels green. |
+|相|范围 |所需信号|通过/不通过标准 |
+|------|------|------------------|--------------------|
+| **实验室** |专用集成集群|针对夹具有效负载进行手动 CLI 获取 |所有块均成功，提供程序失败计数器保持为 0，重试率 < 5%。 |
+| **分期** |全面控制平面升级| Grafana 仪表板已连接；仅警告模式下的警报规则 | `sorafs_orchestrator_active_fetches` 每次测试运行后返回到零；没有 `warn/critical` 警报触发。 |
+| **金丝雀** | ≤10% 的生产流量 |寻呼机静音但实时监控遥测 |重试率 < 10%，提供者故障与已知的噪音对等点隔离，延迟直方图与分段基线 ±20% 匹配。 |
+| **全面上市** | 100% 推出 |寻呼机规则有效 | 24 小时内 `NoHealthyProviders` 错误为零，重试率稳定，仪表板 SLA 面板呈绿色。 |
 
-For each phase:
+对于每个阶段：
 
-1. Update the orchestrator JSON with the intended `max_providers` and retry budgets.
-2. Run `sorafs_cli fetch` or the SDK integration test suite against the canonical fixture and a representative manifest from the environment.
-3. Capture scoreboard + summary artefacts and attach them to the release record.
-4. Review telemetry dashboards with the on-call engineer before promoting to the next phase.
+1. 使用预期的 `max_providers` 更新协调器 JSON 并重试预算。
+2. 针对规范夹具和环境中的代表性清单运行 `sorafs_cli fetch` 或 SDK 集成测试套件。
+3. 捕获记分板+摘要工件并将其附加到发布记录中。
+4. 在进入下一阶段之前，与值班工程师一起检查遥测仪表板。
 
-## 4. Observability & Incident Hooks
+## 4. 可观察性和事件挂钩
 
-- **Metrics:** Ensure Alertmanager monitors `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` and `sorafs_orchestrator_retries_total`. A sudden spike typically means a provider is degrading under load.
-- **Logs:** Route the `telemetry::sorafs.fetch.*` targets to the shared log aggregator. Build saved searches for `event=complete status=failed` to speed up triage.
-- **Scoreboards:** Persist every scoreboard artefact to long-term storage. The JSON doubles as the evidence trail for compliance reviews and staged rollbacks.
-- **Dashboards:** Clone the canonical Grafana board (`docs/examples/sorafs_fetch_dashboard.json`) into the production folder with alert rules from `docs/examples/sorafs_fetch_alerts.yaml`.
+- **指标：** 确保 Alertmanager 监控 `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` 和 `sorafs_orchestrator_retries_total`。突然的峰值通常意味着提供商在负载下性能下降。
+- **日志：** 将 `telemetry::sorafs.fetch.*` 目标路由到共享日志聚合器。构建已保存的 `event=complete status=failed` 搜索以加快分类速度。
+- **记分板：** 将每个记分板制品保留为长期存储。 JSON 还可以作为合规性审查和分阶段回滚的证据线索。
+- **仪表板：** 将规范的 Grafana 板 (`docs/examples/sorafs_fetch_dashboard.json`) 克隆到生产文件夹中，其中包含来自 `docs/examples/sorafs_fetch_alerts.yaml` 的警报规则。
 
-## 5. Communication & Documentation
+## 5. 沟通和文档
 
-- Log every deny/boost change in the operations changelog with timestamp, operator, reason, and associated incident.
-- Notify SDK teams when provider weights or retry budgets change to align client-side expectations.
-- After GA completes, update `status.md` with the rollout summary and archive this runbook reference in the release notes.
+- 在操作变更日志中记录每个拒绝/提升更改，包括时间戳、操作员、原因和相关事件。
+- 当提供商权重或重试预算发生变化时通知 SDK 团队，以符合客户端期望。
+- GA 完成后，使用部署摘要更新 `status.md`，并在发行说明中存档此 Runbook 参考。

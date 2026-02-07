@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f9f765fbe3170f654a9c44c3cd1afc5d82a72ff49137f32b98cf9d310faf114e
 source_last_modified: "2025-12-29T18:16:35.963528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Governance Pipeline (Iroha 2 and SORA Parliament)
+% Կառավարման խողովակաշար (Iroha 2 և SORA խորհրդարան)
 
-# Current state (v1)
-- Governance proposals run as: proposer → referendum → tally → enactment. Referendum windows and turnout/approval thresholds are enforced as described in `gov.md`; locks are extend-only and unlock on expiry.
-- Parliament selection uses VRF-based draws with deterministic ordering and term bounds; when no persisted roster exists, Torii derives a fallback using `gov.parliament_*` config. Council gating and quorum checks are exercised in `gov_parliament_bodies` / `gov_pipeline_sla` tests.
-- Voting modes: ZK (default, requires `Active` VK with inline bytes) and Plain (quadratic weight). Mode mismatches are rejected; lock creation/extension is monotonic in both modes with regression tests for ZK and plain re-votes.
-- Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
-- Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
+# Ընթացիկ վիճակ (v1)
+- Կառավարման առաջարկներն իրականացվում են հետևյալ կերպ. առաջարկող → հանրաքվե → հաշվարկ → ուժի մեջ մտնելը: Հանրաքվեի պատուհանները և մասնակցության/հաստատման շեմերը կիրառվում են, ինչպես նկարագրված է `gov.md`-ում; կողպեքները միայն երկարաձգվում են և բացվում են ժամկետի ավարտից հետո:
+- Խորհրդարանի ընտրությունը օգտագործում է VRF-ի վրա հիմնված խաղարկություններ՝ դետերմինիստական ​​կարգով և ժամկետային սահմաններով; երբ գոյություն չունի մշտական ​​ցուցակ, Torii-ը ստանում է հետադարձ կապ՝ օգտագործելով `gov.parliament_*` կազմաձևը: Խորհրդի մուտքի և քվորումի ստուգումն իրականացվում է `gov_parliament_bodies` / `gov_pipeline_sla` թեստերում:
+- Քվեարկության ռեժիմներ՝ ZK (կանխադրված, պահանջում է `Active` VK՝ ներկառուցված բայթերով) և պարզ (քառակուսի քաշ): Ռեժիմների անհամապատասխանությունները մերժվում են. կողպեքի ստեղծումը/ընդլայնումը միապաղաղ է երկու ռեժիմներում՝ ZK-ի ռեգրեսիոն թեստերով և պարզ վերաքվեարկությամբ:
+- Վավերացնողի սխալ վարքագիծը վերացվել է ապացույցների խողովակաշարի միջոցով (`/v1/sumeragi/evidence*`, CLI օգնականներ)՝ համատեղ համաձայնությամբ ձեռքբերման միջոցով, որոնք պարտադրվել են `NextMode` + `ModeActivationHeight`-ով:
+- Պաշտպանված անունների տարածքները, գործարկման ժամանակի արդիականացման կեռիկները և կառավարման մանիֆեստի ընդունումը փաստաթղթավորված են `governance_api.md`-ում և ծածկված են հեռաչափությամբ (`governance_manifest_*`, `governance_protected_namespace_total`):
 
-# In-flight / backlog
-- Publish VRF draw artifacts (seed, proof, ordered roster, alternates) and codify replacement rules for no-shows; add golden fixtures for the draw and replacements.
-- Stage-SLA enforcement for the Parliament bodies (rules → agenda → study → review → jury → enact) needs explicit timers, escalation paths, and telemetry counters.
-- Policy-jury secret/commit–reveal voting and associated bribery-resistance audits are still to be implemented.
-- Role-bond multipliers, misconduct slashing for high-risk bodies, and cooldowns between service slots require configuration plumbing plus tests.
-- Governance lane sealing and referenda window/turnout gates are tracked in `gov.md`/`status.md`; keep the roadmap entries updated as the remaining acceptance tests land.
+# Թռիչքի ընթացքում / հետաձգված
+- Հրապարակել VRF-ի նկարների արտեֆակտները (սերմ, ապացույց, պատվիրված ցուցակ, փոխարինողներ) և կոդավորել փոխարինման կանոնները չցուցադրելու համար. ավելացրեք ոսկե հարմարանքներ վիճակահանության և փոխարինումների համար:
+- Խորհրդարանի մարմինների համար Stage-SLA-ի կիրարկումը (կանոններ → օրակարգ → ուսումնասիրություն → վերանայում → ժյուրի → ուժի մեջ մտնելու համար) կարիք ունի հստակ ժամանակաչափերի, էսկալացիայի ուղիների և հեռաչափական հաշվիչների:
+- Քաղաքական ժյուրիի գաղտնի/պարտավորությունների բացահայտման քվեարկությունը և կաշառակերությանը դիմակայելու հետ կապված աուդիտները դեռ պետք է իրականացվեն:
+- Դերային կապերի բազմապատկիչները, սխալ վարքագծի կրճատումը բարձր ռիսկային մարմինների համար և սպասարկման անցքերի միջև սառեցումները պահանջում են կոնֆիգուրացիայի սանտեխնիկա և թեստեր:
+- Կառավարման գծի կնքումը և հանրաքվեի պատուհանի/շրջադարձի դարպասները հետևվում են `gov.md`/`status.md`-ում; թարմացրե՛ք ճանապարհային քարտեզի գրառումները, քանի որ մնացած ընդունման թեստերը վայրէջք են կատարում:

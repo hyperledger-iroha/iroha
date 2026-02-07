@@ -4,46 +4,48 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-plan
-title: План community intake W2
-sidebar_label: План W2
-description: Intake, одобрения и чек-лист доказательств для community preview когорты.
+المعرف: معاينة ردود الفعل W2-الخطة
+العنوان: خطة استيعاب المجتمع W2
+Sidebar_label: الخطة W2
+الوصف: الإدخال والموافقة وقائمة الاختيار للمساهمة في مجموعات معاينة المجتمع.
 ---
 
-| Пункт | Детали |
+| نقطة | التفاصيل |
 | --- | --- |
-| Волна | W2 - community reviewers |
-| Целевое окно | Q3 2025 неделя 1 (предварительно) |
-| Тег артефакта (план) | `preview-2025-06-15` |
-| Трекер | `DOCS-SORA-Preview-W2` |
+| فولنا | W2 - مراجعو المجتمع |
+| Целевое okno | الربع الثالث من عام 2025 السنة 1 (مسبقًا) |
+| قطعة أثرية (خطة) | `preview-2025-06-15` |
+| تريكر | `DOCS-SORA-Preview-W2` |
 
-## Цели
+## كيلي
 
-1. Определить критерии community intake и workflow vetting.
-2. Получить governance-одобрение для предложенного roster и acceptable-use addendum.
-3. Обновить checksum-верифицированный preview-артефакт и телеметрический bundle под новое окно.
-4. Подготовить Try it proxy и dashboards до отправки приглашений.
+1. تحديد معايير قبول المجتمع وفحص سير العمل.
+2. الحصول على موافقة الحوكمة للقائمة المقترحة وملحق الاستخدام المقبول.
+3. قم بالتحقق من معاينة المجموع الاختباري للمنتج وحزمة القياس عن بعد بعد النقر الجديد.
+4. قم بتجربة الوكيل ولوحات المعلومات من أجل التحقق.
 
 ## Разбивка задач
 
-| ID | Задача | Владелец | Срок | Статус | Примечания |
+| معرف | زادا | فلاديليتس | كروك | الحالة | مساعدة |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Подготовить критерии community intake (eligibility, max slots, требования CoC) и разослать в governance | Docs/DevRel lead | 2025-05-15 | ✅ Завершено | Политика intake смержена в `DOCS-SORA-Preview-W2` и одобрена на совете 2025-05-20. |
-| W2-P2 | Обновить request template вопросами для community (motivation, availability, localization needs) | Docs-core-01 | 2025-05-18 | ✅ Завершено | `docs/examples/docs_preview_request_template.md` теперь включает раздел Community и указан в intake форме. |
-| W2-P3 | Получить governance-одобрение плана intake (голосование + протокол) | Governance liaison | 2025-05-22 | ✅ Завершено | Голосование прошло единогласно 2025-05-20; протокол и roll call связаны в `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Запланировать staging Try it proxy + телеметрию для окна W2 (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | ✅ Завершено | Change ticket `OPS-TRYIT-188` одобрен и выполнен 2025-06-09 02:00-04:00 UTC; Grafana скриншоты сохранены с тикетом. |
-| W2-P5 | Собрать/проверить новый preview artefact tag (`preview-2025-06-15`) и архивировать descriptor/checksum/probe logs | Portal TL | 2025-06-07 | ✅ Завершено | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` выполнен 2025-06-10; outputs сохранены в `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Сформировать roster community приглашений (<=25 reviewers, staged batches) с контактами, одобренными governance | Community manager | 2025-06-10 | ✅ Завершено | Первая когорта из 8 community reviewers одобрена; IDs `DOCS-SORA-Preview-REQ-C01...C08` записаны в трекере. |
+| W2-P1 | دعم معايير قبول المجتمع (الأهلية، الحد الأقصى للفتحات، متطلبات مدونة قواعد السلوك) والتغيير في الحوكمة | مستندات/DevRel الرصاص | 2025-05-15 | ✅ ممتاز | تم الجمع بين تناول السياسة في `DOCS-SORA-Preview-W2` وتوافق على 2025-05-20. |
+| W2-P2 | الحصول على قالب طلب لاستفسارات المجتمع (الدافع، التوفر، احتياجات الترجمة) | مستندات-core-01 | 2025-05-18 | ✅ ممتاز | يشتمل `docs/examples/docs_preview_request_template.md` teper على مجتمع razdел و указан في نموذج القبول. |
+| W2-P3 | الحصول على خطة تحسين الحوكمة (الحوكمة + البروتوكول) | الاتصال بالحوكمة | 2025-05-22 | ✅ ممتاز | نهاية الأسبوع 2025-05-20; تم إرسال البروتوكول ونداء الأسماء إلى `DOCS-SORA-Preview-W2`. |
+| W2-P4 | Запланировать التدريج جربه الوكيل + أجهزة التحكم عن بعد W2 (`preview-2025-06-15`) | مستندات/DevRel + Ops | 2025-06-05 | ✅ ممتاز | تغيير التذكرة `OPS-TRYIT-188` одобран и выполнен 2025-06-09 02:00-04:00 UTC; Grafana لقطة الشاشة المحملة بالتذكرة. |
+| W2-P5 | قم بالتحقق/التحقق من علامة المعاينة الجديدة (`preview-2025-06-15`) وأرشفة سجلات الواصف/المجموع الاختباري/المسبار | بوابة TL | 2025-06-07 | ✅ ممتاز | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` مفعل 2025-06-10; النواتج المضغوطة في `artifacts/docs_preview/W2/preview-2025-06-15/`. |
+| W2-P6 | Сформировать قائمة المجتمع приглаšений (<= 25 مراجعًا، دفعات مرحلية) с контактами، одобrenнными حوكمة | مدير المجتمع | 2025-06-10 | ✅ ممتاز | المجموعة الأولى من 8 مراجعين من المجتمع معتمدة; تم كتابة المعرفات `DOCS-SORA-Preview-REQ-C01...C08` في المسار. |
 
-## Чек-лист доказательств
+## قائمة التحقق من المصادقة
 
-- [x] Запись governance approval (заметки встречи + ссылка на голосование) приложена к `DOCS-SORA-Preview-W2`.
-- [x] Обновленный request template закоммичен под `docs/examples/`.
-- [x] Descriptor `preview-2025-06-15`, checksum log, probe output, link report и Try it proxy transcript сохранены в `artifacts/docs_preview/W2/`.
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) сняты для окна preflight W2.
-- [x] Таблица roster приглашений с reviewer IDs, request tickets и timestamps одобрений заполнена до отправки (см. секцию W2 в трекере).
+- [x] قم بتسجيل موافقة الإدارة (الموافقة المسبقة عن علم + ضمان الترقية) المقدمة إلى `DOCS-SORA-Preview-W2`.
+- [x] قالب الطلب الأساسي المخصص تحت `docs/examples/`.
+- [x] الواصف `preview-2025-06-15`، سجل المجموع الاختباري، مخرجات التحقيق، تقرير الارتباط وجرب نسخة الوكيل المضمنة في `artifacts/docs_preview/W2/`.
+- [x] لقطات شاشة Grafana (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) сняты для окна الاختبار المبدئي W2.
+- [x] يتم عرض قائمة الجدول باستخدام معرفات المراجعين وطلب التذاكر والطوابع الزمنية المسموح بها للتنفيذ (في القسم W2 في المسار).
 
-Держите этот план актуальным; трекер ссылается на него, чтобы roadmap DOCS-SORA видел, что осталось до рассылки W2 приглашений.
+بعد ذلك هذه الخطة الحالية; تم توصيل جهاز treker إلى ما هو موضح في خريطة الطريق DOCS-SORA التي تتجه إلى رسل W2.

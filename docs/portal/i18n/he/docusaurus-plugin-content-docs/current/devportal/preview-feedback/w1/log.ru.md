@@ -4,86 +4,86 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w1/log.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: preview-feedback-w1-log
-title: Лог отзывов и телеметрии W1
+כותרת: Лог отзывов и телеметрии W1
 sidebar_label: Лог W1
-description: Сводный roster, телеметрические checkpoints и заметки reviewers для первой preview-волны партнеров.
+תיאור: Сводный רוסטר, телеметрические מחסומים и заметки סוקרים для первой preview-волны партнеров.
 ---
 
-Этот лог хранит roster приглашений, телеметрические checkpoints и отзывы reviewers для
-**preview партнеров W1**, сопровождающей задачи приема в
+Этот лог хранит סגל приглашений, телеметрические מחסומים ו отзывы סוקרים для
+**תצוגה מקדימה של партнеров W1**, сопровождающей задачи приема в
 [`preview-feedback/w1/plan.md`](./plan.md) и запись трекера волны в
 [`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Обновляйте его, когда отправлено приглашение,
-записан телеметрический snapshot или triage выполнен по пункту отзывов, чтобы governance reviewers могли
+записан телеметрический תמונת מצב или טריאגה выполнен по пункту отзывов, чтобы מבקרי ממשל могли
 воспроизвести доказательства без поиска внешних тикетов.
 
 ## Рoster когорты
 
-| Partner ID | Тикет запроса | NDA получено | Приглашение отправлено (UTC) | Ack/первый логин (UTC) | Статус | Примечания |
+| מזהה שותף | Тикет запроса | NDA получено | Приглашение отправлено (UTC) | Ack/первый логин (UTC) | Статус | Примечания |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Завершено 2025-04-26 | sorafs-op-01; сфокусирован на доказательствах parity для orchestrator docs. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Завершено 2025-04-26 | sorafs-op-02; проверил cross-links Norito/telemetry. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Завершено 2025-04-26 | sorafs-op-03; провел multi-source failover drills. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Завершено 2025-04-26 | torii-int-01; ревью cookbook Torii `/v1/pipeline` + Try it. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Завершено 2025-04-26 | torii-int-02; участвовал в обновлении скриншота Try it (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Завершено 2025-04-26 | sdk-partner-01; feedback по cookbook JS/Swift + sanity checks для ISO bridge. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Завершено 2025-04-26 | sdk-partner-02; compliance закрыт 2025-04-11, фокус на заметках Connect/telemetry. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Завершено 2025-04-26 | gateway-ops-01; аудит ops гайда gateway + анонимизированный поток Try it proxy. |
+| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Завершено 2025-04-26 | soraps-op-01; сфокусирован на доказательствах זוגיות למסמכי מתזמר. |
+| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 12-04-2025 15:03 | 12-04-2025 15:15 | ✅ Завершено 2025-04-26 | soraps-op-02; проверил צולב קישורים Norito/טלמטריה. |
+| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Завершено 2025-04-26 | soraps-op-03; провел תרגילי ריבוי מקורות כשל. |
+| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 12-04-2025 15:09 | 2025-04-12 15:21 | ✅ Завершено 2025-04-26 | torii-int-01; ספר בישול ревью Torii `/v1/pipeline` + נסה את זה. |
+| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 12-04-2025 15:12 | 2025-04-12 15:23 | ✅ Завершено 2025-04-26 | torii-int-02; участвовал в обновлении скриншота נסה את זה (docs-preview/w1 #2). |
+| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 12-04-2025 15:15 | 2025-04-12 15:26 | ✅ Завершено 2025-04-26 | sdk-partner-01; משוב по ספר בישול JS/Swift + בדיקות שפיות ל-ISO Bridge. |
+| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Завершено 2025-04-26 | sdk-partner-02; תאימות קוד 2025-04-11, תמונה על חיבור/טלמטריה. |
+| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Завершено 2025-04-26 | gateway-ops-01; аудит ops гайда gateway + анонимизированный поток נסה את זה proxy. |
 
-Заполните **Приглашение отправлено** и **Ack** сразу после отправки письма.
+Заполните **Приглашение отправлено** ו-**Ack** сразу после отправки письма.
 Привяжите время к UTC расписанию, заданному в плане W1.
 
-## Телеметрические checkpoints
-
-| Время (UTC) | Dashboards / probes | Владелец | Результат | Артефакт |
+## מחסומי Телеметрические| Время (UTC) | לוחות מחוונים / בדיקות | Владелец | Результат | Артефакт |
 | --- | --- | --- | --- | --- |
 | 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ Все зеленое | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | Транскрипт `npm run manage:tryit-proxy -- --stage preview-w1` | Ops | ✅ Подготовлено | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | Дашборды выше + `probe:portal` | Docs/DevRel + Ops | ✅ Pre-invite snapshot, без регрессий | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Дашборды выше + diff по латентности Try it proxy | Docs/DevRel lead | ✅ Midpoint check прошел (0 алертов; латентность Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Дашборды выше + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, нет активных алертов | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 06-04-2025 18:20 | Транскрипт `npm run manage:tryit-proxy -- --stage preview-w1` | אופס | ✅ Подготовлено | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | Дашборды выше + `probe:portal` | Docs/DevRel + Ops | ✅ תמונת מצב של הזמנה מוקדמת, без регрессий | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 19/04/2025 17:55 | Дашборды выше + diff по латентности נסה זאת proxy | Docs/DevRel lead | ✅ בדיקת נקודת אמצע прошел (0 алертов; латентность נסה זאת p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 26/04/2025 16:25 | Дашборды выше + בדיקה יציאה | Docs/DevRel + קשר ממשל | ✅ יציאה מתמונת מצב, нет активных алертов | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Ежедневные выборки office hours (2025-04-13 -> 2025-04-25) упакованы как NDJSON + PNG экспорты под
+Ежедневные выборки שעות המשרד (2025-04-13 -> 2025-04-25) упакованы как NDJSON + PNG экспорты под
 `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` с именами файлов
 `docs-preview-integrity-<date>.json` и соответствующими скриншотами.
 
-## Лог отзывов и issues
+## Лог отзывов и בעיות
 
-Используйте эту таблицу для суммирования результатов reviewers. Ссылайтесь на каждый элемент на GitHub/discuss
-тикет и на структурированную форму, заполненную через
+Используйте эту таблицу для суммирования результатов מבקרים. Ссылайтесь на каждый элемент ב-GitHub/discuss
+תקליט ופורמט צורה, מזדמן
 [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
 
-| Reference | Severity | Owner | Status | Notes |
+| הפניה | חומרה | בעלים | סטטוס | הערות |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ Resolved 2025-04-18 | Уточнены формулировка навигации Try it + якорь sidebar (`docs/source/sorafs/tryit.md` обновлен новым label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ Resolved 2025-04-19 | Обновлены скриншот Try it и подпись; artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| - | Info | Docs/DevRel lead | 🟢 Closed | Остальные комментарии были только Q&A; зафиксированы в форме каждого партнера под `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` | נמוך | Docs-core-02 | ✅ נפתר 2025-04-18 | Уточнены формулировка навигации נסה את זה + якорь סרגל צד (`docs/source/sorafs/tryit.md` обновлен новым תווית). |
+| `docs-preview/w1 #2` | נמוך | Docs-core-03 | ✅ נפתר 2025-04-19 | Обновлены скриншот נסה את זה и подпись; חפץ `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| - | מידע | Docs/DevRel lead | סגור | Остальные комментарии были только שאלות ותשובות; зафиксированы в форме каждого партнера под `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
 
-## Knowledge check и surveys
+## בדיקת ידע и סקרים
 
-1. Запишите результаты quiz (цель >=90%) для каждого reviewer; прикрепите экспорт CSV рядом с артефактами приглашений.
-2. Соберите качественные ответы survey, записанные в форме feedback, и сохраните их под
+1. חידון Запишите результаты (цель >=90%) для каждого מבקר; прикрепите эксPORT CSV рядом с артефактами приглашений.
+2. בדיקת סקר אופטימלי, משוב מפורט בפורמט, ובדיקת מידע
    `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Запланируйте remediation звонки для тех, кто ниже порога, и отметьте их в этом файле.
+3. Запланируйте תיקון звонки для тех, кто ниже порога, и отметьте их в этом файле.
 
-Все восемь reviewers набрали >=94% в knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). remediation звонки не потребовались;
-exports survey для каждого партнера находятся под
+Все восемь מבקרים набрали >=94% בבדיקת ידע (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). תיקון звонки не потребовались;
+סקר יצוא עבור каждого партнера находятся под
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
 ## Инвентаризация артефактов
 
-- Bundle preview descriptor/checksum: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Summary probe + link-check: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Лог изменений Try it proxy: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Telemetry exports: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Daily office-hour telemetry bundle: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Feedback + survey exports: размещать папки per reviewer под
+- מתאר/סיכום בדיקה מקדימה של חבילה: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- בדיקה סיכום + בדיקת קישור: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- Лог изменений נסה זאת פרוקסי: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- ייצוא טלמטריה: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- חבילת טלמטריה יומית לשעות המשרד: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- משוב + ייצוא סקרים: размещать папки לכל סוקר под
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- Knowledge check CSV и summary: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- CSV לבדיקת ידע וסיכום: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Держите инвентарь синхронизированным с issue трекера. При копировании артефактов в тикет governance
+Держите инвентарь синхронизированным с issue трекера. При копировании артефактов в тикет ממשל
 прикладывайте хэши, чтобы аудиторы могли проверить файлы без shell-доступа.

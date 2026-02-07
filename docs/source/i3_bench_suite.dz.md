@@ -7,16 +7,17 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a3158cd70a42104bacaafc520fdcc10e20e3bc347d895be448fcb10da4f668bd
 source_last_modified: "2025-12-29T18:16:35.965528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha 3 Bench Suite
+# Iroha 3 བེནཆ་སུའིཊ།
 
-The Iroha 3 bench suite times the hot paths we rely on during staking, fee
-charging, proof verification, scheduling, and proof endpoints. It runs as an
-`xtask` command with deterministic fixtures (fixed seeds, fixed key material,
-and stable request payloads) so results are reproducible across hosts.
+ང་ཚོས་བང་སྒྲིག་སྐབས་ལམ་ཚ་པོ་ལ་བརྟེན་པའི་ལམ་ཚ་པོ་ཚུ་ Iroha 3 བང་རྒྱུགས་ཚང་མ།
+གློག་ཤུགས་དང་ བདེན་ཁུངས་བདེན་དཔྱད་ དུས་ཚོད་བཀོད་ནི་ དེ་ལས་ བདེན་ཁུངས་ཅན་གྱི་མཇུག་བསྡུ། འདི་ གཡོག་བཀོལཝ་ཨིན།
+`xtask` བརྡ་བཀོད་འདི་ གཏན་འབེབས་སྒྲིག་བཀོད་ཚུ་ (གཏན་བཟོས་སོན་ཚུ་ གཏན་བཟོས་ལྡེ་མིག་དངོས་པོ་,
+དང་ བརྟན་ཏོག་ཏོ་གི་ཞུ་བ་ཚུ་) དེ་འབདཝ་ལས་ གྲུབ་འབྲས་ཚུ་ ཧོསིཊི་ཚུ་ནང་ བསྐྱར་བཟོ་འབད་ཚུགས།
 
-## Running the suite
+## སྒྲིག་ཆས་བརྒྱུགས་པ།
 
 ```bash
 cargo xtask i3-bench-suite \
@@ -29,41 +30,41 @@ cargo xtask i3-bench-suite \
   --allow-overwrite
 ```
 
-Flags:
+སྐུགས་:
 
-- `--iterations` controls iterations per scenario sample (default: 64).
-- `--sample-count` repeats each scenario to compute the median (default: 5).
-- `--json-out|--csv-out|--markdown-out` choose output artifacts (all optional).
-- `--threshold` compares medians against the baseline bounds (set `--no-threshold`
-  to skip).
-- `--flamegraph-hint` annotates the Markdown report with the `cargo flamegraph`
-  command to profile a scenario.
+- `--iterations` གིས་ གནས་སྟངས་དཔེ་ཚད་རེ་ལུ་ བསྐྱར་ལོག་ཚུ་ཚད་འཛིན་འབདཝ་ཨིན་ (སྔོན་སྒྲིག་: ༦༤)།
+- `--sample-count` གིས་ བར་མཚམས་རྩིས་སྟོན་ནི་ལུ་ མཐོང་སྣང་རེ་ལུ་ བསྐྱར་ལོག་འབདཝ་ཨིན། (སྔོན་སྒྲིག་: ༥)
+- `--json-out|--csv-out|--markdown-out` ཐོན་འབྲས་ཅ་མཛོད་ཚུ་གདམ་ཁ་རྐྱབས་ (གདམ་ཁ་ཅན་ཆ་མཉམ་)།
+- `--threshold` གཞི་རྟེན་མཐའ་མཚམས་ཀྱི་བར་མཚམས་ག་བསྡུར་འབདཝ་ཨིན། (`--no-threshold` གཞི་སྒྲིག་འབདཝ་ཨིན།
+  གོམ་བགྲོད)
+- `--flamegraph-hint` གིས་ `cargo flamegraph` དང་གཅིག་ཁར་ Markdown སྙན་ཞུ་འདི་མཆན་འགྲེལ་འབདཝ་ཨིན།
+  གནས་སྟངས་ཅིག་གསལ་སྡུད་ལུ་བརྡ་བཀོད།
 
-CI glue lives in `ci/i3_bench_suite.sh` and defaults to the paths above; set
-`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` to tune runtime in nightlies.
+CI གུ་ལུ་ `ci/i3_bench_suite.sh` ནང་སྡོད་ཞིནམ་ལས་ གོང་འཁོད་ཀྱི་ལམ་ཚུ་ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། སྡེ༌ཚན༌
+`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` མཚན་མོའི་ནང་ རན་ཊའིམ་བསྒྱུར་བཅོས་འབད་ནི་ལུ་ཨིན།
 
-## Scenarios
+## འཆར་གཞི།
 
-- `fee_payer` / `fee_sponsor` / `fee_insufficient` — payer vs sponsor debit
-  and shortfall rejection.
-- `staking_bond` / `staking_slash` — bond/unbond queue with and without
-  slashing.
+- `fee_payer` / `fee_sponsor` / `--json-out|--csv-out|--markdown-out` — དངུལ་སྤྲོད་ལེན་དང་ མ་དངུལ་རྒྱབ་སྐྱོར་གྱི་ དངུལ་བཏབ།
+  དང་ མ་ལང་པའི་བཀག་ཆ་ཡོད།
+- `staking_bond` / `staking_slash` — བུན་/ཨན་བོནཌ་གྱལ་རིམ་དང་མེད་པ།
+  བསད་ནི།
 - `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` —
-  signature verification over commit certificates, JDG attestations, and bridge
-  proof payloads.
-- `commit_cert_assembly` — digest assembly for commit certificates.
-- `access_scheduler` — conflict-aware access-set scheduling.
-- `torii_proof_endpoint` — Axum proof endpoint parsing + verification round trip.
+  ཁས་ལེན་ལག་ཁྱེར་ཚུ་དང་ ཇེ་ཌི་ཇི་ བདེན་ཁུངས་ དེ་ལས་ ཟམ་ཚུ་གི་ཐོག་ལུ་ མཚན་རྟགས་བདེན་དཔྱད་འབད་ནི།
+  བདེན་དཔང་དངུལ་ཕོགས་ཚུ།
+- `commit_cert_assembly` — ཁས་བླངས་ལག་ཁྱེར་ཚུ་གི་དོན་ལུ་ བཞུ་བཅོས་ཚོགས་པ།
+- `access_scheduler` — འཁྲུག་རྩོད་ཀྱི་ཤེས་རྟོགས་ འཛུལ་སྤྱོད་སྒྲིག་སྟངས་ལས་རིམ།
+- `torii_proof_endpoint` — Axum བདེན་དཔང་མཐའ་མཇུག་དབྱེ་དཔྱད་ + བདེན་དཔྱད་སྐོར་ཐེངས་སྐོར་འགྲུལ་བསྐྱོད་འབད་ནི།
 
-Every scenario records median nanoseconds per iteration, throughput, and a
-deterministic allocation counter for quick regressions. Thresholds live in
-`benchmarks/i3/thresholds.json`; bump bounds there when hardware changes and
-commit the new artifact alongside a report.
+མཐོང་སྣང་ག་ར་གིས་ བསྐྱར་ལོག་དང་ ཐོན་འབྲས་ དེ་ལས་ a གི་བར་མཚམས་རེ་ལུ་ ནེ་ནོ་སེ་ཀོན་ཌི་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+མགྱོགས་མྱུར་འགྱུར་ལྡོག་ཚུ་གི་དོན་ལུ་ determistic བགོ་བཀྲམ་གྱི་གྱངས་ཁ་རྐྱབ། ཐོར་ཤོལ་ཚུ་ ནང་སྡོད་དོ་ཡོདཔ་ཨིན།
+`benchmarks/i3/thresholds.json`; སྲ་ཆས་བསྒྱུར་བཅོས་དང་ bump bound དེ་ཁར་ དེ་ཁར་ཡོདཔ་ཨིན།
+སྙན་ཞུ་ཅིག་དང་གཅིག་ཁར་ ཅ་རྙིང་གསརཔ་བཀོད།
 
-## Troubleshooting
+## དཀའ་ངལ་སེལ་བ།
 
-- Pin CPU frequency/governor when collecting evidence to avoid noisy regressions.
-- Use `--no-threshold` for exploratory runs, then re-enable once the baseline is
-  refreshed.
-- To profile a single scenario, set `--iterations 1` and re-run under
+- པིན་སི་པི་ཡུ་ བསྐྱར་འབྱུང་/གཞུང་སྐྱོང་པ་ སྒྲུབ་བྱེད་བསྡུ་ལེན་འབད་བའི་སྐབས་ སྐད་ཅོར་ཅན་གྱི་ ལོག་ལྟའི་ལས་ བཀག་ཐབས་འབད་ནི།
+- འཚོལ་ཞིབ་ཀྱི་རྒྱུག་འགྲན་ཚུ་གི་དོན་ལུ་ `--no-threshold` ལག་ལེན་འཐབ།
+  བསྐྱར་གསོ་བྱས།
+- གནས་སྟངས་གཅིག་གསལ་སྡུད་འབད་ནིའི་དོན་ལུ་ `--iterations 1` གཞི་སྒྲིག་འབད་ཞིནམ་ལས་ འོག་ལུ་ལོག་སྟེ་གཡོག་བཀོལ།
   `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`.

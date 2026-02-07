@@ -7,26 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 926ec1446b2ed51270a59a2842ba668cc442cf47f6c7bb0bd8b3189f7d16e738
 source_last_modified: "2026-01-22T14:35:36.896251+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Rust SDK Quickstart
+# Rust SDK အမြန်စတင်ပါ။
 
-The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
-type for talking to Torii. Use it when you need to submit transactions,
-subscribe to events, or query state from a Rust application.
+Rust client API သည် `iroha` သေတ္တာထဲတွင် နေထိုင်သည်၊၊ `client::Client` ကို ဖော်ထုတ်ပေးသည်
+Torii ကို စကားပြောရန်အတွက် ရိုက်ထည့်ပါ။ အရောင်းအ၀ယ်ပြုလုပ်ရန် လိုအပ်သောအခါတွင် ၎င်းကိုအသုံးပြုပါ၊
+အစီအစဉ်များကို စာရင်းသွင်းပါ သို့မဟုတ် Rust အပလီကေးရှင်းမှ အခြေအနေကို မေးမြန်းပါ။
 
-## 1. Add the crate
+## 1. ဗူးကိုထည့်ပါ။
 
 ```toml title="Cargo.toml"
 [dependencies]
 iroha = { path = "../../crates/iroha", features = ["client"] }
 ```
 
-The workspace example unlocks the client module via the `client` feature. If you
-consume the published crate, replace the `path` attribute with the current
-version string.
+အလုပ်ခွင်နမူနာသည် `client` အင်္ဂါရပ်မှတစ်ဆင့် သုံးစွဲသူ module ကို လော့ခ်ဖွင့်ပေးသည်။ သင်
+ထုတ်ဝေထားသော သေတ္တာကို စားသုံးပါ၊ `path` ရည်ညွှန်းချက်ကို လက်ရှိဖြင့် အစားထိုးပါ။
+ဗားရှင်းစာကြောင်း။
 
-## 2. Configure the client
+## 2. client ကို စီစဉ်သတ်မှတ်ပါ။
 
 ```rust title="src/main.rs"
 use iroha::client::{Client, ClientConfiguration};
@@ -45,10 +46,10 @@ fn main() -> eyre::Result<()> {
 }
 ```
 
-`ClientConfiguration` mirrors the CLI configuration file: it includes Torii and
-telemetry URLs, authentication material, timeouts, and batching preferences.
+`ClientConfiguration` သည် CLI ဖွဲ့စည်းမှုပုံစံဖိုင်ကို ထင်ဟပ်စေသည်- ၎င်းတွင် Torii နှင့်
+တယ်လီမီတာ URL များ၊ စစ်မှန်ကြောင်းအထောက်အထားပြပစ္စည်း၊ အချိန်ကုန်သွားခြင်း၊ နှင့် အတွဲလိုက်ရွေးချယ်မှုများ။
 
-## 3. Submit a transaction
+## 3. ငွေပေးငွေယူတစ်ခု တင်သွင်းပါ။
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -88,11 +89,11 @@ fn submit_example() -> eyre::Result<()> {
 }
 ```
 
-Under the hood the client uses Norito to encode the transaction payload before
-posting it to Torii. If submission succeeds, the returned hash can be used to
-track status via `client.poll_transaction_status(hash)`.
+ထုပ်ပိုးမှုအောက်တွင် ဖောက်သည်သည် အရောင်းအ၀ယ် payload ကို ကုဒ်လုပ်ရန် Norito ကို အသုံးပြုသည်။
+Torii မှာ တင်လိုက်တယ်။ တင်ပြမှုအောင်မြင်ပါက၊ ပြန်ပေးထားသော hash ကို အသုံးပြုနိုင်သည်။
+`client.poll_transaction_status(hash)` မှတစ်ဆင့် အခြေအနေကို ခြေရာခံပါ။
 
-## 4. Submit DA blobs
+## 4. DA blobs တင်သွင်းပါ။
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -115,9 +116,9 @@ fn submit_da_blob() -> eyre::Result<()> {
 }
 ```
 
-When you need to inspect or persist the Norito payload without sending it to
-Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
+၎င်းကိုမပို့ဘဲ Norito payload ကို စစ်ဆေးရန် သို့မဟုတ် ဆက်လက်လုပ်ဆောင်ရန် လိုအပ်သည့်အခါ၊
+Torii၊ `client.build_da_ingest_request(...)` ကိုခေါ်ဆို၍ လက်မှတ်ရေးထိုးထားသော တောင်းဆိုချက်ကို ရယူပါ။
+`iroha app da submit --no-submit` ကို ရောင်ပြန်ဟပ်ပြီး JSON/bytes အဖြစ် ပြန်ဆိုပါ။
 
 ## 5. Query data
 
@@ -135,11 +136,11 @@ fn list_domains() -> eyre::Result<()> {
 }
 ```
 
-Queries follow the request/response pattern: construct a query type from
-`iroha_data_model::query`, send it via `client.request`, and iterate over the
-results. Responses use Norito-backed JSON, so the wire format is deterministic.
+မေးမြန်းချက်များသည် တောင်းဆိုမှု/တုံ့ပြန်မှုပုံစံကို လိုက်နာပါ- မှ မေးမြန်းမှုအမျိုးအစားတစ်ခုကို တည်ဆောက်ပါ။
+`iroha_data_model::query`၊ ၎င်းကို `client.request` မှတစ်ဆင့် ပေးပို့ပြီး ထပ်လောင်းဖော်ပြပါ
+ရလဒ်များ။ တုံ့ပြန်မှုများသည် Norito-ကျောထောက်နောက်ခံ JSON ကိုအသုံးပြုသည်၊ ထို့ကြောင့် ဝါယာဖော်မတ်သည် အဆုံးအဖြတ်ဖြစ်သည်။
 
-## 6. Subscribe to events
+## 6. ပွဲများကို စာရင်းသွင်းပါ။
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -159,20 +160,20 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 }
 ```
 
-The client exposes async streams for Torii’s SSE endpoints, including pipeline
-events, data events, and telemetry feeds.
+client သည် ပိုက်လိုင်းအပါအဝင် Torii ၏ SSE အဆုံးမှတ်များအတွက် async stream များကို ဖော်ထုတ်ပေးသည်
+ဖြစ်ရပ်များ၊ ဒေတာဖြစ်ရပ်များနှင့် တယ်လီမီတာ ဖိဒ်များ။
 
-## More examples
+## နောက်ထပ်ဥပမာ
 
-- End-to-end flows live under `tests/` in `crates/iroha`. Search for integration
-  tests such as `transaction_submission.rs` for richer scenarios.
-- The CLI (`iroha_cli`) uses the same client module; browse
-  `crates/iroha_cli/src/` to see how authentication, batching, and retries are
-  handled in production tooling.
-- Keep Norito in mind: the client never falls back to `serde_json`. When you
-  extend the SDK, rely on `norito::json` helpers for JSON endpoints and
-  `norito::codec` for binary payloads.
+- အဆုံးမှအဆုံးသို့စီးဆင်းမှုများသည် `crates/iroha` တွင် `tests/` အောက်တွင် တိုက်ရိုက်နေပါသည်။ ပေါင်းစည်းမှုကို ရှာဖွေပါ။
+  ပိုမိုကြွယ်ဝသောအခြေအနေများအတွက် `transaction_submission.rs` ကဲ့သို့သော စမ်းသပ်မှုများ။
+- CLI (`iroha_cli`) သည် တူညီသော client module ကိုအသုံးပြုသည်။ ရှာဖွေကြည့်ရှုပါ။
+  စစ်မှန်ကြောင်းအထောက်အထားပြခြင်း၊ အတွဲလိုက်ခြင်းနှင့် ထပ်စမ်းခြင်းများ ပြုလုပ်ပုံကိုကြည့်ရန် `crates/iroha_cli/src/`
+  ထုတ်လုပ်မှု tooling တွင်ကိုင်တွယ်။
+- Norito ကိုစိတ်ထဲထားပါ- client သည် `serde_json` သို့ ဘယ်တော့မှ ပြန်မလာခဲ့ပါ။ သင်လိုက်တာ
+  SDK ကို တိုးချဲ့ပါ၊ JSON အဆုံးမှတ်များအတွက် `norito::json` ကူညီပေးသူများကို အားကိုးပြီး
+  binary payloads အတွက် `norito::codec`။
 
-With these building blocks you can integrate Torii into Rust services or CLIs.
-Refer to the generated documentation and data-model crates for the full set of
-instructions, queries, and events.
+ဤအဆောက်အဦလုပ်ကွက်များဖြင့် Torii ကို Rust ဝန်ဆောင်မှုများ သို့မဟုတ် CLI များတွင် ပေါင်းစည်းနိုင်သည်။
+အပြည့်အစုံအတွက် ထုတ်လုပ်ထားသော စာရွက်စာတမ်းများနှင့် ဒေတာပုံစံသေတ္တာများကို ကိုးကားပါ။
+ညွှန်ကြားချက်များ၊ မေးမြန်းချက်များနှင့် ဖြစ်ရပ်များ။

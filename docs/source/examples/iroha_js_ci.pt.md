@@ -6,7 +6,8 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: d21afd33da5ee459b1f6ffb6ac7c42adc0852ed7929e69993f81914637b5e6b5
 source_last_modified: "2026-01-03T18:08:00.440949+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -14,35 +15,35 @@ translation_last_reviewed: 2026-01-30
   This document provides guidance for running @iroha/iroha-js in CI systems.
 -->
 
-# Iroha JS CI Reference
+# Referência Iroha JS CI
 
-The `@iroha/iroha-js` package bundles native bindings via `iroha_js_host`. Any
-CI pipeline that executes tests or builds must provide both a Node.js runtime
-and the Rust toolchain so the native bundle can be compiled before the tests
-run.
+O pacote `@iroha/iroha-js` agrupa ligações nativas por meio de `iroha_js_host`. Qualquer
+O pipeline de CI que executa testes ou compilações deve fornecer um tempo de execução Node.js
+e o conjunto de ferramentas Rust para que o pacote nativo possa ser compilado antes dos testes
+correr.
 
-## Recommended Steps
+## Etapas recomendadas
 
-1. Use a Node LTS release (18 or 20) via `actions/setup-node` or your CI
-   equivalent.
-2. Install the Rust toolchain listed in `rust-toolchain.toml`. We recommend
-   `dtolnay/rust-toolchain@v1` in GitHub Actions.
-3. Cache the cargo registry/git indexes and the `target/` directory to avoid
-   rebuilding the native addon in every job.
-4. Run `npm install`, then `npm run lint:test`. The combined script enforces
-   ESLint with zero warnings, builds the native addon, and runs the Node test
-   suite so CI matches the release gating workflow.
-5. Optionally run `node --test` as a fast smoke step once `npm run build:native`
-   has produced the addon (for example, presubmit quick-check lanes that reuse
-   cached artifacts).
-6. Layer any additional linting or formatting checks from your consumer
-   project on top of `npm run lint:test` when stricter policies are required.
-7. When sharing configuration across services, load `iroha_config` and pass the
-   parsed document to `resolveToriiClientConfig({ config })` so Node clients
-   reuse the same timeout/retry/token policy as the rest of the deployment (see
-   `docs/source/sdk/js/quickstart.md` for a full example).
+1. Use uma versão Node LTS (18 ou 20) via `actions/setup-node` ou seu CI
+   equivalente.
+2. Instale o conjunto de ferramentas Rust listado em `rust-toolchain.toml`. Recomendamos
+   `dtolnay/rust-toolchain@v1` em ações do GitHub.
+3. Armazene em cache os índices de registro de carga/git e o diretório `target/` para evitar
+   reconstruindo o complemento nativo em cada trabalho.
+4. Execute `npm install` e, em seguida, `npm run lint:test`. O script combinado impõe
+   ESLint sem nenhum aviso, cria o complemento nativo e executa o teste do Node
+   suíte para que o CI corresponda ao fluxo de trabalho de controle de liberação.
+5. Opcionalmente, execute `node --test` como uma etapa de fumaça rápida uma vez `npm run build:native`
+   produziu o complemento (por exemplo, pré-enviar pistas de verificação rápida que reutilizam
+   artefatos armazenados em cache).
+6. Coloque em camadas quaisquer verificações adicionais de linting ou formatação do seu consumidor
+   projeto além do `npm run lint:test` quando políticas mais rígidas são necessárias.
+7. Ao compartilhar a configuração entre serviços, carregue `iroha_config` e passe o
+   documento analisado para `resolveToriiClientConfig({ config })` para clientes Node
+   reutilizar a mesma política de tempo limite/nova tentativa/token que o restante da implantação (consulte
+   `docs/source/sdk/js/quickstart.md` para um exemplo completo).
 
-## GitHub Actions Template
+## Modelo de ações do GitHub
 
 ```yaml
 name: iroha-js-ci
@@ -86,11 +87,11 @@ jobs:
       - run: npm run lint:test
 ```
 
-## Fast Smoke Job (Optional)
+## Trabalho de fumaça rápida (opcional)
 
-For pull requests that only touch documentation or TypeScript definitions, a
-minimal job can reuse cached artifacts, rebuild the native module, and run the
-Node test runner directly:
+Para solicitações pull que envolvem apenas documentação ou definições TypeScript, um
+trabalho mínimo pode reutilizar artefatos armazenados em cache, reconstruir o módulo nativo e executar o
+Executor de teste de nó diretamente:
 
 ```yaml
 jobs:
@@ -109,9 +110,9 @@ jobs:
       - run: node --test
 ```
 
-This job completes quickly while still verifying that the native addon compiles
-and that the Node test suite passes.
+Este trabalho é concluído rapidamente enquanto ainda verifica se o complemento nativo é compilado
+e que o conjunto de testes do Node seja aprovado.
 
-> **Reference implementation:** the repository includes
-> `.github/workflows/javascript-sdk.yml`, which wires the steps above into a
-> Node 18/20 matrix with cargo caching.
+> **Implementação de referência:** o repositório inclui
+> `.github/workflows/javascript-sdk.yml`, que conecta as etapas acima em um
+> Matriz Node 18/20 com cache de carga.

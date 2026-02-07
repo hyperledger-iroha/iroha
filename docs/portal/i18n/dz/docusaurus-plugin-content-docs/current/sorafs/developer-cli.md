@@ -8,20 +8,22 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CLI Cookbook
 sidebar_label: CLI Cookbook
 description: Task-focused walkthrough of the consolidated `sorafs_cli` surface.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-The consolidated `sorafs_cli` surface (provided by the `sorafs_car` crate with
-the `cli` feature enabled) exposes every step required to prepare SoraFS
-artifacts. Use this cookbook to jump directly to common workflows; pair it with
-the manifest pipeline and orchestrator runbooks for operational context.
+I18NI000000013X ཁ་ཐོག་ (I18NI000000014X crete དང་བཅས་ཁར།
+the `cli` ཁྱད་རྣམ་ལྕོགས་ཅན་བཟོ་ཡོདཔ་) གིས་ SoraFS གྲ་སྒྲིག་འབད་ནིའི་དོན་ལུ་ དགོ་པའི་གོ་རིམ་རེ་རེ་བཞིན་དུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+ཅ་རྙིང་ཚུ། སྤྱིར་བཏང་ལཱ་གི་རྒྱུན་རིམ་ཚུ་ལུ་ཐད་ཀར་དུ་མཆོང་ནིའི་དོན་ལུ་ བཞེས་སྒོའི་ཀི་དེབ་འདི་ལག་ལེན་འཐབ། འདི་གཅིག་ཁར་ཆ་སྒྲིག་འབད།
+བཀོལ་སྤྱོད་ཀྱི་སྐབས་དོན་གྱི་དོན་ལུ་ གསལ་སྟོན་གྱི་ པའིཔ་ལཱའིན་དང་ རོལ་དབྱངས་སྒྲིག་ཆས་བང་རྒྱུག་དེབ་ཚུ།
 
-## Package payloads
+## ཐུམ་སྒྲིལ་གྱི་གླ་ཆ་ཚུ།
 
-Use `car pack` to produce deterministic CAR archives and chunk plans. The
-command automatically selects the SF-1 chunker unless a handle is provided.
+`car pack` ལག་ལེན་འཐབ། ཚིག༌ཕྲད
+བརྡ་བཀོད་ཀྱིས་ ལག་གདུབ་ཅིག་ མ་བྱིན་པར་ རང་བཞིན་གྱིས་ ཨེསི་ཨེཕ་-༡ ཅར་ཀར་སེལ་འཐུ་འབདཝ་ཨིན།
 
 ```bash
 sorafs_cli car pack \
@@ -31,49 +33,35 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs are walked in lexicographic order so checksums stay stable
-  across platforms.
-- The JSON summary includes payload digests, per-chunk metadata, and the root
-  CID recognised by the registry and orchestrator.
+- སྔོན་སྒྲིག་ཅཱན་ཀར་ལག་ལེབ་: `sorafs.sf1@1.0.0`.
+- སྣོད་ཐོ་ཨིན་པུཊི་ཚུ་ ཚིག་མཛོད་ཀྱི་གོ་རིམ་ནང་ འགྱོ་ཡོདཔ་ལས་ ཞིབ་དཔྱད་སམ་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་སྡོད།
+  སྟེགས་བུ།
+- ཇེ་ཨེསི་ཨོ་ཨེན་ བཅུད་བསྡུས་ནང་ པེ་ལོཌི་བཞུ་ནི་ ཆུང་རེ་རེ་ལུ་ མེ་ཊ་ཌེ་ཊ་ དེ་ལས་ རྩ་བ་ཚུ་ཚུདཔ་ཨིན།
+  ཐོ་བཀོད་དང་ རོལ་དབྱངས་ཚོགས་པ་གིས་ ངོས་འཛིན་འབད་མི་ སི་ཨའི་ཌི་།
 
-## Construct manifests
+## མངོན་རྟགས་བཀོད་ནི།
 
-```bash
-sorafs_cli manifest build \
-  --summary artifacts/video.car.json \
-  --pin-min-replicas 4 \
-  --pin-storage-class hot \
-  --pin-retention-epoch 96 \
-  --manifest-out artifacts/video.manifest.to \
-  --manifest-json-out artifacts/video.manifest.json
-```
+I18NF0000008X
 
-- `--pin-*` options map directly to `PinPolicy` fields in
+- `--pin-*` གདམ་ཁ་ཚུ་གིས་ ཐད་ཀར་དུ་ I18NI000000019X ལུ་ ས་ཁྲ་ཚུ་ ས་ཁྲ་བཟོ་ནི།
   `sorafs_manifest::ManifestBuilder`.
-- Provide `--chunk-plan` when you want the CLI to recompute the SHA3 chunk
-  digest before submission; otherwise it reuses the digest embedded in the
-  summary.
-- The JSON output mirrors the Norito payload for straightforward diffs during
-  reviews.
+- ཁྱོད་ཀྱིས་ སི་ཨེལ་ཨའི་གིས་ ཨེསི་ཨེཆ་ཨའི་༣ ཆ་ཕྲན་འདི་ ལོག་རྩིས་སྟོན་དགོ་པའི་སྐབས་ I18NI000000021X བྱིན།
+  བཙུགས་མ་བཙུགས་པའི་ཧེ་མ་ བཞུ་བཅོས་འབད་ནི། དེ་མེན་པ་ཅིན་ དེ་གིས་ ཌའི་ཇེཌ་འདི་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཨིན།
+  བཅུད༌བསྡུ།
+- ཇེ་ཨེསི་ཨོ་ཨའུཊི་པུཊི་གིས་ ཕྲང་སྟེ་ཡོད་མི་ ཌིཕ་ཚུ་གི་དོན་ལུ་ I18NT0000001X པེ་ལོཌི་འདི་ མེ་ལོང་བཟོཝ་ཨིན།
+  བསྐྱར་ཞིབ་ཚུ།
 
-## Sign manifests without long-lived keys
+## མཚན་རྟགས་འདི་ཡུན་རིང་བའི་ལྡེ་མིག་མེད་པར་མངོན་གསལ་འབདཝ་ཨིན།
 
-```bash
-sorafs_cli manifest sign \
-  --manifest artifacts/video.manifest.to \
-  --bundle-out artifacts/video.manifest.bundle.json \
-  --signature-out artifacts/video.manifest.sig \
-  --identity-token-env SIGSTORE_ID_TOKEN
-```
+I18NF0000009X
 
-- Accepts inline tokens, environment variables, or file-based sources.
-- Adds provenance metadata (`token_source`, `token_hash_hex`, chunk digest)
-  without persisting the raw JWT unless `--include-token=true`.
-- Works well in CI: combine with GitHub Actions OIDC by setting
+- ནང་ཐིག་ཊོ་ཀེན་དང་མཐའ་འཁོར་འགྱུར་ཅན་ ཡང་ན་ ཡིག་སྣོད་གཞི་བཞག་པའི་འབྱུང་ཁུངས་ཚུ་ངོས་ལེན་འབདཝ་ཨིན།
+- འབྱུང་ཁུངས་མེ་ཊ་ཌེ་ཊ་ (I18NI0000022X, `token_hash_hex`, ཆུམ་གྱི་བཞུ་ཁུ།)
+  `--include-token=true` མ་གལ་མོ་མ་གཏོགས།
+- སི་ཨའི་ནང་ལེགས་ཤོམ་སྦེ་ལཱ་ཚུ་: གཞི་སྒྲིག་འབད་དེ་ གིཊི་ཧབ་བྱ་བ་ I18NT000006X དང་ཅིག་ཁར་མཉམ་སྡེབ་འབད།
   `--identity-token-provider=github-actions`.
 
-## Submit manifests to Torii
+## གསལ་སྟོན་ཚུ་ I18NT0000004X ལུ་བཙུགས།
 
 ```bash
 sorafs_cli manifest submit \
@@ -88,13 +76,13 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Performs Norito decoding for alias proofs and verifies they match the
-  manifest digest before POSTing to Torii.
-- Recomputes the chunk SHA3 digest from the plan to prevent mismatch attacks.
-- Response summaries capture HTTP status, headers, and registry payloads for
-  later auditing.
+- མིང་གཞན་བདེན་ཁུངས་ཚུ་གི་དོན་ལུ་ I18NT0000002X ཌི་ཀོཌིང་འབད་ཞིནམ་ལས་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  POSTing ལུ་ བཞུ་བཅོས་མ་འབད་བའི་ཧེ་མ་ Torii ལུ་ བརྡ་སྟོནམ་ཨིན།
+- མ་མཐུན་པའི་འཇབ་རྒོལ་ཚུ་བཀག་ཐབས་ལུ་ འཆར་གཞི་ནང་ལས་ ཅཱན་ཨེསི་ཨེཆ་༣ ཟས་བཅུད་ཚུ་ རྩིས་རྐྱབ་ཨིན།
+- ལན་འདེབས་བཅུད་བསྡུས་ཚུ་གིས་ ཨེཆ་ཊི་ཊི་པི་གནས་རིམ་དང་ མགོ་ཡིག་ཚུ་ དེ་ལས་ ཐོ་བཀོད་ཀྱི་ པེ་ལོཌི་ཚུ་ གི་དོན་ལུ་ བཟུང་ཡོདཔ་ཨིན།
+  ཤུལ་ལས་ རྩིས་ཞིབ་འབད་ནི།
 
-## Verify CAR contents and proofs
+## CAR ནང་དོན་དང་བདེན་ཁུངས་བདེན་དཔྱད་འབད།
 
 ```bash
 sorafs_cli proof verify \
@@ -103,11 +91,11 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Rebuilds the PoR tree and compares payload digests with the manifest summary.
-- Captures counts and identifiers required when submitting replication proofs
-  to governance.
+- པོ་ཨར་ཤིང་འདི་བསྐྱར་བཟོ་འབད་ཞིནམ་ལས་ གསལ་སྟོན་གྱི་བཅུད་བསྡུས་དང་གཅིག་ཁར་ པེ་ལོཌི་བཞུ་ནི་ཚུ་ག་བསྡུར་འབདཝ་ཨིན།
+- འདྲ་བཤུས་བདེན་ཁུངས་ཚུ་བཙུགས་པའི་སྐབས་ དགོ་པའི་ གྱངས་ཁ་དང་ངོས་འཛིན་འབད་མི་ཚུ་ བཟུང་ནི།
+  གཞུང་སྐྱོང་ལུ།
 
-## Stream proof telemetry
+## རྒྱུན་ལམ་བདེན་དཔང་བརྒྱུད་འཕྲིན་རིག་པ།
 
 ```bash
 sorafs_cli proof stream \
@@ -120,24 +108,24 @@ sorafs_cli proof stream \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
 ```
 
-- Emits NDJSON items for each streamed proof (disable replay with
+- རྒྱུན་སྤེལ་འབད་ཡོད་པའི་བདེན་ཁུངས་རེ་རེ་གི་དོན་ལུ་ NDJSON རྣམ་གྲངས་ཚུ་ བཏོནམ་ཨིན།
   `--emit-events=false`).
-- Aggregates success/failure counts, latency histograms, and sampled failures in
-  the summary JSON so dashboards can plot outcomes without scraping logs.
-- Exits non-zero when the gateway reports failures or local PoR verification
-  (via `--por-root-hex`) rejects proofs. Adjust the thresholds with
-  `--max-failures` and `--max-verification-failures` for rehearsal runs.
-- Supports PoR today; PDP and PoTR reuse the same envelope once SF-13/SF-14
-  land.
-- `--governance-evidence-dir` writes the rendered summary, metadata (timestamp,
-  CLI version, gateway URL, manifest digest), and a copy of the manifest into
-  the supplied directory so governance packets can archive the proof-stream
-  evidence without replaying the run.
+- མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་གྱངས་ཁ་ འཕྲོ་མཐུད་ཧིསི་ཊོ་གཱརམ་ དེ་ལས་ དཔེ་ཚད་ཀྱི་འཐུས་ཤོར་ཚུ་ ནང་ མཉམ་བསྡོམས་འབདཝ་ཨིན།
+  བཅུད་བསྡུས་ JSON དེ་འབདཝ་ལས་ ཌེཤ་བོརཌི་ཚུ་གིས་ དྲན་ཐོ་ཚུ་ བཤུད་མ་བཏང་པར་ གྲུབ་འབྲས་ཚུ་ བཀོད་ཚུགས།
+- འཛུལ་སྒོ་འདི་གིས་ འཐུས་ཤོར་ཡང་ན་ ཉེ་གནས་པོ་ཨར་ བདེན་དཔྱད་འབད་བའི་སྐབས་ ཀླད་ཀོར་མེན་པའི་ཕྱིར་འཐོན་འབདཝ་ཨིན།
+  (via `--por-root-hex`) གིས་ བདེན་ཁུངས་ཚུ་ ངོས་ལེན་མི་འབད། ཐེམ་ཚད་ཚུ་ དང་བཅས་ བདེ་སྒྲིག་འབད།
+  བསྐྱར་སྦྱོང་འབད་ནིའི་དོན་ལུ་ `--max-failures` དང་ I18NI0000029X ཚུ་ཨིན།
+- ད་རིས་ PoR རྒྱབ་སྐྱོར་འབདཝ་ཨིན། PDP དང་ PoTR གིས་ SF-13/SF-14 ཚར་གཅིག་ ཡིག་ཤུབས་གཅིག་པ་ལོག་ལག་ལེན་འཐབ།
+  ས།
+- I18NI000000030X གིས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་བཅུད་དོན་ མེ་ཊ་ཌེ་ཊ་ (དུས་ཚོད་རྟགས་བཀལ་,
+  CLI ཐོན་རིམ་དང་ གཱེཊི་ཝེ་ཡུ་ཨར་ཨེལ་ གསལ་སྟོན་འབད་ཡོདཔ་ཨིན་) དེ་ལས་ གསལ་སྟོན་གྱི་འདྲ་བཤུས་འདི་ ནང་ལུ།
+  འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༠ རིག་པ།(༡) གཞུང་སྐྱོང་ཁང་།
+  རྒྱུག་པའི་སྒྲུབ་བྱེད་བསྐྱར་རྩེད་མ་འབད་བར།
 
-## Additional references
+## ཁ་སྐོང་གཞི་བསྟུན་ཚུ།
 
-- `docs/source/sorafs_cli.md` — exhaustive flag documentation.
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema and Grafana
-  dashboard template.
-- `docs/source/sorafs/manifest_pipeline.md` — deep dive on chunking, manifest
-  composition, and CAR handling.
+- `docs/source/sorafs_cli.md` — དར་ཁྱབ་ཅན་གྱི་རྒྱལ་དར་ཡིག་ཆ་ཚུ།
+- `docs/source/sorafs_proof_streaming.md` — བདེན་ཁུངས་བརྡ་འཕྲིན་ལས་འཆར་དང་ Grafana
+  ཌེཤ་བོརཌ་ཊེམ་པེལེཊ་.
+- `docs/source/sorafs/manifest_pipeline.md` — གཏིང་ཟབ་པའི་ཆ་ཤས་ནང་ལུ་ ཆུ་འཛུལ་ཏེ་ གསལ་སྟོན་འབདཝ་ཨིན།
+  རྩོམ་སྒྲིག་, དང་ CAR འཛིན་སྐྱོང་།

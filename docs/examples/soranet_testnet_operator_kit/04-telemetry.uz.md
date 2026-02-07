@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a947c289c13c15b09dfbbf28c23ae1539fd3e29ca3943fa8522c3eca32c28bf5
 source_last_modified: "2025-12-29T18:16:35.091070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Telemetry Requirements
+# Telemetriya talablari
 
-## Prometheus Targets
+## Prometheus Maqsadlar
 
-Scrape the relay and orchestrator with the following labels:
+O'rni va orkestrni quyidagi teglar bilan qirib tashlang:
 
 ```yaml
 - job_name: "soranet-relay"
@@ -30,36 +31,36 @@ Scrape the relay and orchestrator with the following labels:
         role: "orchestrator"
 ```
 
-## Required Dashboards
+## Kerakli boshqaruv paneli
 
-1. `dashboards/grafana/soranet_testnet_overview.json` *(to be published)* — load the JSON, import variables `region` and `relay_id`.
-2. `dashboards/grafana/soranet_privacy_metrics.json` *(existing SNNet-8 asset)* — ensure the privacy bucket panels render without gaps.
+1. `dashboards/grafana/soranet_testnet_overview.json` *(nashr qilinadi)* — JSONni yuklang, `region` va `relay_id` o‘zgaruvchilarni import qiling.
+2. `dashboards/grafana/soranet_privacy_metrics.json` *(mavjud SNNet-8 aktivi)* — maxfiy paqir panellari boʻshliqlarsiz koʻrsatilishini taʼminlang.
 
-## Alert Rules
+## Ogohlantirish qoidalari
 
-Thresholds must match the playbook expectation:
+Eshiklar o'yin kitobi kutilganiga mos kelishi kerak:
 
-- `soranet_privacy_circuit_events_total{kind="downgrade"}` increase > 0 over 10 minutes triggers `critical`.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 per 30 minutes triggers `warning`.
-- `up{job="soranet-relay"}` == 0 for 2 minutes triggers `critical`.
+- `soranet_privacy_circuit_events_total{kind="downgrade"}` ortishi > 0 10 daqiqa ichida `critical` ishga tushiriladi.
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 30 daqiqada 5 `warning` tetiklaydi.
+- `up{job="soranet-relay"}` == 0 2 daqiqa davomida `critical` ni ishga tushiradi.
 
-Load your rules into Alertmanager with the `testnet-t0` receiver; validate with `amtool check-config`.
+Qoidalaringizni `testnet-t0` qabul qiluvchisi bilan Alertmanager-ga yuklang; `amtool check-config` bilan tasdiqlang.
 
-## Metrics Evaluation
+## Ko'rsatkichlarni baholash
 
-Aggregate a 14-day snapshot and feed it to the SNNet-10 validator:
+14 kunlik suratni jamlang va uni SNNet-10 validatoriga yuboring:
 
 ```
 cargo xtask soranet-testnet-metrics --input 07-metrics-sample.json --out metrics-report.json
 ```
 
-- Replace the sample file with your exported snapshot when running against live data.
-- A `status = fail` result blocks promotion; resolve the highlighted check(s) before retrying.
+- Jonli ma'lumotlarga qarshi ishlayotganda namuna faylini eksport qilingan surat bilan almashtiring.
+- `status = fail` natijasi reklamani bloklaydi; qayta urinishdan oldin ta'kidlangan tekshiruv(lar)ni hal qiling.
 
-## Reporting
+## Hisobot
 
-Every week upload:
+Har hafta yuklash:
 
-- Query snapshots (`.png` or `.pdf`) showing PQ ratio, circuit success rate, and PoW solve histogram.
-- Prometheus recording rule output for `soranet_privacy_throttles_per_minute`.
-- A brief narrative describing any alerts that fired and mitigation steps (include timestamps).
+- PQ nisbati, kontaktlarning zanglashiga olib borish darajasi va PoW gistogrammasini hal qiluvchi so'rov suratlari (`.png` yoki `.pdf`).
+- `soranet_privacy_throttles_per_minute` uchun Prometheus yozish qoidasi chiqishi.
+- Har qanday ogohlantirishlar va yumshatish bosqichlari (vaqt belgilarini o'z ichiga oladi) tavsiflovchi qisqacha hikoya.

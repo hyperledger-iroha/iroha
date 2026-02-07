@@ -4,10 +4,12 @@ direction: rtl
 source: docs/portal/docs/nexus/settlement-faq.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-settlement-faq
+מזהה: nexus-settlement-faq
 title: الأسئلة الشائعة للتسوية
 description: إجابات موجهة للمشغلين تغطي توجيه التسوية وتحويل XOR والقياس عن بعد وأدلة التدقيق.
 ---
@@ -22,17 +24,17 @@ description: إجابات موجهة للمشغلين تغطي توجيه الت
 4. **الأدلة** — أرشف الإعدادات وسجلات الـ router وتصديرات القياس عن بعد وتقارير المطابقة لأغراض التدقيق.
 5. **مسؤوليات SDK** — يجب على كل SDK توفير أدوات مساعدة للتسوية ومعرفات lane ومشفري حمولات Norito للحفاظ على التكافؤ مع الـ router.
 
-## أمثلة على التدفقات
+## בוחן
 
 | نوع lane | الأدلة المطلوبة | ماذا يثبت |
-|-----------|--------------------|----------------|
-| خاصة `xor_hosted_custody` | سجل الـ router + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | تؤكد أن مخازن CBDC تخصم XOR حتمي وأن haircuts تبقى ضمن السياسة. |
+|-----------|------------------------|----------------|
+| `xor_hosted_custody` | سجل الـ router + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | تؤكد أن مخازن CBDC تخصم XOR حتمي وأن haircuts تبقى ضمن السياسة. |
 | عامة `xor_global` | سجل الـ router + مرجع DEX/TWAP + مقاييس زمن الاستجابة/التحويل | يثبت أن مسار السيولة المشترك سعّر التحويل وفق TWAP المنشور دون haircut. |
 | هجينة `xor_dual_fund` | سجل الـ router يظهر تقسيم public مقابل shielded + عدادات القياس عن بعد | يثبت أن المزج بين shielded/public احترم نسب الحوكمة وسجل haircut المطبق على كل جزء. |
 
 ## هل تحتاج مزيدا من التفاصيل؟
 
-- FAQ الكامل: `docs/source/nexus_settlement_faq.md`
-- مواصفة Settlement router: `docs/source/settlement_router.md`
-- دليل سياسات CBDC: `docs/source/cbdc_lane_playbook.md`
+- שאלות נפוצות: `docs/source/nexus_settlement_faq.md`
+- נתב יישוב: `docs/source/settlement_router.md`
+- סלולרי CBDC: `docs/source/cbdc_lane_playbook.md`
 - دليل التشغيل: [عمليات Nexus](./nexus-operations)

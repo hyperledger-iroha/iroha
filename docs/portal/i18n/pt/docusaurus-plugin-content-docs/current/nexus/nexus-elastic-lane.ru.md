@@ -4,37 +4,39 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-elastic-lane.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: nexus-elastic-lane
-title: Эластичное выделение lane (NX-7)
-sidebar_label: Эластичное выделение lane
-description: Bootstrap-процесс для создания манифестов lane Nexus, записей каталога и доказательств rollout.
+título: Via elástica (NX-7)
+sidebar_label: Faixa elástica usada
+description: Bootstrap-proцесс для создания манифестов lane Nexus, записей каталога и доказательств rollout.
 ---
 
-:::note Канонический источник
-Эта страница отражает `docs/source/nexus_elastic_lane.md`. Держите обе копии синхронизированными, пока волна переводов не попадет в портал.
+:::nota História Canônica
+Esta página contém `docs/source/nexus_elastic_lane.md`. Selecione uma cópia sincronizada, pois a transferência não será exibida no portal.
 :::
 
 # Набор инструментов для эластичного выделения lane (NX-7)
 
-> **Пункт roadmap:** NX-7 - инструменты эластичного выделения lane  
-> **Статус:** инструменты завершены - генерируют манифесты, фрагменты каталога, Norito payloads, smoke tests,
-> а helper для load-test bundle теперь связывает гейтинг по slot latency + манифесты доказательств, чтобы прогоны нагрузки валидаторов
-> можно было публиковать без кастомных скриптов.
+> **Roteiro de Пункт:** NX-7 - инструменты эластичного выделения lane  
+> **Статус:** инструменты завершены - генерируют манифесты, фрагменты каталога, cargas úteis Norito, testes de fumaça,
+> um auxiliar para o pacote de teste de carga теперь связывает гейтинг по latência de slot + манифесты доказательств, чтобы прогоны нагрузки валидаторов
+> Você pode publicar scripts sem cast.
 
-Этот гайд проводит операторов через новый helper `scripts/nexus_lane_bootstrap.sh`, который автоматизирует генерацию манифестов lane, фрагментов каталога lane/dataspace и доказательств rollout. Цель - легко поднимать новые Nexus lanes (public или private) без ручного редактирования нескольких файлов и без ручного пересчета геометрии каталога.
+Este é o tipo de operação que fornece o novo ajudante `scripts/nexus_lane_bootstrap.sh`, который автоматизирует генерацию манифестов lane, Implementação de faixa de catálogo de fragmentos/espaço de dados e distribuição. Цель - легко поднимать новые Nexus pistas (públicas ou privadas) sem ручного редактирования нескольких файлов и без ручного пересчета геометрии каталога.
 
-## 1. Предварительные требования
+## 1. Treino de segurança
 
-1. Governance-одобрение для alias lane, dataspace, набора валидаторов, fault tolerance (`f`) и политики settlement.
-2. Финальный список валидаторов (account IDs) и список защищенных namespaces.
-3. Доступ к репозиторию конфигураций узлов, чтобы добавить сгенерированные фрагменты.
-4. Пути для реестра манифестов lane (см. `nexus.registry.manifest_directory` и `cache_directory`).
-5. Контакты телеметрии/PagerDuty handles для lane, чтобы алерты были подключены сразу после онлайна.
+1. Governança - одобрение для alias lane, espaço de dados, набора валидаторов, tolerância a falhas (`f`) e liquidação política.
+2. Финальный список валидаторов (IDs de conta) e список защищенных namespaces.
+3. Ao abrir o repositório de configuração, você cria fragmentos de geração.
+4. Coloque para restaurar a pista do Manipheстов (como `nexus.registry.manifest_directory` e `cache_directory`).
+5. Entre em contato com os identificadores de telemetria/PagerDuty para a pista, esses alertas podem ser encontrados on-line.
 
-## 2. Сгенерируйте артефакты lane
+## 2. Pista de Artefatos de Сгенерируйте
 
 Запустите helper из корня репозитория:
 
@@ -58,36 +60,34 @@ scripts/nexus_lane_bootstrap.sh \
   --output-dir artifacts/nexus/payments_lane
 ```
 
-Ключевые флаги:
+Bandeiras de sucesso:
 
-- `--lane-id` должен совпадать с index новой записи в `nexus.lane_catalog`.
-- `--dataspace-alias` и `--dataspace-id/hash` управляют записью dataspace в каталоге (по умолчанию используется id lane).
-- `--validator` можно повторять или читать из `--validators-file`.
-- `--route-instruction` / `--route-account` выводят готовые к вставке правила маршрутизации.
-- `--metadata key=value` (или `--telemetry-contact/channel/runbook`) фиксируют контакты runbook, чтобы dashboards показывали правильных владельцев.
-- `--allow-runtime-upgrades` + `--runtime-upgrade-*` добавляют hook runtime-upgrade в манифест, когда lane требует расширенных операторских контролей.
-- `--encode-space-directory` автоматически вызывает `cargo xtask space-directory encode`. Используйте вместе с `--space-directory-out`, если хотите положить кодированный `.to` в другое место.
+- `--lane-id` é atualizado com o índice de novas descrições em `nexus.lane_catalog`.
+- `--dataspace-alias` e `--dataspace-id/hash` управляют записью dataspace no catálogo (por умолчанию используется id lane).
+- `--validator` pode ser instalado ou removido de `--validators-file`.
+- `--route-instruction` / `--route-account` é um produto que está pronto para ser comercializado.
+- `--metadata key=value` (ou `--telemetry-contact/channel/runbook`) фиксируют контакты runbook, чтобы dashboards показывали правильных владельцев.
+- `--allow-runtime-upgrades` + `--runtime-upgrade-*` добавляют hook runtime-upgrade em манифест, когда lane требует расширенных операторских контролей.
+- `--encode-space-directory` é usado automaticamente para `cargo xtask space-directory encode`. Use o `--space-directory-out`, exceto o código de código `.to` no mesmo local.
 
-Скрипт создает три артефакта в `--output-dir` (по умолчанию текущий каталог) и опционально четвертый при включенном encoding:
+Script criado por um artefacto em `--output-dir` (por meio do catálogo de tecnologia) e opcionalmente fornecido por codificação включенном:1. `<slug>.manifest.json` - манифест lane с quorum валидаторов, zaщищенными namespaces e опциональными метаданными hook runtime-upgrade.
+2. `<slug>.catalog.toml` - TOML-фрагмент с `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]` e запрошенными правилами маршрутизации. Verifique se o `fault_tolerance` está localizado no espaço de dados, ele configurou o comutador de relé de pista (`3f+1`).
+3. `<slug>.summary.json` - audit-сводка с геометрией (slug, сегменты, метаданные), требуемыми шагами rollout и точной командой `cargo xtask space-directory encode` (por `space_directory_encode.command`). Use este JSON como ticket de integração para doação.
+4. `<slug>.manifest.to` - instalado por `--encode-space-directory`; готов для потока Torii `iroha app space-directory manifest publish`.
 
-1. `<slug>.manifest.json` - манифест lane с quorum валидаторов, защищенными namespaces и опциональными метаданными hook runtime-upgrade.
-2. `<slug>.catalog.toml` - TOML-фрагмент с `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]` и запрошенными правилами маршрутизации. Убедитесь, что `fault_tolerance` задан в записи dataspace, чтобы размерить lane-relay комитет (`3f+1`).
-3. `<slug>.summary.json` - аудит-сводка с геометрией (slug, сегменты, метаданные), требуемыми шагами rollout и точной командой `cargo xtask space-directory encode` (под `space_directory_encode.command`). Приложите этот JSON к тикету onboarding как доказательство.
-4. `<slug>.manifest.to` - появляется при `--encode-space-directory`; готов для потока Torii `iroha app space-directory manifest publish`.
+Use `--dry-run`, use JSON/фрагменты para criar arquivos e `--force` para configuração artefactos originais.
 
-Используйте `--dry-run`, чтобы посмотреть JSON/фрагменты без записи файлов, и `--force` для перезаписи существующих артефактов.
+## 3. Configuração de configuração
 
-## 3. Примените изменения
-
-1. Скопируйте JSON манифеста в настроенный `nexus.registry.manifest_directory` (и в cache directory, если registry зеркалит удаленные bundles). Закоммитьте файл, если манифесты версионируются в конфигурационном репозитории.
-2. Добавьте фрагмент каталога в `config/config.toml` (или в подходящий `config.d/*.toml`). Убедитесь, что `nexus.lane_count` не меньше `lane_id + 1`, и обновите `nexus.routing_policy.rules`, которые должны указывать на новую lane.
-3. Закодируйте (если пропустили `--encode-space-directory`) и опубликуйте манифест в Space Directory, используя команду из summary (`space_directory_encode.command`). Это создает `.manifest.to`, который ожидает Torii, и фиксирует доказательства для аудиторов; отправьте через `iroha app space-directory manifest publish`.
-4. Запустите `irohad --sora --config path/to/config.toml --trace-config` и архивируйте вывод trace в тикете rollout. Это подтверждает, что новая геометрия соответствует сгенерированным slug/Kura сегментам.
-5. Перезапустите валидаторы, назначенные на lane, после развертывания изменений манифеста/каталога. Сохраните summary JSON в тикете для будущих аудитов.
+1. Limpe o arquivo JSON no local `nexus.registry.manifest_directory` (e no diretório de cache, exceto o registro para armazenar pacotes configuráveis). Certifique-se de que não há versão manifestada nos repositórios de configuração.
+2. Insira o catálogo de fragmentos em `config/config.toml` (ou em `config.d/*.toml`). Verifique se o `nexus.lane_count` não é o `lane_id + 1`, e atualize o `nexus.routing_policy.rules`, pois este é o caso. pista nova.
+3. Abra (proposta `--encode-space-directory`) e abra o arquivo no Space Directory, usando o comando de resumo (`space_directory_encode.command`). Isso é `.manifest.to`, который ожидает Torii, e фиксирует доказательства para аудиторов; Execute o `iroha app space-directory manifest publish`.
+4. Abra `irohad --sora --config path/to/config.toml --trace-config` e atualize seu rastreamento na implementação do ticket. Isto é possível, esta nova geometria é baseada no segmento slug/Kura do gerador.
+5. Selecione os validadores, coloque-os na pista e altere a configuração da manifestação/caso. Solicite um resumo JSON no tíquete para usuários auditados.
 
 ## 4. Соберите bundle распределения реестра
 
-Упакуйте сгенерированный манифест и overlay, чтобы операторы могли распространять данные governance по lanes без правок конфигов на каждом хосте. Helper упаковки копирует манифесты в канонический layout, создает опциональный governance catalog overlay для `nexus.registry.cache_directory` и может собрать tarball для офлайн-передачи:
+Упакуйте сгенерированный манифест и overlay, чтобы операторы могли распространять данные governança по lanes без правок конфигов na каждом хосте. Helper упаковки копирует манифесты в канонический layout, создает опциональный sobreposição de catálogo de governança para `nexus.registry.cache_directory` e может собрать tarball para off-line:
 
 ```bash
 scripts/nexus_lane_registry_bundle.sh \
@@ -98,18 +98,16 @@ scripts/nexus_lane_registry_bundle.sh \
   --bundle-out artifacts/nexus/payments_lane/registry_bundle.tar.gz
 ```
 
-Выходы:
+O que você precisa:
 
-1. `manifests/<slug>.manifest.json` - копируйте их в настроенный `nexus.registry.manifest_directory`.
-2. `cache/governance_catalog.json` - кладите в `nexus.registry.cache_directory`. Каждая запись `--module` становится подключаемым определением модуля, позволяя замену governance-модуля (NX-2) через обновление cache overlay вместо редактирования `config.toml`.
-3. `summary.json` - содержит хеши, метаданные overlay и инструкции для операторов.
-4. Опционально `registry_bundle.tar.*` - готово для SCP, S3 или трекеров артефактов.
+1. `manifests/<slug>.manifest.json` - copie-o para o `nexus.registry.manifest_directory`.
+2. `cache/governance_catalog.json` - classificado em `nexus.registry.cache_directory`. Каждая запись `--module` становится подключаемым определением модуля, позволяя замену governança-módulo (NX-2) через sobreposição de cache обновление вместо редактирования `config.toml`.
+3. `summary.json` - содержит хеши, метаданные overlay e инструкции para operações.
+4. Opcional `registry_bundle.tar.*` - dispositivo para SCP, S3 ou artefactos de rastreamento.
 
-Синхронизируйте весь каталог (или архив) на каждый валидатор, распакуйте на air-gapped хостах и скопируйте манифесты + cache overlay в их пути реестра перед перезапуском Torii.
+Синхронизируйте весь каталог (или архив) на каждый валидатор, распакуйте на air-gapped хостах и скопируйте манифесты + sobreposição de cache em sua configuração inicial Torii.
 
-## 5. Smoke tests валидаторов
-
-После перезапуска Torii запустите новый smoke helper, чтобы проверить, что lane сообщает `manifest_ready=true`, метрики показывают ожидаемое количество lanes и gauge sealed чист. Lanes, которым нужны манифесты, обязаны иметь непустой `manifest_path`; helper теперь мгновенно падает при отсутствии пути, чтобы каждый деплой NX-7 включал доказательство подписанного манифеста:
+## 5. Testes de fumaça validadosПосле перезапуска Torii запустите новый smoke helper, чтобы проверить, что lane сообщает `manifest_ready=true`, métrica показывают ожидаемое количество pistas e medidor selado. Lanes, которым нужны манифесты, обязаны иметь непустой `manifest_path`; helper теперь мгновенно падает при отсутствии пути, чтобы каждый деплой NX-7 включал доказательство подписанного manifestação:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -132,9 +130,9 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Добавьте `--insecure` при тестировании self-signed окружений. Скрипт завершается ненулевым кодом, если lane отсутствует, sealed, или метрики/телеметрия расходятся с ожидаемыми значениями. Используйте `--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog` и `--max-headroom-events`, чтобы удерживать телеметрию по lane (высота блока/финальность/backlog/headroom) в допустимых рамках, и сочетайте их с `--max-slot-p95` / `--max-slot-p99` (и `--min-slot-samples`) для соблюдения целей NX-18 по длительности слота, не выходя из helper.
+Adicione `--insecure` através de uma assinatura autoassinada. O script não contém nenhum código, exceto faixa aberta, selado, ou métrica/telemetria de faixa com precisão значениями. Use `--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog` e `--max-headroom-events`, quais são os telefones instalados na pista (você precisa de um bloco/financiamento/backlog/headroom) na área de armazenamento, e é baseado em `--max-slot-p95` / `--max-slot-p99` (e `--min-slot-samples`) para instalar o NX-18 em um slot específico, você não precisa de um ajudante.
 
-Для air-gapped проверок (или CI) можно проигрывать сохраненный ответ Torii вместо обращения к живому endpoint:
+Para um dispositivo air-gapped (ou CI) você pode usar o Torii para obter o endpoint atual:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -158,4 +156,4 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Записанные fixtures в `fixtures/nexus/lanes/` отражают артефакты, создаваемые bootstrap helper, чтобы новые манифесты можно было lint-ить без кастомных скриптов. CI гоняет тот же поток через `ci/check_nexus_lane_smoke.sh` и `ci/check_nexus_lane_registry_bundle.sh` (alias: `make check-nexus-lanes`), чтобы убедиться, что smoke helper NX-7 остается совместимым с опубликованным форматом payload и что digests/overlays bundle остаются воспроизводимыми.
+Acessar fixtures em `fixtures/nexus/lanes/` отражают артефакты, создаваемые bootstrap helper, чтобы новые манифесты можно было lint-ить Não há scripts personalizados. CI гоняет тот же поток через `ci/check_nexus_lane_smoke.sh` e `ci/check_nexus_lane_registry_bundle.sh` (alias: `make check-nexus-lanes`), чтобы убедиться, что smoke helper NX-7 остается совместимым опубликованным форматом payload e что digests/overlays bundle остаются воспроизводимыми.

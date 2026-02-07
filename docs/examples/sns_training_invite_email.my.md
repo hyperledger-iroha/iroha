@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e9bf7a41f46d220502776b77d0e2cf86ba19874da9ea373ea440706e531b661
 source_last_modified: "2025-12-29T18:16:35.078745+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-Subject: [SNS Training] <suffix> cohort briefing — <date>
+ဘာသာရပ်- [SNS သင်တန်းကျောင်း] <suffix> အစုအဝေး အကျဉ်းချုပ် — <date>
 
-Hi <name/team>,
+မင်္ဂလာပါ <name/team>၊
 
-You are scheduled for the upcoming Sora Name Service training covering the
-<suffix> suffix launch.
+လာမည့် Sora Name Service သင်တန်းအတွက် သင့်အား စီစဉ်ထားပါသည်။
+<suffix> suffix ကို စတင်လိုက်ပါ။
 
-**Details**
-- **Date / Time:** <weekday, UTC offset + link to calendar invite>
-- **Duration:** 2 hours (includes labs + annex capture)
-- **Format:** Live workshop + breakout rooms
-- **Language:** <language> (simultaneous interpretation available: <yes/no>)
+**အသေးစိတ်**
+- **ရက်စွဲ/အချိန်-** <အပတ်စဉ်၊ UTC အော့ဖ်ဆက် + ပြက္ခဒိန် ဖိတ်ကြားချက်သို့ လင့်ခ်>
+- **ကြာချိန်-** 2 နာရီ (ဓာတ်ခွဲခန်း + နောက်ဆက်တွဲ ရိုက်ယူမှု ပါ၀င်သည်)
+- **ပုံစံ-** တိုက်ရိုက်အလုပ်ရုံဆွေးနွေးပွဲ + ခွဲထွက်ခန်းများ
+- **ဘာသာစကား-** <ဘာသာစကား> (တစ်ပြိုင်နက်တည်း အဓိပ္ပာယ်ဖွင့်ဆိုနိုင်သည်- <yes/no>)
 
-**Pre-work (30 minutes)**
-1. Read `docs/source/sns/onboarding_kit.md`.
-2. Skim the KPI walkthrough (`docs/portal/docs/sns/kpi-dashboard.md`).
-3. Install the tooling listed in `docs/source/sns/training_collateral.md#13-lab-prerequisites`.
+**အလုပ်​အကြို (မိနစ်​၃၀)**
+1. `docs/source/sns/onboarding_kit.md` ကိုဖတ်ပါ။
+2. KPI လမ်းညွှန်ချက် (`docs/portal/docs/sns/kpi-dashboard.md`) ကို ဖြတ်ပါ။
+3. `docs/source/sns/training_collateral.md#13-lab-prerequisites` တွင်ဖော်ပြထားသော ကိရိယာကို ထည့်သွင်းပါ။
 
-**What to expect**
-- KPI dashboard orientation and registrar SLA review.
-- Manifest + resolver exercises with live validation.
-- Dispute drill covering guardian + council workflows.
-- KPI annex automation via `cargo xtask sns-annex`.
+**ဘာတွေမျှော်လင့်ထားလဲ**
+- KPI ဒက်ရှ်ဘုတ် တိမ်းညွတ်မှုနှင့် မှတ်ပုံတင်အရာရှိ SLA ပြန်လည်သုံးသပ်ခြင်း။
+- တိုက်ရိုက်အတည်ပြုချက်နှင့်အတူ Manifest + ဖြေရှင်းသူလေ့ကျင့်ခန်း။
+- အုပ်ထိန်းသူ + ကောင်စီအလုပ်အသွားအလာများကို အကျုံးဝင်သည့် အငြင်းပွားမှုလေ့ကျင့်မှု။
+- `cargo xtask sns-annex` မှတစ်ဆင့် KPI နောက်ဆက်တွဲ အလိုအလျောက်စနစ်။
 
-Please confirm attendance by replying to this email or accepting the calendar
-invite. If you cannot attend, nominate a delegate and copy governance so we can
-keep the readiness log accurate.
+ဤအီးမေးလ်ကို စာပြန်ခြင်း သို့မဟုတ် ပြက္ခဒိန်ကို လက်ခံခြင်းဖြင့် တက်ရောက်မှုကို အတည်ပြုပါ။
+ဖိတ်ခေါ်ပါတယ်။ မတက်နိုင်ပါက ကိုယ်စားလှယ်တစ်ဦးကို အမည်စာရင်း တင်သွင်းပြီး အုပ်ချုပ်မှု မိတ္တူကို တတ်နိုင်သမျှ ဆောင်ရွက်ပါ။
+အဆင်သင့်မှတ်တမ်းကို တိကျအောင်ထားပါ။
 
-Thanks,  
+ကျေးဇူး၊  
 `sns-training@sora.org`

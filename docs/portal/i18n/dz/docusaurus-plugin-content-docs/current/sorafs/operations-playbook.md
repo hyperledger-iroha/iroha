@@ -8,189 +8,189 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Operations Playbook
 sidebar_label: Operations Playbook
 description: Incident response guides and chaos drill procedures for SoraFS operators.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.md`. Keep both copies in sync until the Sphinx documentation set is fully migrated.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ལེབ་འདི་གིས་ `docs/source/sorafs_ops_playbook.md` གི་འོག་ལུ་ བདག་འཛིན་འཐབ་མི་ རན་དེབ་འདི་ མཐོང་སྣང་བཟོཝ་ཨིན། འདྲ་བཤུས་གཉིས་ཆ་ར་ སི་ཕིནཀསི་ཡིག་ཆ་ཆ་ཚན་འདི་ ཆ་ཚང་སྦེ་ གནས་སྤོ་མ་འགྱོ་ཚུན་ཚོད་ མཉམ་འབྱུང་སྦེ་བཞག།
 :::
 
-## Key References
+## ལྡེ་མིག་གཞི་བསྟུན།
 
-- Observability assets: refer to the Grafana dashboards under `dashboards/grafana/` and Prometheus alert rules in `dashboards/alerts/`.
-- Metric catalog: `docs/source/sorafs_observability_plan.md`.
-- Orchestrator telemetry surfaces: `docs/source/sorafs_orchestrator_plan.md`.
+- བལྟ་རྟོག་འབད་བཏུབ་པའི་རྒྱུ་དངོས་: I18NI000000008X དང་ I18NI0000000000X ཉེན་བརྡ་ལམ་ལུགས་ཚུ་གི་འོག་ལུ་ Grafana བརྡ་བཀོད་ཚུ་ལུ་གཞི་བཞག་སྟེ་ I18NI00000000009X.
+- མེ་ཊིག་ཐོ་གཞུང་: `docs/source/sorafs_observability_plan.md`.
+- ཨོར་ཀེཊ་ཊར་ ཊེ་ལི་མི་ཊི་རི་ ཁ་ཐོག་: I18NI000000011X.
 
-## Escalation Matrix
+## ཡར་འཕར་གྱི་མེ་རིགས།
 
-| Priority | Trigger examples | Primary on-call | Backup | Notes |
-|----------|------------------|-----------------|--------|-------|
-| P1 | Global gateway outage, PoR failure rate > 5% (15 min), replication backlog doubling every 10 min | Storage SRE | Observability TL | Engage governance council if impact exceeds 30 min. |
-| P2 | Regional gateway latency SLO breach, orchestrator retry spike without SLA impact | Observability TL | Storage SRE | Continue rollout but gate new manifests. |
-| P3 | Non-critical alerts (manifest staleness, capacity 80–90%) | Intake triage | Ops guild | Address within next business day. |
+| གཙོ་རིམ་ | དཔེ་བཟང་པོ་ | གཞི་རྩའི་ཁ་པར་ | རྒྱབ་ཐག་ | དྲན་ཐོ། |
+|--------------------------------------------------------------------- -----------------------------------
+| P1 | འཛམ་གླིང་འཛུལ་སྒོ་མེདཔ་འགྱོ་མི་ པོ་ཨར་ འཐུས་ཤོར་ཚད་ > ༥% (སྐར་མ་༡༥) འདྲ་བཤུས་རྒྱབ་ལོག་ལོག་ལོག་འདི་ སྐར་མ་༡༠ རེ་ལུ་ གཉིས་རེ་ལུ་ གཉིས་ལྡབ་སྦེ་ | གསོག་འཇོག་ SRE | བལྟ་རྟོག་འབད་ཚུགསཔ་ TL | གནོད་སྐྱོན་འདི་ སྐར་མ་༣༠ ལས་ལྷག་སྟེ་ཡོད་པ་ཅིན་ གཞུང་སྐྱོང་ཚོགས་སྡེ་གིས་ འབད་དགོ། |
+| P2 | ལུང་ཕྱོགས་ཀྱི་སྒོ་ཁའི་ བར་ཆད་ SLO བརྡལ་བ། བལྟ་རྟོག་འབད་ཚུགསཔ་ TL | གསོག་འཇོག་ SRE | འཕྲོ་མཐུད་དེ་ མཇུག་བསྡུའི་གསལ་སྟོན་ཚུ་ སྒོ་བསྡམ་དགོ། |
+| P3 | གལ་ཆེ་བའི་དྲན་ཤེས་ (མན་ངག་གི་ཤུགས་ཚད་ ༨༠–༩༠%) | ཚོད་བརྟག་འབད་ནི། | Ops guild | ཤུལ་མའི་ཚོང་འབྲེལ་ཉིནམ་ནང་ ཁ་བྱང་། |
 
-## Gateway Outage / Degraded Availability
+## སྒོ་རྙིང་པའི་ཐོན་འབྲས་ / ཉམས་རྒུད་པའི་ཐོབ་ཚུལ།
 
-**Detection**
+**ཤེས་རྟོགས་**།
 
-- Alerts: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
-- Dashboard: `dashboards/grafana/sorafs_gateway_overview.json`.
+- ཉེན་བརྡ་: `SoraFSGatewayAvailabilityDrop`, I18NI000000013X.
+- ཌེཤ་བོརཌ་: `dashboards/grafana/sorafs_gateway_overview.json`.
 
-**Immediate actions**
+**འཕྲལ་འཕྲུལ།**།
 
-1. Confirm scope (single provider vs fleet) via request-rate panel.
-2. Switch Torii routing to healthy providers (if multi-provider) by toggling `sorafs_gateway_route_weights` in the ops config (`docs/source/sorafs_gateway_self_cert.md`).
-3. If all providers impacted, enable “direct fetch” fallback for CLI/SDK clients (`docs/source/sorafs_node_client_protocol.md`).
+༡ ཞུ་བ་ཚད་གཞི་ པེ་ནཱལ་བརྒྱུད་དེ་ ཁྱབ་ཚད་ (བྱིན་མི་རྐྱང་པ་ དང་ གྲུ་གཟིངས་) ངེས་གཏན་བཟོ།
+2. I18NT0000002X གསོ་བའི་མཁོ་སྤྲོད་པ་ཚུ་ལུ་ འགྲུལ་ལམ་སོར་བསྒྱུར་འབད། (གལ་སྲིད་ སྣ་མང་བྱིན་མི་)
+༣ གལ་སྲིད་ བྱིན་མི་ཆ་མཉམ་ལུ་ གནོད་སྐྱོན་བྱུང་པ་ཅིན་ སི་ཨེལ་ཨའི་/ཨེསི་ཌི་ཀེ་ མཁོ་སྤྲོད་པ་ (`docs/source/sorafs_node_client_protocol.md`) གི་དོན་ལུ་ “ཐད་ཀར་གྱི་ ཕིཆ་” ཕོལཊི་ཚུ་ ལྕོགས་ཅན་བཟོ།
 
-**Triage**
+**དཔྱད་གཞི།**
 
-- Check stream token utilisation against `sorafs_gateway_stream_token_limit`.
-- Inspect gateway logs for TLS or admission errors.
-- Run `scripts/telemetry/run_schema_diff.sh` to ensure the gateway exported schema matches the expected version.
+- `sorafs_gateway_stream_token_limit` ལུ་ རྒྱུན་ལམ་བརྡ་མཚོན་ཞིབ་དཔྱད་འབད།
+- ཊི་ཨེལ་ཨེསི་ཡང་ན་ འཛུལ་ཞུགས་འཛོལ་བ་ཚུ་གི་དོན་ལུ་ གཱེཊི་ལམ་གྱི་དྲན་ཐོ་ཚུ་བརྟག་ཞིབ་འབད།
+- སྒོ་སྒྲིག་ཕྱིར་འདྲེན་འབད་ཡོད་པའི་ལས་རིམ་འདི་ རེ་བ་བསྐྱེད་པའི་ཐོན་རིམ་དང་མཐུན་སྒྲིག་འབད་ནི་ལུ་ `scripts/telemetry/run_schema_diff.sh` གཡོག་བཀོལ།
 
-**Remediation options**
+**བཅོས་ཐབས་གདམ་ཁ་***
 
-- Restart only the affected gateway process; avoid recycling the entire cluster unless multiple providers are failing.
-- Increase stream token limit by 10–15% temporarily if saturation is confirmed.
-- Re-run self-cert (`scripts/sorafs_gateway_self_cert.sh`) after stabilisation.
+- གནོད་སྐྱོན་ཕོག་པའི་སྒོ་སྒྲིག་བྱ་རིམ་རྐྱངམ་ཅིག་ ལོག་འགོ་བཙུགས། མཁོ་སྤྲོད་འབད་མི་ལེ་ཤ་ཅིག་གིས་ འཐུས་ཤོར་མ་བྱུང་ཚུན་ཚོད་ ཀླད་ཀོར་ཆ་མཉམ་སླར་གསོ་འབད་ནི་ལས་ འཛེམ་དགོ།
+- ཚད་གཞི་འདི་ ངེས་གཏན་བཟོ་བ་ཅིན་ གནས་སྐབས་ཅིག་གི་དོན་ལུ་ ཆུ་རྒྱུན་ཊོ་ཀེན་ཚད་གཞི་འདི་ བརྒྱ་ཆ་༡༠ལས་༡༥གི་བར་ན་ ཡར་སེང་འབད།
+- བརྟན་ཏོག་ཏོ་བཟོ་བའི་ཤུལ་ལས་ རང་གིས་རང་ ལག་ཁྱེར་ (I18NI0000020X) ལོག་སྟེ་གཡོག་བཀོལ།
 
-**Post-incident**
+**བྱུང་རིམ་བྱུང་རྗེས་**
 
-- File a P1 postmortem using `docs/source/sorafs/postmortem_template.md`.
-- Schedule follow-up chaos drill if remediation relied on manual interventions.
+- `docs/source/sorafs/postmortem_template.md` ལག་ལེན་འཐབ་སྟེ་ P1 རྗེས་མའི་མོར་ཊེམ་ཅིག་ཕུལ་དགོ།
+- ལག་ཐོག་ལས་ བར་འཛུལ་འབད་མི་ལུ་ བཅོ་ཁ་རྐྱབ་པ་ཅིན་ ལས་འཆར་གྱི་ རྗེས་སྙེག་ཟང་ཟིང་སྦྱོང་བརྡར་འབད་ནི།
 
-## Proof Failure Spike (PoR / PoTR)
+## བདེན་དཔང་འབད་མ་ཚུགས་པའི་ སྤི་ཀེ་ (PoR / PoTR)
 
-**Detection**
+**ཤེས་རྟོགས་**།
 
-- Alerts: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
-- Dashboard: `dashboards/grafana/sorafs_proof_integrity.json`.
-- Telemetry: `torii_sorafs_proof_stream_events_total` and `sorafs.fetch.error` events with `provider_reason=corrupt_proof`.
+- དྲན་སྐུལ་: `SoraFSProofFailureSpike`, I18NI000000023X.
+- ཌེཤ་བོརཌ་: `dashboards/grafana/sorafs_proof_integrity.json`.
+- བརྒྱུད་འཕྲིན་: `torii_sorafs_proof_stream_events_total` དང་ I18NI000000026X `provider_reason=corrupt_proof` དང་བཅས་པའི་བྱུང་རིམ་ཚུ།
 
-**Immediate actions**
+**འཕྲལ་འཕྲུལ།**།
 
-1. Freeze new manifest admissions by flagging the manifest registry (`docs/source/sorafs/manifest_pipeline.md`).
-2. Notify Governance to pause incentives for affected providers.
+༡ གསལ་སྟོན་ཐོ་བཀོད་ (I18NI0000028X) འདི་ བཀྲམ་སྟོན་འབད་དེ་ གསལ་སྟོན་གྱི་ གསལ་སྟོན་གསརཔ་ ཉམས་བཅོས་འབད།
+༢ གནོད་སྐྱོན་ཕོག་མི་བྱིན་མི་ཚུ་གི་དོན་ལུ་ གཞུང་སྐྱོང་ལུ་ སེམས་ཤུགས་བྱིན་ནིའི་དོན་ལུ་ གཞུང་སྐྱོང་ལུ་ བརྡ་བསྐུལ་འབད།
 
-**Triage**
+**དཔྱད་གཞི།**
 
-- Check PoR challenge queue depth vs `sorafs_node_replication_backlog_total`.
-- Validate proof verification pipeline (`crates/sorafs_node/src/potr.rs`) for recent deployments.
-- Compare provider firmware versions with the operator registry.
+- པོ་ཨར་ གདོང་ལེན་གྱལ་གཏིང་ཚད་ vs `sorafs_node_replication_backlog_total` བརྟག་དཔྱད་འབད།
+- འཕྲལ་ཁམས་ཀྱི་ བཀྲམ་སྤེལ་ཚུ་གི་དོན་ལུ་ བདེན་ཁུངས་བདེན་དཔྱད་ཀྱི་ མདའ་རྟགས་ (I18NI0000030X) བདེན་དཔྱད་འབད།
+- མཁོ་སྤྲོད་འབད་མི་ མཉེན་ཆས་ཐོན་རིམ་ཚུ་ བཀོལ་སྤྱོད་ཐོ་བཀོད་དང་གཅིག་ཁར་ ག་བསྡུར་རྐྱབ།
 
-**Remediation options**
+**བཅོས་ཐབས་གདམ་ཁ་***
 
-- Trigger PoR replays using `sorafs_cli proof stream` with the latest manifest.
-- If proofs consistently fail, remove provider from active set by updating the governance registry and forcing orchestrator scoreboards to refresh.
+- གསར་ཤོས་གསལ་སྟོན་དང་གཅིག་ཁར་ `sorafs_cli proof stream` ལག་ལེན་འཐབ་སྟེ་ Trigger POR བསྐྱར་རྩེད་འབདཝ་ཨིན།
+- གལ་སྲིད་ བདེན་ཁུངས་ཚུ་ རྟག་བུ་རང་ འཐུས་ཤོར་བྱུང་པ་ཅིན་ གཞུང་སྐྱོང་ཐོ་བཀོད་དུས་མཐུན་བཟོ་སྟེ་ གཞི་སྒྲིག་འབད་མི་ལས་ བཏོན་གཏང་ཞིནམ་ལས་ རོལ་དབྱངས་ཚོགས་པ་གི་ སྐུགས་ཚུ་ གསརཔ་བཟོ་བཅུག་དགོ།
 
-**Post-incident**
+**བྱུང་རིམ་བྱུང་རྗེས་**
 
-- Run the PoR chaos drill scenario before the next production deploy.
-- Capture lessons in the postmortem template and update provider qualification checklist.
+- ཤུལ་མམ་གྱི་ཐོན་སྐྱེད་བཀྲམ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ པོ་ཨར་ ཟང་ཟིང་སྦྱོང་བརྡར་གྱི་གནས་སྟངས་འདི་ གཡོག་བཀོལ།
+- ཤི་རྐྱེན་གྱི་ཤུལ་ལས་ ཊེམ་པེལེཊི་དང་ དུས་མཐུན་བཟོ་མི་ ཤེས་ཚད་ཞིབ་དཔྱད་ཐོ་ཡིག་ནང་ སློབ་ཚན་ཚུ་ བསྡུ་ལེན་འབད་ནི།
 
-## Replication Lag / Backlog Growth
+## འགྲིག ལག / རྒྱབ་ལོག་འཛུལ།
 
-**Detection**
+**ཤེས་རྟོགས་**།
 
-- Alerts: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Import
-  `dashboards/alerts/sorafs_capacity_rules.yml` and run
+- དྲན་སྐུལ་: `SoraFSReplicationBacklogGrowing`, I18NI000000033X. ནང་འདྲེན
+  `dashboards/alerts/sorafs_capacity_rules.yml` དང་རྒྱུ།
   `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
-  before promotion so Alertmanager reflects the documented thresholds.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
-- Metrics: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
+  ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ དྲན་ཤེས་བཏོན་མི་གིས་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ཚད་གཞི་ཚུ་ བསྟན་བཅུགཔ་ཨིན།
+- ཌེཤ་བོརཌ་: I18NI000000036X.
+- མེ་ཊིག་: `sorafs_node_replication_backlog_total`, I18NI000000038X.
 
-**Immediate actions**
+**འཕྲལ་འཕྲུལ།**།
 
-1. Verify backlog scope (single provider or fleet) and pause non-essential replication tasks.
-2. If backlog is isolated, temporarily reassign new orders to alternate providers via the replication scheduler.
+༡ རྒྱབ་ལོག་ཁྱབ་ཁོངས་བདེན་དཔྱད་འབད་ (བྱིན་མི་རྐྱངམ་ཅིག་ཡང་ན་གྲུ་གཟིངས་) དང་ གལ་ཅན་མེན་པའི་འདྲ་བཤུས་ལས་འགན་ཚུ་བཀག་བཞག།
+༢ གལ་སྲིད་ རྒྱབ་ལོག་འདི་ སོ་སོ་སྦེ་བཞག་པ་ཅིན་ འདྲ་བཤུས་དུས་ཚོད་བཀོད་མི་བརྒྱུད་དེ་ བྱིན་མི་ཚུ་ལུ་ བཀའ་རྒྱ་གསརཔ་ཚུ་ གནས་སྐབས་ཅིག་གི་དོན་ལུ་ བཀོད་སྒྲིག་འབད།
 
-**Triage**
+**དཔྱད་གཞི།**
 
-- Inspect orchestrator telemetry for retry bursts that may cascade backlog.
-- Confirm storage targets have sufficient headroom (`sorafs_node_capacity_utilisation_percent`).
-- Review recent configuration changes (chunk profile updates, proof cadence).
+- རྒྱབ་ལོག་ཚུ་ འཕྱེལ་འགྱོ་ནི་གི་ འབར་རྫས་ཚུ་གི་དོན་ལུ་ རོལ་དབྱངས་འཕྲུལ་ཆས་ཀྱི་ བརྡ་འཕྲིན་བརྟག་དཔྱད་འབད།
+- གསོག་འཇོག་དམིགས་གཏད་ཚུ་ལུ་ མགུ་ཏོ་གི་ཁང་མིག་ལངམ་སྦེ་ཡོདཔ་ཨིན་ (`sorafs_node_capacity_utilisation_percent`).
+- འཕྲལ་གྱི་རིམ་སྒྲིག་བསྒྱུར་བཅོས་ (ཆ་ཤས་གསལ་སྡུད་དུས་མཐུན་ཚུ་ བདེན་དཔྱད་ཀྱི་གདམ་ཁ།) བསྐྱར་ཞིབ་འབད།
 
-**Remediation options**
+**བཅོས་ཐབས་གདམ་ཁ་***
 
-- Run `sorafs_cli` with the `--rebalance` option to redistribute content.
-- Scale replication workers horizontally for the impacted provider.
-- Trigger manifest refresh to re-align TTL windows.
+- ནང་དོན་བསྐྱར་སྤེལ་འབད་ནི་ལུ་ `--rebalance` གདམ་ཁ་དང་གཅིག་ཁར་ I18NI000000040X གཡོག་བཀོལ།
+- གནོད་སྐྱོན་ཕོག་མི་བྱིན་མི་ཚུ་གི་དོན་ལུ་ ཚད་འཇལ་གྱི་ལཱ་འབད་མི་ཚུ་ ཐད་སྙོམས་སྦེ་ འཕྲེད་ལ་།
+- ཊི་ཊི་ཨེལ་སྒོ་སྒྲིག་ཚུ་ལོག་ཕྲང་སྒྲིག་འབད་ནི་ལུ་ ཊི་རི་གཱར་གྱིས་ གསརཔ་བཟོཝ་ཨིན།
 
-**Post-incident**
+**བྱུང་རིམ་བྱུང་རྗེས་**
 
-- Schedule a capacity drill focusing on provider saturation failure.
-- Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
+- བྱིན་མི་ ཚིལ་མ་ཚངམ་སྦེ་ཡོད་མི་ལུ་གཙོ་བོར་བསྟེན་པའི་ ཤུགས་ཚད་སྦྱོང་བརྡར་ཅིག་ དུས་ཚོད་བཀོད་དགོ།
+- `docs/source/sorafs_node_client_protocol.md` ནང་ འདྲ་བཤུས་འདྲ་བཤུས་ཅན་གྱི་ ཨེསི་ཨེལ་ཨེ་ཡིག་ཆ་ དུས་མཐུན་བཟོ།
 
-## Repair Backlog & SLA Breaches
+## ཉམས་བཅོས་དང་ SLA བརྡལ་བཅོས།
 
-**Detection**
+**ཤེས་རྟོགས་**།
 
-- Alerts:
-  - `SoraFSRepairBacklogHigh` (queue depth > 50 or oldest queued age > 4h for 10m).
-  - `SoraFSRepairEscalations` (> 3 escalations/hour).
-  - `SoraFSRepairLeaseExpirySpike` (> 5 lease expiries/hour).
-  - `SoraFSRetentionBlockedEvictions` (retention blocked by active repairs in last 15m).
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- ཉེན་བརྡ་:
+  - `SoraFSRepairBacklogHigh` (བང་རིམ་གཏིང་ཚད་ > ༥༠ ཡང་ན་ བང་རིམ་རྙིང་ཤོས་ > ༤h for ༡༠m)།
+  - `SoraFSRepairEscalations` (>> ༣ ཡར་འཕར་/ཆུ་ཚོད་)།
+  - `SoraFSRepairLeaseExpirySpike` (> ༥ གླ་ཁར་ལེན་པའི་དུས་ཚོད་/ཆུ་ཚོད་)།
+  - `SoraFSRetentionBlockedEvictions` (མཐའ་མའི་ ༡༥m ནང་ ཤུགས་ལྡན་བཟོ་བཅོས་ཀྱིས་ བཀག་ཆ་འབད་ཡོདཔ།)
+- ཌེཤ་བོརཌ་: I18NI000000047X.
 
-**Immediate actions**
+**འཕྲལ་འཕྲུལ།**།
 
-1. Identify affected providers (queue depth spikes) and pause new pins/replication orders for them.
-2. Verify repair worker liveness and increase worker concurrency if safe.
+༡ གནོད་སྐྱོན་ཕོག་མི་བྱིན་མི་ཚུ་ངོས་འཛིན་འབད་ཞིནམ་ལས་ (གྱལ་གཏིང་གི་གཏིང་ཚད་) དང་ དེ་ཚུ་གི་དོན་ལུ་ པིན་གསརཔ་/འདྲ་དཔེ་བཀོད་རྒྱ་ཚུ་བཀག་བཞག།
+༢ ཉམས་བཅོས་འབད་མི་ལཱ་འབད་མི་ཚུ་གི་འཚོ་བ་བདེན་དཔྱད་འབད་ཞིནམ་ལས་ ཉེན་སྲུང་ཡོད་པ་ཅིན་ ལས་མི་མཐུན་ཚོགས་ཡར་སེང་འབད་ནི།
 
-**Triage**
+**དཔྱད་གཞི།**
 
-- Compare `torii_sorafs_repair_backlog_oldest_age_seconds` against the 4h SLA window.
-- Inspect `torii_sorafs_repair_lease_expired_total{outcome=...}` for crash/clock-skew patterns.
-- Review escalated tickets for repeated manifest/provider pairs and verify evidence bundles.
+- 4h SLA སྒོ་སྒྲིག་ལུ་ `torii_sorafs_repair_backlog_oldest_age_seconds` ག་བསྡུར་འབད།
+- བརྡབ་གསིག་/ཆུ་ཚོད་-skew དཔེ་རིས་ཚུ་གི་དོན་ལུ་ `torii_sorafs_repair_lease_expired_total{outcome=...}` ཞིབ་དཔྱད་འབད།
+- གསལ་སྟོན་/བྱིན་མི་ཆ་གཅིག་བསྐྱར་ལོག་འབད་ནི་དང་ སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ཚུ་གི་དོན་ལུ་ བསྐྱར་ཞིབ་ཡར་སེང་འབད་ཡོད་པའི་ ཤོག་འཛིན་ཚུ།
 
-**Remediation options**
+**བཅོས་ཐབས་གདམ་ཁ་***
 
-- Reassign or restart stalled repair workers; clear orphaned leases via the normal claim flow.
-- Throttle new pins while repairs drain to prevent additional SLA pressure.
-- Escalate to governance if escalations persist and attach the repair audit artefacts.
+- ཉམས་བཅོས་འབད་མི་ཚུ་ ལོག་སྟེ་སྤྲོད་ནི་དང་ ཡང་ན་ ལོག་འགོ་བཙུགས་ནི། སྤྱིར་བཏང་ཐོབ་བརྗོད་རྒྱུན་རིམ་བརྒྱུད་དེ་ དྭངས་གསལ་ཅན་གྱི་ གླ་ཁར་ལེན་ནི།
+- ཐོརོ་ཊལ་ པིན་གསརཔ་ ཆུ་བཏོན་པའི་སྐབས་ ཆུ་བཏོན་ནིའི་དོན་ལུ་ ཨེསི་ཨེལ་ཨེ་ གནོན་ཤུགས་ཁ་སྐོང་ བཀག་ཐབས་འབདཝ་ཨིན།
+- གལ་སྲིད་ ཡར་འཕར་དང་ ཉམས་བཅོས་རྩིས་ཞིབ་ཀྱི་ ཅ་ཆས་ཚུ་ མཉམ་སྦྲགས་འབད་བ་ཅིན་ གཞུང་སྐྱོང་ལུ་ ཡར་སེང་འབད་ནི།
 
-## Retention / GC Inspection (Read-only)
+## བདག་འཛིན་ / ཇི་སི་ཞིབ་བཤེར་ (ལྷག་རྐྱང)
 
-**Detection**
+**ཤེས་རྟོགས་**།
 
-- Alerts: `SoraFSCapacityPressure` or sustained `torii_sorafs_storage_bytes_used` > 90%.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- དྲན་སྐུལ་: `SoraFSCapacityPressure` ཡང་ན་ ཡུན་བརྟན་ I18NI000000051X > 90%.
+- ཌེཤ་བོརཌ་: I18NI000000052X.
 
-**Immediate actions**
+**འཕྲལ་འཕྲུལ།**།
 
-1. Run a local retention snapshot:
+1. ས་གནས་ཀྱི་བདག་འཛིན་གྱི་པར་ཅིག་བརྒྱུད།
    ```bash
    iroha app sorafs gc inspect --data-dir /var/lib/sorafs
    ```
-2. Capture an expired-only view for triage:
-   ```bash
-   iroha app sorafs gc dry-run --data-dir /var/lib/sorafs
-   ```
-3. Attach the JSON outputs to the incident ticket for auditability.
+༢ ཚོད་བརྟག་གི་དོན་ལུ་ དུས་ཡོལ་རྐྱངམ་ཅིག་གི་མཐོང་སྣང་ཅིག་ བཟུང་ནི།
+   I18NF0000004X
+༣ རྩིས་ཞིབ་འབད་ཚུགས་པའི་ བྱུང་རྐྱེན་གྱི་ ཤོག་འཛིན་ལུ་ JSON ཐོན་འབྲས་ཚུ་ མཐུད་དགོ།
 
-**Triage**
+**དཔྱད་གཞི།**
 
-- Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
-- Use `retention_sources` in the GC JSON output to see which constraint set the effective
-  retention (`deal_end`, `governance_cap`, `pin_policy`, or `unbounded`). Deal and governance caps
-  are supplied via manifest metadata keys `sorafs.retention.deal_end_epoch` and
+- `retention_epoch=0` སྙན་ཞུ་གསལ་སྟོན་འབད་མི་ ངེས་གཏན་བཟོ་ནི། (དུས་ཡུན་ཚང་མི་) དང་ དུས་ཚོད་ཡོད་མི་ཚུ་ཨིན།
+- ཇི་སི་ཇེ་ཨེསི་ཨོ་ཨེན་ཨའུཊི་པུཊི་ནང་ `retention_sources` ལག་ལེན་འཐབ།
+  བདག་འཛིན་ (I18NI000000055X, I18NI000000056X, I18NI0000000057X, ཡང་ན་ I18NI000000058X). ཉེར་སྤྱོད་དང་གཞུང་སྐྱོང་ཁབ་ལེན་ཁང༌།
+  གསལ་སྟོན་མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ཚུ་བརྒྱུད་དེ་ I18NI000000059X དང་།
   `sorafs.retention.governance_cap_epoch`.
-- If `dry-run` reports expired manifests but capacity remains pinned, verify no
-  active repairs or retention policy overrides block eviction.
-  Capacity-triggered sweeps evict expired manifests by least-recently-used order with
-  `manifest_id` tie-breakers.
+- I18NI000000061X སྙན་ཞུ་ཚུ་ དུས་ཚོད་རྫོགས་ཡོད་པའི་ གསལ་སྟོན་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན་རུང་ ཤོང་ཚད་ལུས་ཡོདཔ་ཨིན་པ་ཅིན་ བདེན་དཔྱད་འབད་ནི་མེདཔ་ཨིན།
+  ཤུགས་ལྡན་བཟོ་བཅོས་ཡང་ན་ བཀག་འཛིན་སྲིད་བྱུས་ཀྱིས་ བཀག་ཆ་འབད་མི་ བཏོན་གཏང་ནི།
+  ལྕོགས་གྲུབ་ཅན་གྱི་ ཕྱགས་བརྡར་འདི་ འཕྲལ་ཁམས་ཅིག་ཁར་ ལག་ལེན་འཐབ་མི་ གོ་རིམ་དང་འཁྲིལ་ཏེ་ གསལ་སྟོན་འབདཝ་ཨིན།
+  `manifest_id` མཐུན་སྒྲིག་འགག་པ།
 
-**Remediation options**
+**བཅོས་ཐབས་གདམ་ཁ་***
 
-- The GC CLI is read-only. Do not delete manifests or chunks manually in production.
-- Escalate to governance for retention policy adjustments or capacity expansion
-  when expired data accumulates without automated eviction.
+- ཇི་སི་ སི་ཨེལ་ཨའི་ ལྷག་རྐྱངམ་གཅིག་ཨིན། བཟོ་བསྐྲུན་ནང་ ལག་ཐོག་ལས་ གསལ་སྟོན་ཡང་ན་ ཆ་ཤས་ཚུ་ བཏོན་གཏང་མ་བཏུབ།
+- བདག་འཛིན་སྲིད་བྱུས་བདེ་སྒྲིག་ ཡང་ན་ ལྕོགས་གྲུབ་རྒྱ་སྐྱེད་ཀྱི་དོན་ལུ་ གཞུང་སྐྱོང་ལུ་ ཡར་སེང་འབད་ནི།
+  དུས་ཡོལ་ཡོད་པའི་གནས་སྡུད་བསྡུ་གསོག་འབད་བའི་སྐབས་ རང་བཞིན་གྱིས་ བཏོན་གཏང་མ་ཚུགསཔ་ཨིན།
 
-## Chaos Drill Cadence
+##
 
-- **Quarterly**: Combined gateway outage + orchestrator retry storm simulation.
-- **Biannual**: PoR/PoTR failure injection across two providers with recovery.
-- **Monthly spot-check**: Replication lag scenario using staging manifests.
-- Track drills in the shared runbook log (`ops/drill-log.md`) via:
+- **Quarterly**: མཉམ་སྡེབ་སྒོ་སྒྲིག་མེདཔ་ + སྙན་ཆའི་སྡེ་ཚན་སླར་ལོག་འབད་མི་ རླུང་འཚུབ་ཚོད་བརྟག་།
+- **གཉིས་ལྡན་**: བསྐྱར་གསོ་འབད་མི་ བྱིན་མི་གཉིས་ནང་ PoR/PoTR འཐུས་ཤོར་གྱི་སྨན་ཁབ་བཙུགས་ནི།
+- **ཟླཝ་གི་ས་གོ་བརྟག་དཔྱད་**: འདྲ་བཤུས་རྐྱབ་ནིའི་གནས་སྟངས་ལག་ལེན་འཐབ་སྟེ་ གོ་རིམ་གསལ་སྟོན་ཚུ་ལག་ལེན་འཐབ་ཨིན།
+- བརྗེ་སོར་འབད་ཡོད་པའི་ རན་བུག་དྲན་ཐོ་ (`ops/drill-log.md`) བརྒྱུད་དེ་ འཚོལ་ཞིབ་འབད།
 
   ```bash
   scripts/telemetry/log_sorafs_drill.sh \
@@ -203,15 +203,15 @@ This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.
     --link "docs/source/sorafs/postmortem_template.md"
   ```
 
-- Validate the log before commits with:
+- ཁས་བླངས་མ་འབད་བའི་ཧེ་མ་ དྲན་ཐོ་འདི་ བདེན་དཔྱད་འབད།
 
   ```bash
   scripts/telemetry/validate_drill_log.sh
   ```
 
-- Use `--status scheduled` for upcoming drills, `pass`/`fail` for completed runs, and `follow-up` when action items remain open.
-- Override the destination with `--log` for dry-runs or automated verification; without it the script continues to update `ops/drill-log.md`.
+- འོང་ནི་ཨིན་པའི་སྦྱོང་བརྡར་ཚུ་གི་དོན་ལུ་ I18NI000000064X ལག་ལེན་འཐབ།, `pass`/`fail` དང་ མཇུག་བསྡུ་ཡོད་པའི་རྒྱུག་འགྲན།
+- སྐམ་གཡོག་དང་ ཡང་ན་ རང་བཞིན་གྱིས་བདེན་དཔྱད་འབད་ནིའི་དོན་ལུ་ `--log` དང་གཅིག་ཁར་ འགྲོ་ཡུལ་འདི་ བཀག་ཆ་འབད་དགོ། དེ་མེད་པར་ཡིག་གཟུགས་འདི་འཕྲོ་མཐུད་དེ་ `ops/drill-log.md` དུས་མཐུན་བཟོ་ཡོད།
 
-## Postmortem Template
+## བཤག་བཅོས་རྗེས་མའི་རྟགས།
 
-Use `docs/source/sorafs/postmortem_template.md` for every P1/P2 incident and for chaos drill retrospectives. The template covers timeline, impact quantification, contributing factors, corrective actions, and follow-up verification tasks.
+P1/P2 བྱུང་རྐྱེན་རེ་རེ་དང་ ཟང་ཟིང་སྦྱོང་བརྡར་གྱི་དོན་ལུ་ `docs/source/sorafs/postmortem_template.md` ལག་ལེན་འཐབ། ཊེམ་པེལེཊི་འདི་གིས་ དུས་ཚོད་ཐིག་དང་ ཕན་གནོད་ཀྱི་འབོར་ཚད་ ཕན་འདེབས་ཀྱི་ཆ་རྐྱེན་ བཅོ་ཁ་རྐྱབ་ནིའི་བྱ་བ་ དེ་ལས་ རྗེས་འཇུག་བདེན་དཔྱད་ཀྱི་ལཱ་ཚུ་ཁྱབ་ཨིན།

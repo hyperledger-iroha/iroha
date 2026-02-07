@@ -4,80 +4,80 @@ direction: ltr
 source: docs/portal/docs/norito/streaming.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Streaming
+# Norito རྒྱུན་འཁྱོངས།
 
-Norito Streaming defines the wire format, control frames, and reference codec
-used for live media flows across Torii and SoraNet. The canonical spec lives in
-`norito_streaming.md` at the workspace root; this page distills the pieces that
-operators and SDK authors need alongside the configuration touch points.
+Norito Streaming གིས་ གློག་ཐག་རྩ་སྒྲིག་དང་ ཚད་འཛིན་གཞི་ཁྲམ་ དེ་ལས་ གཞི་བསྟུན་ ཀོ་ཌེཀ་ཚུ་ ངེས་འཛིན་འབདཝ་ཨིན།
+བརྡ་བརྒྱུད་ཀྱི་རྒྱུན་འབབ་ཚུ་ Torii དང་ SoraNet ལུ་ལག་ལེན་འཐབ་ཨིན། ཁྲིམས་ལུགས་ཀྱི་ཁྱད་ཚད་འདི་ སྤྱི་ལོ་ ༢༠༡༦ ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+ལཱ་གི་ས་སྒོ་ནང་ `norito_streaming.md`; ཤོག་ལེབ་འདི་གིས་ ཆ་ཤས་ཚུ་ དེ་ གཏན་འབེབས་བཟོཝ་ཨིན།
+བཀོལ་སྤྱོད་པ་དང་ ཨེསི་ཌི་ཀེ་རྩོམ་བྲིས་པ་ཚུ་ལུ་ རིམ་སྒྲིག་རེག་པ་ས་ཚིགས་ཚུ་དང་གཅིག་ཁར་ དགོཔ་ཨིན།
 
-## Wire format and control plane
+## ཐགས་ རྩ་སྒྲིག་དང་ ཚད་འཛིན།
 
-- **Manifests & frames.** `ManifestV1` and `PrivacyRoute*` describe the segment
-  timeline, chunk descriptors, and route hints. Control frames (`KeyUpdate`,
-  `ContentKeyUpdate`, and cadence feedback) live alongside the manifest so
-  viewers can validate commitments before decoding.
-- **Baseline codec.** `BaselineEncoder`/`BaselineDecoder` enforce monotonic
-  chunk ids, timestamp arithmetic, and commitment verification. Hosts must call
-  `EncodedSegment::verify_manifest` before serving viewers or relays.
-- **Feature bits.** Capability negotiation advertises `streaming.feature_bits`
-  (default `0b11` = baseline feedback + privacy route provider) so relays and
-  clients can reject peers without matching capabilities deterministically.
+- **`ManifestV1` དང་ `PrivacyRoute*` གིས་ ཆ་ཤས་འདི་འགྲེལ་བཤད་རྐྱབ་ཨིན།
+  timeline, chunk འགྲེལ་བཤད་དང་ ལམ་གྱི་བརྡ་སྟོན་ཚུ། ཚད་འཛིན་གཞི་ཁྲམ་ (`KeyUpdate`,
+  `ContentKeyUpdate`, དང་ ཚད་གཞིའི་བསམ་འཆར།) གསལ་སྟོན་གྱི་མཉམ་དུ་སྡོད་དགོས།
+  བལྟ་མི་ཚུ་གིས་ གསལ་བསྒྲགས་མ་འབད་བའི་ཧེ་མ་ ཁས་བླངས་ཚུ་ བདེན་དཔྱད་འབད་ཚུགས།
+- **གཞི་རྟེན་གསང་ཨང་.** `BaselineEncoder`/`BaselineDecoder` བཀག་ཆ་གཅིག་པ།
+  ཆུང་ཆུང་ཨའི་ཌི་དང་ དུས་ཚོད་མཚོན་རྟགས་ དེ་ལས་ ཁས་བླངས་བདེན་དཔྱད་ཚུ་ཨིན། ཧོསིཊི་ཚུ་འབོ་དགོ།
+  `EncodedSegment::verify_manifest` གིས་ ལྟདམོ་ལྟ་མི་ཚུ་ཡང་ན་ རི་ལེ་ཚུ་ མ་བྱིན་པའི་ཧེ་མ་ཨིན།
+- **འགྲེམས་སྟོན་གྱི་བིཊི་ཚུ།
+  (སྔོན་སྒྲིག་ `0b11` = གཞི་རྟེན་བསམ་འཆར་ + སྒེར་གྱི་འགྲུལ་ལམ་བྱིན་མི་) དེ་འབདཝ་ལས་ རི་ལེ་དང་།
+  མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ལྕོགས་གྲུབ་ཚུ་ གཏན་འབེབས་བཟོ་སྟེ་ ལྕོགས་གྲུབ་ཚུ་ མ་མཐུན་པར་ བཀག་ཆ་འབད་ཚུགས།
 
-## Keys, suites, and cadence
+## ལྡེ་མིག་དང་ ཆ་ཁྱབ་དང་ གདངས་གདངས།
 
-- **Identity requirements.** Streaming control frames are always signed with
-  Ed25519. Dedicated keys can be supplied via
-  `streaming.identity_public_key`/`streaming.identity_private_key`; otherwise
-  the node identity is reused.
-- **HPKE suites.** `KeyUpdate` selects the lowest common suite; suite #1 is
-  mandatory (`AuthPsk`, `Kyber768`, `HKDF-SHA3-256`, `ChaCha20-Poly1305`), with
-  an optional `Kyber1024` upgrade path. Suite selection is stored on the
-  session and validated on every update.
-- **Rotation.** Publishers emit a signed `KeyUpdate` every 64 MiB or 5 minutes.
-  `key_counter` must increase strictly; regression is a hard error.
-  `ContentKeyUpdate` distributes the rolling Group Content Key, wrapped under
-  the negotiated HPKE suite, and gates segment decryption by ID + validity
-  window.
-- **Snapshots.** `StreamingSession::snapshot_state` and
-  `restore_from_snapshot` persist `{session_id, key_counter, suite, sts_root,
-  cadence state}` under `streaming.session_store_dir` (default
-  `./storage/streaming`). Transport keys are re-derived on restore so crashes
-  do not leak session secrets.
+- **ངོ་རྟགས་དགོས་མཁོ་ཡོདཔ་ཨིན།
+  Ed25519། བློ་གཏད་ཅན་གྱི་ལྡེ་མིག་ཚུ་ བརྒྱུད་དེ་བཀྲམ་སྤེལ་འབད་ཚུགས།
+  `streaming.identity_public_key`/`streaming.identity_private_key`; དེ་མིན་
+  མཐུད་མཚམས་ངོ་རྟགས་འདི་ལོག་སྟེ་ལག་ལེན་འཐབ་ཨིན།
+- **HPKE popes.** `KeyUpdate` གིས་ སྤྱིར་བཏང་ཆ་ཚང་དམའ་ཤོས་འདི་སེལ་འཐུ་འབདཝ་ཨིན། ས་ ་ ་ #༡ ནི།
+  བཀའ་ཤག་ (`AuthPsk`, `Kyber768`, `HKDF-SHA3-256`, `ChaCha20-Poly1305`)
+  གདམ་ཁའི་`Kyber1024` ཡར་བསྐྱེད་འགྲུལ་ལམ། སའིཊི་སེལ་འཐུ་འདི་ གུ་ གསོག་འཇོག་འབད་ཡོདཔ་ཨིན།
+  དུས་མཐུན་བཟོ་ནི་དང་ དུས་མཐུན་བཟོ་ནི་རེ་རེ་ནང་ བདེན་དཔྱད་འབད་ཡོདཔ།
+- **རོ་ཊི་ཤཱན་.** དཔར་བསྐྲུན་པ་ཚུ་གིས་ མཚན་རྟགས་བཀོད་མི་ `KeyUpdate` འདི་ 64MiB ཡང་ན་ 5སྐར་མ་རེ་ལུ་ བཏོནམ་ཨིན།
+  Torii དམ་དམ་སྦེ་ཡར་སེང་འབད་དགོ། འགྱུར་ལྡོག་འདི་ འཛོལ་བ་སྦོམ་ཅིག་ཨིན།
+  `ContentKeyUpdate` གིས་ འོག་ལུ་བཀོད་ཡོད་མི་ མཇུག་བསྡུའི་སྡེ་ཚན་ནང་དོན་ལྡེ་མིག་འདི་བཀྲམ་སྤེལ་འབདཝ་ཨིན།
+  གྲོས་བསྟུན་འབད་ཡོད་པའི་ HPKE ཆ་ཚན་དང་ ID + ནུས་ཅན་གྱིས་ ཆ་ཤས་གསང་བཟོས།
+  སྒོང༌སྒྲིག།
+- **པར་ལེན་ཚུ་.** `StreamingSession::snapshot_state` དང་།
+  `restore_from_snapshot` གིས་ `Sission_id, ལྡེ་མིག་_རྩོད་གཞི་, ཆ་སྙོམས་, sts_root, ཚུ་ རྟག་བརྟན་སྦེ་ཡོདཔ་ཨིན།
+  ཚད་གཞིའི་གནས་སྟངས་}` under `struage.session_store_dir` (སྔོན་སྒྲིག་འཐབ།
+  `./storage/streaming`). སྐྱེལ་འདྲེན་ལྡེ་མིག་ཚུ་ སླར་གསོ་འབདཝ་ལས་ བརྡབ་འགྱོ་མི་ཚུ་ལུ་ ལོག་བྱུང་ཡོདཔ་ཨིན།
+  ལཱ་ཡུན་གསང་བ་ཚུ་ མ་བཙུགས།
 
-## Runtime configuration
-
-- **Key material.** Supply dedicated keys with
+## གཡོག་བཀོལ།- **ལྡེ་མིག་རྒྱུ་ཆ།** དང་བཅས་པའི་ཆེད་དུ་ཅན་གྱི་ལྡེ་མིག་ཚུ་ དང་ཅིག་ཁར་
   `streaming.identity_public_key`/`streaming.identity_private_key` (Ed25519
-  multihash) and optional Kyber material via
-  `streaming.kyber_public_key`/`streaming.kyber_secret_key`. All four must be
-  present when overriding defaults; `streaming.kyber_suite` accepts
-  `mlkem512|mlkem768|mlkem1024` (aliases `kyber512/768/1024`, default
+  multihas) དང་ གདམ་ཁ་ཅན་གྱི་ Kyber རྒྱུ་ཆ།
+  `streaming.kyber_public_key`/`streaming.kyber_secret_key`. བཞི་ཆ་ར་འོང་དགོས།
+  སྔོན་སྒྲིག་ཚུ་ བཀག་ཆ་འབད་བའི་སྐབས། `streaming.kyber_suite` དང་ལེན་འབད་ནི།
+  `mlkem512|mlkem768|mlkem1024` (མི་གཞན་ `kyber512/768/1024`, སྔོན་སྒྲིག་།
   `mlkem768`).
-- **Codec guardrails.** CABAC stays disabled unless the build enables it;
-  bundled rANS requires `ENABLE_RANS_BUNDLES=1`. Enforce via
-  `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` and optional
-  `streaming.codec.rans_tables_path` when supplying custom tables. Bundled
-- **SoraNet routes.** `streaming.soranet.*` controls anonymous transport:
-  `exit_multiaddr` (default `/dns/torii/udp/9443/quic`), `padding_budget_ms`
-  (default 25 ms), `access_kind` (`authenticated` vs `read-only`), optional
-  `channel_salt`, `provision_spool_dir` (default
-  `./storage/streaming/soranet_routes`), `provision_spool_max_bytes` (default 0,
-  unlimited), `provision_window_segments` (default 4), and
-  `provision_queue_capacity` (default 256).
-- **Sync gate.** `streaming.sync` toggles drift enforcement for audiovisual
-  streams: `enabled`, `observe_only`, `ewma_threshold_ms`, and `hard_cap_ms`
-  govern when segments are rejected for timing drift.
+- **Codec sardrails.** བཟོ་བསྐྲུན་གྱིས་ལྕོགས་ཅན་མ་བཟོ་ཚུན་ཚོད་ ལྕོགས་མིན་བཟོ་སྟེ་སྡོདཔ་ཨིན།
+  bunded raNS ལུ་ `ENABLE_RANS_BUNDLES=1` དགོཔ་ཨིན། བརྒྱུད་འཕྲིན་བརྒྱུད་དེ་ བསྟར་སྤྱོད་འབད།
+  `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` དང་གདམ་ཁ།
+  སྲོལ་སྒྲིག་ཐིག་ཁྲམ་ཚུ་བཀྲམ་སྤེལ་འབད་བའི་སྐབས་ `streaming.codec.rans_tables_path` ཨིན། བསྡམས་ཡོདཔ།
+- **སོ་ར་ནེཊི་ལམ་ཚུ་.** `streaming.soranet.*` མིང་མེད་སྐྱེལ་འདྲེན་ཚད་འཛིན་འབདཝ་ཨིན།
+  Norito (སྔོན་སྒྲིག་ `/dns/torii/udp/9443/quic`), `padding_budget_ms`
+  (སྔོན་སྒྲིག་ ༢༥ms), `access_kind` (`authenticated` vs `read-only`).
+  `channel_salt`, `ManifestV1` (སྔོན་སྒྲིག་
+  `./storage/streaming/soranet_routes`), `provision_spool_max_bytes` (སྔོན་སྒྲིག་༠,
+  ཚད་མེད་), `provision_window_segments` (སྔོན་སྒྲིག་ ༤) དང་།
+  `provision_queue_capacity` (སྔོན་སྒྲིག་ ༢༥༦)།
+- **སིན་ཀ་གཱེཊི་.** `streaming.sync` རྣར་ཉན་མཐོང་སྣང་དོན་ལུ་ སོར་བསྒྱུར་གྱི་ ཌིརཊི་ཚུ་ བཀག་འཛིན་འབད་ནི།
+  རྒྱུན་ལམ་: `enabled`, `observe_only`, `PrivacyRoute*`, དང་ `KeyUpdate`
+  དུས་ཚོད་ཀྱི་འགྱུར་བ་གི་དོན་ལུ་ ཆ་ཤས་ཚུ་ ངོས་ལེན་མ་འབད་བའི་སྐབས་ གཞུང་།
 
-## Validation and fixtures
+## བདེན་དཔང་དང་སྒྲིག་ཆ།
 
-- Canonical type definitions and helpers live in
+- ཀེ་ནོ་ནིག་དབྱེ་བ་ངེས་ཚིག་དང་ གྲོགས་རམ་པ་ཚུ་ ནང་སྡོད་ཡོདཔ་ཨིན།
   `crates/iroha_crypto/src/streaming.rs`.
-- Integration coverage exercises the HPKE handshake, content-key distribution,
-  and snapshot lifecycle (`crates/iroha_crypto/tests/streaming_handshake.rs`).
-  Run `cargo test -p iroha_crypto streaming_handshake` to verify the streaming
-  surface locally.
-- For a deep dive into layout, error handling, and future upgrades, read
-  `norito_streaming.md` in the repository root.
+- མཉམ་སྡེབ་ཁྱབ་ཁོངས་ལག་ལེན་འཐབ་ཐོག་ལས་ HPKE ལག་ཤེན་ ནང་དོན་གཙོ་བོ་བཀྲམ་སྤེལ་ ,
+  དང་ འཕྲོ་བརླག་གཏང་བའི་མི་ཚེ་འཁོར་རིམ་ (`crates/iroha_crypto/tests/streaming_handshake.rs`).
+  རྒྱུན་སྤེལ་བདེན་དཔྱད་འབད་ནིའི་དོན་ལུ་ `cargo test -p iroha_crypto streaming_handshake` གཡོག་བཀོལ།
+  ཁ་ཐོག་ལུ་ ཁ་ཐོག་ལུ།
+- སྒྲིག་བཀོད་དང་ འཛོལ་བ་འཛིན་སྐྱོང་ དེ་ལས་ མ་འོངས་པའི་ཡར་འཕར་ཚུ་ གཏིང་ཟབ་སྦེ་ མཆོངས་ནིའི་དོན་ལུ་ ལྷག་དགོ།
+  `norito_streaming.md` མཛོད་ཁང་གི་རྩ་བ་ནང་།

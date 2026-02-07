@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 59948351a84b27efe0d9741545d8f93c7525fa5f545605a0942d9f2f574f6f06
 source_last_modified: "2025-12-29T18:16:35.072823+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Access Request (Template)
+# Docs Portal Preview Access Request (Загвар)
 
-Use this template when capturing reviewer details before granting access to the
-public preview environment. Copy the markdown into an issue or request form and
-replace the placeholder values.
+Хандалт өгөхөөс өмнө хянагчийн дэлгэрэнгүй мэдээллийг авахдаа энэ загварыг ашиглана уу
+олон нийтэд урьдчилан харах орчин. Тэмдэглэгээг асуудал эсвэл хүсэлтийн маягт руу хуулж,
+орлуулагчийн утгыг солих.
 
 ```markdown
 ## Request Summary
@@ -44,9 +45,9 @@ replace the placeholder values.
 
 ---
 
-## Community-Specific Questions (W2+)
-- Motivation for preview access (one sentence):
-- Primary review focus (SDK, governance, Norito, SoraFS, other):
-- Weekly time commitment & availability window (UTC):
-- Localization or accessibility needs (yes/no + details):
-- Community Code of Conduct + preview acceptable-use addendum acknowledged (yes/no):
+## Олон нийтэд зориулсан асуултууд (W2+)
+- Урьдчилан үзэх боломжийг олгох сэдэл (нэг өгүүлбэр):
+- Анхан шатны хяналтад анхаарлаа хандуулах (SDK, засаглал, Norito, SoraFS, бусад):
+- Долоо хоног тутмын амлалт ба бэлэн байдлын цонх (UTC):
+- Локалчлал эсвэл хүртээмжийн хэрэгцээ (тийм/үгүй + дэлгэрэнгүй):
+- Олон нийтийн ёс зүйн дүрэм + урьдчилан үзэх зөвшөөрөгдсөн ашиглах нэмэлтийг хүлээн зөвшөөрсөн (тийм/үгүй):

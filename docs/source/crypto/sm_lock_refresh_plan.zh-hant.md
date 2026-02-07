@@ -7,48 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3065571b34a226a5871c4fb68063f9419e48074b20096de215f440bdf54a4e59
 source_last_modified: "2025-12-29T18:16:35.943236+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Procedure for scheduling the Cargo.lock refresh required by the SM spike.
+//！安排 SM 尖峰所需的 Cargo.lock 刷新的過程。
 
-# SM Feature `Cargo.lock` Refresh Plan
+# SM 功能 `Cargo.lock` 刷新計劃
 
-The `sm` feature spike for `iroha_crypto` originally could not complete `cargo check` while `--locked` was enforced. This note records the coordination steps for a sanctioned `Cargo.lock` update and tracks the current status of that need.
+`iroha_crypto` 的 `sm` 功能尖峰最初無法完成 `cargo check`，而強制執行 `--locked`。本說明記錄了經批准的 `Cargo.lock` 更新的協調步驟，並跟踪該需求的當前狀態。
 
-> **2026-02-12 update:** Recent validation shows the optional `sm` feature now builds with the existing lockfile (`cargo check -p iroha_crypto --features sm --locked` succeeds in 7.9 s cold/0.23 s warm). The dependency set already contains `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`, so no immediate lock refresh is required. Keep the procedure below on standby for future dependency bumps or new optional crates.
+> **2026-02-12 更新：** 最近的驗證顯示可選的 `sm` 功能現在使用現有鎖定文件構建（`cargo check -p iroha_crypto --features sm --locked` 在 7.9 秒冷/0.23 秒熱中成功）。依賴項集已包含 `base64ct`、`ghash`、`opaque-debug`、`pem-rfc7468`、`pkcs8`、`polyval`、`primeorder`、`sm2`、 `sm3`、`sm4` 和 `sm4-gcm`，因此不需要立即鎖定刷新。請保留以下過程，以備將來出現依賴項或新的可選包時使用。
 
-## Why the refresh is needed
-- Earlier iterations of the spike required adding optional crates that were missing from the lockfile. Current lock snapshots already include the RustCrypto stack (`sm2`, `sm3`, `sm4`, supporting codecs, and AES helpers).
-- Repository policy still blocks opportunistic lockfile edits; if a future dependency upgrade is necessary, the procedure below remains applicable.
-- Retain this plan so the team can execute a controlled refresh when new SM-related dependencies are introduced or existing ones need version bumps.
+## 為什麼需要刷新
+- 尖峰的早期迭代需要添加鎖定文件中缺少的可選包。當前的鎖定快照已包含 RustCrypto 堆棧（`sm2`、`sm3`、`sm4`、支持編解碼器和 AES 幫助程序）。
+- 存儲庫策略仍然阻止機會主義的鎖定文件編輯；如果將來需要升級依賴項，則以下過程仍然適用。
+- 保留此計劃，以便團隊可以在引入新的 SM 相關依賴項或現有依賴項需要版本更新時執行受控刷新。
 
-## Proposed coordination steps
-1. **Raise request in Crypto WG + Release Eng sync (owner: @crypto-wg lead).**
-   - Reference `docs/source/crypto/sm_program.md` and note the optional nature of the feature.
-   - Confirm there are no concurrent lockfile change windows (e.g., dependency freezes).
-2. **Prepare patch with lock diff (owner: @release-eng).**
-   - Execute `scripts/sm_lock_refresh.sh` (after approval) to update only the required crates.
-   - Capture `cargo tree -p iroha_crypto --features sm` output (script emits `target/sm_dep_tree.txt`).
-3. **Security review (owner: @security-reviews).**
-   - Verify new crates/versions match the audit register and licensing expectations.
-   - Record hashes in supply-chain tracker.
-4. **Merge window execution.**
-   - Submit PR containing only the lockfile delta, dependency tree snapshot (attached as artifact), and updated audit notes.
-   - Ensure CI runs with `cargo check -p iroha_crypto --features sm` before merge.
-5. **Follow-up tasks.**
-   - Update `docs/source/crypto/sm_program.md` action item checklist.
-   - Notify SDK team that the feature can be compiled locally with `--features sm`.
+## 建議的協調步驟
+1. **在 Crypto WG + Release Eng 同步中提出請求（所有者：@crypto-wg Lead）。 **
+   - 參考 `docs/source/crypto/sm_program.md` 並註意該功能的可選性質。
+   - 確認沒有並發的鎖文件更改窗口（例如，依賴性凍結）。
+2. **準備帶鎖差異的補丁（所有者：@release-eng）。 **
+   - 執行 `scripts/sm_lock_refresh.sh`（批准後）以僅更新所需的 crate。
+   - 捕獲 `cargo tree -p iroha_crypto --features sm` 輸出（腳本發出 `target/sm_dep_tree.txt`）。
+3. **安全審查（所有者：@security-reviews）。 **
+   - 驗證新的包/版本是否符合審核註冊和許可期望。
+   - 在供應鏈跟踪器中記錄哈希值。
+4. **合併窗口執行。 **
+   - 提交僅包含鎖定文件增量、依賴關係樹快照（作為工件附加）和更新的審核註釋的 PR。
+   - 在合併之前確保 CI 使用 `cargo check -p iroha_crypto --features sm` 運行。
+5. **後續任務。 **
+   - 更新 `docs/source/crypto/sm_program.md` 行動項目清單。
+   - 通知 SDK 團隊該功能可以使用 `--features sm` 進行本地編譯。## 時間表和所有者
+|步驟|目標|業主|狀態 |
+|------|--------|--------|--------|
+|請求下次加密貨幣工作組電話會議的議程位置 | 2025-01-22 |加密貨幣工作組負責人 | ✅ 已完成（審查結論秒殺可以繼續進行，無需刷新）|
+|草稿選擇性 `cargo update` 命令 + 健全性差異 | 2025-01-24 |發布工程| ⚪ 待機（如果出現新箱子則重新激活）|
+|新貨箱安全審查| 2025-01-27 |安全評論 | ⚪ 待機（刷新恢復時重新使用審核清單）|
+|合併鎖定文件更新 PR | 2025-01-29 |發布工程| ⚪ 待機 |
+|更新 SM 程序文檔清單 |合併後 |加密貨幣工作組負責人 | ✅ 通過 `docs/source/crypto/sm_program.md` 條目解決 (2026-02-12) |
 
-## Timeline & owners
-| Step | Target | Owner | Status |
-|------|--------|-------|--------|
-| Request agenda slot in next Crypto WG call | 2025-01-22 | Crypto WG lead | ✅ Completed (review concluded spike can proceed without refresh) |
-| Draft selective `cargo update` command + sanity diff | 2025-01-24 | Release Engineering | ⚪ On standby (reactivate if new crates appear) |
-| Security review of new crates | 2025-01-27 | Security Reviews | ⚪ On standby (reuse audit checklist when refresh resumes) |
-| Merge lockfile update PR | 2025-01-29 | Release Engineering | ⚪ On standby |
-| Update SM program doc checklist | After merge | Crypto WG lead | ✅ Addressed via `docs/source/crypto/sm_program.md` entry (2026-02-12) |
-
-## Notes
-- Keep any future refresh restricted to the SM-related crates listed above (and supporting helpers like `rfc6979`), avoiding workspace-wide `cargo update`.
-- If any transitive dependencies introduce MSRV drift, surface it before merge.
-- Once merged, enable an ephemeral CI job to monitor build times for the `sm` feature.
+## 註釋
+- 將任何未來的刷新限制在上面列出的 SM 相關 crate（以及支持 `rfc6979` 等幫助程序），避免工作區範圍內的 `cargo update`。
+- 如果任何傳遞依賴項引入 MSRV 漂移，請在合併之前將其顯示出來。
+- 合併後，啟用臨時 CI 作業來監控 `sm` 功能的構建時間。

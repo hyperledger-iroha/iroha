@@ -7,98 +7,97 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5a5420a123c456aad264ceb70d744b20b09848f7dca23700b4ee1370144bb57c
 source_last_modified: "2025-12-29T18:16:35.920013+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Benchmarking Report
+# solishtirish hisoboti
 
-Detailed per-run snapshots and the FASTPQ WP5-B history live in
-[`benchmarks/history.md`](benchmarks/history.md); use that index when attaching
-artefacts to roadmap reviews or SRE audits. Regenerate it with
-`python3 scripts/fastpq/update_benchmark_history.py` whenever new GPU captures
-or Poseidon manifests land.
+Har bir ishga tushirish uchun batafsil suratlar va FASTPQ WP5-B tarixi mavjud
+[`benchmarks/history.md`](benchmarks/history.md); biriktirganda ushbu indeksdan foydalaning
+yo'l xaritasi ko'rib chiqish yoki SRE audit uchun artefaktlar. Uni qayta tiklang
+`python3 scripts/fastpq/update_benchmark_history.py` har doim yangi GPU ushlaydi
+yoki Poseidon erni namoyon qiladi.
 
-## Acceleration evidence bundle
+## Tezlashtirish dalillari to'plami
 
-Every GPU or mixed-mode benchmark must include the applied acceleration settings
-so WP6-B/WP6-C can prove configuration parity alongside the timing artefacts.
+Har bir GPU yoki aralash rejimli benchmark qo'llaniladigan tezlashtirish sozlamalarini o'z ichiga olishi kerak
+shuning uchun WP6-B/WP6-C vaqt artefaktlari bilan bir qatorda konfiguratsiya paritetini isbotlashi mumkin.
 
-- Capture the runtime snapshot before/after each run:
+- Har bir ishga tushirishdan oldin/keyin ish vaqti suratini oling:
   `cargo xtask acceleration-state --format json > artifacts/acceleration_state_<stamp>.json`
-  (use `--format table` for human-readable logs). This records `enable_{metal,cuda}`,
-  Merkle thresholds, SHA-2 CPU bias limits, the detected backend health bits, and any
-  sticky parity errors or disable reasons.
-- Store the JSON next to the wrapped benchmark output
-  (`artifacts/fastpq_benchmarks/*.json`, `benchmarks/poseidon/*.json`, Merkle sweep
-  captures, etc.) so reviewers can diff timings and configuration together.
-- Knob definitions and defaults live in `docs/source/config/acceleration.md`; when
-  overrides are applied (e.g., `ACCEL_MERKLE_MIN_LEAVES_GPU`, `ACCEL_ENABLE_CUDA`),
-  note them in the run metadata to keep reruns reproducible across hosts.
+  (odam o'qiy oladigan jurnallar uchun `--format table` dan foydalaning). Bu `enable_{metal,cuda}`,
+  Merkle chegaralari, SHA-2 protsessor chegaralari, aniqlangan backend sog'liq bitlari va har qanday
+  yopishqoq paritet xatolar yoki o'chirish sabablari.
+- JSON-ni o'ralgan benchmark chiqishi yonida saqlang
+  (`artifacts/fastpq_benchmarks/*.json`, `benchmarks/poseidon/*.json`, Merkle supurgi
+  suratga olish va h.k.) shuning uchun sharhlovchilar vaqt va konfiguratsiyani birgalikda farqlashlari mumkin.
+- Knob ta'riflari va standart sozlamalari `docs/source/config/acceleration.md` da mavjud; qachon
+  bekor qilish qoʻllaniladi (masalan, `ACCEL_MERKLE_MIN_LEAVES_GPU`, `ACCEL_ENABLE_CUDA`),
+  Qayta ishlashni xostlar orasida takrorlanishini ta'minlash uchun ularni ishga tushirish metama'lumotlarida qayd qiling.
 
-## Norito stage-1 benchmark (WP5-B/C)
+## Norito 1-bosqich benchmark (WP5-B/C)
 
-- Command: `cargo xtask stage1-bench [--size <bytes|Nk|Nm>]... [--iterations <n>]`
-  emits JSON + Markdown under `benchmarks/norito_stage1/` with per-size timings
-  for the scalar vs accelerated structural-index builder.
-- Latest runs (macOS aarch64, dev profile) live at
-  `benchmarks/norito_stage1/latest.{json,md}` and the fresh cutover CSV from
-  `examples/stage1_cutover` (`benchmarks/norito_stage1/cutover.csv`) shows SIMD
-  wins from ~6–8 KiB onwards. GPU/parallel Stage-1 now defaults to a **192 KiB**
-  cutoff (`NORITO_STAGE1_GPU_MIN_BYTES=<n>` to override) to avoid launch thrash
-  on small documents while enabling accelerators for larger payloads.
+- Buyruq: `cargo xtask stage1-bench [--size <bytes|Nk|Nm>]... [--iterations <n>]`
+  `benchmarks/norito_stage1/` ostida JSON + Markdown chiqaradi, har bir o'lcham vaqtlari bilan
+  skaler va tezlashtirilgan strukturaviy indeks yaratuvchisi uchun.
+- Oxirgi ishga tushirishlar (macOS aarch64, dev profili).
+  `benchmarks/norito_stage1/latest.{json,md}` va yangi kesilgan CSV dan
+  `examples/stage1_cutover` (`benchmarks/norito_stage1/cutover.csv`) SIMDni ko'rsatadi
+  ~6–8KiB dan boshlab yutadi. GPU/parallel Stage-1 endi sukut bo‘yicha **192KiB** ga o‘rnatiladi
+  ishga tushirilishining oldini olish uchun kesish (o'chirish uchun `NORITO_STAGE1_GPU_MIN_BYTES=<n>`).
+  kichik hujjatlarda katta yuklamalar uchun tezlatgichlarni yoqish.
 
-## Enum vs Trait Object Dispatch
+## Enum va Trait Object Dispatch
 
-- Compile time (debug build): 16.58s
-- Runtime (Criterion, lower is better):
-  - `enum`: 386 ps (average)
-  - `trait_object`: 1.56 ns (average)
+- Kompilyatsiya vaqti (disklarni tuzatish): 16.58s
+- Ish vaqti (Kriteriya, pastroqsi yaxshiroq):
+  - `enum`: 386 ps (o'rtacha)
+  - `trait_object`: 1,56 ns (o'rtacha)
 
-These measurements come from a microbenchmark comparing an enum-based dispatch against a boxed trait object implementation.
+Ushbu o'lchovlar raqamga asoslangan jo'natishni qutidagi xususiyat ob'ektini amalga oshirish bilan taqqoslaydigan mikrobenchmarkdan olingan.
 
-## Poseidon CUDA batching
+## Poseidon CUDA to'plami
 
-The Poseidon benchmark (`crates/ivm/benches/bench_poseidon.rs`) now includes workloads that exercise both single-hash permutations and the new batched helpers. Run the suite with:
+Poseidon benchmarki (`crates/ivm/benches/bench_poseidon.rs`) endi bitta xeshli almashtirishlarni va yangi paketli yordamchilarni ishlatadigan ish yuklarini o'z ichiga oladi. To'plamni quyidagilar bilan boshqaring:
 
 ```bash
 cargo bench -p ivm bench_poseidon -- --save-baseline poseidon_cuda
 ```
 
-Criterion will record results under `target/criterion/poseidon*_many`. When a GPU worker is available, export the JSON summaries (e.g., copy `target/criterion/**/new/benchmark.json` into `benchmarks/poseidon/criterion_poseidon2_many_cuda.json`) (e.g., copy `target/criterion/**/new/benchmark.json` into `benchmarks/poseidon/`) so downstream teams can compare CPU vs CUDA throughput for each batch size. Until the dedicated GPU lane goes live, the benchmark falls back to the SIMD/CPU implementation and still provides useful regression data for batch performance.
+Criterion `target/criterion/poseidon*_many` ostida natijalarni qayd qiladi. GPU ishchisi mavjud bo‘lganda, JSON xulosalarini eksport qiling (masalan, `target/criterion/**/new/benchmark.json`ni `benchmarks/poseidon/criterion_poseidon2_many_cuda.json` ga nusxalash) (masalan, `target/criterion/**/new/benchmark.json` ni `benchmarks/poseidon/` ga nusxalash), shuning uchun quyi oqim guruhlari har bir protsessor va CUDA o‘lchamini solishtirishi mumkin. Ajratilgan GPU chizig'i ishga tushgunga qadar, benchmark SIMD/CPU amalga oshirishga qaytadi va hali ham partiya ishlashi uchun foydali regressiya ma'lumotlarini taqdim etadi.
 
-For repeatable captures (and to keep parity evidence with timing data), run
+Takrorlanadigan suratga olish uchun (va vaqt ma'lumotlari bilan tenglik dalillarini saqlash uchun) ishga tushiring
 
 ```bash
 cargo xtask poseidon-cuda-bench --json-out benchmarks/poseidon/poseidon_cuda_latest.json \
   --markdown-out benchmarks/poseidon/poseidon_cuda_latest.md --allow-overwrite
-```
+```qaysi urug'lar deterministik Poseidon2/6 partiyalari, CUDA sog'lig'i/o'chirish sabablarini qayd qiladi, tekshiradi
+skaler yo'lga nisbatan paritet va Metall bilan birga ops/sek + tezlashtirish xulosalarini chiqaradi
+ish vaqti holati (xususiyatlar bayrog'i, mavjudlik, oxirgi xato). Faqat protsessorli xostlar hali ham skalerni yozadilar
+mos yozuvlar va etishmayotgan tezlatgichga e'tibor bering, shuning uchun CI artefaktlarni GPUsiz ham nashr qilishi mumkin
+yuguruvchi.
 
-which seeds deterministic Poseidon2/6 batches, records CUDA health/disable reasons, checks
-parity against the scalar path, and emits ops/sec + speedup summaries alongside the Metal
-runtime status (feature flag, availability, last error). CPU-only hosts still write the scalar
-reference and note the missing accelerator, so CI can publish artefacts even without a GPU
-runner.
+## FASTPQ metall mezonlari (Apple Silicon)
 
-## FASTPQ Metal benchmark (Apple Silicon)
+GPU qatori macOS 14 (arm64) da `fastpq_metal_bench` ning yangilangan uchdan-end ishini, chiziqli muvozanatlangan parametrlar to‘plami, 20 000 mantiqiy qator (32 768 tagacha to‘ldirilgan) va 16 ta ustun guruhlari bilan suratga oldi. Oʻralgan artefakt `artifacts/fastpq_benchmarks/fastpq_metal_bench_20k_refresh.json` da yashaydi, metall izi `traces/fastpq_metal_trace_*_rows20000_iter5.trace` ostida oldingi suratlar bilan birga saqlanadi. O'rtacha vaqtlar (`benchmarks.operations[*]` dan) endi o'qiydi:
 
-The GPU lane captured an updated end-to-end run of `fastpq_metal_bench` on macOS 14 (arm64) with the lane-balanced parameter set, 20,000 logical rows (padded to 32,768), and 16 column groups. The wrapped artefact lives at `artifacts/fastpq_benchmarks/fastpq_metal_bench_20k_refresh.json`, with the Metal trace stored alongside the previous captures under `traces/fastpq_metal_trace_*_rows20000_iter5.trace`. The averaged timings (from `benchmarks.operations[*]`) now read:
+| Operatsiya | CPU o'rtacha (ms) | Metall o'rtacha (ms) | Tezlashtirish (x) |
+|----------|---------------|-----------------|-------------|
+| FFT (32 768 ta kirish) | 83.29 | 79.95 | 1.04 |
+| IFFT (32 768 ta kirish) | 93.90 | 78.61 | 1.20 |
+| LDE (262 144 ta kirish) | 669,54 | 657.67 | 1.02 |
+| Poseidon xesh ustunlari (524 288 ta kirish) | 29 087,53 | 30 004,90 | 0,97 |
 
-| Operation | CPU mean (ms) | Metal mean (ms) | Speedup (x) |
-|-----------|---------------|-----------------|-------------|
-| FFT (32,768 inputs) | 83.29 | 79.95 | 1.04 |
-| IFFT (32,768 inputs) | 93.90 | 78.61 | 1.20 |
-| LDE (262,144 inputs) | 669.54 | 657.67 | 1.02 |
-| Poseidon hash columns (524,288 inputs) | 29,087.53 | 30,004.90 | 0.97 |
+Kuzatishlar:
 
-Observations:
+- FFT/IFFT ikkalasi ham yangilangan BN254 yadrolaridan foyda oladi (IFFT oldingi regressiyani ~20% ga tozalaydi).
+- LDE paritetga yaqinligicha qolmoqda; nol-to‘ldirish hozirda o‘rtacha 18,66 ms bilan 33 554 432 to‘ldirilgan baytni yozadi, shuning uchun JSON to‘plami navbat ta’sirini ushlaydi.
+- Poseidon xeshlash hali ham ushbu uskunada protsessor bilan bog'langan; Metall yo'l eng so'nggi navbat boshqaruvlarini qabul qilmaguncha, Poseidon mikrobench manifestlari bilan solishtirishda davom eting.
+- Har bir qo'lga olish endi `AccelerationSettings.runtimeState().metal.lastError` yozuvlarini beradi, ruxsat beradi
+  Muhandislar protsessorning ishdan chiqishiga ma'lum bir o'chirish sababi bilan izoh qo'yishadi (siyosatni o'zgartirish,
+  paritet xatosi, qurilma yo'q) to'g'ridan-to'g'ri benchmark artefaktida.
 
-- FFT/ IFFT both benefit from the refreshed BN254 kernels (IFFT clears the previous regression by ~20%).
-- LDE remains near parity; zero-fill now records 33,554,432 padded bytes with an 18.66 ms average so the JSON bundle captures the queue impact.
-- Poseidon hashing is still CPU-bound on this hardware; keep comparing against the Poseidon microbench manifests until the Metal path adopts the latest queue controls.
-- Each capture now records `AccelerationSettings.runtimeState().metal.lastError`, letting
-  engineers annotate CPU fallbacks with the specific disable reason (policy toggle,
-  parity failure, no device) directly in the benchmark artefact.
-
-To reproduce the run, build the Metal kernels and execute:
+Yugurishni takrorlash uchun Metall yadrolarni yarating va bajaring:
 
 ```bash
 FASTPQ_METAL_LIB=target/release/build/fastpq_prover-*/out/fastpq.metallib \
@@ -107,11 +106,11 @@ cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_metal_bench --rele
   -- --rows 20000 --iterations 5 --output fastpq_metal_bench_20k.json
 ```
 
-Commit the resulting JSON under `artifacts/fastpq_benchmarks/` together with the Metal trace so the determinism evidence stays reproducible.
+Olingan JSONni `artifacts/fastpq_benchmarks/` ostida metall izi bilan birga bajaring, shunda determinizm dalillari takrorlanishi mumkin.
 
-## FASTPQ CUDA automation
+## FASTPQ CUDA avtomatizatsiyasi
 
-CUDA hosts can run and wrap the SM80 benchmark in one step with:
+CUDA xostlari SM80 benchmarkini bir bosqichda ishga tushirishi va oʻrashi mumkin:
 
 ```bash
 cargo xtask fastpq-cuda-suite \
@@ -120,32 +119,30 @@ cargo xtask fastpq-cuda-suite \
   --label device_class=xeon-rtx --device rtx-ada
 ```
 
-The helper invokes `fastpq_cuda_bench`, threads through labels/device/notes, honours
-`--require-gpu`, and (by default) wraps/signs via `scripts/fastpq/wrap_benchmark.py`.
-Outputs include the raw JSON, the wrapped bundle under `artifacts/fastpq_benchmarks/`,
-and a `<name>_plan.json` next to the output that records the exact commands/env so
-Stage 7 captures stay reproducible across GPU runners. Add `--sign-output` and
-`--gpg-key <id>` when signatures are required; use `--dry-run` to emit only the
-plan/paths without executing the bench.
+Yordamchi `fastpq_cuda_bench` ni chaqiradi, teglar/qurilma/qaydlar orqali o'tadi, hurmat qiladi
+`--require-gpu` va (sukut bo'yicha) `scripts/fastpq/wrap_benchmark.py` orqali o'raladi/belgilar.
+Chiqishlarga xom JSON, `artifacts/fastpq_benchmarks/` ostida oʻralgan toʻplam kiradi,
+va `<name>_plan.json`, natijada aniq buyruqlar/env qayd etiladi.
+7-bosqich tasvirlari GPU ishlovchilarida takrorlanishi mumkin. `--sign-output` va qo'shing
+Imzolar kerak bo'lganda `--gpg-key <id>`; faqat chiqarish uchun `--dry-run` dan foydalaning
+dastgohni bajarmasdan rejalashtirish/yo'llar.
 
-### GA release capture (macOS 14 arm64, lane-balanced)
+### GA relizni suratga olish (macOS 14 arm64, chiziqli balanslangan)
 
-To satisfy WP2-D we also recorded a release build on the same host with GA-ready
-queue heuristics and published it as
-`fastpq_metal_bench_20k_release_macos14_arm64.json`. The artefact captures two
-column batches (lane-balanced, padded to 32,768 rows) and includes Poseidon
-microbench samples for dashboard consumption.
+WP2-D ni qondirish uchun biz GA-tayyor bilan bir xil xostda relizlar tuzilishini ham yozdik.
+evristikani navbatga qo'ying va uni shunday nashr qildi
+`fastpq_metal_bench_20k_release_macos14_arm64.json`. Artefakt ikkitani ushlaydi
+ustunlar partiyalari (bo'lakda muvozanatlangan, 32 768 qatorga to'ldirilgan) va Poseidonni o'z ichiga oladi
+asboblar panelini iste'mol qilish uchun mikrobench namunalari.| Operatsiya | CPU o'rtacha (ms) | Metall o'rtacha (ms) | Tezlashtirish | Eslatmalar |
+|----------|---------------|-----------------|---------|-------|
+| FFT (32 768 ta kirish) | 12.741 | 10.963 | 1,16× | GPU yadrolari yangilangan navbat chegaralarini kuzatib boradi. |
+| IFFT (32 768 ta kirish) | 17.499 | 25.688 | 0,68× | Konservativ navbat fan-out bilan kuzatilgan regressiya; evristikani sozlashda davom eting. |
+| LDE (262 144 ta kirish) | 68.389 | 65.701 | 1,04× | Ikkala to'plam uchun 9,651 ms da 33 554 432 baytni nol to'ldirish jurnallari. |
+| Poseidon xesh ustunlari (524 288 ta kirish) | 1,728.835 | 1,447.076 | 1,19× | Poseidon navbatini o'zgartirgandan so'ng, GPU nihoyat protsessorni uradi. |
 
-| Operation | CPU mean (ms) | Metal mean (ms) | Speedup | Notes |
-|-----------|---------------|-----------------|---------|-------|
-| FFT (32,768 inputs) | 12.741 | 10.963 | 1.16× | GPU kernels track the refreshed queue thresholds. |
-| IFFT (32,768 inputs) | 17.499 | 25.688 | 0.68× | Regression traced to conservative queue fan-out; keep tuning the heuristics. |
-| LDE (262,144 inputs) | 68.389 | 65.701 | 1.04× | Zero-fill logs 33,554,432 bytes in 9.651 ms for both batches. |
-| Poseidon hash columns (524,288 inputs) | 1,728.835 | 1,447.076 | 1.19× | GPU finally beats CPU after the Poseidon queue tweaks. |
-
-Poseidon microbench values embedded in the JSON show a 1.10× speedup (default lane
-596.229 ms vs scalar 656.251 ms across five iterations), so dashboards can now chart
-per-lane improvements alongside the main bench. Reproduce the run with:
+JSON-ga o'rnatilgan Poseidon mikrobench qiymatlari 1,10 × tezlikni ko'rsatadi (standart chiziq
+596,229 ms va beshta iteratsiya bo'yicha skalyar 656,251 ms), shuning uchun asboblar paneli endi diagramma yaratishi mumkin
+asosiy skameyka bilan bir qatorda har bir qatorda yaxshilanishlar. Yugurishni quyidagi bilan takrorlang:
 
 ```bash
 FASTPQ_METAL_LIB=target/release/build/fastpq_prover-*/out/fastpq.metallib \
@@ -155,62 +152,60 @@ cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_metal_bench --rele
   --output fastpq_metal_bench_20k_release_macos14_arm64.json
 ```
 
-Keep the wrapped JSON and `FASTPQ_METAL_TRACE_CHILD=1` traces checked in under
-`artifacts/fastpq_benchmarks/` so subsequent WP2-D/WP2-E reviews can diff the GA
-capture against earlier refresh runs without rerunning the workload.
+Oʻralgan JSON va `FASTPQ_METAL_TRACE_CHILD=1` izlarini ostida saqlang
+`artifacts/fastpq_benchmarks/`, shuning uchun keyingi WP2-D/WP2-E sharhlari GA ni farq qilishi mumkin
+ish yukini qayta ishga tushirmasdan oldingi yangilash ishlariga qarshi suratga oling.
 
-Each fresh `fastpq_metal_bench` capture now also writes a `bn254_metrics` block,
-which exposes `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` entries for the CPU
-baseline and whichever GPU backend (Metal/CUDA) was active, **and** a
-`bn254_dispatch` block that records the observed threadgroup widths, logical thread
-counts, and pipeline limits for the single-column BN254 FFT/LDE dispatches. The
-benchmark wrapper copies both maps into `benchmarks.bn254_*`, so dashboards and
-Prometheus exporters can scrape labelled latencies and geometry without re-parsing
-the raw operations array. The `FASTPQ_METAL_THREADGROUP` override now applies to
-BN254 kernels as well, making threadgroup sweeps reproducible from one knob.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_benchmark.py:1037】
+Har bir yangi `fastpq_metal_bench` surati endi `bn254_metrics` blokini ham yozadi,
+CPU uchun `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` yozuvlarini ochib beradi
+asosiy va qaysi GPU backend (Metal/CUDA) faol bo'lsa, **va** a
+`bn254_dispatch` bloki, kuzatilgan iplar guruhining kengligini, mantiqiy ipni qayd qiladi
+bir ustunli BN254 FFT/LDE jo'natmalari uchun hisoblar va quvur liniyasi chegaralari. The
+benchmark wrapper ikkala xaritani `benchmarks.bn254_*` ga ko'chiradi, shuning uchun asboblar paneli va
+Prometheus eksportchilari yorliqli kechikishlar va geometriyani qayta tahlil qilmasdan qirib tashlashlari mumkin
+xom operatsiyalar massivi. `FASTPQ_METAL_THREADGROUP` bekor qilish endi amal qiladi
+BN254 yadrolari, shuningdek, iplar guruhini tozalashni bittadan takrorlanishi mumkin tugma.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_10【
 
-To keep downstream dashboards simple, run `python3 scripts/benchmarks/export_csv.py`
-after capturing a bundle. The helper flattens `poseidon_microbench_*.json` into
-matching `.csv` files so automation jobs can diff default and scalar lanes without
-custom parsers.
+Pastki oqim panellarini oddiy saqlash uchun `python3 scripts/benchmarks/export_csv.py` ni ishga tushiring
+bir to'plamni qo'lga olgandan keyin. Yordamchi `poseidon_microbench_*.json` ichiga tekislaydi
+mos keladigan `.csv` fayllari, shuning uchun avtomatlashtirish ishlari standart va skaler chiziqlarsiz farq qilishi mumkin
+maxsus tahlilchilar.
 
-## Poseidon microbench (Metal)
+## Poseidon mikrobench (metall)
 
-`fastpq_metal_bench` now re-executes itself under `FASTPQ_METAL_POSEIDON_MICRO_MODE={default,scalar}` and promotes the timings into `benchmarks.poseidon_microbench`. We exported the latest Metal captures with `python3 scripts/fastpq/export_poseidon_microbench.py --bundle <wrapped_json>` and aggregated them via `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json`. The summaries below live under `benchmarks/poseidon/`:
+`fastpq_metal_bench` endi `FASTPQ_METAL_POSEIDON_MICRO_MODE={default,scalar}` ostida o'zini qayta ishga tushiradi va vaqtni `benchmarks.poseidon_microbench` ga targ'ib qiladi. Biz `python3 scripts/fastpq/export_poseidon_microbench.py --bundle <wrapped_json>` bilan eng yangi metall suratlarni eksport qildik va ularni `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json` orqali jamladik. Quyidagi xulosalar `benchmarks/poseidon/` ostida ishlaydi:
 
-| Summary | Wrapped bundle | Default mean (ms) | Scalar mean (ms) | Speedup vs scalar | Columns x states | Iterations |
+| Xulosa | Oʻralgan toʻplam | Standart o'rtacha (ms) | Skalar o'rtacha (ms) | Tezlashtirish va skalar | Ustunlar x holatlar | Takrorlashlar |
 |---------|----------------|-------------------|------------------|-------------------|------------------|------------|
-| `benchmarks/poseidon/poseidon_microbench_full.json` | `fastpq_metal_bench_full.json` | 1,990.49 | 1,994.53 | 1.002 | 64 x 262,144 | 5 |
-| `benchmarks/poseidon/poseidon_microbench_debug.json` | `fastpq_metal_bench_debug.json` | 2,167.66 | 2,152.18 | 0.993 | 64 x 262,144 | 5 |
+| `benchmarks/poseidon/poseidon_microbench_full.json` | `fastpq_metal_bench_full.json` | 1 990,49 | 1,994,53 | 1.002 | 64 x 262,144 | 5 |
+| `benchmarks/poseidon/poseidon_microbench_debug.json` | `fastpq_metal_bench_debug.json` | 2,167,66 | 2,152,18 | 0,993 | 64 x 262,144 | 5 |Har ikkala suratga olishda ham bitta isinish iteratsiyasi bilan har bir yugurishda 262 144 holat (trace log2 = 12) xeshlangan. "Standart" qator sozlangan ko'p shtatli yadroga mos keladi, "skalar" esa yadroni taqqoslash uchun har bir chiziq uchun bitta holatga qulflaydi.
 
-Both captures hashed 262,144 states per run (trace log2 = 12) with a single warm-up iteration. The "default" lane corresponds to the tuned multi-state kernel whereas "scalar" locks the kernel to one state per lane for comparison.
+## Merkle ostonasini tozalash
 
-## Merkle threshold sweeps
+`merkle_threshold` misoli (`cargo run --release -p ivm --features metal --example merkle_threshold -- --json`) Metal-vs-CPU Merkle xeshing yo'llarini ta'kidlaydi. Eng yangi AppleSilicon surati (Darvin 25.0.0 arm64, `ivm::metal_available()=true`) mos keladigan CSV eksporti bilan `benchmarks/merkle_threshold/takemiyacStudio.lan_25.0.0_arm64.json` da saqlanadi. Faqat protsessorli macOS 14 bazasi metallsiz xostlar uchun `benchmarks/merkle_threshold/macos14_arm64_{cpu,metal}.json` ostida qoladi.
 
-The `merkle_threshold` example (`cargo run --release -p ivm --features metal --example merkle_threshold -- --json`) stresses the Metal-vs-CPU Merkle hashing paths. The latest Apple Silicon capture (Darwin 25.0.0 arm64, `ivm::metal_available()=true`) lives in `benchmarks/merkle_threshold/takemiyacStudio.lan_25.0.0_arm64.json` with a matching CSV export. CPU-only macOS 14 baselines remain under `benchmarks/merkle_threshold/macos14_arm64_{cpu,metal}.json` for hosts without Metal.
-
-| Leaves | CPU best (ms) | Metal best (ms) | Speedup |
+| Barglar | CPU eng yaxshi (ms) | Metall eng yaxshi (ms) | Tezlashtirish |
 |--------|---------------|-----------------|---------|
-| 1,024  | 23.01 | 19.69 | 1.17× |
-| 4,096  | 50.87 | 62.12 | 0.82× |
-| 8,192  | 95.77 | 96.57 | 0.99× |
-| 16,384 | 64.48 | 58.98 | 1.09× |
-| 32,768 | 109.49 | 87.68 | 1.25× |
-| 65,536 | 177.72 | 137.93 | 1.29× |
+| 1,024 | 23.01 | 19.69 | 1,17× |
+| 4,096 | 50.87 | 62.12 | 0,82× |
+| 8,192 | 95.77 | 96.57 | 0,99× |
+| 16,384 | 64.48 | 58.98 | 1,09× |
+| 32 768 | 109.49 | 87.68 | 1,25× |
+| 65,536 | 177,72 | 137.93 | 1,29× |
 
-Larger leaf counts benefit from Metal (1.09–1.29×); smaller buckets still run faster on CPU, so the CSV keeps both columns for analysis. The CSV helper preserves the `metal_available` flag beside each profile to keep GPU vs CPU regression dashboards aligned.
+Kattaroq barglar soni Metalldan foyda ko'radi (1,09-1,29 ×); kichik chelaklar hali ham protsessorda tezroq ishlaydi, shuning uchun CSV ikkala ustunni ham tahlil qilish uchun saqlaydi. CSV yordamchisi GPU va protsessor regressiyasi boshqaruv panelini bir xilda ushlab turish uchun har bir profil yonida `metal_available` bayrog'ini saqlaydi.
 
-Reproduction steps:
+Reproduksiya bosqichlari:
 
 ```bash
 cargo run --release -p ivm --features metal --example merkle_threshold -- --json \
   > benchmarks/merkle_threshold/<hostname>_$(uname -r)_$(uname -m).json
 ```
 
-Set `FASTPQ_METAL_LIB`/`FASTPQ_GPU` if the host requires explicit Metal enabling, and keep both CPU + GPU captures checked in so WP1-F can chart the policy thresholds.
+Agar xost aniq metallni yoqishni talab qilsa, `FASTPQ_METAL_LIB`/`FASTPQ_GPU` ni o‘rnating va WP1-F siyosat chegaralarini belgilashi uchun ikkala CPU + GPU tasvirlarini ham tekshirib turing.
 
-When running from a headless shell, set `IVM_DEBUG_METAL_ENUM=1` to log device enumeration and `IVM_FORCE_METAL_ENUM=1` to bypass `MTLCreateSystemDefaultDevice()`. The CLI warms up the CoreGraphics session **before** asking for the default Metal device and falls back to `MTLCreateSystemDefaultDevice()` when `MTLCopyAllDevices()` returns zero; if the host still reports no devices the capture will retain `metal_available=false` (useful CPU baselines live under `macos14_arm64_*`), while GPU hosts should keep `FASTPQ_GPU=metal` enabled so the bundle logs the chosen backend.
+Boshsiz qobiqdan ishlayotganda, `IVM_DEBUG_METAL_ENUM=1` qurilma ro'yxatini jurnalga o'rnating va `IVM_FORCE_METAL_ENUM=1` - `MTLCreateSystemDefaultDevice()` ni chetlab o'ting. CLI standart Metal qurilmani so'rashdan **oldin** CoreGraphics seansini isitadi va `MTLCopyAllDevices()` nolga qaytganida `MTLCreateSystemDefaultDevice()` ga qaytadi; agar xost hali hech qanday qurilma haqida xabar bermasa, yozib olish `metal_available=false` (foydali protsessor bazalari `macos14_arm64_*` ostida ishlaydi), GPU xostlari esa `FASTPQ_GPU=metal` yoqilgan bo'lishi kerak, shunda to'plam tanlangan backendni qayd qiladi.
 
-`fastpq_metal_bench` exposes a similar knob via `FASTPQ_DEBUG_METAL_ENUM=1`, which prints the `MTLCreateSystemDefaultDevice`/`MTLCopyAllDevices` results before the backend decides whether to stay on the GPU path. Enable it whenever `FASTPQ_GPU=gpu` still reports `backend="none"` in the wrapped JSON so the capture bundle records exactly how the host enumerated Metal hardware; the harness aborts immediately when `FASTPQ_GPU=gpu` is set but no accelerator is detected, pointing at the debug knob so the release bundle never hides a CPU fallback behind a forced GPU run.【crates/fastpq_prover/src/backend.rs:665】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】
+`fastpq_metal_bench` shunga o'xshash tugmani `FASTPQ_DEBUG_METAL_ENUM=1` orqali ochib beradi, u `MTLCreateSystemDefaultDevice`/`MTLCopyAllDevices` natijalarini orqa tomon GPU yo'lida qolish-qolmasligini hal qilishdan oldin chop etadi. `FASTPQ_GPU=gpu` oʻralgan JSONda hali ham `backend="none"` haqida xabar berganda uni yoqing, shuning uchun suratga olish toʻplami xostning Metall qurilmalarni qanday sanaganini aniq qayd etadi; jabduqlar `FASTPQ_GPU=gpu` o'rnatilganda darhol to'xtatiladi, lekin hech qanday tezlatgich aniqlanmasa, disk raskadrovka tugmasiga ishora qiladi, shuning uchun chiqarish to'plami hech qachon majburiy GPU orqasida CPU zaxirasini yashirmaydi. ishga tushirish.【crates/fastpq_prover/src/backend.rs:665】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1965】
 
-The CSV helper emits per-profile tables (for example `macos14_arm64_*.csv` and `takemiyacStudio.lan_25.0.0_arm64.csv`), preserving the `metal_available` flag so regression dashboards can ingest the CPU and GPU measurements without bespoke parsers.
+CSV yordamchisi har bir profil uchun jadvallarni chiqaradi (masalan, `macos14_arm64_*.csv` va `takemiyacStudio.lan_25.0.0_arm64.csv`), `metal_available` bayrog'ini saqlab qoladi, shuning uchun regressiya asboblar paneli protsessor va GPU o'lchovlarini maxsus tahlilchilarsiz qabul qilishi mumkin.

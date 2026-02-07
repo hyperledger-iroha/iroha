@@ -8,22 +8,23 @@ source_hash: 1017858988f6bbc1c58029ca0476e2eee7b011c3c65ba5b33a80c049165600ca
 source_last_modified: "2025-12-29T18:16:35.115752+00:00"
 translation_last_reviewed: 2026-02-07
 title: Norito-RPC Overview
+translator: machine-google-reviewed
 ---
 
-# Norito-RPC Overview
+#Norito-RPC ခြုံငုံသုံးသပ်ချက်
 
-Norito-RPC is the binary transport for Torii APIs. It reuses the same HTTP paths
-as `/v1/pipeline` but exchanges Norito-framed payloads that include schema
-hashes and checksums. Use it when you need deterministic, validated responses or
-when pipeline JSON responses become a bottleneck.
+Norito-RPC သည် Torii APIs အတွက် ဒွိသယ်ယူပို့ဆောင်ရေးဖြစ်သည်။ ၎င်းသည် တူညီသော HTTP လမ်းကြောင်းများကို ပြန်လည်အသုံးပြုသည်။
+`/v1/pipeline` အနေဖြင့်၊ သို့သော် schema ပါဝင်သော Norito-framed payload များကို လဲလှယ်သည်
+hashes နှင့် checksums များ။ တိကျသေချာသော၊ အတည်ပြုထားသော တုံ့ပြန်မှုများ လိုအပ်သည့်အခါ သို့မဟုတ် ၎င်းကို အသုံးပြုပါ။
+ပိုက်လိုင်း JSON တုံ့ပြန်မှုများသည် ပိတ်ဆို့မှုဖြစ်လာသောအခါ။
 
-## Why switch?
-- Deterministic framing with CRC64 and schema hashes reduces decoding errors.
-- Shared Norito helpers across SDKs let you reuse existing data-model types.
-- Torii already tags Norito sessions in telemetry, so operators can monitor
-adoption with the provided dashboards.
+##ဘာလို့ပြောင်းတာလဲ။
+- CRC64 ဖြင့် အဆုံးအဖြတ်ပေးသောဘောင်နှင့် schema hash များသည် ကုဒ်ဖော်ပြခြင်းအမှားများကို လျှော့ချပေးသည်။
+- SDKs တစ်လျှောက်တွင် မျှဝေထားသော Norito အကူအညီပေးသူများသည် သင့်အား လက်ရှိဒေတာမော်ဒယ်အမျိုးအစားများကို ပြန်လည်အသုံးပြုနိုင်စေပါသည်။
+- Torii သည် Norito ဆက်ရှင်များကို တယ်လီမက်ထရီတွင် တဂ်ထားပြီးဖြစ်သောကြောင့် အော်ပရေတာများက စောင့်ကြည့်နိုင်သည်
+ပေးထားသော ဒက်ရှ်ဘုတ်များဖြင့် မွေးစားခြင်း။
 
-## Making a request
+## တောင်းဆိုချက်တစ်ခု ပြုလုပ်ခြင်း။
 
 ```bash
 curl \
@@ -34,62 +35,62 @@ curl \
   https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
-1. Serialize your payload with the Norito codec (`iroha_client`, SDK helpers, or
-   `norito::to_bytes`).
-2. Send the request with `Content-Type: application/x-norito`.
-3. Request a Norito response using `Accept: application/x-norito`.
-4. Decode the response using the matching SDK helper.
+1. သင်၏ payload ကို Norito codec (`iroha_client`၊ SDK ကူညီသူများ၊ သို့မဟုတ်
+   `norito::to_bytes`)။
+2. `Content-Type: application/x-norito` ဖြင့် တောင်းဆိုချက်ကို ပေးပို့ပါ။
+3. `Accept: application/x-norito` ကို အသုံးပြု၍ Norito တုံ့ပြန်မှုကို တောင်းဆိုပါ။
+4. ကိုက်ညီသော SDK အကူအညီပေးသူကို အသုံးပြု၍ တုံ့ပြန်မှုကို ကုဒ်လုပ်ပါ။
 
-SDK-specific guidance:
-- **Rust**: `iroha_client::Client` negotiates Norito automatically when you set
-  the `Accept` header.
-- **Python**: use `NoritoRpcClient` from `iroha_python.norito_rpc`.
-- **Android**: use `NoritoRpcClient` and `NoritoRpcRequestOptions` in the
-  Android SDK.
-- **JavaScript/Swift**: helpers are tracked in `docs/source/torii/norito_rpc_tracker.md`
-  and will land as part of NRPC-3.
+SDK ၏ သီးခြားလမ်းညွှန်ချက်-
+- **Rust**: `iroha_client::Client` သည် Norito ကို သင်သတ်မှတ်သောအခါ အလိုအလျောက်ညှိနှိုင်းသည်
+  `Accept` ခေါင်းစီး။
+- **Python**- `iroha_python.norito_rpc` မှ `NoritoRpcClient` ကို အသုံးပြုပါ။
+- **Android**- `NoritoRpcClient` နှင့် `NoritoRpcRequestOptions` ကို အသုံးပြုပါ။
+  Android SDK
+- **JavaScript/Swift**- အကူအညီပေးသူများကို `docs/source/torii/norito_rpc_tracker.md` တွင် ခြေရာခံထားသည်
+  NRPC-3 ၏ အစိတ်အပိုင်းအဖြစ် ဆင်းသက်မည်ဖြစ်သည်။
 
-## Try It console sample
+## အဲဒါကို console နမူနာကို စမ်းကြည့်ပါ။
 
-The developer portal ships a Try It proxy so reviewers can replay Norito
-payloads without writing bespoke scripts.
+ဆော့ဖ်ဝဲရေးသားသူပေါ်တယ်သည် Try It ပရောက်စီကို ပို့ဆောင်ပေးသောကြောင့် သုံးသပ်သူများသည် Norito ကို ပြန်လည်ပြသနိုင်သည်
+စိတ်ကြိုက် script များမရေးဘဲ payload များ။
 
-1. [Start the proxy](./try-it.md#start-the-proxy-locally) and set
-   `TRYIT_PROXY_PUBLIC_URL` so the widgets know where to send traffic.
-2. Open the **Try it** card on this page or the `/reference/torii-swagger`
-   panel and select an endpoint such as `POST /v1/pipeline/submit`.
-3. Switch the **Content-Type** to `application/x-norito`, choose the **Binary**
-   editor, and upload `fixtures/norito_rpc/transfer_asset.norito`
-   (or any payload listed in
-   `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
-4. Provide a bearer token via the OAuth device-code widget or the manual token
-   field (the proxy accepts `X-TryIt-Auth` overrides when configured with
-   `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
-5. Submit the request and verify that Torii echoes the `schema_hash` listed in
-   `fixtures/norito_rpc/schema_hashes.json`. Matching hashes confirm that the
-   Norito header survived the browser/proxy hop.
+1. [ပရောက်စီကို စတင်ပါ](./try-it.md#start-the-proxy-locally) နှင့် သတ်မှတ်ပါ။
+   `TRYIT_PROXY_PUBLIC_URL` ထို့ကြောင့် ဝစ်ဂျက်များသည် အသွားအလာပေးပို့ရမည့်နေရာကို သိသည်။
+2. ဤစာမျက်နှာရှိ **စမ်းသုံးကြည့်ပါ** ကတ် သို့မဟုတ် `/reference/torii-swagger` ကိုဖွင့်ပါ။
+   အကန့်နှင့် `POST /v1/pipeline/submit` ကဲ့သို့သော အဆုံးမှတ်တစ်ခုကို ရွေးပါ။
+3. **Content-Type** ကို `application/x-norito` သို့ပြောင်းပါ၊ **Binary** ကို ရွေးပါ။
+   တည်းဖြတ်ပြီး `fixtures/norito_rpc/transfer_asset.norito` ကို အပ်လုဒ်လုပ်ပါ။
+   (သို့) တွင်ဖော်ပြထားသော payload တစ်ခုခု
+   `fixtures/norito_rpc/transaction_fixtures.manifest.json`)။
+4. OAuth ကိရိယာ-ကုဒ်ဝစ်ဂျက် သို့မဟုတ် လက်စွဲပါ တိုကင်မှတစ်ဆင့် ကိုင်ဆောင်သူ တိုကင်တစ်ခု ပေးပါ။
+   အကွက် (proxy သည် `X-TryIt-Auth` ဖြင့် configure လုပ်သောအခါ overrides လက်ခံသည်
+   `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`)။
+5. တောင်းဆိုချက်ကို တင်သွင်းပြီး Torii တွင်ဖော်ပြထားသော `schema_hash` ကို သံယောင်လိုက်ကြောင်း အတည်ပြုပါ
+   `fixtures/norito_rpc/schema_hashes.json`။ ကိုက်ညီသော hashe များသည် အတည်ပြုသည်။
+   Norito ခေါင်းစီးသည် browser/proxy hop မှလွတ်မြောက်ခဲ့သည်။
 
-For roadmap evidence, pair the Try It screenshot with a run of
-`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"`. The script wraps
-`cargo xtask norito-rpc-verify`, writes the JSON summary to
-`artifacts/norito_rpc/<timestamp>/`, and captures the same fixtures that the
-portal consumed.
+လမ်းပြမြေပုံအထောက်အထားအတွက်၊ Try It ဖန်သားပြင်ဓာတ်ပုံကို အပြေးတစ်ခုနှင့် တွဲချိတ်ပါ။
+`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"`။ ဇာတ်ညွှန်းတွေဖြစ်ပါတယ်။
+`cargo xtask norito-rpc-verify` မှ JSON အကျဉ်းချုပ်ကို ရေးသည်။
+`artifacts/norito_rpc/<timestamp>/` နှင့် တူညီသော ပွဲစဉ်များကို ဖမ်းယူသည်။
+portal လောင်တယ်။
 
-## Troubleshooting
+## ပြဿနာဖြေရှင်းခြင်း။
 
-| Symptom | Where it appears | Likely cause | Fix |
-| --- | --- | --- | --- |
-| `415 Unsupported Media Type` | Torii response | Missing or incorrect `Content-Type` header | Set `Content-Type: application/x-norito` before sending the payload. |
-| `X-Iroha-Error-Code: schema_mismatch` (HTTP 400) | Torii response body/headers | Fixture schema hash differs from the Torii build | Regenerate fixtures with `cargo xtask norito-rpc-fixtures` and confirm the hash in `fixtures/norito_rpc/schema_hashes.json`; fall back to JSON if the endpoint has not enabled Norito yet. |
-| `{"error":"origin_forbidden"}` (HTTP 403) | Try It proxy response | Request came from an origin that is not listed in `TRYIT_PROXY_ALLOWED_ORIGINS` | Add the portal origin (e.g., `https://docs.devnet.sora.example`) to the env var and restart the proxy. |
-| `{"error":"rate_limited"}` (HTTP 429) | Try It proxy response | Per-IP quota exceeded the `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` budget | Increase the limit for internal load testing or wait until the window resets (see `retryAfterMs` in the JSON response). |
-| `{"error":"upstream_timeout"}` (HTTP 504) or `{"error":"upstream_error"}` (HTTP 502) | Try It proxy response | Torii timed out or the proxy could not reach the configured backend | Verify that `TRYIT_PROXY_TARGET` is reachable, check Torii health, or retry with a larger `TRYIT_PROXY_TIMEOUT_MS`. |
+| ရောဂါလက္ခဏာ | ပေါ်လာသည့်နေရာ | ဖြစ်ဖွယ်ရှိ | ပြင်ရန် |
+| ---| ---| ---| ---|
+| `415 Unsupported Media Type` | Torii တုံ့ပြန်မှု | `Content-Type` ခေါင်းစီး | ပျောက်နေသည် သို့မဟုတ် မမှန်ပါ။ payload ကိုမပို့မီ `Content-Type: application/x-norito` ကို သတ်မှတ်ပါ။ |
+| `X-Iroha-Error-Code: schema_mismatch` (HTTP 400) | Torii တုံ့ပြန်မှုကိုယ်ထည်/ခေါင်းစီးများ | Fixture schema hash သည် Torii build နှင့် ကွဲပြားသည် | `cargo xtask norito-rpc-fixtures` ဖြင့် ပြင်ဆင်ပြီး `fixtures/norito_rpc/schema_hashes.json` တွင် hash ကို အတည်ပြုပါ။ အဆုံးမှတ်သည် Norito ကို မဖွင့်ရသေးပါက JSON သို့ ပြန်သွားပါ။ |
+| `{"error":"origin_forbidden"}` (HTTP 403) | Proxy တုံ့ပြန်မှု | တောင်းဆိုချက်သည် `TRYIT_PROXY_ALLOWED_ORIGINS` | တွင်ဖော်ပြထားခြင်းမရှိသော မူရင်းမှလာပါသည်။ ပေါ်တယ်မူရင်း (ဥပမာ၊ `https://docs.devnet.sora.example`) ကို env var တွင်ထည့်ကာ proxy ကို ပြန်လည်စတင်ပါ။ |
+| `{"error":"rate_limited"}` (HTTP 429) | Proxy တုံ့ပြန်မှု | Per-IP ခွဲတမ်းသည် `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` ဘတ်ဂျက်ကို ကျော်လွန်သွားသည် | အတွင်းဝန်စမ်းသပ်ခြင်းအတွက် ကန့်သတ်ချက်ကို တိုးမြှင့်ပါ သို့မဟုတ် ဝင်းဒိုးပြန်လည်သတ်မှတ်သည်အထိ စောင့်ပါ (JSON တုံ့ပြန်မှုတွင် `retryAfterMs` ကိုကြည့်ပါ)။ |
+| `{"error":"upstream_timeout"}` (HTTP 504) သို့မဟုတ် `{"error":"upstream_error"}` (HTTP 502) | Proxy တုံ့ပြန်မှု | Torii အချိန်ကုန်သွားသည် သို့မဟုတ် proxy သည် configured backend သို့ မရောက်ရှိနိုင် | `TRYIT_PROXY_TARGET` ကို ရရှိနိုင်ကြောင်း အတည်ပြုပါ၊ Torii ကျန်းမာရေးကို စစ်ဆေးပါ သို့မဟုတ် ပိုကြီးသော `TRYIT_PROXY_TIMEOUT_MS` ဖြင့် ထပ်စမ်းကြည့်ပါ။ |
 
-More Try It diagnostics and OAuth tips live in
-[`devportal/try-it.md`](./try-it.md#norito-rpc-samples).
+နောက်ထပ် စမ်းသပ်ကြည့်ပါက ရောဂါရှာဖွေမှုများနှင့် OAuth အကြံပြုချက်များ တိုက်ရိုက်ပါဝင်ပါသည်။
+[`devportal/try-it.md`](./try-it.md#norito-rpc-samples)။
 
-## Additional resources
-- Transport RFC: `docs/source/torii/norito_rpc.md`
-- Executive summary: `docs/source/torii/norito_rpc_brief.md`
-- Action tracker: `docs/source/torii/norito_rpc_tracker.md`
-- Try-It proxy instructions: `docs/portal/docs/devportal/try-it.md`
+## နောက်ထပ်အရင်းအမြစ်များ
+- သယ်ယူပို့ဆောင်ရေး RFC: `docs/source/torii/norito_rpc.md`
+- အမှုဆောင်အနှစ်ချုပ်- `docs/source/torii/norito_rpc_brief.md`
+- လုပ်ဆောင်ချက် ခြေရာခံ- `docs/source/torii/norito_rpc_tracker.md`
+- Try-It proxy ညွှန်ကြားချက်များ- `docs/portal/docs/devportal/try-it.md`

@@ -7,94 +7,93 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
 source_last_modified: "2025-12-29T18:16:35.969398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISI Extension Plan (v1)
+# ISI გაფართოების გეგმა (v1)
 
-This note signs off on the priority order for the new Iroha Special Instructions and captures
-non-negotiable invariants for each instruction ahead of implementation. The ordering matches
-security and operability risk first, UX throughput second.
+ეს ჩანაწერი აწერს პრიორიტეტულ წესრიგს ახალი Iroha სპეციალური ინსტრუქციებისა და გადაღებებისთვის
+შეუთანხმებელი უცვლელები თითოეული ინსტრუქციისთვის განხორციელების წინ. შეკვეთა ემთხვევა
+უსაფრთხოებისა და ოპერატიულობის რისკი პირველი, UX გამტარუნარიანობა მეორე.
 
-## Priority Stack
+## პრიორიტეტული დასტა
 
-1. **RotateAccountSignatory** – Required for hygienic key rotation without destructive migrations.
-2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Provide deterministic contract
-   kill switches and storage reclamation for compromised deployments.
-3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Extend metadata parity to concrete asset
-   balances so observability tooling can tag holdings.
-4. **BatchMintAsset** / **BatchTransferAsset** – Deterministic fan-out helpers to keep payload size
-   and VM fallback pressure manageable.
+1. **RotateAccountSignatory** – საჭიროა გასაღების ჰიგიენური როტაციისთვის დესტრუქციული მიგრაციის გარეშე.
+2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – უზრუნველყოს დეტერმინისტული კონტრაქტი
+   ამომრთველების მოკვლა და საცავის აღდგენა კომპრომეტირებული განლაგებისთვის.
+3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – მეტამონაცემების პარიტეტის გაფართოება კონკრეტულ აქტივზე
+   აბალანსებს, ასე რომ დაკვირვებადობის ინსტრუმენტს შეუძლია მონიშნოს ჰოლდინგი.
+4. **BatchMintAsset** / **BatchTransferAsset** – განმსაზღვრელი დამხმარეები ტვირთის ზომის შესანარჩუნებლად
+   და VM სარეზერვო წნევა მართვადია.
 
-## Instruction Invariants
+## ინსტრუქციის უცვლელი
 
 ### SetAssetKeyValue / RemoveAssetKeyValue
-- Reuse the `AssetMetadataKey` namespace (`state.rs`) so canonical WSV keys stay stable.
-- Enforce JSON size and schema limits identically to account metadata helpers.
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` with the affected `AssetId`.
-- Require the same permission tokens as existing asset metadata edits (definition owner OR
-  `CanModifyAssetMetadata`-style grants).
-- Abort if the asset record is missing (no implicit creation).
+- ხელახლა გამოიყენეთ `AssetMetadataKey` სახელთა სივრცე (`state.rs`), რათა კანონიკური WSV კლავიშები დარჩეს სტაბილური.
+- აღასრულეთ JSON ზომისა და სქემის ლიმიტები ანგარიშის მეტამონაცემების დამხმარეებისთვის.
+- გამოუშვით `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` დაზარალებულთან `AssetId`.
+- მოითხოვეთ იგივე ნებართვის ნიშნები, როგორც არსებული აქტივების მეტამონაცემების რედაქტირება (განმარტების მფლობელი ან
+  `CanModifyAssetMetadata` სტილის გრანტები).
+- გააუქმეთ, თუ აქტივის ჩანაწერი აკლია (არ არის ნაგულისხმევი შექმნა).
 
 ### RotateAccountSignatory
-- Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
-  resources (assets, triggers, roles, permissions, pending events).
-- Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
-- Update all canonical keys that embed the account ID and invalidate caches before commit.
-- Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+- ხელმომწერის ატომური გაცვლა `AccountId`-ში, ანგარიშის მეტამონაცემების შენახვით და დაკავშირებული
+  რესურსები (აქტივები, ტრიგერები, როლები, ნებართვები, მომლოდინე მოვლენები).
+- შეამოწმეთ, რომ ამჟამინდელი ხელმომწერი ემთხვევა აბონენტს (ან დელეგირებული უფლებამოსილება აშკარა ნიშნით).
+- უარყოფა, თუ ახალი საჯარო გასაღები უკვე მხარს უჭერს სხვა ანგარიშს იმავე დომენში.
+- განაახლეთ ყველა კანონიკური კლავიატურა, რომლებიც ათავსებენ ანგარიშის ID-ს და გააუქმებენ ქეშებს ჩადენამდე.
+- გამოუშვით გამოყოფილი `AccountEvent::SignatoryRotated` ძველი/ახალი გასაღებებით აუდიტის ბილიკებისთვის.
+- მიგრაციული ხარაჩო: შემოიღეთ `AccountLabel` + `AccountRekeyRecord` (იხ. `account::rekey`) ასე
+  არსებული ანგარიშები შეიძლება განთავსდეს სტაბილურ ლეიბლებზე მოძრავი განახლების დროს ჰეშის შესვენების გარეშე.
 
 ### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
-- Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
-
-### RemoveSmartContractBytes
-- Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
-  reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
-- Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
-  stale handles.
-- Emit `ContractCodeEvent::Removed` with hash and caller metadata.
+- ამოიღეთ ან საფლავის ქვა `(namespace, contract_id)` შესაკრავი წარმოშობის მონაცემების შენარჩუნებისას
+  (ვინ, როდის, მიზეზის კოდი) პრობლემების აღმოსაფხვრელად.
+- მოითხოვეთ იგივე მმართველობის ნებართვა დაყენებული, როგორც აქტივაცია, პოლიტიკის კაუჭებით რომ არ დაუშვათ
+  ძირითადი სისტემის სახელთა სივრცის დეაქტივაცია ამაღლებული დამტკიცების გარეშე.
+- უარი თქვით, როდესაც ინსტანცია უკვე არააქტიურია, რათა მოვლენის ჟურნალი განმსაზღვრელი იყოს.
+- გამოუშვით `ContractInstanceEvent::Deactivated`, რომლის მოხმარებაც შეუძლიათ დამკვირვებლებს.### RemoveSmartContractBytes
+- დაუშვით შენახული ბაიტეკოდის ამოჭრა `code_hash`-ით მხოლოდ მაშინ, როდესაც არ არის გამოხატული ან აქტიური შემთხვევები
+  მინიშნება არტეფაქტზე; წინააღმდეგ შემთხვევაში, მარცხი აღწერითი შეცდომით.
+- ნებართვის კარიბჭის სარკეების რეგისტრაცია (`CanRegisterSmartContractCode`) პლუს ოპერატორის დონის
+  მცველი (მაგ., `CanManageSmartContractStorage`).
+- გადაამოწმეთ, რომ მოწოდებული `code_hash` ემთხვევა შენახულ ორგანიზმს წაშლამდე, რათა თავიდან აიცილოთ
+  შემორჩენილი სახელურები.
+- გამოუშვით `ContractCodeEvent::Removed` ჰეშით და აბონენტის მეტამონაცემებით.
 
 ### BatchMintAsset / BatchTransferAsset
-- All-or-nothing semantics: either every tuple succeeds or the instruction aborts without side
-  effects.
-- Input vectors must be deterministically ordered (no implicit sorting) and bounded by config
+- ყველაფერი ან არაფერი სემანტიკა: ან ყველა დუბლი წარმატებულია, ან ინსტრუქცია წყვეტს გვერდის გარეშე
+  ეფექტები.
+- შეყვანის ვექტორები უნდა იყოს დეტერმინისტულად დალაგებული (არ არის იმპლიციტური დახარისხება) და შემოიფარგლოს კონფიგურაციით
   (`max_batch_isi_items`).
-- Emit per-item asset events so downstream accounting stays consistent; batch context is additive,
-  not a replacement.
-- Permission checks reuse existing single-item logic per target (asset owner, definition owner,
-  or granted capability) before state mutation.
-- Advisory access sets must union all read/write keys to keep optimistic concurrency correct.
+- ავრცელებს აქტივების მოვლენებს თითო პუნქტზე, რათა ქვემოთ აღრიცხვა დარჩეს თანმიმდევრული; სერიის კონტექსტი არის დანამატი,
+  არა შემცვლელი.
+- ნებართვა ამოწმებს არსებული ერთეულის ლოგიკის ხელახლა გამოყენებას სამიზნეზე (აქტივის მფლობელი, განმარტების მფლობელი,
+  ან მინიჭებული შესაძლებლობა) სახელმწიფო მუტაციამდე.
+- საკონსულტაციო წვდომის კომპლექტებმა უნდა გააერთიანონ წაკითხვის/ჩაწერის ყველა გასაღები, რათა ოპტიმისტური კონკურენტულობა სწორი იყოს.
 
-## Implementation Scaffolding
+## დანერგვის ხარაჩოები
 
-- Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
-  edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
+- მონაცემთა მოდელი ახლა ატარებს `SetAssetKeyValue` / `RemoveAssetKeyValue` ხარაჩოებს ბალანსის მეტამონაცემებისთვის
+  რედაქტირება (`transparent.rs`).
+- შემსრულებლის სტუმრები ამჟღავნებენ ჩანაცვლების დამფუძნებლებს, რომლებიც მიიღებენ ნებართვებს მას შემდეგ, რაც მასპინძლობს გაყვანილობა
   (`default/mod.rs`).
-- Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
-  signatory migrations without touching the historical `AccountId` encoding.
+- Rekey პროტოტიპის ტიპები (`account::rekey`) უზრუნველყოფს სადესანტო ზონას მოძრავი მიგრაციებისთვის.
+- მსოფლიო სახელმწიფო მოიცავს `account_rekey_records` კლავიშს `AccountLabel`-ით, ასე რომ, ჩვენ შეგვიძლია დავადგმევინოთ ლეიბლი →
+  ხელმომწერი მიგრაცია ისტორიულ `AccountId` კოდირების შეხების გარეშე.
 
-## IVM Syscall Drafting
+## IVM Syscall შედგენა
 
-- Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
-  canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+- მასპინძელი შიმები `DeactivateContractInstance` / `RemoveSmartContractBytes` გემისთვის, როგორც
+  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) და
+  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), ორივე მოიხმარს Norito TLV-ს, რომელიც ასახავს
+  კანონიკური ISI სტრუქტურები.
+- გააფართოვეთ `abi_syscall_list()` მხოლოდ მას შემდეგ, რაც მასპინძელი დამმუშავებლები ასახავს `iroha_core` შესრულების ბილიკებს შესანარჩუნებლად
+  ABI ჰეშები სტაბილურია განვითარების დროს.
+- განაახლეთ Kotodama დაქვეითება, როგორც კი syscall ნომრები დასტაბილურდება; დაამატეთ ოქროს საფარი გაფართოებისთვის
+  ზედაპირზე ამავე დროს.
 
-## Status
+## სტატუსი
 
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+ზემოაღნიშნული შეკვეთა და ინვარიანტები მზადაა განსახორციელებლად. შემდგომი ფილიალები უნდა მიმართონ
+ეს დოკუმენტი გაყვანილობის შესრულების ბილიკებისა და syscall-ის ექსპოზიციისას.

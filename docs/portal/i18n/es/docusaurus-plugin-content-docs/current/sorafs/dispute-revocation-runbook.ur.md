@@ -4,16 +4,18 @@ direction: ltr
 source: docs/portal/docs/sorafs/dispute-revocation-runbook.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: dispute-revocation-runbook
-title: SoraFS تنازع اور منسوخی رن بک
+id: disputa-revocación-runbook
+título: SoraFS تنازع اور منسوخی رن بک
 sidebar_label: تنازع اور منسوخی رن بک
-description: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخیوں کی ہم آہنگی، اور ڈیٹا کو ڈٹرمنسٹک طور پر خالی کرنے کے لیے گورننس ورک فلو۔
+descripción: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخیوں کی ہم آہنگی، اور ڈیٹا کو ڈٹرمنسٹک طور پر خالی کرنے کے لیے گورننس ورک فلو۔
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 یہ صفحہ `docs/source/sorafs/dispute_revocation_runbook.md` کی عکاسی کرتا ہے۔ جب تک پرانی Sphinx ڈاکیومنٹیشن ریٹائر نہ ہو جائے، دونوں نقول کو ہم آہنگ رکھیں۔
 :::
 
@@ -23,22 +25,20 @@ description: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخی
 
 ## 1. واقعے کا جائزہ
 
-- **ٹرگر شرائط:** SLA کی خلاف ورزی (uptime/PoR failure)، replication shortfall، یا billing disagreement کی نشاندہی۔
-- **ٹیلیمیٹری کی تصدیق:** پرووائیڈر کے لیے `/v1/sorafs/capacity/state` اور `/v1/sorafs/capacity/telemetry` snapshots حاصل کریں۔
-- **اسٹیک ہولڈرز کو مطلع کریں:** Storage Team (provider operations)، Governance Council (decision body)، Observability (dashboard updates)۔
+- **ٹرگر شرائط:** SLA کی خلاف ورزی (fallo de tiempo de actividad/PoR), déficit de replicación, یا desacuerdo de facturación کی نشاندہی۔
+- **ٹیلیمیٹری کی تصدیق:** پرووائیڈر کے لیے `/v1/sorafs/capacity/state` اور `/v1/sorafs/capacity/telemetry` instantáneas حاصل کریں۔
+- **اسٹیک ہولڈرز کو مطلع کریں:** Equipo de almacenamiento (operaciones del proveedor), Consejo de gobierno (órgano de decisión), Observabilidad (actualizaciones del panel) ۔
 
 ## 2. شواہد کا پیکج تیار کریں
 
-1. خام artifacts جمع کریں (telemetry JSON، CLI logs، auditor notes)۔
-2. ڈٹرمنسٹک archive (مثلاً tarball) میں normalize کریں؛ درج کریں:
-   - BLAKE3-256 digest (`evidence_digest`)
-   - media type (`application/zip`, `application/jsonl` وغیرہ)
-   - hosting URI (object storage، SoraFS pin، یا Torii-accessible endpoint)
-3. گورننس evidence collection bucket میں write-once رسائی کے ساتھ پیکج محفوظ کریں۔
+1. خام artefactos جمع کریں (telemetría JSON, registros CLI, notas del auditor) ۔
+2. ڈٹرمنسٹک archivo (مثلاً tarball) میں normalizar کریں؛ درج کریں:
+   - Resumen BLAKE3-256 (`evidence_digest`)
+   - tipo de medio (`application/zip`, `application/jsonl` y otros)
+   - URI de alojamiento (almacenamiento de objetos, pin SoraFS, punto final accesible Torii)
+3. گورننس depósito de recopilación de pruebas میں escritura única رسائی کے ساتھ پیکج محفوظ کریں۔## 3. تنازع جمع کرائیں
 
-## 3. تنازع جمع کرائیں
-
-1. `sorafs_manifest_stub capacity dispute` کے لیے JSON spec بنائیں:
+1. `sorafs_manifest_stub capacity dispute` Archivo de especificación JSON:
 
    ```json
    {
@@ -71,38 +71,36 @@ description: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخی
      --private-key=ed25519:<key>
    ```
 
-3. `dispute_summary.json` ریویو کریں (kind، evidence digest، timestamps)۔
+3. `dispute_summary.json` ریویو کریں (tipo, resumen de evidencia, marcas de tiempo) ۔
 4. گورننس ٹرانزیکشن کیو کے ذریعے Torii `/v1/sorafs/capacity/dispute` کو ریکوئسٹ JSON بھیجیں۔ جواب کی قدر `dispute_id_hex` محفوظ کریں؛ یہی بعد کی منسوخی کارروائیوں اور آڈٹ رپورٹس کا اینکر ہے۔
 
 ## 4. انخلا اور منسوخی
 
-1. **Grace window:** پرووائیڈر کو متوقع منسوخی سے آگاہ کریں؛ پالیسی اجازت دے تو pinned data کے انخلا کی اجازت دیں۔
-2. **`ProviderAdmissionRevocationV1` بنائیں:**
+1. **Ventana de gracia:** پروائیڈر کو متوقع منسوخی سے آگاہ کریں؛ پالیسی اجازت دے تو datos anclados کے انخلا کی اجازت دیں۔
+2. **`ProviderAdmissionRevocationV1` Número:**
    - منظور شدہ وجہ کے ساتھ `sorafs_manifest_stub provider-admission revoke` استعمال کریں۔
-   - دستخط اور revocation digest ویریفائی کریں۔
+   - دستخط اور resumen de revocación ویریفائی کریں۔
 3. **منسوخی شائع کریں:**
    - منسوخی ریکوئسٹ Torii کو جمع کریں۔
-   - یقینی بنائیں کہ پرووائیڈر adverts بلاک ہیں (متوقع ہے `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` بڑھے)۔
-4. **Dashboards اپڈیٹ کریں:** پرووائیڈر کو revoked کے طور پر فلیگ کریں، dispute ID کا حوالہ دیں، اور evidence bundle لنک کریں۔
+   - یقینی بنائیں کہ پرووائیڈر anuncios بلاک ہیں (متوقع ہے `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` بڑھے)۔
+4. **Paneles de control:** پرووائیڈر کو revocado کے طور پر فلیگ کریں، ID de disputa کا حوالہ دیں، اور paquete de pruebas لنک کریں۔
 
 ## 5. Post-mortem اور فالو اپ
 
-- ٹائم لائن، root cause، اور remediation اقدامات گورننس incident tracker میں ریکارڈ کریں۔
-- restitution طے کریں (stake slashing، fee clawbacks، customer refunds)۔
-- سیکھے گئے اسباق دستاویز کریں؛ ضرورت ہو تو SLA thresholds یا monitoring alerts اپڈیٹ کریں۔
+- Búsqueda de causa raíz, reparación y seguimiento de incidentes.
+- restitución طے کریں (reducción de la participación, recuperación de tarifas, reembolsos a los clientes) ۔
+- سیکھے گئے اسباق دستاویز کریں؛ ضرورت ہو تو Umbrales SLA یا alertas de monitoreo اپڈیٹ کریں۔
 
 ## 6. حوالہ جاتی مواد
 
 - `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (dispute section)
-- `docs/source/sorafs/provider_admission_policy.md` (revocation workflow)
-- Observability dashboard: `SoraFS / Capacity Providers`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (sección de disputas)
+- `docs/source/sorafs/provider_admission_policy.md` (flujo de trabajo de revocación)
+- Panel de observabilidad: `SoraFS / Capacity Providers`
 
-## چیک لسٹ
-
-- [ ] evidence bundle حاصل کر کے hash کر لیا گیا۔
-- [ ] dispute payload مقامی طور پر validate کیا گیا۔
-- [ ] Torii dispute ٹرانزیکشن قبول ہوئی۔
-- [ ] منسوخی نافذ کی گئی (اگر منظور ہو)۔
-- [ ] dashboards/runbooks اپڈیٹ ہوئے۔
-- [ ] Post-mortem گورننس کونسل میں جمع کرایا گیا۔
+## چیک لسٹ- [] paquete de evidencia حاصل کر کے hash کر لیا گیا۔
+- [] disputar carga útil مقامی طور پر validar کیا گیا۔
+- [] Disputa Torii ٹرانزیکشن قبول ہوئی۔
+- [] منسوخی نافذ کی گئی (اگر منظور ہو)۔
+- [] paneles/runbooks اپڈیٹ ہوئے۔
+- [] Post-mortem گورننس کونسل میں جمع کرایا گیا۔

@@ -6,233 +6,224 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 2a0ce1be46f9c468915f50de5e38e2f34657b26bf4243fb5ea45dab175789393
 source_last_modified: "2026-01-04T11:42:43.489571+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android AND6 Compliance Checklist
+# Android AND6 準拠チェックリスト
 
-This checklist tracks the compliance deliverables that gate milestone **AND6 -
-CI & Compliance Hardening**. It consolidates the regulatory artefacts requested
-in `roadmap.md` and defines the storage layout under
-`docs/source/compliance/android/` so Release Engineering, Support, and Legal
-can reference the same evidence set before approving Android releases.
+このチェックリストは、マイルストーンを決定するコンプライアンスの成果物を追跡します **AND6 -
+CI とコンプライアンスの強化**。要求された規制上の成果物を統合します
+`roadmap.md` でストレージ レイアウトを定義します。
+`docs/source/compliance/android/` だからリリースエンジニアリング、サポート、法務
+Android リリースを承認する前に、同じ証拠セットを参照できます。
 
-## Scope & Owners
+## 範囲と所有者
 
-| Area | Deliverables | Primary Owner | Backup / Reviewer |
-|------|--------------|---------------|-------------------|
-| EU regulatory bundle | ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation, evidence log | Compliance & Legal (Sofia Martins) | Release Engineering (Alexei Morozov) |
-| Japan regulatory bundle | FISC security controls checklist, bilingual StrongBox attestation bundles, evidence log | Compliance & Legal (Daniel Park) | Android Program Lead |
-| Device lab readiness | Capacity tracking, contingency triggers, escalation log | Hardware Lab Lead | Android Observability TL |
+|エリア |成果物 |主要所有者 |バックアップ/レビュー担当者 |
+|------|--------------|---------------|---------------------|
+| EU 規制バンドル | ETSI EN 319 401 セキュリティ目標、GDPR DPIA 概要、SBOM 認証、証拠ログ |コンプライアンスと法務 (ソフィア・マーティンズ) |リリースエンジニアリング (Alexei Morozov) |
+|日本の規制バンドル | FISC セキュリティ管理チェックリスト、バイリンガル StrongBox 認証バンドル、証拠ログ |コンプライアンスと法務 (ダニエル・パーク) | Android プログラム リード |
+|デバイス ラボの準備 |キャパシティ追跡、緊急事態トリガー、エスカレーション ログ |ハードウェア ラボ リーダー | Android の可観測性 TL |
 
-## Artefact Matrix
+## アーティファクト マトリックス|アーティファクト |説明 |ストレージパス |リフレッシュの頻度 |メモ |
+|----------|---------------|--------------|---------------------|----------|
+| ETSI EN 319 401 セキュリティ目標 | Android SDK バイナリのセキュリティ目標/前提条件を説明する説明。 | `docs/source/compliance/android/eu/security_target.md` |すべての GA + LTS リリースを再検証します。 |リリース トレインのビルド来歴ハッシュを引用する必要があります。 |
+| GDPR DPIA の概要 |テレメトリ/ロギングを対象としたデータ保護の影響評価。 | `docs/source/compliance/android/eu/gdpr_dpia_summary.md` |年次 + マテリアルテレメトリーが変更される前。 | `sdk/android/telemetry_redaction.md` の参照編集ポリシー。 |
+| SBOM 認証 | Gradle/Maven アーティファクトの署名付き SBOM と SLSA の出所。 | `docs/source/compliance/android/eu/sbom_attestation.md` |すべての GA リリース。 | `scripts/android_sbom_provenance.sh <version>` を実行して、CycloneDX レポート、バンドルの署名、およびチェックサムを生成します。 |
+| FISC セキュリティ管理チェックリスト | SDK コントロールを FISC 要件にマッピングするチェックリストが完了しました。 | `docs/source/compliance/android/jp/fisc_controls_checklist.md` |年次 + JP パートナーのパイロット前。 |見出しを二か国語 (EN/JP) で提供します。 |
+| StrongBox 認証バンドル (JP) | JP 規制当局向けのデバイスごとの認証概要 + チェーン。 | `docs/source/compliance/android/jp/strongbox_attestation.md` |新しいハードウェアがプールに入るとき。 | `artifacts/android/attestation/<device>/` の下の生のアーティファクトを指します。 |
+|法的承認メモ | ETSI/GDPR/FISC の範囲、プライバシーの姿勢、添付されたアーティファクトの保管過程をカバーする法律顧問の概要。 | `docs/source/compliance/android/eu/legal_signoff_memo.md` |アーティファクト バンドルが変更されるか、新しい管轄区域が追加されるたびに。 |メモは証拠ログのハッシュを参照し、デバイスとラボの緊急事態バンドルにリンクします。 |
+|証拠ログ |ハッシュ/タイムスタンプのメタデータを含む、送信されたアーティファクトのインデックス。 | `docs/source/compliance/android/evidence_log.csv` |上記のエントリが変更されるたびに更新されます。 | Buildkite リンクとレビュー担当者のサインオフを追加します。 |
+|デバイスラボ計測バンドル | `device_lab_instrumentation.md` で定義されたプロセスで記録されたスロット固有のテレメトリ、キュー、および証明の証拠。 | `artifacts/android/device_lab/<slot>/` (`docs/source/compliance/android/device_lab_instrumentation.md` を参照)すべての予約スロット + フェイルオーバー ドリル。 | SHA-256 マニフェストをキャプチャし、証拠ログとチェックリストでスロット ID を参照します。 |
+|デバイスラボ予約ログ |フリーズ中に StrongBox プールを 80% 以上に保つために使用される予約ワークフロー、承認、キャパシティ スナップショット、およびエスカレーション ラダー。 | `docs/source/compliance/android/device_lab_reservation.md` |予約が作成/変更されるたびに更新します。 |手順に記載されている `_android-device-lab` チケット ID と週次カレンダーのエクスポートを参照してください。 |
+| Device-lab フェールオーバー ランブックとドリル バンドル |フォールバック レーン、Firebase バースト キュー、外部 StrongBox リテイナーの準備状況を示す四半期ごとのリハーサル計画とアーティファクト マニフェスト。 | `docs/source/compliance/android/device_lab_failover_runbook.md` + `artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` |四半期ごと (またはハードウェア名簿の変更後)。 |ドリル ID を証拠ログに記録し、Runbook に記載されているマニフェスト ハッシュ + PagerDuty エクスポートを添付します。 |
 
-| Artifact | Description | Storage Path | Refresh Cadence | Notes |
-|----------|-------------|--------------|-----------------|-------|
-| ETSI EN 319 401 security target | Narrative describing security objectives/assumptions for Android SDK binaries. | `docs/source/compliance/android/eu/security_target.md` | Revalidate every GA + LTS release. | Must cite build provenance hashes for the release train. |
-| GDPR DPIA summary | Data protection impact assessment covering telemetry/logging. | `docs/source/compliance/android/eu/gdpr_dpia_summary.md` | Annual + before material telemetry changes. | Reference redaction policy in `sdk/android/telemetry_redaction.md`. |
-| SBOM attestation | Signed SBOM plus SLSA provenance for the Gradle/Maven artifacts. | `docs/source/compliance/android/eu/sbom_attestation.md` | Every GA release. | Run `scripts/android_sbom_provenance.sh <version>` to generate CycloneDX reports, cosign bundles, and checksums. |
-| FISC security controls checklist | Completed checklist mapping SDK controls to FISC requirements. | `docs/source/compliance/android/jp/fisc_controls_checklist.md` | Annual + before JP partner pilots. | Provide bilingual headings (EN/JP). |
-| StrongBox attestation bundle (JP) | Per-device attestation summary + chain for JP regulators. | `docs/source/compliance/android/jp/strongbox_attestation.md` | When new hardware enters the pool. | Point to raw artefacts under `artifacts/android/attestation/<device>/`. |
-| Legal sign-off memo | Counsel summary covering ETSI/GDPR/FISC scope, privacy posture, and chain of custody for attached artefacts. | `docs/source/compliance/android/eu/legal_signoff_memo.md` | Every time the artefact bundle changes or a new jurisdiction is added. | Memo references hashes from the evidence log and links to the device-lab contingency bundle. |
-| Evidence log | Index of submitted artefacts with hash/timestamp metadata. | `docs/source/compliance/android/evidence_log.csv` | Updated whenever any entry above changes. | Add Buildkite link + reviewer sign-off. |
-| Device-lab instrumentation bundle | Slot-specific telemetry, queue, and attestation evidence recorded with the process defined in `device_lab_instrumentation.md`. | `artifacts/android/device_lab/<slot>/` (see `docs/source/compliance/android/device_lab_instrumentation.md`) | Every reserved slot + failover drill. | Capture SHA-256 manifests and reference the slot ID in the evidence log + checklist. |
-| Device-lab reservation log | Booking workflow, approvals, capacity snapshots, and escalation ladder used to keep StrongBox pools ≥80 % during freezes. | `docs/source/compliance/android/device_lab_reservation.md` | Update whenever reservations are created/changed. | Reference the `_android-device-lab` ticket IDs and weekly calendar export noted in the procedure. |
-| Device-lab failover runbook & drill bundle | Quarterly rehearsal plan and artefact manifest demonstrating fallback lanes, Firebase burst queue, and external StrongBox retainer readiness. | `docs/source/compliance/android/device_lab_failover_runbook.md` + `artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` | Quarterly (or after hardware roster changes). | Log drill IDs in the evidence log and attach the manifest hash + PagerDuty export noted in the runbook. |
+> **ヒント:** PDF または外部署名されたアーティファクトを添付する場合は、短いファイルを保存してください
+> 不変アーティファクトにリンクするテーブルパス内のマークダウンラッパー
+> ガバナンスシェア。これにより、リポジトリを軽量に保ちながら、
+> 監査証跡。
 
-> **Tip:** When attaching PDFs or externally signed artefacts, store a short
-> Markdown wrapper in the tabled path that links to the immutable artefact in
-> the governance share. This keeps the repo lightweight while preserving the
-> audit trail.
+## EU 規制パケット (ETSI/GDPR)EU のパケットには、上記の 3 つの成果物と法的メモがまとめられています。
 
-## EU Regulatory Packet (ETSI/GDPR)
+- `security_target.md` をリリース識別子、Torii マニフェスト ハッシュで更新します。
+  および SBOM ダイジェストを使用して、監査人がバイナリを宣言されたスコープと照合できるようにします。
+- DPIA の概要を最新のテレメトリ編集ポリシーに合わせて維持し、
+  `docs/source/sdk/android/telemetry_redaction.md` で参照されている Norito の差分の抜粋を添付します。
+- SBOM 認証エントリには、CycloneDX JSON ハッシュ、出所を含める必要があります。
+  バンドル ハッシュ、余署名ステートメント、およびそれらを生成した Buildkite ジョブ URL。
+- `legal_signoff_memo.md` は顧問/日付をキャプチャし、すべてのアーティファクトをリストする必要があります +
+  SHA-256、補償コントロールの概要、および証拠ログ行へのリンク
+  加えて、承認を追跡したPagerDutyチケットID。
 
-The EU packet ties together the three artefacts above plus the legal memo:
+## 日本の規制パケット (FISC/StrongBox)
 
-- Update `security_target.md` with the release identifier, Torii manifest hash,
-  and SBOM digest so auditors can match binaries to the declared scope.
-- Keep the DPIA summary aligned with the latest telemetry redaction policy and
-  attach the Norito diff excerpt referenced in `docs/source/sdk/android/telemetry_redaction.md`.
-- The SBOM attestation entry should include: CycloneDX JSON hash, provenance
-  bundle hash, cosign statement, and the Buildkite job URL that generated them.
-- `legal_signoff_memo.md` must capture the counsel/date, list every artefact +
-  SHA-256, outline any compensating controls, and link to the evidence log row
-  plus the PagerDuty ticket ID that tracked the approval.
+日本の規制当局は、次のようなバイリンガルのドキュメントを含む並行バンドルを期待しています。
 
-## Japan Regulatory Packet (FISC/StrongBox)
-
-Japan’s regulators expect a parallel bundle with bilingual documentation:
-
-- `fisc_controls_checklist.md` mirrors the official spreadsheet; fill both the
-  EN and JA columns and reference the specific section of `sdk/android/security.md`
-  or the StrongBox attestation bundle that satisfies each control.
-- `strongbox_attestation.md` summarises the latest runs of
+- `fisc_controls_checklist.md` は公式スプレッドシートを反映しています。両方を埋める
+  EN および JA 列および `sdk/android/security.md` の特定のセクションを参照
+  または、各制御を満たす StrongBox 認証バンドル。
+- `strongbox_attestation.md` は、の最新の実行を要約します。
   `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  (per-device JSON + Norito envelopes). Embed links to the immutable artefacts
-  under `artifacts/android/attestation/<device>/` and note the rotation cadence.
-- Record the bilingual cover letter template that ships with submissions inside
-  `docs/source/compliance/android/jp/README.md` so Support can reuse it.
-- Update the evidence log with a single row that references the checklist, the
-  attestation bundle hash, and any JP partner ticket IDs tied to the delivery.
+  (デバイスごとの JSON + Norito エンベロープ)。不変のアーティファクトへのリンクを埋め込む
+  `artifacts/android/attestation/<device>/` の下で、回転のリズムに注目してください。
+- 提出物に同梱されるバイリンガルのカバーレターのテンプレートを記録します
+  `docs/source/compliance/android/jp/README.md` なので、サポートが再利用できます。
+- チェックリストを参照する単一行で証拠ログを更新します。
+  構成証明バンドルのハッシュ、および配信に関連付けられた JP パートナー チケット ID。
 
-## Submission Workflow
+## 提出ワークフロー
 
-1. **Draft** - Owner prepares the artefact, records the planned filename from
-   the table above, and opens a PR containing the updated Markdown stub plus a
-   checksum of the external attachment.
-2. **Review** - Release Engineering confirms provenance hashes match the staged
-   binaries; Compliance verifies regulatory language; Support ensures SLAs and
-   telemetry policies are referenced correctly.
-3. **Sign-off** - Approvers add their names and dates to the `Sign-off` table
-   below. The evidence log is updated with the PR URL and Buildkite run.
-4. **Publish** - After SRE governance sign-off, link the artefact in
-   `status.md` and update the Android Support Playbook references.
+1. **ドラフト** - 所有者がアーティファクトを準備し、計画されたファイル名を記録します。
+   上の表を参照し、更新された Markdown スタブと
+   外部添付ファイルのチェックサム。
+2. **レビュー** - リリース エンジニアリングにより、出所ハッシュが段階的なハッシュと一致することを確認します。
+   バイナリ;コンプライアンスは規制文言を検証します。サポートにより SLA が保証され、
+   テレメトリ ポリシーが正しく参照されています。
+3. **サインオフ** - 承認者は自分の名前と日付を `Sign-off` テーブルに追加します
+   以下。証拠ログは PR URL と Buildkite の実行によって更新されます。
+4. **公開** - SRE ガバナンスの承認後、アーティファクトをリンクします。
+   `status.md` を更新し、Android サポート プレイブックの参照を更新します。
 
-### Sign-off Log
+### サインオフログ
 
-| Artefact | Reviewed By | Date | PR / Evidence |
-|----------|-------------|------|---------------|
-| *(pending)* | - | - | - |
+|アーティファクト |レビュー者 |日付 | PR / 証拠 |
+|----------|---------------|------|----------|
+| *(保留中)* | - | - | - |
 
-## Device Lab Reservation & Contingency Plan
+## デバイス ラボの予約と緊急時対応計画
 
-To mitigate the **device lab availability** risk called out in the roadmap:
+ロードマップで指摘されている **デバイス ラボの可用性** リスクを軽減するには:- `docs/source/compliance/android/evidence_log.csv` で週次容量を追跡
+  (列 `device_lab_capacity_pct`)。利用可能な場合はリリース エンジニアリングにアラートを送信
+  2週連続で70％を下回る。
+- 以下のストロングボックス/一般レーンを予約します
+  `docs/source/compliance/android/device_lab_reservation.md` よりも先に
+  凍結、リハーサル、またはコンプライアンススイープを実行するため、リクエスト、承認、およびアーティファクトが
+  `_android-device-lab` キューにキャプチャされます。結果として得られたチケット ID をリンクします
+  容量スナップショットを記録するときに証拠ログに記録されます。
+- **フォールバック プール:** 最初に共有ピクセル プールにバーストします。まだ飽和している場合は、
+  CI 検証のために Firebase Test Lab のスモーク実行をスケジュールします。
+- **外部ラボ リテーナー:** StrongBox パートナーとリテーナーを保守します。
+  これにより、フリーズ期間中にハードウェアを予約できるようになります (最低 7 日間のリード)。
+- **エスカレーション:** 両方の場合、PagerDuty で `AND6-device-lab` インシデントが発生します。
+  プライマリ プールとフォールバック プールの容量が 50 % を下回ります。ハードウェアラボのリーダー
+  SRE と連携してデバイスの優先順位を再設定します。
+- **フェイルオーバー証拠バンドル:** すべてのリハーサルを以下に保存します
+  `artifacts/android/device_lab_contingency/<YYYYMMDD>/` 予約あり
+  リクエスト、PagerDuty エクスポート、ハードウェア マニフェスト、およびリカバリ トランスクリプト。参考資料
+  `device_lab_contingency.md` のバンドルを取得し、証拠ログに SHA-256 を追加します。
+  したがって、法務部門は緊急事態対応ワークフローが実行されたことを証明できます。
+- **四半期ごとの訓練:** でランブックを演習します。
+  `docs/source/compliance/android/device_lab_failover_runbook.md`、添付してください
+  結果として得られるバンドル パス + マニフェスト ハッシュから `_android-device-lab` チケット、および
+  緊急時ログと証拠ログの両方にドリル ID をミラーリングします。
 
-- Track weekly capacity in `docs/source/compliance/android/evidence_log.csv`
-  (column `device_lab_capacity_pct`). Alert Release Engineering if availability
-  falls below 70 % for two consecutive weeks.
-- Reserve StrongBox/general lanes following
-  `docs/source/compliance/android/device_lab_reservation.md` ahead of every
-  freeze, rehearsal, or compliance sweep so requests, approvals, and artefacts
-  are captured in the `_android-device-lab` queue. Link the resulting ticket IDs
-  in the evidence log when recording capacity snapshots.
-- **Fallback pools:** burst to the shared Pixel pool first; if still saturated,
-  schedule Firebase Test Lab smoke runs for CI validation.
-- **External lab retainer:** maintain the retainer with the StrongBox partner
-  lab so we can reserve hardware during freeze windows (minimum 7-day lead).
-- **Escalation:** raise `AND6-device-lab` incident in PagerDuty when both the
-  primary and fallback pools drop below 50 % capacity. The Hardware Lab Lead
-  coordinates with SRE to re-prioritise devices.
-- **Failover evidence bundles:** store every rehearsal under
-  `artifacts/android/device_lab_contingency/<YYYYMMDD>/` with the reservation
-  request, PagerDuty export, hardware manifest, and recovery transcript. Reference
-  the bundle from `device_lab_contingency.md` and add the SHA-256 to the evidence log
-  so Legal can prove the contingency workflow was exercised.
-- **Quarterly drills:** exercise the runbook in
-  `docs/source/compliance/android/device_lab_failover_runbook.md`, attach the
-  resulting bundle path + manifest hash to the `_android-device-lab` ticket, and
-  mirror the drill ID in both the contingency log and evidence log.
+緊急時対応計画のすべての発動を文書化します。
+`docs/source/compliance/android/device_lab_contingency.md` (日付を含む、
+トリガー、アクション、フォローアップなど）。
 
-Document every activation of the contingency plan in
-`docs/source/compliance/android/device_lab_contingency.md` (include date,
-trigger, actions, and follow-ups).
+## 静的解析プロトタイプ
 
-## Static-Analysis Prototype
-
-- `make android-lint` wraps `ci/check_android_javac_lint.sh`, compiling
-  `java/iroha_android` and the shared `java/norito_java` sources with
-  `javac --release 21 -Xlint:all -Werror` (with the flagged categories noted in
-- After compilation, the script enforces the AND6 dependency policy with
-  `jdeps --summary`, failing if any module outside the approved allowlist
-  (`java.base`, `java.net.http`, `jdk.httpserver`) appears. This keeps the
-  Android surface aligned with the SDK council’s “no hidden JDK dependencies”
-  requirement before StrongBox compliance reviews.
-- CI now runs the same gate via
-  `.github/workflows/android-lint.yml`, which invokes
-  `ci/check_android_javac_lint.sh` on every push/PR that touches the Android or
-  shared Norito Java sources and uploads `artifacts/android/lint/jdeps-summary.txt`
-  so compliance reviews can reference a signed module list without rerunning the
-  script locally.
-- Set `ANDROID_LINT_KEEP_WORKDIR=1` when you need to retain the temporary
-  workspace. The script already copies the generated module summary into
-  `artifacts/android/lint/jdeps-summary.txt`; set
+- `make android-lint` は `ci/check_android_javac_lint.sh` をラップし、コンパイルします
+  `java/iroha_android` および共有 `java/norito_java` ソース
+  `javac --release 21 -Xlint:all -Werror` (フラグが設定されたカテゴリは次のとおりです)
+- コンパイル後、スクリプトは AND6 依存関係ポリシーを適用します。
+  `jdeps --summary`、承認された許可リスト外のモジュールがある場合は失敗します
+  (`java.base`、`java.net.http`、`jdk.httpserver`) が表示されます。これにより、
+  SDK カウンシルの「隠れた JDK 依存関係なし」に準拠した Android サーフェス
+  StrongBox コンプライアンス レビューの前に必要となります。
+- CI は次経由で同じゲートを実行します。
+  `.github/workflows/android-lint.yml`、これを呼び出します
+  Android にアクセスするすべてのプッシュ/PR で `ci/check_android_javac_lint.sh`
+  共有 Norito Java ソースとアップロード `artifacts/android/lint/jdeps-summary.txt`
+  そのため、コンプライアンス レビューでは、再実行せずに署名付きモジュール リストを参照できます。
+  ローカルでスクリプトを作成します。
+- 一時的なデータを保持する必要がある場合は、`ANDROID_LINT_KEEP_WORKDIR=1` を設定します。
+  ワークスペース。スクリプトは、生成されたモジュールの概要を既にコピーしています。
+  `artifacts/android/lint/jdeps-summary.txt`;セット
   `ANDROID_LINT_SUMMARY_OUT=docs/source/compliance/android/evidence/android_lint_jdeps.txt`
-  (or similar) when you require an additional, versioned artefact for audits.
-  Engineers should still run the command locally before submitting Android PRs
-  that touch Java sources and attach the recorded summary/log to compliance
-  reviews. Reference it from release notes as “Android javac lint + dependency
-  scan”.
+  (または同様の) 監査用に追加のバージョン管理されたアーティファクトが必要な場合。
+  エンジニアは Android PR を送信する前にコマンドをローカルで実行する必要があります。
+  Java ソースにアクセスし、記録された概要/ログをコンプライアンスに添付するもの
+  レビュー。リリースノートから「Android javac lint + 依存関係」として参照してください。
+  スキャン」。
 
-## CI Evidence (Lint, Tests, Attestation)
-
-- `.github/workflows/android-and6.yml` now runs all AND6 gates (javac lint +
-  dependency scan, Android test suite, StrongBox attestation verifier, and
-  device-lab slot validation) on every PR/push touching the Android surface.
-- `ci/run_android_tests.sh` wraps `ci/run_android_tests.sh` and emits
-  a deterministic summary at `artifacts/android/tests/test-summary.json` while
-  persisting the console log to `artifacts/android/tests/test.log`. Attach both
-  files to compliance packets when referencing CI runs.
-- `scripts/android_strongbox_attestation_ci.sh --summary-out` produces
-  `artifacts/android/attestation/ci-summary.json`, validating the bundled
-  attestation chains under `artifacts/android/attestation/**` for StrongBox and
-  TEE pools.
+## CI 証拠 (Lint、テスト、証明)- `.github/workflows/android-and6.yml` はすべての AND6 ゲートを実行するようになりました (javac lint +
+  依存関係スキャン、Android テスト スイート、StrongBox 構成証明検証ツール、および
+  デバイス ラボ スロット検証）は、Android サーフェスに触れるすべての PR/プッシュで行われます。
+- `ci/run_android_tests.sh` は `ci/run_android_tests.sh` をラップして出力します
+  `artifacts/android/tests/test-summary.json` での決定的な概要
+  コンソール ログを `artifacts/android/tests/test.log` に永続化します。両方取り付けてください
+  CI 実行を参照するときに、ファイルをコンプライアンス パケットに変換します。
+- `scripts/android_strongbox_attestation_ci.sh --summary-out` は生成します
+  `artifacts/android/attestation/ci-summary.json`、バンドルされたものを検証します
+  StrongBox の `artifacts/android/attestation/**` の下の証明書チェーンと
+  TEEプール。
 - `scripts/check_android_device_lab_slot.py --root fixtures/android/device_lab`
-  verifies the sample slot (`slot-sample/`) used in CI and can be pointed at
-  real runs under `artifacts/android/device_lab/<slot-id>/` with
-  `--require-slot --json-out <dest>` to prove instrumentation bundles follow
-  the documented layout. CI writes the validation summary to
-  `artifacts/android/device_lab/summary.json`; the sample slot includes
-  placeholder telemetry/attestation/queue/log extracts plus a recorded
-  `sha256sum.txt` for reproducible hashes.
+  CI で使用され、ポイントできるサンプル スロット (`slot-sample/`) を検証します。
+  実際は `artifacts/android/device_lab/<slot-id>/` で実行されます。
+  `--require-slot --json-out <dest>` は、インストルメンテーション バンドルが次のとおりであることを証明します。
+  文書化されたレイアウト。 CI は検証の概要を次の場所に書き込みます。
+  `artifacts/android/device_lab/summary.json`;サンプルスロットには以下が含まれます
+  プレースホルダテレメトリ/アテステーション/キュー/ログ抽出と記録された
+  再現可能なハッシュの場合は `sha256sum.txt`。
 
-## Device-Lab Instrumentation Workflow
+## デバイスラボ計測ワークフロー
 
-Every reservation or failover rehearsal must follow the
-`device_lab_instrumentation.md` guide so telemetry, queue, and attestation
-artefacts line up with the booking log:
+すべての予約またはフェイルオーバーのリハーサルは、次の手順に従う必要があります。
+`device_lab_instrumentation.md` ガイド、テレメトリ、キュー、および構成証明
+アーティファクトは予約ログと一致します。
 
-1. **Seed slot artefacts.** Create
-   `artifacts/android/device_lab/<slot>/` with the standard sub-folders and run
-   `shasum` after the slot closes (see the “Artifact Layout” section of the new
-   guide).
-2. **Run instrumentation commands.** Execute the telemetry/queue capture,
-   override digest, StrongBox harness, and lint/dependency scan exactly as
-   documented so the outputs mirror CI.
-3. **File evidence.** Update
-   `docs/source/compliance/android/evidence_log.csv` and the reservation ticket
-   with the slot ID, SHA-256 manifest path, and corresponding dashboard/Buildkite
-   links.
+1. **シード スロット アーティファクト** の作成
+   `artifacts/android/device_lab/<slot>/` を標準のサブフォルダーとともに実行します
+   スロットが閉じた後は `shasum` (新しいドキュメントの「アーティファクト レイアウト」セクションを参照)
+   ガイド）。
+2. **インストルメンテーション コマンドを実行します。** テレメトリ/キュー キャプチャを実行します。
+   ダイジェスト、StrongBox ハーネス、および lint/依存関係スキャンを正確にオーバーライドします。
+   出力が CI を反映するように文書化されています。
+3. **証拠を提出します。** アップデート
+   `docs/source/compliance/android/evidence_log.csv`と予約チケット
+   スロット ID、SHA-256 マニフェスト パス、および対応するダッシュボード/Buildkite を含む
+   リンク。
 
-Attach the artefact folder and the hash manifest to the AND6 release packet for
-the affected freeze window. Governance reviewers will reject checklists that do
-not cite a slot identifier plus the instrumentation guide.
+アーティファクト フォルダーとハッシュ マニフェストを AND6 リリース パケットに添付します。
+影響を受けるフリーズウィンドウ。ガバナンス審査担当者は、次のようなチェックリストを拒否します。
+スロット識別子とインストルメンテーション ガイドは引用しないでください。
 
-### Reservation & Failover Readiness Evidence
+### 予約とフェイルオーバーの準備状況の証拠
 
-Roadmap item “Regulatory artefact approvals & lab contingency” requires more
-than instrumentation. Every AND6 packet must also reference the proactive
-reservation workflow and quarterly failover rehearsal:
+ロードマップ項目「規制上のアーティファクトの承認と研究所の緊急事態」には、さらに多くのことが必要です
+計装よりも。すべての AND6 パケットもプロアクティブ パケットを参照する必要があります。
+予約ワークフローと四半期ごとのフェイルオーバー リハーサル:- **予約プレイブック (`device_lab_reservation.md`)。** 予約に従ってください
+  テーブル (リード タイム、所有者、スロットの長さ)、共有カレンダーをエクスポートします。
+  `scripts/android_device_lab_export.py`、およびレコード `_android-device-lab`
+  `evidence_log.csv` の容量スナップショットとチケット ID。プレイブック
+  エスカレーションラダーと緊急事態のトリガーを詳しく説明します。それらの詳細をコピーします
+  予約が移動したとき、またはキャパシティが定員を下回ったときに、チェックリストのエントリに追加されます。
+  ロードマップの目標は 80%。
+- **フェールオーバー ドリル Runbook (`device_lab_failover_runbook.md`)。**
+  四半期ごとのリハーサル (停止のシミュレーション → フォールバック レーンの促進 → 関与)
+  Firebase バースト + 外部 StrongBox パートナー) にアーティファクトを保存します。
+  `artifacts/android/device_lab_contingency/<drill-id>/`。各バンドルは、
+  マニフェスト、PagerDuty エクスポート、Buildkite 実行リンク、Firebase バーストが含まれます
+  レポートと、ランブックに記載されたリテイナーの承認。を参照してください。
+  証拠ログと両方のドリル ID、SHA-256 マニフェスト、およびフォローアップ チケット
+  このチェックリスト。
 
-- **Reservation playbook (`device_lab_reservation.md`).** Follow the booking
-  table (lead times, owners, slot lengths), export the shared calendar via
-  `scripts/android_device_lab_export.py`, and record `_android-device-lab`
-  ticket IDs alongside capacity snapshots in `evidence_log.csv`. The playbook
-  spells out the escalation ladder and contingency triggers; copy those details
-  into the checklist entry when reservations move or capacity drops below the
-  80 % roadmap target.
-- **Failover drill runbook (`device_lab_failover_runbook.md`).** Execute the
-  quarterly rehearsal (simulate outage → promote fallback lanes → engage
-  Firebase burst + external StrongBox partner) and store the artefacts under
-  `artifacts/android/device_lab_contingency/<drill-id>/`. Each bundle must
-  contain the manifest, PagerDuty export, Buildkite run links, Firebase burst
-  report, and retainer acknowledgement noted in the runbook. Reference the
-  drill ID, SHA-256 manifest, and follow-up ticket in both the evidence log and
-  this checklist.
+これらの文書を総合すると、デバイスの容量計画、停止のリハーサル、
+そして、インスツルメンテーション バンドルは、システムが要求する同じ監査済み証跡を共有します。
+ロードマップと法的審査担当者。
 
-Together these documents prove that device capacity planning, outage rehearsals,
-and the instrumentation bundles share the same audited trail demanded by the
-roadmap and legal reviewers.
+## レビューの頻度
 
-## Review Cadence
-
-- **Quarterly** - Validate that EU/JP artefacts are up to date; refresh
-  evidence log hashes; rehearse provenance capture.
-- **Pre-release** - Run this checklist during every GA/LTS cutover and attach
-  the completed log to the release RFC.
-- **Post-incident** - If a Sev 1/2 incident touches telemetry, signing, or
-  attestation, update the relevant artefact stubs with remediation notes and
-  capture the reference in the evidence log.
+- **四半期** - EU/JP のアーティファクトが最新であることを検証します。リフレッシュする
+  証拠ログのハッシュ。来歴キャプチャをリハーサルします。
+- **プレリリース** - GA/LTS カットオーバーのたびにこのチェックリストを実行し、アタッチします
+  リリース RFC への完成したログ。
+- **インシデント後** - 重大度 1/2 のインシデントがテレメトリ、署名、または
+  証明、修復メモを使用して関連するアーティファクト スタブを更新し、
+  証拠ログに参照をキャプチャします。

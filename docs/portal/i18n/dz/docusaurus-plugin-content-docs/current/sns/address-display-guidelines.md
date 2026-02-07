@@ -8,113 +8,115 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Address Display Guidelines
 sidebar_label: Address display
 description: UX and CLI requirements for IH58 vs compressed (`sora`) Sora address presentation (ADDR-6).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
+ནང་འདྲེན་ ExplorerAddressCard ལས་ '@site/src/ཆ་ཤས་/ ExplorerAddressCard';
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
-as the canonical portal copy. The source file sticks around for translation PRs.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ལེབ་འདི་གིས་ `docs/source/sns/address_display_guidelines.md` ལུ་མེ་ལོང་དང་ད་ལྟོ་ཞབས་ཏོག་འབདཝ་ཨིན།
+ཚད་ལྡན་གྱི་ དྲྭ་ཚིགས་འདྲ་བཤུས་སྦེ། འབྱུང་ཁུངས་ཡིག་སྣོད་འདི་ སྐད་སྒྱུར་པི་ཨར་ཚུ་གི་དོན་ལུ་ མཐའ་འཁོར་ལུ་བཞགཔ་ཨིན།
 :::
 
-Wallets, explorers, and SDK samples must treat account addresses as immutable
-payloads. The Android retail wallet sample in
-`examples/android/retail-wallet` now demonstrates the required UX pattern:
+དངུལ་ཁུག་དང་ འཚོལ་ཞིབ་པ་ དེ་ལས་ ཨེསི་ཌི་ཀེ་དཔེ་ཚད་ཚུ་གིས་ རྩིས་ཁྲའི་ཁ་བྱང་ཚུ་ བསྒྱུར་བཅོས་འབད་མ་ཚུགསཔ་སྦེ་ བརྩི་དགོ།
+པེ་ལོཌ་ཚུ། ཨེན་ཌོའིཌ་སིལ་སིའི་ཚོང་ཁང་དངུལ་ཁུག་དཔེ་ཚད།
+I18NI000000018X གིས་ད་ལྟོ་དགོས་མཁོ་ཡོད་པའི་ཡུ་ཨེགསི་དཔེ་རིས་འདི་སྟོནམ་ཨིན།
 
-- **Dual copy targets.** Ship two explicit copy buttons—IH58 (preferred) and the
-  compressed Sora-only form (`sora…`, second-best). IH58 is always safe to share externally
-  and powers the QR payload. The compressed variant must include an inline
-  warning because it only works inside Sora-aware apps. The Android retail
-  wallet sample wires both Material buttons and their tooltips in
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and
-  the iOS SwiftUI demo mirrors the same UX via `AddressPreviewCard` inside
-  `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, selectable text.** Render both strings with a monospace font and
-  `textIsSelectable="true"` so users can inspect values without invoking an IME.
-  Avoid editable fields: IMEs can rewrite kana or inject zero-width code points.
-- **Implicit default domain hints.** When the selector points at the implicit
-  `default` domain, surface a caption reminding operators no suffix is required.
-  Explorers should also highlight the canonical domain label when the selector
-  encodes a digest.
-- **IH58 QR payloads.** QR codes must encode the IH58 string. If QR generation
-  fails, display an explicit error instead of a blank image.
-- **Clipboard messaging.** After copying the compressed form, emit a toast or
-  snackbar reminding users that it is Sora-only and prone to IME mangling.
+- **འདྲ་བཤུས་གཉིས་ལྡན་དམིགས་ཚད།** གསལ་པོ་འདྲ་བཤུས་ཨེབ་རྟ་གཉིས་—IH58 (དགའ་གདམ་) དང་ལུ།
+  སོ་ར་རྐྱངམ་ཅིག་གི་རྣམ་པ་ (`sora…`, གཉིས་པ་) བསྡམ་བཞག་ཡོདཔ་ཨིན། IH58 འདི་ རྟག་བུ་རང་ ཕྱིའི་ཐོག་ལས་ བརྗེ་སོར་འབད་ནི་ལུ་ ཉེན་སྲུང་ཡོདཔ་ཨིན།
+  དང་ QR པེ་ལོཌི་ལུ་ ནུས་ཤུགས་བྱིནམ་ཨིན། བསྡམ་བཞག་ཡོད་པའི་འགྱུར་ཅན་དེ་གིས་ ནང་ཐིག་ཅིག་གྲངས་སུ་བཙུགས་དགོ།
+  ཉེན་བརྡ་འདི་གིས་ སོ་ར་-ཨེ་ཝར་ཨེཔ་ཚུ་གི་ནང་ལུ་རྐྱངམ་ཅིག་ལཱ་འབདཝ་ལས་ཨིན། Android ཚོང་འབྲེལ།
+  ཝ་ལེཊ་དཔེ་ཚད་ཀྱི་གློག་ཐག་ཚུ་ དངོས་པོ་གི་ཨེབ་རྟ་དང་ དེ་ཚུ་གི་ལག་ཆས་བསླབ་བྱ་གཉིས་ཆ་ར་ནང་ 2 2 ནང་ལུ།
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, དང་།
+  the iOS SwiftUI གིས་ ནང་ན་ཡོད་པའི་ `AddressPreviewCard` བརྒྱུད་དེ་ UX དེ་འདྲ་ གསལ་སྟོན་འབདཝ་ཨིན།
+  I18NI0000002X.
+- **མོ་ནོ་སི་པེསི་ སེལ་འཐུ་འབད་བཏུབ་པའི་ཚིག་ཡིག་.** ཡིག་རྒྱུན་གཉིས་ཆ་རང་ མོ་ནོ་སི་པེསི་ཡིག་གཟུགས་དང་ དང་བཅས་ བཀྲམ་སྟོན་འབད།
+  I18NI000000023X དེ་འབདཝ་ལས་ ལག་ལེན་པ་ཚུ་གིས་ ཨའི་ཨེམ་ཅིག་ འབོད་བརྡ་མ་འབད་བར་ གནས་གོང་ཚུ་ བརྟག་ཞིབ་འབད་ཚུགས།
+  ཞུན་དག་འབད་བཏུབ་པའི་ས་སྒོ་ཚུ་སྤང་ནི་: ཨའི་ཨེམ་ཨེསི་ཚུ་གིས་ ཀ་ན་འདི་ལོག་བྲིས་བཏུབ་ནི་དང་ ཡང་ན་ ཀླད་ཀོར་རྒྱ་ཚད་ཨང་རྟགས་ས་ཚིགས་ཚུ་བཙུགས་བཏུབ།
+- **སྔོན་སྒྲིག་མངའ་ཁོངས་ཀྱི་ཕན་བསླབ་འབདཝ་ཨིན།
+  I18NI000000024X མངའ་ཁོངས་, ཁ་ཐོག་ལུ་ མགོ་ཡིག་དྲན་སྐུལ་བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ རྗེས་འཇུག་དགོཔ་མེདཔ་ཨིན།
+  འཚོལ་ཞིབ་པ་ཚུ་གིས་ སེལ་འཐུ་འབད་བའི་སྐབས་ ཀེ་ནོ་ནིག་མངའ་ཁོངས་ཁ་ཡིག་འདི་ཡང་ འོད་རྟགས་བཀོད་དགོ།
+  ཟས་བཅུད་ཅིག་ཨིན་ བརྡ་སྟོནམ་ཨིན།
+- **IH58 QR པེ་ལོཌི་ཚུ་.** ཀིའུ་ཨར་ཨང་རྟགས་ཚུ་གིས་ ཨའི་ཨེཆ་༥༨ ཡིག་རྒྱུན་ཨེན་ཀོཌི་འབད་དགོ། གལ་ཏེ་ QR མི་རབས་ཡིན་ན།
+  འཐུས་ཤོར་, གཟུགས་བརྙན་སྟོངམ་ཅིག་གི་ཚབ་ལུ་ གསལ་རི་རི་འཛོལ་བ་ཅིག་བཀྲམ་སྟོན་འབད།
+- **བཤུད་སྒྲིལ་འབད་ཡོད་པའི་འབྲི་ཤོག་འདི་འདྲ་བཤུས་རྐྱབ་པའི་ཤུལ་ལས་ ཀ་བའིཊ་ཅིག་བཏོན་གཏང་།
+  བཞེས་སྒོ་འབད་མི་ཚུ་གིས་ ལག་ལེན་པ་ཚུ་ལུ་ དེ་ Sora-only དང་ IME manging ལུ་འབྱུང་སྲིད་ཟེར་དྲན་སྐུལ་འབདཝ་ཨིན།
 
-Following these guardrails prevents Unicode/IME corruption and satisfies the
-ADDR-6 roadmap acceptance criteria for wallet/explorer UX.
+འདི་གི་ཤུལ་ལས་ ཡུ་ནི་ཀོཌ་/ཨའི་ཨེམ་ལུ་ ངན་ལྷད་བཀག་ཆ་འབད་དེ་ བསམ་པ་རྫོགས་ཏེ་ཡོདཔ་ཨིན།
+ADDR-6 ལམ་གྱི་ས་ཁྲ་ དངུལ་ཁུག་/འཚོལ་ཞིབ་པ་ UX གི་དོན་ལུ་ ལམ་སྟོན་གྱི་ཁྱད་ཚད།
 
-## Screenshot fixtures
+## གཟབ་གཞིའི་སྒྲིག་ཆས།
 
-Use the following fixtures during localization reviews to ensure button labels,
-tooltips, and warnings stay aligned across platforms:
+ཨེབ་རྟ་ཁ་ཡིག་ཚུ་ངེས་གཏན་བཟོ་ནི་ལུ་ ས་གནས་ཀྱི་བསྐྱར་ཞིབ་ཚུ་གི་སྐབས་ལུ་ འོག་གི་སྒྲིག་བཀོད་ཚུ་ལག་ལེན་འཐབ།
+ལག་ཆས་བསླབ་བྱ་དང་ ཉེན་བརྡ་ཚུ་ སྟེགས་བུ་ཚུ་ནང་ལས་ཕར་ ཕྲང་སྒྲིག་སྦེ་སྡོདཔ་ཨིན།
 
-- Android reference: `/img/sns/address_copy_android.svg`
+- Android རྒྱབ་རྟེན་: I18NI0000025X
 
-  ![Android dual copy reference](/img/sns/address_copy_android.svg)
+  ![Android འདྲ་གཉིས་འདྲ་བཤུས།](/img/sns/address_copy_android.svg)
 
-- iOS reference: `/img/sns/address_copy_ios.svg`
+- iOS གཞི་བསྟུན་: I18NI0000026X
 
-  ![iOS dual copy reference](/img/sns/address_copy_ios.svg)
+  ![iOS གཉིས་ལྡན་གྱི་གཞི་བསྟུན་](I18NU0000015X)
 
-## SDK helpers
+## ཨེསི་ཌི་ཀེ་གྲོགས་རམ་པ།
 
-Each SDK exposes a convenience helper that returns the IH58 (preferred) and compressed (`sora`, second-best)
-forms alongside the warning string so UI layers can stay consistent:
+ཨེསི་ཌི་ཀེ་རེ་རེ་གིས་ ཨའི་ཨེཆ་༥༨ (དགའ་གདམ་) དང་ བསྡམ་བཞག་ཡོད་མི་ (`sora`, གཉིས་པ་) དང་ བསྡམ་བཞག་མི་ སྟབས་བདེ་བའི་གྲོགས་རམ་པ་ཅིག་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+ཉེན་བརྡའི་ཡིག་རྒྱུན་གྱི་མཉམ་དུ་འབྲི་ཤོག་ཚུ་ དེ་འབདཝ་ལས་ ཡུ་ཨའི་བང་རིམ་ཚུ་ རིམ་མཐུན་སྦེ་སྡོད་ཚུགས།
 
-- JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
-  (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` returns the compressed warning
-  string and appends it to `warnings` whenever callers provide a `sora…`
-  literal, so explorers/wallet dashboards can surface the Sora-only notice
-  during paste/validation flows instead of only when they generate the
-  compressed form themselves.
-- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
+- ཇ་བ་ཨིསི་ཀིརིཔ: I18NI0000028X
+  (I18NI0000029X)
+- ཇ་བ་ཨིསི་ཀིརིཔ་ཞིབ་དཔྱད་པ་: I18NI000000030X གིས་ བསྡམ་བཞག་ཡོད་པའི་ཉེན་བརྡ་སླར་ལོག་འབདཝ་ཨིན།
+  ཡིག་རྒྱུན་དང་ དེ་ `warnings` ལུ་ འབོད་བརྡ་གཏང་མི་ཚུ་གིས་ `sora…` བྱིན་པའི་སྐབས་ ཁ་སྐོང་འབདཝ་ཨིན།
+  literal, དེ་འབདཝ་ལས་ འཚོལ་ཞིབ་པ་/གྱང་ཁོག་ཚུ་ སོ་ར་རྐྱངམ་ཅིག་གི་བརྡ་དོན་འདི་ ཐོན་ཚུགས།
+  སྦྱར་བརྩེགས་/བདེན་དཔྱད་སྐབས་ དེ་གི་ཚབ་ལུ་ དེ་ཚུ་གིས་ བཏོན་པའི་སྐབས་རྐྱངམ་ཅིག་ མེན།
+  བསྡམ་བཞག་ཡོད་པའི་རྣམ་པ་རང་སོ།
+- པའི་ཐོན་: `AccountAddress.display_formats(network_prefix: int = 753)`
+- སུའིཕཊི་: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- ཇ་བ་/ཀོཊི་ལིན་: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-Use these helpers instead of reimplementing the encode logic in UI layers.
-The JavaScript helper also exposes a `selector` payload on `domainSummary`
-(`tag`, `digest_hex`, `registry_id`, `label`) so UIs can indicate whether a
-selector is Local-12 or registry-backed without re-parsing the raw payload.
+ཡུ་ཨའི་བང་རིམ་ཚུ་ནང་ ཨེན་ཀོཌི་ཚད་མ་འདི་ ལོག་ལག་ལེན་འཐབ་ནིའི་ཚབ་ལུ་ གྲོགས་རམ་འདི་ཚུ་ལག་ལེན་འཐབ།
+ཇ་བ་ཨིསི་ཀིརིཔཊི་གྲོགས་རམ་པ་འདི་གིས་ཡང་ I18NI000000038X གུ་ I18NI000000037X གི་སྤྲོད་ལེན་འབདཝ་ཨིན།
+(I18NI000000039X, I18NI0000004X, I18NI000000041X, དེ་འབདཝ་ལས་ UIs ཚུ་གིས་ a a a 1 1 18NI00000042X ལུ་སྟོན་ཚུགས།
+གདམ་འཐུ་འདི་ ཉེ་གནས་-༡༢ ཡང་ན་ ཐོ་བཀོད་ཀྱི་རྒྱབ་ཐག་འདི་ ལོག་སྤྲོད་མ་དགོ་པར་ ཐོ་བཀོད་འབདཝ་ཨིན།
 
-## Explorer instrumentation demo
+## འཚོལ་ཞིབ་འཕྲུལ་ཆས་ཀྱི་བརྡ་སྟོན།
 
-<ExplorerAddressCard />
+<ཕྱིར་འདོན་གྱི་ཨེ་ཌིརསི་ཀརཌ་ />
 
-Explorers should mirror the wallet telemetry and accessibility work:
+འཚོལ་ཞིབ་པ་ཚུ་གིས་ དངུལ་ཁུག་ཊེ་ལི་མི་ཊི་དང་ འཛུལ་སྤྱོད་ཀྱི་ལཱ་ཚུ་ མེ་མདའ་རྐྱབ་དགོ།
 
-- Apply `data-copy-mode="ih58|compressed|qr"` to copy buttons so front-ends can emit usage counters
-  alongside the Torii-side `torii_address_format_total` metric. The demo component above dispatches
-  an `iroha:address-copy` event with `{mode,timestamp}`—wire this into your analytics/telemetry
-  pipeline (e.g., push to Segment or a NORITO-backed collector) so dashboards can correlate server
-  address-format usage with client copy behaviour. Also mirror the Torii domain counters
-  (`torii_address_domain_total{domain_kind}`) in the same feed so Local-12 retirement reviews can
-  export a 30-day `domain_kind="local12"` zero-usage proof directly from the `address_ingest`
-  Grafana board.
-- Pair every control with distinct `aria-label`/`aria-describedby` hints that explain whether a
-  literal is safe to share (`IH58`) or Sora-only (compressed `sora`). Include the implicit-domain caption in
-  the description so assistive technology surfaces the same context shown visually.
-- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
-  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
+- གདོང་ཕྱོགས་ཚུ་གིས་ ལག་ལེན་འཐབ་སའི་ གྱངས་ཁ་ཚུ་ བཏོནམ་ལས་ ཨེབ་རྟ་ཚུ་འདྲ་བཤུས་རྐྱབ་ནི་ལུ་ I18NI000000043X འདི་ འཇུག་སྤྱོད་འབད།
+  མཉམ་དུ་ I18NT000000005X-side `torii_address_format_total` metric. ལྟག་ལུ་སྤྲོད་ཡོད་པའི་བརྡ་སྟོནམ་ཨིན།
+  I18NI000000045X དང་བཅས་ I18NI000000046X—འདི་ཁྱོད་རའི་དབྱེ་དཔྱད་/ལྕགས་རིགས་ནང་དུ་ གློག་ཐག་བཏང་ཡོད།
+  pipline (དཔེར་ན་ ཆ་ཤས་ཚུ་ཡང་ན་ NORITO-back བསྡུ་སྒྲིག་འབད་མི་) དེ་འབདཝ་ལས་ ཌེཤ་བོརཌི་ཚུ་གིས་ སར་བར་འདི་ འབྲེལ་མཐུད་འབད་ཚུགས།
+  ཁ་བྱང་-རྩ་སྒྲིག་ལག་ལེན་འདི་ མཁོ་སྤྲོད་པ་འདྲ་བཤུས་སྤྱོད་ལམ་དང་གཅིག་ཁར་ཨིན། ད་རུང་ Torii ཌོ་མེན་གྱངས་ཁ་ཚུ་ཡང་ མེ་ལོང་བཟོ།
+  (I18NI000000047X) དེ་དང་འདྲ་བའི་ ཕིཌ་ནང་ དེ་འབདཝ་ལས་ ས་གནས་-༡༢ དགོངས་ཞུའི་བསྐྱར་ཞིབ་ཚུ་ འབད་ཚུགས།
+  ཉིན་གྲངས་ ༣༠ གི་ I18NI000000048X ཀླད་ཀོར་ཀླད་ཀོར་གྱི་བདེན་ཁུངས་ཅིག་ `address_ingest` ལས་ཐད་ཀར་དུ་ཕྱིར་འདྲེན་འབད།
+  I18NT0000000X བགྲེས།
+- མ་འདྲཝ་ I18NI000000050X/`aria-describedby` གིས་ ཚད་འཛིན་ག་ར་ ཆ་སྒྲིག་འབད།
+  ཚིག་དོན་འདི་ བརྗེ་སོར་འབད་ནི་ལུ་ ཉེན་སྲུང་ཡོདཔ་ཨིན། (I18NI0000052X) ཡང་ན་ སོ་ར་རྐྱངམ་ཅིག་ (བསྡམ་བཞག་མི་ I18NI0000000053X)། ནང་ བརྡ་རྟགས་མངའ་ཁོངས་ མགོ་ཡིག་བཙུགས།
+  འགྲེལ་བཤད་འདི་ དེ་འབདཝ་ལས་ ཕན་ཐོགས་ཅན་གྱི་འཕྲུལ་རིག་འདི་ མཐོང་སྣང་གིས་སྟོན་ཡོད་པའི་ སྐབས་དོན་གཅིག་ཨིན།
+- མི་ཚེའི་ལུང་ཕྱོགས་ (དཔེར་ན་ `<output aria-live="polite">…</output>`) འདྲ་བཤུས་གྲུབ་འབྲས་གསལ་བསྒྲགས་འབདཝ་ཨིན།
+  ཉེན་བརྡ་ཚུ་ VoiceOver/TalkBack གི་སྤྱོད་ལམ་དང་མཐུན་སྒྲིག་འབད་དེ་ ད་ལྟོ་ Swift/Android དཔེ་ཚད་ནང་ལུ་ གློག་ཐག་བཏང་ཡོདཔ་ཨིན།
 
-This instrumentation satisfies ADDR-6b by proving operators can observe both Torii ingestion and
-client-side copy modes before Local selectors are disabled.
+འ་ནི་ལག་ཆས་འདི་གིས་ ADDR-6b འདི་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ Torii བཙུགས་ནི་དང་ ཟ་སྤྱོད་འབད་ནི་གཉིས་ཆ་ར་ བལྟ་ཚུགས།
+ཉེ་གནས་འདེམས་སྒྲུག་ཚུ་ ལྕོགས་མིན་བཟོ་བའི་ཧེ་མར་ མཁོ་སྤྲོད་པ་-ཟུར་པའི་འདྲ་བཤུས་ཐབས་ལམ་ཚུ་ ལྕོགས་མིན་ཨིན།
 
-## Local → Global migration toolkit
+## ལོག → ཡོངས་ཁྱབ་གནས་སྤོའི་ལག་ཆས་ཁམས།
 
-Use the [Local → Global toolkit](local-to-global-toolkit.md) to automate
-JSON audit report and the converted preferred IH58 / second-best compressed (`sora`) list that operators attach
-to readiness tickets, while the accompanying runbook links the Grafana
-dashboards and Alertmanager rules that gate the strict-mode cutover.
+རང་བཞིན་གྱིས་ [ས་གནས་ → ཡོངས་ཁྱབ་ལག་ཆས་ཆས་](I18NU0000016X) ལག་ལེན་འཐབ།
+JSON རྩིས་ཞིབ་སྙན་ཞུ་དང་ གཞི་བསྒྱུར་འབད་ཡོད་པའི་ IH58 / གཉིས་པ་ བསྡམ་བཞག་ཡོད་པའི་ (Torii) ཐོ་ཡིག་འདི་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མཉམ་སྦྲགས་འབད་མི་ ཐོ་ཡིག་ལུ་དགའ་གདམ་འབད་ཡོདཔ་ཨིན།
+to to to fory ཤོག་འཛིན་ མཉམ་དུ་འགྲོ་བའི་རྔ་དེབ་འདི་ I18NT0000001X འབྲེལ་མཐུད་འབདཝ་ཨིན།
+dashboods དང་ Alertmanager གིས་ དམ་དམ་སྦེ་ དམ་དམ་སྦེ་ བཀག་ཆ་འབད་མི་འདི་ བཀག་ཆ་འབདཝ་ཨིན།
 
-## Binary layout quick reference (ADDR-1a)
+## གཉིས་ལྡན་བཀོད་སྒྲིག་མགྱོགས་དྲགས་སྦེ་གཞི་བསྟུན་ (ADDR-1a)
 
-When SDKs surface advanced address tooling (inspectors, validation hints,
-manifest builders), point developers at the canonical wire format captured in
-`docs/account_structure.md`. The layout is always
-`header · selector · controller`, where the header bits are:
+ཨེསི་ཌི་ཀེ་ཚུ་ གོང་འཕེལ་ཅན་གྱི་ཁ་བྱང་ལག་ཆས་ཚུ་ ཁ་ཐོག་ལུ་ཡོད་པའི་སྐབས་ (བརྟག་དཔྱད་པ་ཚུ་ བདེན་དཔྱད་ཀྱི་བརྡ་སྟོན།
+གསལ་སྟོན་པ་), 2 2 ནང་འཛིན་བཟུང་བྱས།
+`0x00`. བཀོད་སྒྲིག་འདི་ཨ་རྟག་རང་ཨིན།
+I18NI000000057X, མགོ་ཡིག་བིཊི་ཚུ་ཡོད་སའི་:
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -123,14 +125,14 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-- `addr_version = 0` (bits 7‑5) today; non-zero values are reserved and must
-  raise `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class` distinguishes single (`0`) vs multisig (`1`) controllers.
-- `norm_version = 1` encodes the Norm v1 selector rules. Future norms will reuse
-  the same 2-bit field.
-- `ext_flag` is always `0`—set bits indicate unsupported payload extensions.
+- ད་རིས་ I18NI000000058X (bits7‐5); ཀླད་ཀོར་མེན་པའི་གནས་གོང་ཚུ་ གསོག་འཇོག་འབད་ཡོདཔ་དང་ དགོས་མཁོ་ཡོད།
+  `AccountAddressError::InvalidHeaderVersion` ཡར་འཕར།
+- I18NI0000000060X གིས་ རྐྱང་པ་ (`0`) vs མལ་ཊི་སིག་ (I18NI000000062X) ཚད་འཛིན་ཚུ་ དབྱེ་བ་ཕྱེ་ཚུགས།
+- I18NI000000063X གིས་ Normv1 སེལ་འཐུ་འབད་མི་ལམ་ལུགས་ཚུ་ ཨིན་ཀོ་འབདཝ་ཨིན། མ་འོངས་པའི་ལམ་ལུགས་ཚུ་ ལོག་ལག་ལེན་འཐབ་འོང་།
+  དེ་དང་འདྲ་བའི་ ༢-བིཊི་ས་སྒོ་།
+- I18NI000000064X འདི་རྟག་བུ་རང་ I18NI000000065X ཨིན།
 
-The selector immediately follows the header:
+སེལ་འཐུ་འབད་མི་འདི་གིས་ དེ་འཕྲོ་ལས་ མགོ་ཡིག་གི་རྗེས་སུ་འབྲངམ་ཨིན།
 
 ```
 ┌──────────┬──────────────────────────────────────────────┐
@@ -138,35 +140,35 @@ The selector immediately follows the header:
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-UI and SDK surfaces should be ready to display the selector kind:
+ཡུ་ཨའི་ དང་ ཨེསི་ཌི་ཀེ་ ཁ་ཐོག་ཚུ་ སེལ་འཐུ་འབད་མི་ དབྱེ་བ་བཀྲམ་སྟོན་འབད་ནི་ལུ་ གྲ་སྒྲིག་འབད་དགོ།
 
-- `0x00` = implicit default domain (no payload).
-- `0x01` = local digest (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = global registry entry (big-endian `registry_id:u32`).
+- `0x00` = བརྡ་རྟགས་སྔོན་སྒྲིག་མངའ་ཁོངས་ (pataload མེད་)།
+- I18NI0000000067X = ས་གནས་ཀྱི་བཞུ་བཅོས་ (༡༢-བཱའིཊི་ `blake2s_mac("SORA-LOCAL-K:v1", label)`).
+- I18NI000000069X = འཛམ་གླིང་ཐོ་བཀོད་ཐོ་བཀོད་ (Big I18NI0000070X).
 
-Canonical hex examples that wallet tooling can link or embed in docs/tests:
+དངུལ་ཁུག་ལག་ཆས་འདི་གིས་ ཡིག་ཆ་/བརྟག་དཔྱད་ཚུ་ནང་ འབྲེལ་མཐུད་ཡང་ན་ བཙུགས་ཚུགས།
 
-| Selector kind | Canonical hex |
-|---------------|---------------|
-| Implicit default | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Global registry (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
+| གདམ་ཁའི་རིགས་ | ཀེན་ནོ་ཀལ་ཧེགསི་ |
+|-------------------------------------|
+| སྔོན་སྒྲིག་སྔོན་སྒྲིག་ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| ས་གནས་ཀྱི་བཞུ་བཅོས་ (I18NI000000072X) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
+| འཛམ་གླིང་ཐོ་བཀོད་ (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
-Refer to `docs/source/references/address_norm_v1.md` for the full selector/state
-table and `docs/account_structure.md` for the complete byte diagram.
+སེལ་འཐུ་འབད་མི་/གནས་སྟངས་ཆ་ཚང་གི་དོན་ལུ་ I18NI000000076X ལུ་བལྟ།
+བཱའིཊི་རི་མོ་ཆ་ཚང་གི་དོན་ལུ་ ཐིག་ཁྲམ་དང་ `docs/account_structure.md` ཨིན།
 
-## Enforcing canonical forms
+## སྒྲིག་གཞི་འབྲི་ཤོག་ཚུ་བསྟར་སྤྱོད་འབད་དོ།
 
-strings must follow the CLI workflow documented under ADDR-5:
+ཡིག་རྒྱུན་ཚུ་གིས་ ཨེ་ཌི་ཌི་ཨར་-༥ གི་འོག་ལུ་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ སི་ཨེལ་ཨའི་ ལཱ་གི་རྒྱུན་རིམ་ལུ་ རྗེས་སུ་འཇུག་དགོ།
 
-1. `iroha tools address inspect` now emits a structured JSON summary with IH58,
-   compressed, and canonical hex payloads. The summary also includes a `domain`
-   object with `kind`/`warning` fields and echoes any provided domain via the
-   `input_domain` field. When `kind` is `local12`, the CLI prints a warning to
-   stderr and the JSON summary echoes the same guidance so CI pipelines and SDKs
-   can surface it. Pass `--append-domain` whenever you want the converted
-   encoding replayed as `<ih58>@<domain>`.
-2. SDKs can surface the same warning/summary via the JavaScript helper:
+1. I18NI0000000078X གིས་ད་ལྟ་IH58 དང་མཉམ་དུ་བཀོད་སྒྲིག་བྱས་པའི་JSONབཅུད་བསྡུས་ཅིག་བཏོནམ་ཨིན།
+   བསྡམ་བཞག་ཡོདཔ་དང་ ཀེ་ནོ་ནིག་ཧེགསི་པེ་ལོཌ་ཚུ། བཅུད་བསྡུས་འདི་ནང་ `domain` ཡང་ཚུདཔ་ཨིན།
+   དངོས་པོ་ I18NI0000000800000X/I18NI0000081X དང་ བརྒྱུད་དེ་ མངའ་ཁོངས་གང་རུང་བྱིན་ཡོདཔ་ཨིན།
+   `input_domain` ས་སྒོ། `kind` འདི་ `local12` ཨིན་པ་ཅིན་ CLI གིས་ ཉེན་བརྡ་ཅིག་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
+   stderr དང་ JSON བཅུད་བསྡུས་འདི་གིས་ ལམ་སྟོན་གཅིག་མཚུངས་འབདཝ་ལས་ CI གི་མདོང་ལམ་དང་ SDKs ཚུ་ བསྐྱར་སྒྲོག་འབདཝ་ཨིན།
+   འདི་ཁ་ཐོག་ལུ་འབད་ཚུགས། གཞི་བསྒྱུར་འབད་དགོ་པའི་སྐབས་ `--append-domain` འདི་ བརྒྱུད་སྤྲོད་འབད།
+   ཨིན་ཀོ་ཌིང་འདི་ `<ih58>@<domain>` སྦེ་བསྐྱར་རྩེད་འབད་ཡོདཔ།
+2. ཨེསི་ཌི་ཀེ་ཚུ་གིས་ ཇ་བ་ཨིསི་ཀིརིཔཊི་གྲོགས་རམ་བརྒྱུད་དེ་ ཉེན་བརྡ་/བཅུད་བསྡུས་ཅོག་འཐདཔ་འདི་ གཅིག་མཚུངས་སྦེ་ཐོན་ཚུགས།
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -177,69 +179,67 @@ strings must follow the CLI workflow documented under ADDR-5:
    }
    console.log(summary.ih58.value, summary.compressed);
    ```
-  The helper preserves the IH58 prefix detected from the literal unless you
-  explicitly provide `networkPrefix`, so summaries for non-default networks do
-  not silently re-render with the default prefix.
+  གྲོགས་རམ་པ་གིས་ ཁྱོད་མ་གཏོགས་ ཡིག་འབྲུ་ལས་ ཤེས་རྟོགས་བྱུང་མི་ IH58 སྔོན་ཚིག་འདི་ ཉམས་སྲུང་འབདཝ་ཨིན།
+  གསལ་ཏོག་ཏོ་སྦེ་ `networkPrefix` བྱིན་དོ་ཡོདཔ་ལས་ སྔོན་སྒྲིག་མེན་པའི་ཡོངས་འབྲེལ་ཚུ་གི་དོན་ལུ་ བཅུད་བསྡུས་ཚུ་འབདཝ་ཨིན།
+  སྔོན་སྒྲིག་སྔོན་ཚིག་དང་གཅིག་ཁར་ ཁུ་སིམ་སིམ་སྦེ་ བསྐྱར་ལོག་འབད་མི་བཏུབ།
 
-3. Convert the canonical payload by reusing the `ih58.value` or `compressed`
-   fields from the summary (or request another encoding via `--format`). These
-   strings are already safe to share externally.
-4. Update manifests, registries, and customer-facing documents with the
-   canonical form and notify counterparties that Local selectors will be
-   rejected once the cutover completes.
-5. For bulk data sets, run
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
-   reads newline-separated literals (comments starting with `#` are ignored, and
-   `--input -` or no flag uses STDIN), emits a JSON report with
-   canonical/preferred IH58/second-best compressed (`sora`) summaries for every entry, and counts both parse
-   dumps that contain junk rows, and gate automation with `--fail-on-warning`
-   once operators are ready to block Local selectors in CI.
-6. When you need a newline-to-newline rewrite, use
-  For Local-selector remediation spreadsheets, use
-  to export a `input,status,format,…` CSV that highlights canonical encodings, warnings, and parse failures in one pass.
-   The helper skips non-Local rows by default, converts every remaining entry
-   into the requested encoding (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the
-   original domain when `--append-domain` is set. Pair it with `--allow-errors`
-   to keep scanning even when a dump contains malformed literals.
-7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts
-   the Local selectors from `fixtures/account/address_vectors.json`, converts
-   them via `iroha tools address normalize`, and replays
-   `iroha tools address audit --fail-on-warning` to prove releases no longer emit
-   Local digests.
-
-`torii_address_local8_total{endpoint}` plus
+༣ I18NI0000088X ཡང་ན་ `compressed` ལོག་སྟེ་ལག་ལེན་འཐབ་ཐོག་ལས་ ཀེ་ནོ་ནིག་པེ་ལོཌ་འདི་ གཞི་བསྟུན་འབད།
+   བཅུད་བསྡུས་ལས་ ས་སྒོ་ཚུ་ (ཡང་ན་ `--format` བརྒྱུད་དེ་ ཨིན་ཀོ་ཌིང་གཞན་ཅིག་ཞུ་བ་འབད།) འ་ནཱི་འདི་ཚུ
+   ཡིག་རྒྱུན་ཚུ་ཧེ་མ་ལས་རང་ཕྱི་ཁར་བརྗེ་སོར་འབད་ནི་ལུ་ཉེན་སྲུང་ཡོདཔ་ཨིན།
+༤ དུས་མཐུན་གྱི་གསལ་སྟོན་དང་ ཐོ་བཀོད་ཚུ་ དེ་ལས་ ཚོང་མགྲོན་པ་ལུ་གདོང་ལེན་འབད་མི་ཡིག་ཆ་ཚུ་ ༡ ༡ ༡ དང་གཅིག་ཁར་ཨིན།
+   ཀེ་ནོ་ནིཀ་འབྲི་ཤོག་དང་ ཕྱོགས་ཕྱོགས་ཚུ་ལུ་ ཉེ་གནས་འདེམས་སྒྲུག་ཚུ་ཨིན་ཟེར་སླབ་ཨིན།
+   བཏོག་འདི་མཇུག་བསྡུ་ཞིནམ་ལས་ ངོས་ལེན་མ་འབད་བས།
+5. གནད་སྡུད་ཆ་ཚང་ཚུ་གི་དོན་ལུ་ གཡོག་བཀོལ།
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. བརྡ་བཀོད་འདི།
+   གྲལ་ཐིག་གསརཔ་སོ་སོ་སྦེ་ཁ་ཕྱེ་ཡོད་པའི་ཡིག་འབྲུ (I18NI0000092X དང་ཅིག་ཁར་འགོ་བཙུགས་ཡོད་པའི་བསམ་འཆར་ཚུ་ སྣང་མེད་བཞག་སྟེ་ཡོདཔ་ཨིན།
+   `--input -` ཡང་ན་ དར་ཆ་གིས་ STDIN ལག་ལེན་འཐབ་མི་བཏུབ་) གིས་ JSON སྙན་ཞུ་དང་གཅིག་ཁར་ བཏོནམ་ཨིན།
+   ཀེ་ནོ་ཀལ་/དགའ་གདམ་ཅན་གྱི་ཨའི་ཨེཆ་༥༨/སྐར་ཆ་དྲག་ཤོས་བསྡམ་བཞག་ཡོད་མི་ (`sora`) ཐོ་བཀོད་རེ་རེ་གི་དོན་ལུ་ བཅུད་བསྡུས་ཚུ་, དང་ མིང་དཔྱད་གཉིས་ཆ་ར་གིས་ རྩིས་རྐྱབ་ཨིན།
+   གྱལ་རིམ་ཚུ་ཡོད་མི་ ས་བརྐོ་ནི་དང་ I18NI0000095X དང་གཅིག་ཁར་ སྒོ་སྒྲིག་རང་བཞིན་གྱིས་ བཀོ་ནི།
+   བཀོལ་སྤྱོད་པ་ཚུ་ CI ནང་ ཉེ་གནས་སེལ་འཐུ་འབད་མི་ཚུ་ བཀག་ཆ་འབད་ནི་ལུ་ གྲ་སྒྲིག་ཡོདཔ་ཨིན།
+༦ ཁྱོད་ལུ་ ཐིག་གསརཔ་ལས་ གསརཔ་དགོཔ་ད་ ལག་ལེན་འཐབ།
+  ཉེ་གནས་-གདམ་ཁ་ཅན་གྱི་བཅོ་ཁ་ཤོག་ཁྲམ་ཚུ་གི་དོན་ལུ་ ལག་ལེན་འཐབ།
+  `input,status,format,…` ཅིག་ཕྱིར་འདྲེན་འབད་ནིའི་དོན་ལུ་ ཆོག་ཐམ་གཅིག་ནང་ ཀེ་ནོ་ནིག་ཨེན་ཀོ་ཌིང་དང་ ཉེན་བརྡ་ དེ་ལས་ འཐུས་ཤོར་ཚུ་ གཙོ་བོར་བཏོནམ་ཨིན།
+   གྲོགས་རམ་པ་དེ་གིས་ སྔོན་སྒྲིག་གིས་ གནས་ས་མེན་པའི་གྲལ་ཐིག་ཚུ་གོམ་འགྱོཝ་ཨིན་ དེ་གིས་ ལྷག་ལུས་ཐོ་བཀོད་ཆ་མཉམ་ལུ་གཞི་བསྒྱུར་འབདཝ་ཨིན།
+   ཞུ་བ་འབད་ཡོད་པའི་ཨེན་ཀོ་ཌིང་ནང་ལུ་ (IH58 དང་འདོད་/བསྡོམས་རྩིས་ (`sora`) གཉིས་པ་/དྲག་ཤོས་/ཧེགསི་/JSON) དེ་ལས་ ཉམས་སྲུང་འབདཝ་ཨིན།
+   `--append-domain` གཞི་སྒྲིག་འབད་བའི་སྐབས་ མངའ་ཁོངས་ངོ་མ། `--allow-errors` དང་མཉམ་དུ།
+   བླུག་སའི་ ལེབ་ལེབ་ཚུ་ཡོད་རུང་ པར་ལོག་བཏབ་ནིའི་དོན་ལུ་ཡང་ པར་ལེན་འབད་ནི།
+7. CI/lint རང་བཞིན་གྱིས་ I18NI000000100X གཡོག་བཀོལ་ཚུགས།
+   I18NI000001010 ལས་ ཉེ་གནས་འདེམས་སྒྲུག་ཚུ་ གཞི་བསྒྱུར་འབདཝ་ཨིན།
+   དེ་དག་བརྒྱུད་ནས་ `iroha tools address normalize` དང་།
+   `iroha tools address audit --fail-on-warning` གསར་བཏོན་ཚུ་ ད་ལས་ཕར་ ཕྱིར་བཏོན་འབད་མི་བཏུབ་པས།
+   ས་གནས་ཀྱི་ཟས་འཇུ་ནི།`torii_address_local8_total{endpoint}` དང་།
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, and the
-Grafana board `dashboards/grafana/address_ingest.json` provide the enforcement
-signal: once production dashboards show zero legitimate Local submissions and
-zero Local-12 collisions for 30 consecutive days, Torii will flip the Local-8
-gate to hard-fail on mainnet, followed by Local-12 once global domains have
-matching registry entries. Consider the CLI output the operator-facing notice
-for this freeze—the same warning string is used across SDK tooltips and
-automation to keep parity with the roadmap exit criteria. Torii now defaults to
-when diagnosing regressions. Keep mirroring `torii_address_domain_total{domain_kind}`
-into Grafana (`dashboards/grafana/address_ingest.json`) so the ADDR-7 evidence pack
-can prove `domain_kind="local12"` stayed at zero for the required 30-day window before
-(`dashboards/alerts/address_ingest_rules.yml`) adds three guardrails:
+`torii_address_collision_domain_total{endpoint,domain}`, དང་།
+I18NT0000002X བཀོད་སྒྲིག་ `dashboards/grafana/address_ingest.json` བཀག་སྡོམ་བྱེད་པ།
+བརྡ་རྟགས་: ཐོན་རྫས་ཀྱི་ བརྡ་དོན་བཀོད་སྒྲིག་ཚུ་གིས་ ཁྲིམས་མཐུན་གྱི་ ཁྲིམས་མཐུན་གྱི་ ཞུ་ཡིག་ཚུ་ དང་།
+ཀླད་ཀོར་གྱི་ས་གནས་-༡༢ ཁ་ཐུག་རྐྱབ་མི་ཚུ་ ཉིནམ་༣༠ གི་རིང་ལུ་ Torii གིས་ ས་གནས་ཀྱི་-༨ འདི་ གཡོག་བཀོལ་འོང་།
+འཛམ་གླིང་ཡོངས་ཀྱི་མངའ་ཁོངས་ཚུ་ནང་ ཚར་གཅིག་ ས་གནས་-༡༢ གི་ཤུལ་ལས་ འཛུལ་སྒོ་འབད་ནི།
+ཐོ་བཀོད་ཐོ་བཀོད་ཚུ་མཐུན་སྒྲིག་འབད། བཀོལ་སྤྱོད་པའི་གདོང་ཕྱོགས་བརྡ་དོན་འདི་ སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་ལུ་བརྩི་འཇོག་འབད།
+གྱང་འདི་གི་དོན་ལུ་—ཉེན་བརྡའི་ཡིག་རྒྱུན་གཅིགཔོ་འདི་ ཨེསི་ཌི་ཀེ་ལག་ཆས་ཚུ་དང་ བརྒྱུད་དེ་ལག་ལེན་འཐབ་ཨིན།
+ལམ་གྱི་ས་ཁྲ་ཕྱིར་ཐོན་ཚད་གཞི་དང་གཅིག་ཁར་ ཆ་སྙོམས་བཞག་ནི་ལུ་ རང་བཞིན་བཟུམ། Torii ད་ལྟ་ ༡ ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
+འགྱུར་ལྡོག་ཚུ་བརྟག་དཔྱད་འབད་བའི་སྐབས། `torii_address_domain_total{domain_kind}` མེ་ལོང་བཞག།
+in Grafana (`dashboards/grafana/address_ingest.json`) དེ་འབདཝ་ལས་ ADDR-7 སྒྲུབ་བྱེད་ཐུམ་སྒྲིལ་ནང་ལུ།
+ཉིན་གྲངས་ ༣༠ གྱི་སྒོ་སྒྲིག་འདི་གི་དོན་ལུ་ `domain_kind="local12"` འདི་ ཀླད་ཀོར་ནང་སྡོད་ཡོདཔ་ཨིན།
+(I18NI000000111X) གིས་ ལྟ་རྟོག་པ་གསུམ་ཁ་སྐོང་འབདཝ་ཨིན།
 
-- `AddressLocal8Resurgence` pages whenever a context reports a fresh Local-8
-  increment. Halt strict-mode rollouts, locate the offending SDK surface in the
-  until the signal returns to zero—then restore the default (`true`).
-- `AddressLocal12Collision` fires when two Local-12 labels hash to the same
-  digest. Pause manifest promotions, run the Local → Global toolkit to audit
-  the digest mapping, and coordinate with Nexus governance before reissuing the
-  registry entry or re-enabling downstream rollouts.
-- `AddressInvalidRatioSlo` warns when the fleet-wide invalid ratio (excluding
-  Local-8/strict-mode rejections) exceeds the 0.1 % SLO for ten minutes. Use
-  `torii_address_invalid_total` to pinpoint the responsible context/reason and
-  coordinate with the owning SDK team before re-enabling strict mode.
+- `AddressLocal8Resurgence` སྐབས་དོན་གཅིག་གིས་ ལོབ་ལོ་ཡལ་-༨ གསརཔ་ཅིག་སྙན་ཞུ་འབད་བའི་སྐབས་ ཤོག་ལེབ་ཚུ།
+  ཡར་སེང་། དམ་དམ་སྦེ་ དམ་དམ་སྦེ་ བཀག་འཛིན་འབད་དེ་ ཉེས་འཛུགས་ཅན་གྱི་ ཨེསི་ཌི་ཀེ་ ཁ་ཐོག་འདི་ འཚོལ་ཞིབ་འབད།
+  བརྡ་རྟགས་འདི་ ཀླད་ཀོར་ལུ་ལོག་འོང་—དེ་ལས་ སྔོན་སྒྲིག་ (`true`) སླར་གསོ་འབད་ཚུན་ཚོད་ཨིན།
+- I18NI000000114X འདི་ གཅིག་པ་ལུ་ ས་གནས་ཀྱི་-༡༢ ཁ་ཡིག་ཧེ་ཤི་འབད་བའི་སྐབས་ མེ་བཏངམ་ཨིན།
+  འཇའ་ཚོན། གསལ་སྟོན་གྱི་ཡར་འཕེལ་ཚུ་ ངལ་གསོ་འབད་ནི།, ཉེ་གནས་ → ཡོངས་ཁྱབ་ལག་ཆས་ཆས་འདི་རྩིས་ཞིབ་ལུ་གཡོག་བཀོལ།
+  བཞུ་བའི་སབ་ཁྲ་བཟོ་ནི་དང་ Nexus གཞུང་སྐྱོང་དང་གཅིག་ཁར་ མཉམ་འབྲེལ་འབདཝ་ཨིན།
+  ཐོ་བཀོད་ཐོ་བཀོད་ཡང་ན་ མར་གྱི་མར་འབབ་ཚུ་ ལོག་བཙུགས་ནི།
+- I18NI000000115X གིས་ གྲུ་གཟིངས་རྒྱ་ཆེ་བའི་ ཆ་མེད་ (མ་བརྩིས་བར་ མ་བརྩིས་བར་ ཉེན་བརྡ་འབདཝ་ཨིན།
+  ས་གནས་ཀྱི་-༨/ཐབས་ལམ་བཀག་ཆ་ཚུ་) སྐར་མ་བཅུ་ཐམ་གྱི་དོན་ལུ་ ༠.༡% SLO ལས་ལྷག་སྟེ་ཡོདཔ་ཨིན། ལག་ལེན་འཐབ་ནི
+  `torii_address_invalid_total` འགན་འཁྲི་ཅན་གྱི་སྐབས་དོན་/རྒྱུ་མཚན་དང་ དང་།
+  བདག་དབང་ཅན་གྱི་ SDK སྡེ་ཚན་དང་གཅིག་ཁར་ དམ་དམ་སྦེ་ ཐབས་ལམ་བསྐྱར་བཟོ་མ་འབད་བའི་ཧེ་མ་ མཉམ་འབྲེལ་འབད།
 
-### Release note snippet (wallet & explorer)
+### དྲན་ཐོ་ པར་ལེན་ (ཝ་ལེཊ་དང་ འཚོལ་ཞིབ་པ་) གསར་བཏོན་འབད།
 
-Include the following bullet in the wallet/explorer release notes when shipping
-the cutover:
+གྲུ་བཏང་པའི་སྐབས་ དངུལ་ཁུག་/འཚོལ་ཞིབ་གསར་བཏོན་དྲན་ཐོ་ཚུ་ནང་ འོག་གི་མདའ་རྟགས་ཚུ་བཙུགས།
+གཅོད་ཚད།
 
-> **Addresses:** Added the `iroha tools address normalize --only-local --append-domain`
-> helper and wired it into CI (`ci/check_address_normalize.sh`) so wallet/explorer
-> before Local-8/Local-12 are blocked on mainnet. Update any custom exports to
-> run the command and attach the normalized list to the release evidence bundle.
+> **ཁ་བྱང་ཚུ་:** `iroha tools address normalize --only-local --append-domain` ཁ་སྐོང་འབད་ཡོདཔ།
+> རོགས་རམ་འབད་དེ་ CI (`ci/check_address_normalize.sh`) ནང་ གློག་ཐག་བཏང་ཡོདཔ་ལས་ ཝ་ལེཊ་/འཚོལ་ཞིབ་པ།
+> ས་གནས་-༨/ས་གནས་-༡༢ དེ་ མེན་ནེཊི་གུ་བཀག་བཞག་པའི་ཧེ་མ། སྲོལ་སྒྲིག་ཕྱིར་འདྲེན་གང་རུང་ལུ་དུས་མཐུན་བཟོ།
+> བརྡ་བཀོད་འདི་གཡོག་བཀོལ་ཞིནམ་ལས་ གསར་བཏོན་འབད་ཡོད་པའི་སྒྲུབ་བྱེད་བཱན་ཌལ་ལུ་ སྤྱིར་བཏང་བཟོ་ཡོད་པའི་ཐོ་ཡིག་འདི་མཉམ་སྦྲགས་འབད།

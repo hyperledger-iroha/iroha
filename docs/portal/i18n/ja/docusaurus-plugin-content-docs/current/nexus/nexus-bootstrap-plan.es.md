@@ -4,101 +4,101 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: nexus-bootstrap-plan
-title: Bootstrap y observabilidad de Sora Nexus
-description: Plan operativo para poner en linea el cluster central de validadores Nexus antes de agregar servicios SoraFS y SoraNet.
+title: ソラ Nexus のブートストラップと観察可能性
+説明: 有効なクラスターの中心となる運用計画 Nexus および統合サービス SoraFS および SoraNet。
 ---
 
-:::note Fuente canonica
-Esta pagina refleja `docs/source/soranexus_bootstrap_plan.md`. Manten ambas copias alineadas hasta que las versiones localizadas lleguen al portal.
+:::ノート フエンテ カノニカ
+エスタページナリフレジャ`docs/source/soranexus_bootstrap_plan.md`。 Manten ambas alineadas hasta que las versiones localizadas lleguen al portal。
 :::
 
-# Plan de bootstrap y observabilidad de Sora Nexus
+# ブートストラップとソラの観察を計画 Nexus
 
-## Objetivos
-- Levantar la red base de validadores/observadores de Sora Nexus con llaves de gobernanza, APIs de Torii y monitoreo de consenso.
-- Validar servicios centrales (Torii, consenso, persistencia) antes de habilitar despliegues piggyback de SoraFS/SoraNet.
-- Establecer workflows de CI/CD y dashboards/alertas de observabilidad para asegurar la salud de la red.
+## オブジェクト
+- Levantar は、Sora Nexus の有効な検証/監視の赤い基地、Gobernanza の API、Torii の監視およびコンセンサスの監視を行います。
+- 中央サービス (Torii、コンセンサス、永続化) は、SoraFS/SoraNet に便乗して利用可能です。
+- CI/CD およびダッシュボード/アラートのワークフローを監視し、安全な状態で監視します。
 
-## Prerequisitos
-- Material de llaves de gobernanza (multisig del consejo, llaves de comite) disponible en HSM o Vault.
-- Infraestructura base (clusters Kubernetes o nodos bare-metal) en regiones primaria/secundaria.
-- Configuracion bootstrap actualizada (`configs/nexus/bootstrap/*.toml`) que refleje los ultimos parametros de consenso.
+## 前提条件
+- HSM または Vault で管理される資料 (multisig del consejo、llaves de comite)。
+- インフラストラクチャ ベース (クラスタ Kubernetes またはノード ベアメタル) プライマリ/セカンダリア リージョン。
+- ブートストラップの実際の構成 (`configs/nexus/bootstrap/*.toml`) は、コンセンサスの究極のパラメータを参照します。
 
-## Entornos de red
-- Operar dos entornos Nexus con prefijos de red distintos:
-- **Sora Nexus (mainnet)** - prefijo de red de produccion `nexus`, hospedando la gobernanza canonica y servicios piggyback de SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefijo de red de staging `testus`, que espeja la configuracion de mainnet para pruebas de integracion y validacion pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Mantener archivos genesis separados, llaves de gobernanza y huellas de infraestructura para cada entorno. Testus actua como el banco de pruebas de todos los rollouts SoraFS/SoraNet antes de promover a Nexus.
-- Las pipelines de CI/CD deben desplegar primero en Testus, ejecutar smoke tests automatizados, y requerir promocion manual a Nexus una vez que pasen los checks.
-- Los bundles de configuracion de referencia viven en `configs/soranexus/nexus/` (mainnet) y `configs/soranexus/testus/` (testnet), cada uno con `config.toml`, `genesis.json` y directorios de admision Torii de ejemplo.
+## エントルノス・デ・レッド
+- 赤いディスティントのオペレーター Nexus:
+- **Sora Nexus (メインネット)** - `nexus` の生産準備、SoraFS/SoraNet のピギーバック サービスの提供 (チェーン ID `0x02F1` / UUID) `00000000-0000-0000-0000-000000000753`)。
+- **Sora Testus (テストネット)** - ステージング `testus` の赤、リリース前の統合と検証におけるメインネットの構成の確認 (チェーン UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)。
+- セパラドスの発生源、ラベス デ ゴベルナンザ、およびインフラストラクチャーの管理を管理します。 Testus actua como el banco de pruebas de todos los rollouts SoraFS/SoraNet antes de promover a Nexus。
+- テスト用の CI/CD のパイプライン、自動排煙テスト、プロモーション マニュアル、Nexus の検査が必要です。
+- `configs/soranexus/nexus/` (メインネット) および `configs/soranexus/testus/` (テストネット) の参照用バンドルが失われ、`config.toml`、`genesis.json` および管理用ディレクトリ Torii が見つかりません。
 
-## Paso 1 - Revision de configuracion
-1. Auditar la documentacion existente:
-   - `docs/source/nexus/architecture.md` (consenso, layout de Torii).
-   - `docs/source/nexus/deployment_checklist.md` (requisitos de infraestructura).
-   - `docs/source/nexus/governance_keys.md` (procedimientos de custodia de llaves).
-2. Validar que los archivos genesis (`configs/nexus/genesis/*.json`) se alineen con el roster actual de validadores y los pesos de staking.
-3. Confirmar parametros de red:
-   - Tamano de comite de consenso y quorum.
-   - Intervalo de bloques / umbrales de finalizacion.
-   - Puertos de servicio Torii y certificados TLS.
+## 手順 1 - 構成の改訂
+1. 存在する文書の監査:
+   - `docs/source/nexus/architecture.md` (コンセンサス、レイアウト Torii)。
+   - `docs/source/nexus/deployment_checklist.md` (インフラストラクチャの要件)。
+   - `docs/source/nexus/governance_keys.md` (ラベスの管理手順)。
+2. Validar que los archives Genesis (`configs/nexus/genesis/*.json`) は、実際の Validadores と Los pesos de sking の名簿を確認します。
+3. 赤のパラメータを確認します。
+   - 玉野委員会の合意と定足数。
+   - ブロック間/最終決定のアンブラル。
+   - プエルトス デ サービス Torii および TLS 証明書。
 
-## Paso 2 - Despliegue del cluster bootstrap
-1. Aprovisionar nodos validadores:
-   - Desplegar instancias `irohad` (validadores) con volumnes persistentes.
-   - Asegurar reglas de firewall que permitan trafico de consenso y Torii entre nodos.
-2. Iniciar servicios Torii (REST/WebSocket) en cada validador con TLS.
-3. Desplegar nodos observadores (solo lectura) para resiliencia adicional.
-4. Ejecutar scripts de bootstrap (`scripts/nexus_bootstrap.sh`) para distribuir genesis, iniciar consenso y registrar nodos.
-5. Ejecutar smoke tests:
-   - Enviar transacciones de prueba via Torii (`iroha_cli tx submit`).
-   - Verificar produccion/finalidad de bloques mediante telemetria.
-   - Revisar replicacion del ledger entre validadores/observadores.
+## パソ 2 - クラスタ ブートストラップのデスリーグ
+1. 暫定的なノードの有効性:
+   - Desplegar instancias `irohad` (validadores) con volumenes が持続します。
+   - ファイアウォールの規制は、Torii エントリのコンセンサストラフィックを許可します。
+2. TLS の検証サービス Torii (REST/WebSocket) を開始します。
+3. Desplegar nodos observadores (solo lectura) para resiliencia adicional。
+4. ブートストラップのイジェクタ スクリプト (`scripts/nexus_bootstrap.sh`) は、配布元の生成、初期のコンセンサス、レジストラ ノードに含まれます。
+5. エジェクターの煙テスト:
+   - Torii (`iroha_cli tx submit`) 経由のプルエバ トランザクションを参照してください。
+   - 中央テレメトリの製造/最終ブロックの検証。
+   - 検証/観測所の台帳の複製を改訂します。
 
 ## Paso 3 - Gobernanza y gestion de llaves
-1. Cargar la configuracion multisig del consejo; confirmar que las propuestas de gobernanza se puedan enviar y ratificar.
-2. Almacenar de forma segura las llaves de consenso/comite; configurar backups automaticos con logging de acceso.
-3. Configurar procedimientos de rotacion de llaves de emergencia (`docs/source/nexus/key_rotation.md`) y verificar el runbook.
+1. マルチシグデルコンセホの設定を行う。承認者は、ゴベルナンザ・セ・プエダンの羨望の的であり、批准者であることを確認します。
+2. 合意/委員会の形成のためのアルマセナール;構成バックアップは、ログ記録に応じて自動的に実行されます。
+3. 緊急時の緊急対応手順 (`docs/source/nexus/key_rotation.md`) と検証用 Runbook を構成します。
 
-## Paso 4 - Integracion de CI/CD
-1. Configurar pipelines:
-   - Build y publicacion de imagenes de validator/Torii (GitHub Actions o GitLab CI).
-   - Validacion automatizada de configuracion (lint de genesis, verificacion de firmas).
-   - Pipelines de despliegue (Helm/Kustomize) para clusters de staging y produccion.
-2. Implementar smoke tests en CI (levantar cluster efimero, correr suite canonica de transacciones).
-3. Agregar scripts de rollback para despliegues fallidos y documentar runbooks.
+## 手順 4 - CI/CD の統合
+1. パイプラインを構成します。
+   - 画像検証バリデータ/Torii の公開をビルドします (GitHub Actions または GitLab CI)。
+   - 自動構成の検証 (生成、企業の検証)。
+   - クラスターのステージングと制作のパイプライン (Helm/KusTOMize)。
+2. CI でスモーク テストを実装します (levantar クラスター efimero、correr suite canonica de transacciones)。
+3. フォールドやドキュメント Runbook のロールバック用スクリプトを統合。## パソ 5 - 監視と警告
+1. リージョンの監視スタック (Prometheus + Grafana + Alertmanager) を削除します。
+2. 中心的な指標を再コピーします。
+  - `nexus_consensus_height`、`nexus_finality_lag`、`torii_request_duration_seconds`、`validator_peer_count`。
+   - Loki/ELK パラサービス Torii y コンセンサスを介したログ。
+3. ダッシュボード:
+   - 合意の表明 (ブロックの合意、ファイナリザシオン、ピアの確立)。
+   - Torii API の遅延/エラー。
+   - 知事とプロプエスタの取引。
+4. アラート:
+   - ブロックの生産パロ (ブロックの間隔が 2 つを超える)。
+   - 定足数に対する仲間のコンテオ。
+   - Torii でエラーが発生しました。
+   - 政府の資金調達のバックログ。
 
-## Paso 5 - Observabilidad y alertas
-1. Desplegar el stack de monitoreo (Prometheus + Grafana + Alertmanager) por region.
-2. Recopilar metricas centrales:
-  - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Logs via Loki/ELK para servicios Torii y consenso.
-3. Dashboards:
-   - Salud de consenso (altura de bloque, finalizacion, estado de peers).
-   - Latencia/tasa de error de Torii API.
-   - Transacciones de gobernanza y estado de propuestas.
-4. Alertas:
-   - Paro de produccion de bloques (>2 intervalos de bloque).
-   - Conteo de peers por debajo del quorum.
-   - Picos en la tasa de error de Torii.
-   - Backlog de la cola de propuestas de gobernanza.
+## パソ 6 - 検証と引き継ぎ
+1. Ejecutar のエンドツーエンド検証:
+   - Enviar una propuesta de gobernanza (p. ej.、cambio de parametro)。
+   - 安全なパイプラインの管理による手続き。
+   - 一貫性のある帳簿の差分を記録します。
+2. オンコールでのランブックの文書化 (インシデント、フェイルオーバー、エスカレードの対応)。
+3. SoraFS/SoraNet のロス・エクイポス通信。確認者 que los despliegues ピギーバック puedan apuntar a nodos Nexus。
 
-## Paso 6 - Validacion y handoff
-1. Ejecutar validacion end-to-end:
-   - Enviar una propuesta de gobernanza (p. ej., cambio de parametro).
-   - Procesarla via aprobacion del consejo para asegurar que el pipeline de gobernanza funciona.
-   - Ejecutar diff del estado del ledger para asegurar consistencia.
-2. Documentar el runbook para on-call (respuesta a incidentes, failover, escalado).
-3. Comunicar la disponibilidad a los equipos de SoraFS/SoraNet; confirmar que los despliegues piggyback puedan apuntar a nodos Nexus.
-
-## Checklist de implementacion
-- [ ] Auditoria de genesis/configuracion completada.
-- [ ] Nodos validadores y observadores desplegados con consenso saludable.
-- [ ] Llaves de gobernanza cargadas, propuesta probada.
-- [ ] Pipelines CI/CD corriendo (build + deploy + smoke tests).
-- [ ] Dashboards de observabilidad activos con alertas.
-- [ ] Documentacion de handoff entregada a equipos downstream.
+## 実装のチェックリスト
+- [ ] オーディオの生成/構成が完了しました。
+- [ ] ノドスの有効性と観察性は、合意に基づいて評価できるものです。
+- [ ] Llaves de gobernanza cargadas、propuesta probada。
+- [ ] パイプライン CI/CD コリエンド (ビルド + デプロイ + スモーク テスト)。
+- [ ] アラートを監視するダッシュボード。
+- [ ] ダウンストリームでのハンドオフに関する文書。

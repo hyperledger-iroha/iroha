@@ -4,92 +4,90 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-operator-onboarding.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-operator-onboarding
-title: Incorporacion de operadores de data-space de Sora Nexus
-description: Espejo de `docs/source/sora_nexus_operator_onboarding.md`, que sigue la checklist de release end-to-end para operadores de Nexus.
+идентификатор: nexus-operator-onboarding
+заголовок: Объединение операторов пространства данных Соры Nexus
+Описание: Я увидел `docs/source/sora_nexus_operator_onboarding.md`, который содержит контрольный список сквозного выпуска для операций Nexus.
 ---
 
-:::note Fuente canonica
-Esta pagina refleja `docs/source/sora_nexus_operator_onboarding.md`. Manten ambas copias alineadas hasta que las ediciones localizadas lleguen al portal.
+:::обратите внимание на Фуэнте каноника
+Эта страница отражает `docs/source/sora_nexus_operator_onboarding.md`. Пожалуйста, скопируйте информацию о том, что локализованные издания будут размещены на портале.
 :::
 
-# Incorporacion de operadores de data-space de Sora Nexus
+# Включение операторов пространства данных Sora Nexus
 
-Esta guia captura el flujo end-to-end que deben seguir los operadores de data-space de Sora Nexus una vez se anuncia un release. Complementa el runbook de doble via (`docs/source/release_dual_track_runbook.md`) y la nota de seleccion de artefactos (`docs/source/release_artifact_selection.md`) al describir como alinear bundles/imagenes descargados, manifests y plantillas de configuracion con las expectativas de lanes globales antes de poner un nodo en linea.
+Эта команда захватывает сквозной поток, который должен следить за операторами пространства данных Соры Nexus, и это будет объявление о выпуске. В дополнение к двойному Runbook через (`docs/source/release_dual_track_runbook.md`) и примечанию к выбору артефактов (`docs/source/release_artifact_selection.md`) можно описать как линейные пакеты/выгруженные изображения, манифесты и планировки конфигураций с ожидаемыми глобальными полосами до того, как они появятся на линии.
 
-## Audiencia y prerequisitos
-- Has sido aprobado por el Programa Nexus y recibiste tu asignacion de data-space (indice de lane, data-space ID/alias y requisitos de politica de routing).
-- Puedes acceder a los artefactos firmados del release publicados por Release Engineering (tarballs, imagenes, manifests, firmas, llaves publicas).
-- Has generado o recibido material de llaves de produccion para tu rol de validator/observer (identidad de nodo Ed25519; llave de consenso BLS + PoP para validators; mas cualquier toggle de funciones confidenciales).
-- Puedes alcanzar a los peers existentes de Sora Nexus que bootstrapean tu nodo.
+## Аудиенция и предварительные требования
+- Имеет одобрение для программы Nexus и получение назначения пространства данных (индекс полосы, идентификатор/псевдоним пространства данных и требования политики маршрутизации).
+- Можно получить доступ к артефактам, опубликованным в рамках Release Engineering (архивы, изображения, манифесты, фирмы, публичные публикации).
+- Имеет созданный или подтвержденный материал производственных процессов для роли валидатора/наблюдателя (идентификатор узла Ed25519; согласование BLS + PoP для валидаторов; возможность переключения конфиденциальных функций).
+- Вы можете быть добавлены к существующим коллегам Соры Nexus, которые загрузили ваш узел.
 
-## Paso 1 - Confirmar el perfil de release
-1. Identifica el alias de red o chain ID que te dieron.
-2. Ejecuta `scripts/select_release_profile.py --network <alias>` (o `--chain-id <id>`) en un checkout de este repositorio. El helper consulta `release/network_profiles.toml` e imprime el perfil a desplegar. Para Sora Nexus la respuesta debe ser `iroha3`. Para cualquier otro valor, deten y contacta a Release Engineering.
-3. Anota el tag de version que referencio el anuncio del release (por ejemplo `iroha3-v3.2.0`); lo usaras para descargar artefactos y manifests.
+## Шаг 1 — Подтвердить выпуск файла
+1. Идентификатор псевдонима красного цвета или идентификатора цепи, которую вы называете.
+2. Извлеките `scripts/select_release_profile.py --network <alias>` (или `--chain-id <id>`) из этого репозитория. Помощник проконсультируется с `release/network_profiles.toml` и введет в него данные и выключит их. Для Сора Nexus ответ должен быть предоставлен `iroha3`. Чтобы проявить еще одну доблесть, задержитесь и свяжитесь с отделом Release Engineering.
+3. Укажите тег версии, содержащую ссылку на объявление о выпуске (например, `iroha3-v3.2.0`); используйте средства для удаления артефактов и проявлений.
 
-## Paso 2 - Recuperar y validar artefactos
-1. Descarga el bundle `iroha3` (`<profile>-<version>-<os>.tar.zst`) y sus archivos companeros (`.sha256`, opcional `.sig/.pub`, `<profile>-<version>-manifest.json`, y `<profile>-<version>-image.json` si despliegas contenedores).
-2. Valida la integridad antes de descomprimir:
+## Шаг 2 — Восстановление и проверка артефактов
+1. Загрузите пакет `iroha3` (`<profile>-<version>-<os>.tar.zst`) и наши архивы компаний (`.sha256`, дополнительно `.sig/.pub`, `<profile>-<version>-manifest.json`, и `<profile>-<version>-image.json`, если они отсутствуют. соперники).
+2. Действительность целостности до завершения сделки:
    ```bash
    sha256sum -c iroha3-<version>-linux.tar.zst.sha256
    openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub \
        -signature iroha3-<version>-linux.tar.zst.sig \
        iroha3-<version>-linux.tar.zst
    ```
-   Reemplaza `openssl` con el verificador aprobado por la organizacion si usas un KMS con respaldo de hardware.
-3. Inspecciona `PROFILE.toml` dentro del tarball y los manifests JSON para confirmar:
+   Замените `openssl` с проверкой, одобренной для организации, если вы используете KMS с восстановлением оборудования.
+3. Проверьте `PROFILE.toml` в архиве и манифестах JSON для подтверждения:
    - `profile = "iroha3"`
-   - Los campos `version`, `commit` y `built_at` coinciden con el anuncio del release.
-   - El OS/arquitectura coinciden con tu objetivo de despliegue.
-4. Si usas la imagen de contenedor, repite la verificacion de hash/firma para `<profile>-<version>-<os>-image.tar` y confirma el image ID registrado en `<profile>-<version>-image.json`.
-
-## Paso 3 - Preparar configuracion desde plantillas
+   - Кампос `version`, `commit` и `built_at` совпадают с объявлением о выпуске.
+   - El OS/arquitectura совпадает с вашей целью.
+4. Если вы используете изображение конкурента, повторите проверку хеша/фирмы для `<profile>-<version>-<os>-image.tar` и подтвердите регистрацию идентификатора изображения в `<profile>-<version>-image.json`.## Paso 3 - Preparar configuracion desde plantillas
 1. Extrae el bundle y copia `config/` a la ubicacion donde el nodo leera su configuracion.
 2. Trata los archivos bajo `config/` como plantillas:
-   - Reemplaza `public_key`/`private_key` con tus llaves Ed25519 de produccion. Elimina llaves privadas del disco si el nodo las obtiene de un HSM; actualiza la configuracion para apuntar al conector HSM.
-   - Ajusta `trusted_peers`, `network.address` y `torii.address` para reflejar tus interfaces accesibles y los peers de bootstrap asignados.
-   - Actualiza `client.toml` con el endpoint Torii de cara al operador (incluyendo configuracion TLS si aplica) y las credenciales que aprovisionas para tooling operativo.
-3. Mantiene el chain ID provisto en el bundle a menos que Governance lo indique explicitamente: el lane global espera un identificador de cadena canonico unico.
-4. Planea iniciar el nodo con el flag de perfil Sora: `irohad --sora --config <path>`. El loader de configuracion rechazara ajustes de SoraFS o multi-lane si el flag esta ausente.
+   - Reemplaza `public_key`/`private_key` con tus llaves Ed25519 de produccion. Elimina llaves privadas del disco si el nodo las obtiene de un HSM; выполните настройку для подключения к разъему HSM.
+   - Настройте `trusted_peers`, `network.address` и `torii.address` для отображения доступных интерфейсов и назначенных узлов начальной загрузки.
+   - Актуализация `client.toml` с конечной точкой Torii для оператора (включая конфигурацию TLS и приложение) и учетными данными, которые предоставляются для работы инструментов.
+3. Укажите идентификатор цепочки в пакете, в котором указано явное управление: глобальная полоса находится в уникальном каноническом идентификаторе.
+4. Запустите узел с флагом выполнения Сора: `irohad --sora --config <path>`. El loader de configuracion rechazara ajustes de SoraFS o multi-lane si el flag esta ausente.
 
-## Paso 4 - Alinear metadata de data-space y routing
-1. Edita `config/config.toml` para que la seccion `[nexus]` coincida con el catalogo de data-spaces proporcionado por el Nexus Council:
-   - `lane_count` debe igualar el total de lanes habilitados en la epoca actual.
-   - Cada entrada en `[[nexus.lane_catalog]]` y `[[nexus.dataspace_catalog]]` debe contener un `index`/`id` unico y los alias acordados. No elimines las entradas globales existentes; agrega tus alias delegados si el consejo asigno data-spaces adicionales.
-   - Asegura que cada entrada de dataspace incluya `fault_tolerance (f)`; los comites lane-relay se dimensionan en `3f+1`.
-2. Actualiza `[[nexus.routing_policy.rules]]` para capturar la politica que te asignaron. La plantilla por defecto enruta instrucciones de gobernanza al lane `1` y despliegues de contratos al lane `2`; agrega o modifica reglas para que el trafico destinado a tu data-space vaya al lane y alias correctos. Coordina con Release Engineering antes de cambiar el orden de reglas.
-3. Revisa los umbrales de `[nexus.da]`, `[nexus.da.audit]` y `[nexus.da.recovery]`. Se espera que los operadores mantengan los valores aprobados por el consejo; ajustalos solo si se ratifico una politica actualizada.
-4. Registra la configuracion final en tu tracker de operaciones. El runbook de release de doble via requiere adjuntar el `config.toml` efectivo (con secretos redactados) al ticket de onboarding.
-
-## Paso 5 - Validacion previa
-1. Ejecuta el validador de configuracion integrado antes de unirte a la red:
+## Шаг 4 — Линейные метаданные пространства данных и маршрутизация
+1. Отредактируйте `config/config.toml` для раздела `[nexus]`, совпадающего с каталогом пространств данных, пропорциональных Nexus. Совет:
+   - `lane_count` будет соответствовать всем навыкам движения в действующую эпоху.
+   - Вход в `[[nexus.lane_catalog]]` и `[[nexus.dataspace_catalog]]` может быть контейнером `index`/`id`, уникальным и псевдонимом acordados. «Ничто не устраняет las entradas globales Existentes»; agrega tus alias delegados si el consejo asigno data-spaces adicionales.
+   - Убедитесь, что вход в пространство данных включает `fault_tolerance (f)`; los comites lane-relay se dimensionan en `3f+1`.
+2. Actualiza `[[nexus.routing_policy.rules]]` para capturar la politica que te asignaron. La plantilla por defecto enruta instrucciones de gobernanza al lane `1` y despliegues de contratos al lane `2`; агрегирование или изменение правил для того, чтобы трафик, предназначенный для вашего пространства данных, оставался на полосе и псевдонимах. Координация с инженерным выпуском перед установкой соответствующего регламента.
+3. Пересмотрите тени `[nexus.da]`, `[nexus.da.audit]` и `[nexus.da.recovery]`. Если вы ожидаете, что операдоры будут поддерживать ценности, одобренные советом; было изменено только тогда, когда была утверждена актуализированная политика.
+4. Зарегистрируйте окончательную конфигурацию на рабочем трекере. Двойной блокнот высвобождения через дополнительное дополнение к эффективному `config.toml` (с отредактированными секретами) к билету на вход.## Шаг 5 – предыдущая проверка
+1. Выполните проверку интегрированной конфигурации перед объединением в красный цвет:
    ```bash
    ./bin/irohad --sora --config config/config.toml --trace-config
    ```
-   Esto imprime la configuracion resuelta y falla temprano si las entradas de catalogo/routing son inconsistentes o si genesis y config no coinciden.
-2. Si despliegas contenedores, ejecuta el mismo comando dentro de la imagen despues de cargarla con `docker load -i <profile>-<version>-<os>-image.tar` (recuerda incluir `--sora`).
-3. Revisa logs para advertencias sobre identificadores placeholder de lane/data-space. Si aparecen, regresa al Paso 4: los despliegues de produccion no deben depender de los IDs placeholder que vienen con las plantillas.
-4. Ejecuta tu procedimiento local de smoke (p. ej., enviar una consulta `FindNetworkStatus` con `iroha_cli`, confirmar que los endpoints de telemetria exponen `nexus_lane_state_total` y verificar que las llaves de streaming se rotaron o importaron segun corresponda).
+   Это значит, что результаты конфигурации и время падения, если входы в каталог/маршрутизацию не совпадают или их происхождение и конфигурация не совпадают.
+2. Если вы вытащили содержимое, извлеките команду из изображения после загрузки с `docker load -i <profile>-<version>-<os>-image.tar` (требуется включить `--sora`).
+3. Журналы Revisa содержат рекламные идентификаторы заполнителя полосы движения/пространства данных. Если появится, вернитесь к шагу 4: производственные процессы не зависят от заполнителя идентификаторов, который связан с растениями.
+4. Выполните локальную процедуру дыма (стр. например, отправьте консультацию `FindNetworkStatus` с `iroha_cli`, подтвердите, что конечные точки телеметрии показаны `nexus_lane_state_total` и проверьте, что потоковые потоки вращаются или импортируются в следующий раз).
 
-## Paso 6 - Cutover y hand-off
-1. Guarda el `manifest.json` verificado y los artefactos de firma en el ticket de release para que los auditores puedan reproducir tus verificaciones.
-2. Notifica a Nexus Operations que el nodo esta listo para ser introducido; incluye:
-   - Identidad del nodo (peer ID, hostnames, endpoint Torii).
-   - Valores efectivos de catalogo de lane/data-space y politica de routing.
-   - Hashes de los binarios/imagenes que verificaste.
-3. Coordina la admision final de peers (gossip seeds y asignacion de lane) con `@nexus-core`. No te unas a la red hasta recibir aprobacion; Sora Nexus aplica ocupacion determinista de lanes y requiere un manifest de admisiones actualizado.
-4. Despues de que el nodo este en vivo, actualiza tus runbooks con cualquier override que introdujiste y anota el tag de release para que la siguiente iteracion arranque desde esta baseline.
+## Шаг 6 – Переключение и передача
+1. Охраняйте `manifest.json` проверенным и артефактами фирмы в билете выпуска, чтобы аудиторы могли воспроизвести ваши проверенные данные.
+2. Уведомите Nexus Operations о том, что этот список указан для введения; включая:
+   - Идентификатор узла (идентификатор узла, имена хостов, конечная точка Torii).
+   - Эффективные значения каталога полос/пространства данных и политики маршрутизации.
+   - Хэши двоичных файлов/изображений, проверенные.
+3. Координация финального приема сверстников (сплетни и назначение полосы движения) с `@nexus-core`. No te unas a la red hasta recibir arobacion; Sora Nexus применяет определение занятости полос и требует актуализации акта допуска.
+4. Если этот узел является живым, актуализируйте свои runbooks с возможностью переопределения того, что вводится, и отметьте тег выпуска для следующей итерации, запланированной на основе этой базовой линии.
 
-## Checklist de referencia
-- [ ] Perfil de release validado como `iroha3`.
-- [ ] Hashes y firmas del bundle/imagen verificados.
-- [ ] Llaves, direcciones de peers y endpoints Torii actualizados a valores de produccion.
-- [ ] Catalogo de lanes/dataspace y politica de routing de Nexus coincide con la asignacion del consejo.
-- [ ] Validador de configuracion (`irohad --sora --config ... --trace-config`) pasa sin advertencias.
-- [ ] Manifests/firmas archivados en el ticket de onboarding y Ops notificado.
+## Контрольный список рекомендаций
+- [ ] Профиль проверки выпуска как `iroha3`.
+- [ ] Хэши и проверенные пакеты/изображения.
+- [ ] Указания, направления одноранговых узлов и конечные точки Torii актуализируются и повышают производительность.
+- [ ] Каталог полос/пространства данных и политика маршрутизации Nexus совпадают с назначением совета.
+- [ ] Проверка конфигурации (`irohad --sora --config ... --trace-config`) без предупреждения.
+- [ ] Архив манифестов/фирм в билете на подключение и уведомлении об эксплуатации.
 
-Para contexto adicional sobre fases de migracion de Nexus y expectativas de telemetria, revisa [Nexus transition notes](./nexus-transition-notes).
+Для дополнительных контекстных этапов миграции Nexus и ожидаемых телеметрических данных пересмотрите [Nexus примечания к переходу] (./nexus-transition-notes).

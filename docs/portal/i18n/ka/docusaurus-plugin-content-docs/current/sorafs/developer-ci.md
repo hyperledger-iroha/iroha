@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-# CI Recipes
+# CI რეცეპტები
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS მილსადენები სარგებლობენ დეტერმინისტული დაშლით, მანიფესტის ხელმოწერით და
+მტკიცებულების შემოწმება. `sorafs_cli` ბრძანების ზედაპირი ინარჩუნებს ამ ნაბიჯებს პორტატულად
+CI პროვაიდერებს შორის. ეს გვერდი ხაზს უსვამს კანონიკურ რეცეპტებს და მიუთითებს
+მზა შაბლონები.
 
-## GitHub Actions (keyless)
+## GitHub მოქმედებები (გასაღების გარეშე)
 
 ```yaml
 name: sorafs-artifacts
@@ -93,11 +95,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+ძირითადი პუნქტები:
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- არ არის შენახული სტატიკური ხელმოწერის გასაღებები; OIDC ჟეტონები მოთხოვნილია.
+- არტეფაქტები (CAR, მანიფესტი, ნაკრები, მტკიცებულების რეზიუმეები) ატვირთულია განსახილველად.
+- სამუშაო ხელახლა იყენებს იგივე Norito სქემებს, რომლებიც გამოიყენება წარმოების გავრცელებაში.
 
 ## GitLab CI
 
@@ -133,15 +135,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- უზრუნველყოს `SIGSTORE_ID_TOKEN` GitLab-ის დატვირთვის იდენტიფიკაციის ფედერაციის ან
+  დალუქული საიდუმლო გამოქვეყნების ეტაპის შესრულებამდე.
+- ნებისმიერი CLI ნაბიჯის წარუმატებლობა იწვევს მილსადენის გაჩერებას, თანმიმდევრულობის შენარჩუნებას
+  არტეფაქტები.
 
-## Additional resources
+## დამატებითი რესურსები
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- ბოლოდან ბოლომდე შაბლონები (მოიცავს Bash დამხმარეებს, ფედერაციულ პირადობის კონფიგურაციას,
+  და დასუფთავების ნაბიჯები): `docs/examples/sorafs_ci.md`
+- CLI მითითება, რომელიც მოიცავს ყველა ვარიანტს: `docs/source/sorafs_cli.md`
+- მმართველობა/სხვა მოთხოვნები წარდგენამდე:
   `docs/source/sorafs/provider_admission_policy.md`

@@ -4,29 +4,31 @@ direction: rtl
 source: docs/portal/docs/soranet/pq-primitives.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: pq-primitives
-title: بدائيات ما بعد الكم في SoraNet
-sidebar_label: بدائيات PQ
-description: نظرة عامة على crate `soranet_pq` وكيف يستهلك مصافحة SoraNet مساعدات ML-KEM/ML-DSA.
+כותרת: פרימיטיבים פוסט-קוונטיים ב- SoraNet
+sidebar_label: PQ primitives
+תיאור: סקירה כללית של ארגז `soranet_pq` וכיצד לחיצת היד של SoraNet צורך עזרי ML-KEM/ML-DSA.
 ---
 
-:::note المصدر القياسي
-تعكس هذه الصفحة `docs/source/soranet/pq_primitives.md`. حافظ على النسختين متطابقتين حتى يتم تقاعد مجموعة الوثائق القديمة.
+:::הערה מקור סטנדרטי
+דף זה משקף את `docs/source/soranet/pq_primitives.md`. שמור את שני העותקים זהים עד להוצאת מערכת המסמכים הישנה.
 :::
 
-يحتوي crate `soranet_pq` على لبنات ما بعد الكم التي تعتمد عليها كل relay وclient وtooling في SoraNet. وهو يغلف مجموعات Kyber (ML-KEM) وDilithium (ML-DSA) المدعومة من PQClean ويضيف helpers لـ HKDF وRNG hedged ملائمة للبروتوكول حتى تتشارك جميع الأسطح نفس التنفيذات.
+ארגז `soranet_pq` מכיל את אבני הבניין הפוסט-קוונטיות שכל ממסר, לקוח וכלי עבודה ב- SoraNet תלויים בהם. הוא עוטף את חפיסות ה-Kyber (ML-KEM) וה-Dilithium (ML-DSA) הנתמכות על ידי PQClean ומוסיף עוזרים עבור HKDF ו-RNG המגודרים לפרוטוקול כך שכל העורים חולקים את אותם יישומים.
 
-## ما الذي يتضمنه `soranet_pq`
+## מה כלול ב-`soranet_pq`
 
-- **ML-KEM-512/768/1024:** توليد مفاتيح حتمي، ومساعدات encapsulation وdecapsulation مع نشر أخطاء بزمن ثابت.
-- **ML-DSA-44/65/87:** توقيع/تحقق منفصلان مربوطان بنصوص مفصولة النطاق.
-- **HKDF موسوم:** `derive_labeled_hkdf` يضيف namespace لكل اشتقاق مع مرحلة المصافحة (`DH/es`, `KEM/1`, ...) حتى تبقى النصوص الهجينة بلا تصادم.
-- **عشوائية hedged:** `hedged_chacha20_rng` يمزج بذورا حتمية مع إنتروبيا النظام ويصفر الحالة الوسيطة عند التحرير.
+- **ML-KEM-512/768/1024:** עוזרי יצירת מפתח דטרמיניסטים, אנקפסולציה ו-Decapsulation עם הפצת שגיאות בזמן קבוע.
+- **ML-DSA-44/65/87:** חתימה/אימות נפרדים המקושרים לסקריפטים מופרדים בהיקף.
+- **תג HKDF:** `derive_labeled_hkdf` מוסיף מרחב שמות לכל גזירה עם שלב לחיצת היד (`DH/es`, `KEM/1`, ...) כך שמיתרים היברידיים יישארו נקיים מהתנגשות.
+- **אקראיות מגודרת:** `hedged_chacha20_rng` מערבבת זרעים דטרמיניסטיים עם האנטרופיה של המערכת ומאפס את מצב הביניים עם השחרור.
 
-تسكن جميع الأسرار داخل حاويات `Zeroizing` وتختبر CI روابط PQClean على جميع المنصات المدعومة.
+כל הסודות חיים בתוך מיכלי `Zeroizing` ו-CI בדיקות PQClean bindings בכל הפלטפורמות הנתמכות.
 
 ```rust
 use soranet_pq::{
@@ -49,19 +51,19 @@ let okm = derive_labeled_hkdf(
 ).unwrap();
 ```
 
-## كيفية الاستخدام
+## כיצד להשתמש
 
-1. **اضف الاعتماد** إلى crates الموجودة خارج جذر workspace:
+1. **הוסף אישורים** לארגזים מחוץ לשורש סביבת העבודה:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **اختر المجموعة الصحيحة** في نقاط الاستدعاء. للعمل الأولي على المصافحة الهجينة، استخدم `MlKemSuite::MlKem768` و`MlDsaSuite::MlDsa65`.
+2. **בחר את הקבוצה הנכונה** במוקדי הקריאה. לעבודה ראשונית על לחיצת היד ההיברידית, השתמש ב-`MlKemSuite::MlKem768` ו-`MlDsaSuite::MlDsa65`.
 
-3. **اشتق المفاتيح مع وسوم.** استخدم `HkdfDomain::soranet("KEM/1")` (ونظراءه) حتى يبقى تسلسل النصوص حتميا عبر العقد.
+3. **הפקת מפתחות עם תגים.** השתמש ב-`HkdfDomain::soranet("KEM/1")` (ובמקביליו) כך שרצפי טקסט יישארו דטרמיניסטים על פני צמתים.
 
-4. **استخدم RNG hedged** عند أخذ عينات لأسرار بديلة:
+4. **השתמש ב-RNG hedged** בעת דגימת סודות חלופיים:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -69,11 +71,11 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-تسحب مصافحة SoraNet الأساسية ومساعدات تعمية CID (`iroha_crypto::soranet`) هذه الأدوات مباشرة، ما يعني أن crates التابعة ترث نفس التنفيذات دون ربط PQClean بنفسها.
+לחיצת היד של הליבה של SoraNet והצפנת CID (`iroha_crypto::soranet`) מושכים אותם ישירות, כלומר ארגזים ילדים יורשים את אותם יישומים מבלי לחייב את PQClean עצמם.
 
-## قائمة تحقق التحقق
+## רשימת בדיקה לאימות
 
 - `cargo test -p soranet_pq --offline`
-- `cargo fmt --package soranet_pq`
-- راجع أمثلة الاستخدام في README (`crates/soranet_pq/README.md`)
-- حدث وثيقة تصميم مصافحة SoraNet عند وصول الهجائن
+-`cargo fmt --package soranet_pq`
+- ראה דוגמאות שימוש ב-README (`crates/soranet_pq/README.md`)
+- עדכן את מסמך עיצוב לחיצת היד של SoraNet כאשר הגיעו היברידיות

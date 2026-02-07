@@ -4,42 +4,44 @@ direction: ltr
 source: docs/portal/docs/reference/publishing-checklist.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Publishing checklist
+# Контрольный список публикации
 
-جب بھی آپ developer portal اپڈیٹ کریں تو اس checklist کا استعمال کریں۔ یہ یقینی بناتی ہے کہ CI build، GitHub Pages deployment، اور دستی smoke tests ہر سیکشن کو کور کریں اس سے پہلے کہ کوئی release یا roadmap milestone آئے۔
+На портале разработчиков можно найти контрольный список, который нужно проверить. یہ یقینی بناتی ہے کہ کہ کور کریں اس سے Выпуск дорожной карты آئے۔
 
-## 1. Local validation
+## 1. Локальная проверка
 
-- `npm run sync-openapi -- --version=current --latest` (Torii OpenAPI بدلنے پر ایک یا زیادہ `--mirror=<label>` flags شامل کریں تاکہ ایک frozen snapshot بنے).
-- `npm run build` – تصدیق کریں کہ `Build on Iroha with confidence` hero copy اب بھی `build/index.html` میں موجود ہے۔
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` – checksum manifest verify کریں (downloaded CI artefacts ٹیسٹ کرتے وقت `--descriptor`/`--archive` شامل کریں).
-- `npm run serve` – checksum-gated preview helper لانچ کرتا ہے جو `docusaurus serve` کو کال کرنے سے پہلے manifest verify کرتا ہے، تاکہ reviewers کبھی unsigned snapshot نہ براؤز کریں (`serve:verified` alias واضح کالز کیلئے موجود رہتا ہے).
-- `npm run start` اور live reload server کے ذریعے اس markdown کو spot-check کریں جسے آپ نے touch کیا ہے۔
+- `npm run sync-openapi -- --version=current --latest` (Torii OpenAPI بدلنے پر ایک یا زیادہ `--mirror=<label>` flags شامل کریں تاکہ ایک замороженный снимок بنے).
+- `npm run build` – تصدیق کریں کہ `Build on Iroha with confidence` геройская копия اب بھی `build/index.html` میں موجود ہے۔
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` – манифест контрольной суммы проверяет правильность (загруженные артефакты CI доступны для использования в `--descriptor`/`--archive`).
+- `npm run serve` – помощник предварительного просмотра с контролем контрольной суммы. Рецензенты могут использовать неподписанный снимок экрана (псевдоним `serve:verified` واضح کالز کیلئے موجود رہتا ہے).
+- `npm run start` обеспечивает перезагрузку сервера в реальном времени и уценку, а также выборочную проверку и сенсорное управление.
 
-## 2. Pull request checks
+## 2. Проверка запросов на включение
 
-- `.github/workflows/check-docs.yml` میں `docs-portal-build` job کی کامیابی verify کریں۔
-- تصدیق کریں کہ `ci/check_docs_portal.sh` چلا (CI logs میں hero smoke check دکھائی دیتا ہے)۔
-- یقینی بنائیں کہ preview workflow نے manifest (`build/checksums.sha256`) upload کیا اور preview verification script کامیاب ہوا (CI logs میں `scripts/preview_verify.sh` output دکھائی دیتا ہے)۔
-- GitHub Pages environment کی published preview URL کو PR description میں شامل کریں۔
+- `.github/workflows/check-docs.yml` میں `docs-portal-build` задание کی کامیابی проверить کریں۔
+- تصدیق کریں کہ `ci/check_docs_portal.sh` چلا (журналы CI میں проверка дыма героя دکھائی دیتا ہے)۔
+- Рабочий процесс предварительного просмотра и манифест (`build/checksums.sha256`) загрузка сценария проверки предварительного просмотра и выход (журналы CI с выводом `scripts/preview_verify.sh`) دکھائی دیتا ہے)۔
+- Среда GitHub Pages. Опубликованный URL-адрес предварительного просмотра и PR-описание.
 
-## 3. Section sign-off
+## 3. Подписание раздела
 
-| Section | Owner | Checklist |
+| Раздел | Владелец | Контрольный список |
 |---------|-------|-----------|
-| Homepage | DevRel | Hero copy render ہو، quickstart cards valid routes پر جائیں، CTA buttons resolve ہوں۔ |
-| Norito | Norito WG | Overview اور getting-started guides تازہ ترین CLI flags اور Norito schema docs کو refer کریں۔ |
-| SoraFS | Storage Team | Quickstart مکمل ہو، manifest report fields documented ہوں، fetch simulation instructions verify ہوں۔ |
-| SDK guides | SDK leads | Rust/Python/JS guides موجودہ examples compile کریں اور live repos سے link ہوں۔ |
-| Reference | Docs/DevRel | Index تازہ ترین specs دکھائے، Norito codec reference `norito.md` سے match کرے۔ |
-| Preview artifact | Docs/DevRel | `docs-portal-preview` artifact PR کے ساتھ attach ہو، smoke checks pass ہوں، link reviewers کے ساتھ share ہو۔ |
-| Security & Try it sandbox | Docs/DevRel · Security | OAuth device-code login configure ہو (`DOCS_OAUTH_*`)، `security-hardening.md` checklist execute ہو، CSP/Trusted Types headers `npm run build` یا `npm run probe:portal` سے verify ہوں۔ |
+| Домашняя страница | ДевРел | Рендеринг главного текста. Карты быстрого запуска. Допустимые маршруты. Кнопки с призывом к действию. Разрешение. |
+| Norito | Norito РГ | Обзор. Руководства по началу работы. Флаги CLI. Документация по схеме Norito. Дополнительная информация. |
+| SoraFS | Команда хранения | Краткое руководство или документирование полей отчета манифеста, получение инструкций по моделированию и проверка. |
+| Руководства по SDK | SDK ведет | Руководства по Rust/Python/JS. Примеры компиляции. Использование живых репозиториев. Ссылка. |
+| Ссылка | Документы/Разработчики | Индекс تازہ ترین specs دکھائے، Norito Ссылка на кодек `norito.md` سے match کرے۔ |
+| Предварительный просмотр артефакта | Документы/Разработчики | `docs-portal-preview` артефакт PR کے ساتھ прикрепить ہو، дымовые проверки пройти ہوں، ссылка рецензенты کے ساتھ поделиться ہو۔ |
+| Безопасность и попробуйте в песочнице | Документы/DevRel · Безопасность | Вход в систему с кодом устройства OAuth, настройка (`DOCS_OAUTH_*`), контрольный список `security-hardening.md`, выполнение заголовков CSP/Trusted Types `npm run build`, `npm run probe:portal`, проверка. |
 
-ہر row کو اپنے PR review کا حصہ بنائیں، یا follow-up tasks لکھیں تاکہ status tracking درست رہے۔
+ہر row کو اپنے PR-обзор کا حصہ بنائیں، یا последующие задачи لککھیں تاکہ отслеживание статуса درست رہے۔
 
-## 4. Release notes
+## 4. Примечания к выпуску
 
-- `https://docs.iroha.tech/` (یا deployment job سے ملا environment URL) کو release notes اور status updates میں شامل کریں۔
-- نئے یا تبدیل شدہ sections کو واضح طور پر بیان کریں تاکہ downstream teams جان سکیں کہ انہیں اپنے smoke tests کہاں دوبارہ چلانے ہیں۔
+- `https://docs.iroha.tech/` (задание по развертыванию, URL-адрес среды), примечания к выпуску и обновления статуса.
+- В разделах можно найти нужные разделы, которые помогут нижестоящим командам и командам, работающим ниже по течению. Тесты на дым

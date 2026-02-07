@@ -7,38 +7,39 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
 source_last_modified: "2025-12-29T18:16:35.921274+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Bridge proofs
+# የድልድይ ማስረጃዎች
 
-Bridge proof submissions travel through the standard instruction path (`SubmitBridgeProof`) and land in the proof registry with a verified status. The current surface covers ICS-style Merkle proofs and transparent-ZK payloads with pinned retention and manifest binding.
+የድልድይ ማረጋገጫ ማቅረቢያዎች በመደበኛው የማስተማሪያ መንገድ (`SubmitBridgeProof`) እና በማረጋገጫ መዝገብ ውስጥ ከተረጋገጠ ሁኔታ ጋር ይጓዛሉ። አሁን ያለው ወለል የአይ.ሲ.ኤስ አይነት የመርክል ማረጋገጫዎችን እና ግልጽ-ZK ሸክሞችን በተሰካ ማቆየት እና ግልጽ ማሰርን ይሸፍናል።
 
-## Acceptance rules
+## የመቀበል ህጎች
 
-- Ranges must be ordered/non-empty and respect `zk.bridge_proof_max_range_len` (0 disables the cap).
-- Optional height windows reject stale/future proofs: `zk.bridge_proof_max_past_age_blocks` and `zk.bridge_proof_max_future_drift_blocks` are measured against the block height that ingests the proof (0 disables the guardrails).
-- Bridge proofs may not overlap an existing proof for the same backend (pinned proofs are preserved and block overlaps).
-- Manifest hashes must be non-zero; payloads are size-capped by `zk.max_proof_size_bytes`.
-- ICS payloads honour the configured Merkle depth cap and verify the path using the declared hash function; transparent payloads must declare a non-empty backend label.
-- Pinned proofs are exempt from retention pruning; unpinned proofs still respect the global `zk.proof_history_cap`/grace/batch settings.
+- ክልሎች ማዘዝ/ባዶ ያልሆኑ እና `zk.bridge_proof_max_range_len` ማክበር አለባቸው (0 ቆብ ያሰናክላል)።
+- አማራጭ ቁመት መስኮቶች ያረጁ/ወደፊት ማረጋገጫዎች ውድቅ: `zk.bridge_proof_max_past_age_blocks` እና `zk.bridge_proof_max_future_drift_blocks` ያለውን የማገጃ ቁመት ላይ የሚለካው ማስረጃውን ወደ ውስጥ (0 ጠባቂዎቹም ያሰናክላል).
+- የድልድይ ማረጋገጫዎች ለተመሳሳይ የኋላ መጋረጃ ነባር ማረጋገጫ ላይደራረቡ አይችሉም (የተሰካው ማረጋገጫዎች ተጠብቀው መደራረብን አግደዋል)።
+- አንጸባራቂ hashes ዜሮ ያልሆኑ መሆን አለባቸው; የሚጫኑ ጭነቶች በ `zk.max_proof_size_bytes` በመጠን ተያይዘዋል።
+- የአይ.ሲ.ኤስ የደመወዝ ጭነቶች የተዋቀረውን የመርክል ጥልቀት ካፕ ያከብራሉ እና የታወጀውን የሃሽ ተግባር በመጠቀም መንገዱን ያረጋግጡ። ግልጽ ጭነት ባዶ ያልሆነ የኋላ መለያ መለያ ማወጅ አለበት።
+- የተጣበቁ ማረጋገጫዎች ከማቆየት መግረዝ ነፃ ናቸው; ያልተሰካ ማረጋገጫዎች አሁንም ዓለም አቀፋዊውን የ`zk.proof_history_cap`/የጸጋ/ባች ቅንጅቶችን ያከብራሉ።
 
-## Torii API surface
+## Torii ኤፒአይ ወለል
 
-- `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:
-  - `bridge_only=true` returns only bridge proofs.
-  - `bridge_pinned_only=true` narrows to pinned bridge proofs.
-  - `bridge_start_from_height` / `bridge_end_until_height` clamp the bridge range window.
-- `GET /v1/zk/proof/{backend}/{hash}` returns bridge metadata (range, manifest hash, payload summary) alongside the proof id/status/VK bindings.
-- The full Norito proof record (including payload bytes) remains available via `GET /v1/proofs/{proof_id}` for off-node verifiers.
+- `GET /v1/zk/proofs` እና `GET /v1/zk/proofs/count` ድልድይ የሚያውቁ ማጣሪያዎችን ይቀበላሉ፡
+  - `bridge_only=true` የድልድይ ማረጋገጫዎችን ብቻ ይመልሳል።
+  - `bridge_pinned_only=true` በተሰካው ድልድይ ማረጋገጫዎች ላይ ጠባብ።
+  - `bridge_start_from_height` / `bridge_end_until_height` የድልድይ ክልል መስኮቱን አጣብቅ።
+- `GET /v1/zk/proof/{backend}/{hash}` ከማስረጃ መታወቂያ/ሁኔታ/VK ማሰሪያዎች ጎን ለጎን ድልድይ ሜታዳታ (ክልል፣ አንጸባራቂ ሃሽ፣ የክፍያ ማጠቃለያ) ይመልሳል።
+- ሙሉው የNorito የማስረጃ መዝገብ (የክፍያ ባይት ጨምሮ) በ`GET /v1/proofs/{proof_id}` ከአንጓ ውጪ አረጋጋጮች ይገኛል።
 
-## Bridge receipt events
+## የድልድይ ደረሰኝ ዝግጅቶች
 
-Bridge lanes emit typed receipts via the `RecordBridgeReceipt` instruction. Executing this instruction
-records a `BridgeReceipt` payload and emits `DataEvent::Bridge(BridgeEvent::Emitted)` on the event
-stream, replacing the prior log-only stub. The CLI `iroha bridge emit-receipt` helper submits the
-typed instruction so indexers can consume receipts deterministically.
+የድልድይ መስመሮች የተተየቡ ደረሰኞችን በ`RecordBridgeReceipt` መመሪያ ይለቃሉ። ይህንን መመሪያ በመተግበር ላይ
+የ `BridgeReceipt` ክፍያ መዝግቦ በዝግጅቱ ላይ `DataEvent::Bridge(BridgeEvent::Emitted)` ያወጣል።
+ዥረት፣ የቀደመውን የምዝግብ ማስታወሻ-ብቻ ግንድ በመተካት። የ CLI `iroha bridge emit-receipt` ረዳት ያቀርባል
+መረጃ ጠቋሚዎች ደረሰኞችን በቆራጥነት እንዲበሉ የተተየበው መመሪያ።
 
-## External verification sketch (ICS)
+## የውጭ ማረጋገጫ ንድፍ (ICS)
 
 ```rust
 use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};

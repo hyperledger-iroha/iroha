@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
 source_last_modified: "2026-01-28T17:11:30.632934+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IH58 Rollout Note for SDK & Codec Owners
+# IH58 SDK өсөн ролл-аут иҫкәрмә & Кодексы хужалары
 
-Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
+Командалар: Туст СДК, ТипСкрипт/JavaScript SDK, Python SDK, Котлин СДК, Кодк инструменталь
 
-Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
-implementation. Please align SDK behaviour and tests with the canonical spec.
+Контекст: I18NI000000000X хәҙер IH58 иҫәбе ID ташыуҙы сағылдыра.
+тормошҡа ашырыу. Зинһар, SDK тәртибе һәм тестар менән канон спецификацияһы тура килтерергә.
 
-Key references:
-- Address codec + header layout — `docs/account_structure.md` §2
-- Curve registry — `docs/source/references/address_curve_registry.md`
-- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
-- Fixture vectors — `fixtures/account/address_vectors.json`
+Төп һылтанмалар:
+- Адрес кодек + баш макеты — `docs/account_structure.md` §2.
+- Ҡыйыулыҡ реестры — `docs/source/references/address_curve_registry.md`
+- Норма v1 домен менән эш итеү — I18NI000000003X
+- Фикстура векторҙары — `fixtures/account/address_vectors.json`
 
-Action items:
-1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
-   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
-2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
-   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
-   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
-   resolver unless the selector is implicit default (use the configured default
-   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
-   resolvers.
-4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
-   the first 2 bytes. Compressed alphabet base is **105**.
-5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
-   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
-   not assume secp256k1 is enabled by default outside Rust.
-6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
-   depend on CAIP‑10 conversions.
+Эш пункттары:
+1. **Каноник сығыш:** I18NI000000005X/Display IH58 ғына Эй
+   (юҡ I18NI000000006X суффиксы). Канон hex өсөн отладка (`0x...`).
+2. **Ҡабул ителгән индереүҙәр:** анализлаусылар ҡабул итергә тейеш IH58 (өҫтөнлөк), `sora` ҡыҫылған,
+   һәм канонлы гекс (`0x...` ғына; яланғас гекс кире ҡағыла). Инпуттар МАЙ ташый ан
+   Маршрутлаштырыу кәңәштәре өсөн `@<domain>` суффиксы; I18NI000000011X псевдонимы талап итә.
+   хәл итеүсе. Сеймал I18NI0000012X (күпхаш гекс) ярҙам итә.
+3. **Репочинкалар:** доменһыҙ IH58/сора анализлау домен-һайлаусы талап итә .
+   әгәр селектор асыҡланмаған ғәҙәттәгесә (конфигурацияланған ғәҙәттәгесә ҡулланыу
+   домен ярлығы). УАИД (`uaid:...`) һәм асыҡ булмаған (I18NI000000014X) литрҙар кәрәк
+   хәл итеүселәр.
+4. **IH58 тикшерелгән сумма:** ҡулланыу Blak2b-512 өҫтөндә I18NI000000015X, алыу
+   тәүге 2 байт. Ҡыҫылған алфавит базаһы **105**.
+5. **Ҡырмыҫҡа ҡапҡаһы:** SDKs ғәҙәттәгесә Ed25519-тик. Асыҡтан-асыҡ опт-ин тәьмин итеү өсөн .
+   ML-DSA/GOST/SM (Свифт төҙөү флагтары; JS/Android I18NI0000016X). Итергә
+   secp256k1 тип фаразламай, Rust-тан ситтә ғәҙәттәгесә эшләй.
+6. **КАИП-10:** әлегә ебәрелгән CAIP‐10 картаһы юҡ; фашламағыҙ йәки
+   CAIP‐10 конверсияһына бәйле.
 
-Please confirm once the codecs/tests are updated; open questions can be tracked
-in the account-addressing RFC thread.
+Зинһар, раҫлау бер тапҡыр кодек/тестар яңыртыла; асыҡ һорауҙарҙы күҙәтеп була
+иҫәп-хисап менән идара итеү RFC еп.

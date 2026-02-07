@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8de31f9e066b729fda8324b8847badba23de926888574d02a44fb0e6d4472f77
 source_last_modified: "2026-01-16T17:12:51.444585+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Codec Reference
+№ Norito кодек анықтамасы
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito — Iroha канондық сериялау қабаты. Әрбір сымды хабарлама, дискідегі
+пайдалы жүктеме және кросс-компоненттік API Norito пайдаланады, сондықтан түйіндер бірдей байттармен келіседі
+олар әртүрлі жабдықта жұмыс істегенде де. Бұл бетте қозғалатын бөліктер жинақталған
+және `norito.md` ішіндегі толық сипаттаманы көрсетеді.
 
-## Core layout
+## Негізгі орналасу
 
-| Component | Purpose | Source |
+| Құрамдас | Мақсаты | Дереккөз |
 | --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| **Тақырып** | Сиқырлы/нұсқа/схема хэші, CRC64, ұзындығы және қысу тегі бар пайдалы жүктемелерді жақтаулар; v1 `VERSION_MINOR = 0x00` талап етеді және қолдау көрсетілетін маскаға қарсы тақырып жалауларын тексереді (әдепкі `0x00`). | `norito::header` — `norito.md` қараңыз («Тақырып және жалаулар», репозиторий түбірі) |
+| **Бос пайдалы жүктеме** | Хэштеу/салыстыру үшін пайдаланылатын детерминистік мәнді кодтау. Сым арқылы тасымалдау әрқашан тақырыпты пайдаланады; жалаң байттар тек ішкі. | `norito::codec::{Encode, Decode}` |
+| **Сығу** | Қосымша Zstd (және эксперименттік GPU жеделдету) тақырыпты қысу байты арқылы таңдалған. | `norito.md`, «Сығу келіссөздері» |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+Орналасу жалаушасының тізілімі (packed-struct, packed-seq, өріс бит жиыны, ықшам
+ұзындығы) `norito::header::flags` ішінде өмір сүреді. V1 әдепкі `0x00` жалаушаларына, бірақ
+қолдау көрсетілетін маска ішінде айқын тақырып жалауларын қабылдайды; белгісіз бит болып табылады
+қабылданбады. `norito::header::Flags` ішкі тексеру үшін сақталады және
+болашақ нұсқалары.
 
-## Derive support
+## Қолдау алыңыз
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` `Encode`, `Decode`, `IntoSchema` және JSON көмекшісін жібереді.
+Негізгі конвенциялар:
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- Туындылар AoS және пакеттелген код жолдарын да жасайды; v1 әдепкі бойынша AoS
+  макет (`0x00` жалаушалары), егер тақырып жалаулары жинақталған нұсқаларға қосылмаса.
+  Іске асыру `crates/norito_derive/src/derive_struct.rs` ішінде өмір сүреді.
+- Орналасуға әсер ететін мүмкіндіктер (`packed-struct`, `packed-seq`, `compact-len`)
+  тақырып жалаушалары арқылы қосылу және әріптестер арасында дәйекті түрде кодталуы/декодталуы керек.
+- JSON көмекшілері (`norito::json`) үшін детерминирленген Norito қолдауы бар JSON қамтамасыз етеді
+  API интерфейстерін ашу. `norito::json::{to_json_pretty, from_json}` пайдаланыңыз — ешқашан `serde_json`.
 
-## Multicodec & identifier tables
+## Мультикодек және идентификатор кестелері
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito мультикодек тағайындауларын `norito::multicodec` ішінде сақтайды. Анықтама
+кесте (хэштер, кілт түрлері, пайдалы жүктеме дескрипторлары) `multicodec.md` ішінде сақталады
+репозиторий түбірінде. Жаңа идентификатор қосылғанда:
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. `norito::multicodec::registry` жаңарту.
+2. `multicodec.md` кестені кеңейтіңіз.
+3. Төменгі ағынды байланыстыруларды (Python/Java) қалпына келтіріңіз, егер олар картаны пайдаланса.
 
-## Regenerating docs & fixtures
+## Құжаттар мен құрылғыларды қалпына келтіру
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+Порталда қазіргі уақытта прозалық қорытынды бар, жоғары ағынды Markdown пайдаланыңыз
+ақиқаттың қайнар көзі ретінде:
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **Специя**: `norito.md`
+- **Мультикодек кестесі**: `multicodec.md`
+- **Эталондар**: `crates/norito/benches/`
+- **Алтын сынақтар**: `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Docusaurus автоматтандыруы іске қосылғанда, портал келесі арқылы жаңартылады.
+осылардан деректерді алатын синхрондау сценарийі (`docs/portal/scripts/` ішінде бақыланады).
+файлдар. Осы уақытқа дейін спецификация өзгерген сайын бұл бетті қолмен туралаңыз.

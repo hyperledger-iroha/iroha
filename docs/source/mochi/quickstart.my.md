@@ -7,65 +7,66 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44faf6c98d141959cf8cf40b1df7d3d82c3448e6f2b1bc4fa54cdeceb97994b0
 source_last_modified: "2025-12-29T18:16:35.985408+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Quickstart
+# MOCHI အမြန်စတင်ပါ။
 
-**MOCHI** is the desktop supervisor for local Hyperledger Iroha networks. This guide walks through
-installing the prerequisites, building the application, launching the egui shell, and using the
-runtime tools (settings, snapshots, wipes) for day‑to‑day development.
+**MOCHI** သည် ဒေသတွင်း Hyperledger Iroha ကွန်ရက်များအတွက် ဒက်စ်တော့ ကြီးကြပ်ရေးမှူးဖြစ်သည်။ ဒီလမ်းညွှန်က လမ်းလျှောက်တယ်။
+လိုအပ်ချက်များကိုထည့်သွင်းခြင်း၊ အက်ပ်လီကေးရှင်းကိုတည်ဆောက်ခြင်း၊ egui shell ကိုစတင်ခြင်းနှင့်အသုံးပြုခြင်း။
+နေ့စဥ်ဖွံ့ဖြိုးတိုးတက်မှုအတွက် runtime ကိရိယာများ (ဆက်တင်များ၊ လျှပ်တစ်ပြက်ရိုက်ချက်များ၊ ရှင်းလင်းချက်)။
 
-## Prerequisites
+## လိုအပ်ချက်များ
 
-- Rust toolchain: `rustup default stable` (workspace targets edition 2024 / Rust 1.82+).
-- Platform toolchain:
-  - macOS: Xcode Command Line Tools (`xcode-select --install`).
-  - Linux: GCC, pkg-config, OpenSSL headers (`sudo apt install build-essential pkg-config libssl-dev`).
-- Iroha workspace dependencies:
-  - `cargo xtask mochi-bundle` requires built `irohad`, `kagami`, and `iroha_cli`. Build them once via
-    `cargo build -p irohad -p kagami -p iroha_cli`.
-- Optional: `direnv` or `cargo binstall` for managing local cargo binaries.
+- Rust toolchain- `rustup default stable` (workspace ပစ်မှတ်များထုတ်ဝေမှု 2024 / Rust 1.82+)။
+- ပလပ်ဖောင်းတူးလ်ကွင်းဆက်-
+  - macOS- Xcode Command Line Tools (`xcode-select --install`)။
+  - Linux- GCC၊ pkg-config၊ OpenSSL ခေါင်းစီးများ (`sudo apt install build-essential pkg-config libssl-dev`)။
+- Iroha အလုပ်ခွင်မှီခိုမှုများ-
+  - `cargo xtask mochi-bundle` သည် တည်ဆောက်ထားသော `irohad`၊ `kagami` နှင့် `iroha_cli` လိုအပ်သည်။ တစ်ဆင့်ချင်း ဆောက်ပါ။
+    `cargo build -p irohad -p kagami -p iroha_cli`။
+- ရွေးချယ်နိုင်သော- ပြည်တွင်းကုန်တင်ဒွိနရီများကို စီမံခန့်ခွဲရန်အတွက် `direnv` သို့မဟုတ် `cargo binstall`။
 
-MOCHI shells out to the CLI binaries. Ensure they are discoverable via the environment variables
-below or available on the PATH:
+MOCHI သည် CLI binaries များသို့ ပစ်လွှတ်သည်။ ၎င်းတို့ကို ပတ်၀န်းကျင် ပြောင်းလဲနိုင်သော ကိန်းရှင်များမှတစ်ဆင့် ရှာဖွေနိုင်ကြောင်း သေချာပါစေ။
+အောက်ပါ သို့မဟုတ် PATH တွင် ရနိုင်သည်-
 
-| Binary   | Environment override | Notes                                   |
-|----------|----------------------|-----------------------------------------|
-| `irohad` | `MOCHI_IROHAD`       | Supervises peers                        |
-| `kagami` | `MOCHI_KAGAMI`       | Generates genesis manifests/snapshots   |
-| `iroha_cli` | `MOCHI_IROHA_CLI` | Optional for upcoming helper features   |
+| ဒွိ | ပတ်ဝန်းကျင်ကို ပဓာန| မှတ်စုများ |
+|----------------|------------------------------------------------------------------------------------|
+| `irohad` | `MOCHI_IROHAD` | ရွယ်တူ |
+| `kagami` | `MOCHI_KAGAMI` | ဥပါဒ် ထင်ရှားစေခြင်း/လျှပ်တစ်ပြက်များ |
+| `iroha_cli` | `MOCHI_IROHA_CLI` | လာမည့်ကူညီသူအင်္ဂါရပ်များ |
 
-## Building MOCHI
+## MOCHI တည်ဆောက်ခြင်း။
 
-From the repository root:
+repository root မှ
 
 ```bash
 cargo build -p mochi-ui-egui
 ```
 
-This command builds both `mochi-core` and the egui frontend. To produce a distributable bundle, run:
+ဤ command သည် `mochi-core` နှင့် egui frontend နှစ်ခုလုံးကို တည်ဆောက်သည်။ ဖြန့်ဝေနိုင်သောအစုအဝေးတစ်ခုထုတ်လုပ်ရန်၊ လုပ်ဆောင်ရန်-
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-The bundle task assembles the binaries, manifest, and config stubs under `target/mochi-bundle`.
+အစုအဝေးတာဝန်သည် `target/mochi-bundle` အောက်တွင် binaries၊ manifest၊ နှင့် config stubs များကို စုစည်းသည်။
 
-## Launching the egui shell
+## egui ခွံကို စတင်လိုက်ပါ။
 
-Run the UI directly from cargo:
+ကုန်တင်မှ UI ကို တိုက်ရိုက် run သည်-
 
 ```bash
 cargo run -p mochi-ui-egui
 ```
 
-By default MOCHI creates a single-peer preset in a temporary data directory:
+မူရင်းအားဖြင့် MOCHI သည် ယာယီဒေတာလမ်းညွှန်တွင် တစ်ဦးတည်းသောရွယ်တူကြိုတင်သတ်မှတ်မှုကို ဖန်တီးသည်-
 
-- Data root: `$TMPDIR/mochi`.
-- Torii base port: `8080`.
-- P2P base port: `1337`.
+ဒေတာအမြစ်- `$TMPDIR/mochi`။
+- Torii အခြေစိုက်စခန်း- `8080`။
+- P2P အခြေစိုက်စခန်း- `1337`။
 
-Use CLI flags to override the defaults when launching:
+စတင်ချိန်တွင် ပုံသေများကို အစားထိုးရန် CLI အလံများကို အသုံးပြုပါ-
 
 ```bash
 cargo run -p mochi-ui-egui -- \
@@ -77,99 +78,95 @@ cargo run -p mochi-ui-egui -- \
   --irohad /path/to/irohad
 ```
 
-Environment variables mirror the same overrides when CLI flags are omitted: set `MOCHI_DATA_ROOT`,
-`MOCHI_PROFILE`, `MOCHI_CHAIN_ID`, `MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`,
-`MOCHI_RESTART_MAX`, or `MOCHI_RESTART_BACKOFF_MS` to preseed the supervisor builder; binary paths
-continue to respect `MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, and `MOCHI_CONFIG` points at an
-explicit `config/local.toml`.
+CLI အလံများကို ချန်လှပ်ထားသောအခါတွင် တူညီသောအထပ်ထပ်များကို Environment variable များက ထင်ဟပ်နေသည်- set `MOCHI_DATA_ROOT`၊
+`MOCHI_PROFILE`, `MOCHI_CHAIN_ID`, `MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`၊
+ကြီးကြပ်ရေးမှူး တည်ဆောက်သူကို ကြီးကြပ်ရန် `MOCHI_RESTART_MAX`၊ သို့မဟုတ် `MOCHI_RESTART_BACKOFF_MS`၊ binary လမ်းကြောင်းများ
+`MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI` နှင့် `MOCHI_CONFIG` အမှတ်များကို ဆက်လက်လေးစားရန်
+အတိအလင်း `config/local.toml`။
 
-## Settings & persistence
+## ဆက်တင်များနှင့် တည်မြဲမှု
 
-Open the **Settings** dialog from the dashboard toolbar to adjust the supervisor configuration:
+ကြီးကြပ်သူဖွဲ့စည်းပုံကိုချိန်ညှိရန် **ဆက်တင်များ** ဒိုင်ယာလော့ဂ်ကို ဒက်ရှ်ဘုတ်တူးလ်ဘားမှ ဖွင့်ပါ-
 
-- **Data root** — base directory for peer configs, storage, logs, and snapshots.
-- **Torii / P2P base ports** — starting ports for deterministic allocation.
-- **Log visibility** — toggle stdout/stderr/system channels in the log viewer.
+- **ဒေတာအမြစ်** — သက်တူရွယ်တူ configs၊ သိုလှောင်မှု၊ မှတ်တမ်းများနှင့် လျှပ်တစ်ပြက်ရိုက်ချက်များအတွက် အခြေခံလမ်းညွှန်။
+- **Torii / P2P အခြေခံဆိပ်ကမ်းများ** — အဆုံးအဖြတ်ခွဲဝေမှုအတွက် စတင်သော ဆိပ်ကမ်းများ။
+- **မှတ်တမ်းကြည့်ရှုနိုင်မှု** — မှတ်တမ်းကြည့်ရှုသူရှိ stdout/stderr/system ချန်နယ်များကို ပြောင်းပါ။
 
-Advanced knobs such as the supervisor restart policy live in
-`config/local.toml`. Set `[supervisor.restart] mode = "never"` to disable
-automatic restarts during incident debugging, or adjust
-`max_restarts`/`backoff_ms` (via either the config file or the CLI flags
-`--restart-mode`, `--restart-max`, `--restart-backoff-ms`) to control retry
-behaviour.
+ကြီးကြပ်သူမှ ပြန်လည်စတင်သည့် မူဝါဒကဲ့သို့သော အဆင့်မြင့် ခလုတ်များသည် တိုက်ရိုက်ထုတ်လွှင့်သည်။
+`config/local.toml`။ ပိတ်ရန် `[supervisor.restart] mode = "never"` ကို သတ်မှတ်ပါ။
+အဖြစ်အပျက် အမှားရှာပြင်နေစဉ်အတွင်း အလိုအလျောက် ပြန်လည်စတင်ခြင်း သို့မဟုတ် ချိန်ညှိခြင်း။
+`max_restarts`/`backoff_ms` (config file သို့မဟုတ် CLI အလံများမှတဆင့်
+ပြန်စမ်းကြည့်ရန် ထိန်းချုပ်ရန် `--restart-mode`၊ `--restart-max`၊ `--restart-backoff-ms`
+အပြုအမူ။အပြောင်းအလဲများကို အသုံးချခြင်းသည် ကြီးကြပ်သူကို ပြန်လည်တည်ဆောက်ပေးသည်၊ လည်ပတ်နေသည့် ရွယ်တူများအားလုံးကို ပြန်လည်စတင်ပြီး အစားထိုးမှုများကို ရေးချသည်
+`config/local.toml`။ ပေါင်းစပ်ဖွဲ့စည်းမှု ပေါင်းစည်းမှုသည် အဆင့်မြင့်အသုံးပြုသူများ ထိန်းသိမ်းထားနိုင်စေရန် မသက်ဆိုင်သောသော့များကို ထိန်းသိမ်းပေးသည်။
+MOCHI စီမံထားသော တန်ဖိုးများနှင့်အတူ လူကိုယ်တိုင် ပြုပြင်ပြောင်းလဲမှုများ။
 
-Applying changes rebuilds the supervisor, restarts any running peers, and writes the overrides to
-`config/local.toml`. The configuration merge preserves unrelated keys so advanced users can keep
-manual tweaks alongside MOCHI-managed values.
+## လျှပ်တစ်ပြက်နှင့် သုတ်/ပြန်-ဥပါဒ်
 
-## Snapshots & wipe/re-genesis
+**ထိန်းသိမ်းမှု** ဒိုင်ယာလော့ဂ်တွင် ဘေးကင်းရေး လုပ်ဆောင်မှု နှစ်ခုကို ဖော်ပြသည်-
 
-The **Maintenance** dialog exposes two safety operations:
+- **လျှပ်တစ်ပြက်ပုံများကို ထုတ်ယူခြင်း** — ရွယ်တူသိုလှောင်မှု/ပြင်ဆင်မှု/မှတ်တမ်းများကို မိတ္တူကူးယူပြီး လက်ရှိဥပါဒ်ကိုဖော်ပြခြင်းသို့
+  လက်ရှိဒေတာအမြစ်အောက်တွင် `snapshots/<label>`။ တံဆိပ်များကို အလိုအလျောက် သန့်စင်ပေးပါသည်။
+- **လျှပ်တစ်ပြက်ရိုက်ချက်အား ပြန်လည်ရယူခြင်း** — မျိုးတူသိုလှောင်မှု၊ လျှပ်တစ်ပြက်အမြစ်များ၊ ပြင်ဆင်ချက်များ၊ မှတ်တမ်းများနှင့် ဥပါဒ်များကို ပြန်လည်ဖြည့်တင်းပေးသည်။
+  ရှိပြီးသားအတွဲတစ်ခုမှ ထင်ရှားသည်။ `Supervisor::restore_snapshot` သည် ပကတိလမ်းကြောင်း သို့မဟုတ် လက်ခံသည်။
+  သန့်စင်ထားသော `snapshots/<label>` ဖိုင်တွဲအမည်၊ UI သည် ဤစီးဆင်းမှုကို ထင်ဟပ်စေသောကြောင့် Maintenance → Restore
+  ဖိုင်များကို ကိုယ်တိုင်မထိဘဲ အထောက်အထားအစုအဝေးများကို ပြန်ဖွင့်နိုင်သည်။
+- **ရှင်းလင်းပြီး ပြန်လည်ဖြစ်ပေါ်ခြင်း** — ရွယ်တူများလည်ပတ်ခြင်းကို ရပ်သည်၊ သိုလှောင်မှုလမ်းကြောင်းများကို ဖယ်ရှားသည်၊ မှတစ်ဆင့် ဥပါဒ်ကို ပြန်လည်ထုတ်ပေးသည်။
+  Kagami နှင့် ရှင်းထုတ်ခြင်းပြီးသွားသောအခါ ရွယ်တူများကို ပြန်လည်စတင်သည်။
 
-- **Export snapshot** — copies peer storage/config/logs and the current genesis manifest into
-  `snapshots/<label>` under the active data root. Labels are sanitized automatically.
-- **Restore snapshot** — rehydrates peer storage, snapshot roots, configs, logs, and the genesis
-  manifest from an existing bundle. `Supervisor::restore_snapshot` accepts either an absolute path or
-  the sanitised `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore
-  can replay evidence bundles without touching files manually.
-- **Wipe & re-genesis** — stops running peers, removes storage directories, regenerates genesis via
-  Kagami, and restarts peers when the wipe completes.
+စီးဆင်းမှုနှစ်ခုလုံးကို regression tests (`export_snapshot_captures_storage_and_metadata`၊
+အဆုံးအဖြတ်ရလဒ်များကိုအာမခံရန် `wipe_and_regenerate_resets_storage_and_genesis`)။
 
-Both flows are covered by regression tests (`export_snapshot_captures_storage_and_metadata`,
-`wipe_and_regenerate_resets_storage_and_genesis`) to guarantee deterministic outputs.
+## မှတ်တမ်းများနှင့် လမ်းကြောင်းများ
 
-## Logs & streams
+ဒက်ရှ်ဘုတ်သည် ဒေတာ/မက်ထရစ်များကို တစ်ချက်ကြည့်လိုက်သည်-
 
-The dashboard exposes data/metrics at a glance:
+- **မှတ်တမ်းများ** — `irohad` stdout/stderr/system lifecycle မက်ဆေ့ဂျ်များကို အောက်ပါအတိုင်း ဖော်ပြထားသည်။ ဆက်တင်များတွင် ချန်နယ်များကို ပြောင်းပါ။
+- **Blocks / Events** — စီမံထားသော stream များသည် exponential backoff နှင့် annotate frames များဖြင့် အလိုအလျောက်ပြန်လည်ချိတ်ဆက်ခြင်း
+  Norito-decoded အနှစ်ချုပ်များဖြင့်။
+- **အခြေအနေ** — `/status` ကို စစ်တမ်းကောက်ယူပြီး တန်းစီ၏ အနက်၊ ဖြတ်သန်းမှုနှင့် latency အတွက် sparklines များကို ထုတ်ပေးသည်။
+- **စတင်ရန် အဆင်သင့်** — **Start** ကိုနှိပ်ပြီးနောက် (သက်တူရွယ်တူ တစ်ဦးတည်း သို့မဟုတ် ရွယ်တူအားလုံး)၊ MOCHI ပရောဖက်များ
+  ဘောင်ခတ်ထားသော backoff နှင့်အတူ `/status`; သက်တူရွယ်တူတစ်ဦးစီသည် အဆင်သင့်ဖြစ်သောအခါတွင် နဖူးစည်းက အစီရင်ခံတင်ပြသည် (သတိပြုပါ။
+  queue depth) သို့မဟုတ် အဆင်သင့်အချိန်ကုန်သွားပါက Torii error ကိုပြပါ။
 
-- **Logs** — follows `irohad` stdout/stderr/system lifecycle messages. Toggle channels in Settings.
-- **Blocks / Events** — managed streams auto-reconnect with exponential backoff and annotate frames
-  with Norito-decoded summaries.
-- **Status** — polls `/status` and renders sparklines for queue depth, throughput, and latency.
-- **Startup readiness** — after pressing **Start** (single peer or all peers), MOCHI probes
-  `/status` with bounded backoff; the banner reports when each peer goes ready (with the observed
-  queue depth) or surfaces the Torii error if readiness times out.
+ပြည်နယ်ရှာဖွေသူနှင့် တေးရေးဆရာအတွက် တဘ်များသည် အကောင့်များ၊ ပိုင်ဆိုင်မှုများ၊ ရွယ်တူများနှင့် အများသုံးများသို့ အမြန်ဝင်ရောက်ခွင့်ကို ပေးပါသည်။
+UI ကိုမချန်ဘဲ ညွှန်ကြားချက်များ။ Peers view သည် `FindPeers` query ကို ရောင်ပြန်ဟပ်သောကြောင့် သင်အတည်ပြုနိုင်ပါသည်။
+ပေါင်းစည်းခြင်းစစ်ဆေးမှုများမလုပ်ဆောင်မီ မည်သည့်အများပြည်သူသော့များကို လက်ရှိသတ်မှတ်ထားသည့် validator တွင်မှတ်ပုံတင်ထားသည်။
 
-Tabs for state explorer and composer provide quick access to accounts, assets, peers, and common
-instructions without leaving the UI. The Peers view mirrors the `FindPeers` query so you can confirm
-which public keys are currently registered in the validator set before running integration tests.
+လက်မှတ်ရေးထိုးခြင်းဆိုင်ရာ အာဏာပိုင်များကို တင်သွင်းရန် သို့မဟုတ် တည်းဖြတ်ရန် တေးရေးကိရိယာဘား၏ **လက်မှတ်ထိုးခြင်းကို စီမံခန့်ခွဲရန်** ခလုတ်ကို အသုံးပြုပါ။ ဟိ
+ဒိုင်ယာလော့ဂ်သည် လက်ရှိအသုံးပြုနေသော ကွန်ရက်အမြစ် (`<data_root>/<profile>/signers.json`) သို့ ထည့်သွင်းမှုများကို ရေးသားပြီး သိမ်းဆည်းထားသည်။
+အရောင်းအ၀ယ်အကြိုကြည့်ရှုမှုများနှင့် တင်ပြမှုများအတွက် vault keys များကို ချက်ချင်းရနိုင်သည်။ ဟိုဆိုပါစို့
+တေးရေးဆရာသည် ထုပ်ပိုးထားသော ဖွံ့ဖြိုးတိုးတက်မှုသော့များထံ ပြန်ကျသွားသောကြောင့် စက်တွင်းလုပ်ငန်းအသွားအလာများ ဆက်လက်အလုပ်လုပ်သည်။
+ယခု ဖောင်များသည် mint/burn/transfer ( implicit လက်ခံခြင်းအပါအဝင်) ၊ domain/account/asset-definition ကို အကျုံးဝင်သည်
+မှတ်ပုံတင်ခြင်း၊ အကောင့်ဝင်ခွင့်မူဝါဒများ၊ များပြားသော အဆိုပြုချက်များ၊ Space Directory manifests (AXT/AMX)၊
+SoraFS ပင်နံပါတ်သည် ထင်ရှားနေပြီး ပေးအပ်ခြင်း သို့မဟုတ် ရုပ်သိမ်းခြင်းကဲ့သို့သော အုပ်ချုပ်မှုဆိုင်ရာ လုပ်ဆောင်ချက်များသည် အလွန်အသုံးများပါသည်။
+လမ်းပြမြေပုံ-စာရေးခြင်း လုပ်ငန်းများကို Norito ပေးချေမှုများအား လက်ဖြင့်ရေးစရာမလိုဘဲ အစမ်းလေ့ကျင့်နိုင်ပါသည်။
 
-Use the composer toolbar's **Manage signing vault** button to import or edit signing authorities. The
-dialog writes entries to the active network root (`<data_root>/<profile>/signers.json`), and saved
-vault keys are immediately available for transaction previews and submissions. When the vault is
-empty the composer falls back to the bundled development keys so local workflows continue to work.
-Forms now cover mint/burn/transfer (including implicit receive), domain/account/asset-definition
-registration, account admission policies, multisig proposals, Space Directory manifests (AXT/AMX),
-SoraFS pin manifests, and governance actions such as granting or revoking roles so common
-roadmap-authoring tasks can be rehearsed without hand-writing Norito payloads.
+## ရှင်းလင်းခြင်းနှင့် ပြဿနာဖြေရှင်းခြင်း။- ကြီးကြပ်ခံရွယ်တူများကို ရပ်စဲရန် လျှောက်လွှာကို ရပ်ပါ။
+- အခြေအနေအားလုံးကိုပြန်လည်သတ်မှတ်ရန် data root (`rm -rf <data_root>`) ကိုဖယ်ရှားပါ။
+- Kagami သို့မဟုတ် irohad တည်နေရာများ ပြောင်းလဲပါက၊ ပတ်ဝန်းကျင်ပြောင်းလဲမှုများကို အပ်ဒိတ်လုပ်ပါ သို့မဟုတ် MOCHI ဖြင့် ပြန်လည်လုပ်ဆောင်ပါ။
+  သင့်လျော်သော CLI အလံများ၊ ဆက်တင်များ ဒိုင်ယာလော့ဂ်သည် နောက်တစ်ကြိမ်တွင် လမ်းကြောင်းအသစ်များကို ဆက်လက်တည်ရှိနေမည်ဖြစ်သည်။
 
-## Cleanup & troubleshooting
+အပိုအလိုအလျောက်စနစ်အတွက် `mochi/mochi-core/tests` (ကြီးကြပ်ရေးမှူးဘဝစက်ဝန်းစစ်ဆေးမှုများ) နှင့်
+လှောင်ပြောင်ထားသော Torii အခြေအနေများအတွက် `mochi/mochi-integration`။ အစုအဝေးများ တင်ပို့ရန် သို့မဟုတ် ကြိုးသွယ်တန်းရန်
+desktop သည် CI ပိုက်လိုင်းများသို့၊ {doc}`mochi/packaging` လမ်းညွှန်ကို ကိုးကားပါ။
 
-- Stop the application to terminate supervised peers.
-- Remove the data root (`rm -rf <data_root>`) to reset all state.
-- If Kagami or irohad locations change, update the environment variables or re-run MOCHI with the
-  appropriate CLI flags; the Settings dialog will persist new paths on the next apply.
+## ပြည်တွင်းစမ်းသပ်ဂိတ်
 
-For additional automation check `mochi/mochi-core/tests` (supervisor lifecycle tests) and
-`mochi/mochi-integration` for mocked Torii scenarios. To ship bundles or wire the
-desktop into CI pipelines, refer to the {doc}`mochi/packaging` guide.
-
-## Local test gate
-
-Run `ci/check_mochi.sh` before sending patches so the shared CI gate exercises all three MOCHI
-crates:
+ဖာထေးများမပို့မီ `ci/check_mochi.sh` ကို run ပါ ထို့ကြောင့် မျှဝေထားသော CI ဂိတ်သည် MOCHI သုံးခုလုံးကို လေ့ကျင့်သည်။
+သေတ္တာများ
 
 ```bash
 ./ci/check_mochi.sh
 ```
 
-The helper executes `cargo check`/`cargo test` for `mochi-core`, `mochi-ui-egui`, and
-`mochi-integration`, which catches fixture drift (canonical block/event captures) and egui harness
-regressions in one shot. If the script reports stale fixtures, rerun the ignored regeneration tests,
-for example:
+အကူအညီပေးသူက `cargo check`/`cargo test`၊ `mochi-core`၊ `mochi-ui-egui`၊
+`mochi-integration`၊ ဂိမ်းပျံမှု (canonical block/event captures) နှင့် egui harness
+တစ်ချက်တည်းတွင် ဆုတ်ယုတ်မှုများ။ script သည် stale fixtures များကို သတင်းပို့ပါက၊ လျစ်လျူရှုထားသော regeneration tests ကို ပြန်လုပ်ပါ။
+ဥပမာ-
 
 ```bash
 cargo test -p mochi-core regenerate_block_wire_fixture -- --ignored
 ```
 
-Re-running the gate after regenerating ensures the updated bytes stay consistent before you push.
+ပြန်လည်ထုတ်ပေးပြီးနောက် ဂိတ်အား ပြန်လည်လည်ပတ်ခြင်းသည် သင်မတွန်းမီ အပ်ဒိတ်လုပ်ထားသော ဘိုက်များ တသမတ်တည်း ရှိနေကြောင်း သေချာစေသည်။

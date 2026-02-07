@@ -8,43 +8,45 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Operator Runbooks Index
 description: Canonical entry point for the migrated SoraFS operator runbooks.
 sidebar_label: Runbook Index
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Mirrors the owner ledger that lives under `docs/source/sorafs/runbooks/`.
-> Every new SoraFS operations guide must be linked here once it is published in
-> the portal build.
+> በ`docs/source/sorafs/runbooks/` ስር የሚኖረውን የባለቤት ደብተር ያንጸባርቃል።
+> እያንዳንዱ አዲስ የI18NT0000000X ኦፕሬሽን መመሪያ አንዴ ከወጣ እዚህ ጋር መያያዝ አለበት።
+> ፖርታል ግንባታ።
 
-Use this page to verify which runbooks have completed the migration from the
-source path, and the portal copy so reviewers can jump straight to the desired
-guide during the beta preview.
+የትኛዎቹ runbooks ከ ፍልሰት እንዳጠናቀቁ ለማረጋገጥ ይህን ገጽ ይጠቀሙ
+ምንጭ ዱካ፣ እና የፖርታል ቅጂው ስለዚህ ገምጋሚዎች በቀጥታ ወደሚፈለገው መዝለል ይችላሉ።
+በቅድመ-ይሁንታ ቅድመ እይታ ወቅት መመሪያ።
 
-## Beta preview host
+## የቅድመ-ይሁንታ አስተናጋጅ
 
-The DocOps wave has now promoted the reviewer-approved beta preview host at
-`https://docs.iroha.tech/`. When pointing operators or reviewers to a migrated
-runbook, reference that hostname so they exercise the checksum-gated portal
-snapshot. Publishing/rollback procedures live in
-[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
+የDocOps ሞገድ አሁን በግምገማ የጸደቀውን የቅድመ-ይሁንታ አስተናጋጅ በ ላይ አስተዋውቋል
+`https://docs.iroha.tech/`. ኦፕሬተሮችን ወይም ገምጋሚዎችን ወደተሰደደ ሲጠቁም።
+runbook፣ የአስተናጋጅ ስም በማጣቀስ በቼክሰም-የተከለለ ፖርታል እንዲለማመዱ
+ቅጽበታዊ ገጽ እይታ የማተም/የመልሶ መመለስ ሂደቶች በቀጥታ ስርጭት
+[`devportal/preview-host-exposure`](I18NU0000002X)።
 
-| Runbook | Owner(s) | Portal copy | Source |
-|---------|----------|-------------|--------|
-| Gateway & DNS kickoff | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
-| SoraFS operations playbook | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| Capacity reconciliation | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
-| Pin registry ops | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| Node operations checklist | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| Dispute & revocation runbook | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
-| Staging manifest playbook | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| Taikai anchor observability | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| Runbook | ባለቤት(ዎች) | ፖርታል ቅጂ | ምንጭ |
+|--------|-----------|------------|--------|
+| ጌትዌይ እና ዲ ኤን ኤስ መጀመር | የአውታረ መረብ ግንኙነት TL፣ Ops Automation፣ Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| SoraFS ኦፕሬሽኖች መጫወቻ መጽሐፍ | ሰነዶች/DevRel | [`sorafs/operations-playbook`](I18NU0000004X) | `docs/source/sorafs/operations_playbook.md` |
+| የአቅም ማስታረቅ | ግምጃ ቤት / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| ፒን መዝገብ ቤት ops | Tooling WG | [`sorafs/pin-registry-ops`](I18NU0000006X) | `docs/source/sorafs/pin_registry_ops.md` |
+| የመስቀለኛ መንገድ ስራዎች ማረጋገጫ ዝርዝር | የማከማቻ ቡድን, SRE | [`sorafs/node-operations`](I18NU0000007X) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| ክርክር እና መሻር runbook | አስተዳደር ምክር ቤት | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| አንጸባራቂ የመጫወቻ መጽሐፍ | ሰነዶች/DevRel | [`sorafs/staging-manifest-playbook`](I18NU0000009X) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| ታይካይ መልህቅ ታዛቢነት | የሚዲያ መድረክ WG / DA ፕሮግራም / አውታረ መረብ TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
-## Verification checklist
+## የማረጋገጫ ዝርዝር
 
-- [x] Portal build links to this index (sidebar entry).
-- [x] Every migrated runbook lists the canonical source path to keep reviewers
-  aligned during doc reviews.
-- [x] The DocOps preview pipeline blocks merges when a listed runbook is missing
-  from the portal output.
+- [x] ወደዚህ መረጃ ጠቋሚ (የጎን አሞሌ መግቢያ) ፖርታል ግንባታ አገናኞች።
+- [x] እያንዳንዱ የተሰደደ runbook ገምጋሚዎችን ለማቆየት የቀኖናዊ ምንጭ ዱካ ይዘረዝራል።
+  በዶክ ግምገማዎች ጊዜ የተጣጣመ.
+- [x] የDocOps ቅድመ እይታ የቧንቧ መስመር ብሎኮች የተዘረዘረው የሩጫ መጽሐፍ ሲጠፋ ይዋሃዳሉ
+  ከፖርታል ውፅዓት.
 
-Future migrations (e.g., new chaos drills or governance appendices) should add a
-row to the table above and update the DocOps checklist embedded in
+የወደፊት ፍልሰት (ለምሳሌ፣ አዲስ ትርምስ ልምምዶች ወይም የአስተዳደር ተጨማሪዎች) መጨመር አለባቸው ሀ
+ከላይ ባለው ሠንጠረዥ ረድፉ እና የተከተተውን የ DocOps ማረጋገጫ ዝርዝር ያዘምኑ
 `docs/examples/docs_preview_request_template.md`.

@@ -7,65 +7,66 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44faf6c98d141959cf8cf40b1df7d3d82c3448e6f2b1bc4fa54cdeceb97994b0
 source_last_modified: "2025-12-29T18:16:35.985408+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Quickstart
+# MOCHI Tez boshlash
 
-**MOCHI** is the desktop supervisor for local Hyperledger Iroha networks. This guide walks through
-installing the prerequisites, building the application, launching the egui shell, and using the
-runtime tools (settings, snapshots, wipes) for day‑to‑day development.
+**MOCHI** mahalliy Hyperledger Iroha tarmoqlari uchun ish stoli nazoratchisi. Ushbu qo'llanma orqali o'tadi
+old shartlarni o'rnatish, ilovani yaratish, egui qobig'ini ishga tushirish va dan foydalanish
+kundalik ishlab chiqish uchun ish vaqti vositalari (sozlamalar, suratlar, oʻchirish vositalari).
 
-## Prerequisites
+## Old shartlar
 
-- Rust toolchain: `rustup default stable` (workspace targets edition 2024 / Rust 1.82+).
-- Platform toolchain:
-  - macOS: Xcode Command Line Tools (`xcode-select --install`).
-  - Linux: GCC, pkg-config, OpenSSL headers (`sudo apt install build-essential pkg-config libssl-dev`).
-- Iroha workspace dependencies:
-  - `cargo xtask mochi-bundle` requires built `irohad`, `kagami`, and `iroha_cli`. Build them once via
+- Rust asboblar zanjiri: `rustup default stable` (ish maydoni maqsadlari nashri 2024 / Rust 1.82+).
+- platforma asboblar zanjiri:
+  - macOS: Xcode buyruq qatori vositalari (`xcode-select --install`).
+  - Linux: GCC, pkg-config, OpenSSL sarlavhalari (`sudo apt install build-essential pkg-config libssl-dev`).
+- Iroha ish maydoniga bog'liqliklar:
+  - `cargo xtask mochi-bundle` uchun qurilgan `irohad`, `kagami` va `iroha_cli` talab qilinadi. Ularni bir marta orqali yarating
     `cargo build -p irohad -p kagami -p iroha_cli`.
-- Optional: `direnv` or `cargo binstall` for managing local cargo binaries.
+- Majburiy emas: mahalliy yuk ikkiliklarini boshqarish uchun `direnv` yoki `cargo binstall`.
 
-MOCHI shells out to the CLI binaries. Ensure they are discoverable via the environment variables
-below or available on the PATH:
+MOCHI CLI ikkilik fayllarini o'z ichiga oladi. Ularning atrof-muhit o'zgaruvchilari orqali aniqlanishiga ishonch hosil qiling
+quyida yoki PATHda mavjud:
 
-| Binary   | Environment override | Notes                                   |
+| Ikkilik | Atrof-muhitni bekor qilish | Eslatmalar |
 |----------|----------------------|-----------------------------------------|
-| `irohad` | `MOCHI_IROHAD`       | Supervises peers                        |
-| `kagami` | `MOCHI_KAGAMI`       | Generates genesis manifests/snapshots   |
-| `iroha_cli` | `MOCHI_IROHA_CLI` | Optional for upcoming helper features   |
+| `irohad` | `MOCHI_IROHAD` | Tengdoshlarni nazorat qiladi |
+| `kagami` | `MOCHI_KAGAMI` | Genezis manifestlari/snapshotlarini yaratadi |
+| `iroha_cli` | `MOCHI_IROHA_CLI` | Kelgusi yordamchi funksiyalar uchun ixtiyoriy |
 
-## Building MOCHI
+## MOCHI qurish
 
-From the repository root:
+Repozitoriy ildizidan:
 
 ```bash
 cargo build -p mochi-ui-egui
 ```
 
-This command builds both `mochi-core` and the egui frontend. To produce a distributable bundle, run:
+Bu buyruq ikkala `mochi-core` va egui frontendini quradi. Tarqaladigan to'plamni ishlab chiqarish uchun quyidagilarni bajaring:
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-The bundle task assembles the binaries, manifest, and config stubs under `target/mochi-bundle`.
+To'plam vazifasi `target/mochi-bundle` ostida ikkilik, manifest va konfiguratsiya stublarini yig'adi.
 
-## Launching the egui shell
+## Egui qobig'ini ishga tushirish
 
-Run the UI directly from cargo:
+UIni to'g'ridan-to'g'ri yukdan boshqaring:
 
 ```bash
 cargo run -p mochi-ui-egui
 ```
 
-By default MOCHI creates a single-peer preset in a temporary data directory:
+Odatiy bo'lib, MOCHI vaqtinchalik ma'lumotlar katalogida bitta peerli oldindan o'rnatishni yaratadi:
 
-- Data root: `$TMPDIR/mochi`.
-- Torii base port: `8080`.
-- P2P base port: `1337`.
+- Ma'lumotlar ildizi: `$TMPDIR/mochi`.
+- Torii asosiy port: `8080`.
+- P2P asosiy porti: `1337`.
 
-Use CLI flags to override the defaults when launching:
+Ishga tushirishda standart sozlamalarni bekor qilish uchun CLI bayroqlaridan foydalaning:
 
 ```bash
 cargo run -p mochi-ui-egui -- \
@@ -77,99 +78,95 @@ cargo run -p mochi-ui-egui -- \
   --irohad /path/to/irohad
 ```
 
-Environment variables mirror the same overrides when CLI flags are omitted: set `MOCHI_DATA_ROOT`,
+Atrof-muhit o'zgaruvchilari CLI bayroqlari o'tkazib yuborilganda bir xil bekor qilishlarni aks ettiradi: `MOCHI_DATA_ROOT` o'rnating,
 `MOCHI_PROFILE`, `MOCHI_CHAIN_ID`, `MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`,
-`MOCHI_RESTART_MAX`, or `MOCHI_RESTART_BACKOFF_MS` to preseed the supervisor builder; binary paths
-continue to respect `MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, and `MOCHI_CONFIG` points at an
-explicit `config/local.toml`.
+`MOCHI_RESTART_MAX` yoki `MOCHI_RESTART_BACKOFF_MS` nazoratchi quruvchini oldindan belgilash uchun; ikkilik yo'llar
+`MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI` va `MOCHI_CONFIG` nuqtalarini hurmat qilishda davom eting.
+aniq `config/local.toml`.
 
-## Settings & persistence
+## Sozlamalar va doimiylik
 
-Open the **Settings** dialog from the dashboard toolbar to adjust the supervisor configuration:
+Nazoratchi konfiguratsiyasini sozlash uchun asboblar panelidagi **Sozlamalar** muloqot oynasini oching:
 
-- **Data root** — base directory for peer configs, storage, logs, and snapshots.
-- **Torii / P2P base ports** — starting ports for deterministic allocation.
-- **Log visibility** — toggle stdout/stderr/system channels in the log viewer.
+- **Maʼlumotlar ildizi** — tengdosh konfiguratsiyalar, saqlash, jurnallar va suratlar uchun asosiy katalog.
+- **Torii / P2P tayanch portlari** — deterministik ajratish uchun boshlang'ich portlar.
+- **Jurnal ko‘rinishi** — jurnalni ko‘rish vositasida stdout/stderr/tizim kanallarini almashtirish.
 
-Advanced knobs such as the supervisor restart policy live in
-`config/local.toml`. Set `[supervisor.restart] mode = "never"` to disable
-automatic restarts during incident debugging, or adjust
-`max_restarts`/`backoff_ms` (via either the config file or the CLI flags
-`--restart-mode`, `--restart-max`, `--restart-backoff-ms`) to control retry
-behaviour.
+Supervayzerni qayta ishga tushirish siyosati kabi kengaytirilgan tugmalar mavjud
+`config/local.toml`. O'chirish uchun `[supervisor.restart] mode = "never"` sozlang
+nosozliklarni tuzatish paytida avtomatik qayta ishga tushirish yoki sozlash
+`max_restarts`/`backoff_ms` (konfiguratsiya fayli yoki CLI bayroqlari orqali
+Qayta urinishlarni boshqarish uchun `--restart-mode`, `--restart-max`, `--restart-backoff-ms`)
+xatti-harakati.O'zgarishlarni qo'llash supervayzerni qayta tiklaydi, ishlaydigan barcha tengdoshlarni qayta ishga tushiradi va bekor qilishlarni yozadi
+`config/local.toml`. Konfiguratsiya birlashmasi ilg'or foydalanuvchilar saqlab qolishi uchun bog'liq bo'lmagan kalitlarni saqlaydi
+MOCHI tomonidan boshqariladigan qiymatlar bilan bir qatorda qo'lda sozlash.
 
-Applying changes rebuilds the supervisor, restarts any running peers, and writes the overrides to
-`config/local.toml`. The configuration merge preserves unrelated keys so advanced users can keep
-manual tweaks alongside MOCHI-managed values.
+## Suratlar va oʻchirish/qayta genezis
 
-## Snapshots & wipe/re-genesis
+**Xizmat** muloqot oynasi ikkita xavfsizlik amalini ko‘rsatadi:
 
-The **Maintenance** dialog exposes two safety operations:
+- **Eksport snapshot** — tengdosh xotira/konfiguratsiya/jurnallar va joriy genezisdan nusxa oladi
+  `snapshots/<label>` faol ma'lumotlar ildizi ostida. Yorliqlar avtomatik ravishda tozalanadi.
+- **Snapshotni tiklash** — tengdosh xotirasi, oniy rasm ildizlari, konfiguratsiyalar, jurnallar va genezisni qayta namlaydi
+  mavjud to'plamdan manifest. `Supervisor::restore_snapshot` mutlaq yo'lni yoki qabul qiladi
+  tozalangan `snapshots/<label>` papka nomi; UI bu oqimni aks ettiradi, shuning uchun Maintenance → Restore
+  fayllarga qo'lda tegmasdan dalillar to'plamlarini takrorlashi mumkin.
+- **Wipe & re-genesis** — tengdoshlarning ishlashini to'xtatadi, saqlash kataloglarini o'chiradi, genezisni qayta tiklaydi.
+  Kagami va tozalash tugagach, tengdoshlarni qayta ishga tushiradi.
 
-- **Export snapshot** — copies peer storage/config/logs and the current genesis manifest into
-  `snapshots/<label>` under the active data root. Labels are sanitized automatically.
-- **Restore snapshot** — rehydrates peer storage, snapshot roots, configs, logs, and the genesis
-  manifest from an existing bundle. `Supervisor::restore_snapshot` accepts either an absolute path or
-  the sanitised `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore
-  can replay evidence bundles without touching files manually.
-- **Wipe & re-genesis** — stops running peers, removes storage directories, regenerates genesis via
-  Kagami, and restarts peers when the wipe completes.
+Ikkala oqim ham regressiya testlari bilan qoplangan (`export_snapshot_captures_storage_and_metadata`,
+`wipe_and_regenerate_resets_storage_and_genesis`) deterministik natijalarni kafolatlash uchun.
 
-Both flows are covered by regression tests (`export_snapshot_captures_storage_and_metadata`,
-`wipe_and_regenerate_resets_storage_and_genesis`) to guarantee deterministic outputs.
+## Jurnallar va oqimlar
 
-## Logs & streams
+Boshqaruv paneli ma'lumotlar/ko'rsatkichlarni bir qarashda ko'rsatadi:
 
-The dashboard exposes data/metrics at a glance:
+- **Jurnallar** — `irohad` stdout/stderr/tizimning hayot aylanishi haqidagi xabarlarga amal qiladi. Sozlamalarda kanallarni almashtiring.
+- **Bloklar / Voqealar** — boshqariladigan oqimlar eksponensial orqaga qaytish va izohli kadrlar bilan avtomatik qayta ulanadi
+  Norito-dekodlangan xulosalar bilan.
+- **Status** — `/status` so'rovi va navbat chuqurligi, o'tkazish qobiliyati va kechikish uchun sparklines beradi.
+- **Ishga tushirishga tayyorlik** — **Start** tugmasini bosgandan so'ng (bitta teng yoki barcha tengdoshlar), MOCHI zondlari
+  `/status` chegaralangan orqaga qaytish bilan; banner har bir tengdosh tayyor bo'lganda xabar beradi (kuzatilgan bilan
+  navbat chuqurligi) yoki tayyorlik vaqti tugasa, Torii xatosini yuzaga keltiradi.
 
-- **Logs** — follows `irohad` stdout/stderr/system lifecycle messages. Toggle channels in Settings.
-- **Blocks / Events** — managed streams auto-reconnect with exponential backoff and annotate frames
-  with Norito-decoded summaries.
-- **Status** — polls `/status` and renders sparklines for queue depth, throughput, and latency.
-- **Startup readiness** — after pressing **Start** (single peer or all peers), MOCHI probes
-  `/status` with bounded backoff; the banner reports when each peer goes ready (with the observed
-  queue depth) or surfaces the Torii error if readiness times out.
+Davlat tadqiqotchisi va bastakor uchun yorliqlar hisoblar, aktivlar, tengdoshlar va umumiy hisoblarga tezkor kirish imkonini beradi
+foydalanuvchi interfeysidan chiqmasdan ko'rsatmalar. Tengdoshlar ko'rinishi `FindPeers` so'rovini aks ettiradi, shuning uchun siz tasdiqlashingiz mumkin
+integratsiya testlarini o'tkazishdan oldin qaysi ochiq kalitlar validator to'plamida ro'yxatdan o'tgan.
 
-Tabs for state explorer and composer provide quick access to accounts, assets, peers, and common
-instructions without leaving the UI. The Peers view mirrors the `FindPeers` query so you can confirm
-which public keys are currently registered in the validator set before running integration tests.
+Imzolovchi organlarni import qilish yoki tahrirlash uchun kompozitor asboblar panelidagi **Imzolash omborini boshqarish** tugmasidan foydalaning. The
+dialog oynasi faol tarmoq ildiziga (`<data_root>/<profile>/signers.json`) yozuvlarni yozadi va saqlanadi
+kassa kalitlari tranzaktsiyalarni oldindan ko'rish va yuborish uchun darhol mavjud. Kassa bo'lganda
+bo'sh bo'lsa, kompozitor birlashtirilgan ishlab chiqish kalitlariga qaytadi, shuning uchun mahalliy ish oqimlari ishlashda davom etadi.
+Shakllar endi yalpiz/yoqish/o‘tkazish (jumladan, yashirin qabul qilish), domen/hisob/aktiv ta’rifini qamrab oladi.
+ro'yxatdan o'tish, hisobga kirish siyosati, multisig takliflari, kosmik katalog manifestlari (AXT/AMX),
+SoraFS pin manifestlari va rollarni berish yoki bekor qilish kabi boshqaruv harakatlari juda keng tarqalgan
+yo'l xaritasini yaratish vazifalari Norito foydali yuklarni qo'lda yozmasdan takrorlanishi mumkin.
 
-Use the composer toolbar's **Manage signing vault** button to import or edit signing authorities. The
-dialog writes entries to the active network root (`<data_root>/<profile>/signers.json`), and saved
-vault keys are immediately available for transaction previews and submissions. When the vault is
-empty the composer falls back to the bundled development keys so local workflows continue to work.
-Forms now cover mint/burn/transfer (including implicit receive), domain/account/asset-definition
-registration, account admission policies, multisig proposals, Space Directory manifests (AXT/AMX),
-SoraFS pin manifests, and governance actions such as granting or revoking roles so common
-roadmap-authoring tasks can be rehearsed without hand-writing Norito payloads.
+## Tozalash va muammolarni bartaraf etish- Nazorat ostidagi tengdoshlarni tugatish uchun ilovani to'xtating.
+- Barcha holatni tiklash uchun ma'lumotlar ildizini (`rm -rf <data_root>`) olib tashlang.
+- Agar Kagami yoki irohad manzillari o'zgarsa, muhit o'zgaruvchilarini yangilang yoki MOCHI-ni qayta ishga tushiring.
+  tegishli CLI bayroqlari; Sozlamalar dialog oynasi keyingi qo'llashda yangi yo'llar saqlanib qoladi.
 
-## Cleanup & troubleshooting
+Qo'shimcha avtomatlashtirishni tekshirish uchun `mochi/mochi-core/tests` (nazoratchining hayot aylanishi testlari) va
+`mochi/mochi-integration` masxara qilingan Torii stsenariylari uchun. To'plamlarni jo'natish yoki sim o'tkazish uchun
+ish stolini CI quvurlariga o'tkazish uchun {doc}`mochi/packaging` qo'llanmasiga qarang.
 
-- Stop the application to terminate supervised peers.
-- Remove the data root (`rm -rf <data_root>`) to reset all state.
-- If Kagami or irohad locations change, update the environment variables or re-run MOCHI with the
-  appropriate CLI flags; the Settings dialog will persist new paths on the next apply.
+## Mahalliy sinov eshigi
 
-For additional automation check `mochi/mochi-core/tests` (supervisor lifecycle tests) and
-`mochi/mochi-integration` for mocked Torii scenarios. To ship bundles or wire the
-desktop into CI pipelines, refer to the {doc}`mochi/packaging` guide.
-
-## Local test gate
-
-Run `ci/check_mochi.sh` before sending patches so the shared CI gate exercises all three MOCHI
-crates:
+Yamalar yuborishdan oldin `ci/check_mochi.sh` ni ishga tushiring, shunda umumiy CI darvozasi uchta MOCHIni mashq qiladi.
+qutilar:
 
 ```bash
 ./ci/check_mochi.sh
 ```
 
-The helper executes `cargo check`/`cargo test` for `mochi-core`, `mochi-ui-egui`, and
-`mochi-integration`, which catches fixture drift (canonical block/event captures) and egui harness
-regressions in one shot. If the script reports stale fixtures, rerun the ignored regeneration tests,
-for example:
+Yordamchi `mochi-core`, `mochi-ui-egui` uchun `cargo check`/`cargo test` va
+`mochi-integration`, bu armatura drifti (kanonik blok/hodisalarni suratga olish) va egui jabduqlarini ushlaydi
+bir zarbada regressiyalar. Agar skript eskirgan qurilmalar haqida xabar bersa, e'tibor berilmagan regeneratsiya sinovlarini qaytadan o'tkazing,
+masalan:
 
 ```bash
 cargo test -p mochi-core regenerate_block_wire_fixture -- --ignored
 ```
 
-Re-running the gate after regenerating ensures the updated bytes stay consistent before you push.
+Qayta tiklashdan so'ng darvozani qayta ishga tushirish, siz bosishdan oldin yangilangan baytlarning barqaror bo'lishini ta'minlaydi.

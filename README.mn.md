@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8f2fe1d4fc449fc895f770195f3d209d5a576dfe78c8fea37c523cc111694c44
 source_last_modified: "2026-02-07T00:30:39.016220+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Hyperledger Iroha
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Лиценз](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Hyperledger Iroha is a deterministic blockchain platform for permissioned and consortium deployments. It provides account/asset management, on-chain permissions, and smart contracts through the Iroha Virtual Machine (IVM).
+Hyperledger Iroha нь зөвшөөрөгдсөн болон консорциумын байршуулалтад зориулагдсан блокчейн платформ юм. Энэ нь Iroha виртуал машинаар (IVM) дамжуулан данс/хөрөнгийн удирдлага, сүлжээн дэх зөвшөөрөл, ухаалаг гэрээгээр хангадаг.
 
-> Workspace status and recent changes are tracked in [`status.md`](./status.md).
+> Ажлын талбарын байдал болон сүүлийн үеийн өөрчлөлтүүдийг [`status.md`](./status.md)-д хянадаг.
 
-## Release Tracks
+## Дуунуудыг гаргах
 
-This repository ships two deployment tracks from the same codebase:
+Энэ агуулах нь нэг кодын сангаас хоёр байршуулах замыг илгээдэг:
 
-- **Iroha 2**: self-hosted permissioned/consortium networks.
-- **Iroha 3 (SORA Nexus)**: the Nexus-oriented deployment track using the same core crates.
+- **Iroha 2**: өөрөө зохион байгуулсан зөвшөөрөлтэй/консорциумын сүлжээ.
+- **Iroha 3 (SORA Nexus)**: ижил үндсэн хайрцаг ашиглан Nexus-д чиглэсэн байршуулах зам.
 
-Both tracks share the same core components, including Norito serialization, Sumeragi consensus, and the Kotodama -> IVM toolchain.
+Хоёр зам хоёулаа Norito цуваа, Sumeragi зөвшилцөл, Kotodama -> IVM хэрэгслийн гинж зэрэг ижил үндсэн бүрэлдэхүүн хэсгүүдийг хуваалцдаг.
 
-## Repository Layout
+## Хадгалах сангийн зохион байгуулалт
 
-- [`crates/`](./crates): core Rust crates (`iroha`, `irohad`, `iroha_cli`, `iroha_core`, `ivm`, `norito`, etc.).
-- [`integration_tests/`](./integration_tests): cross-component network/integration tests.
-- [`IrohaSwift/`](./IrohaSwift): Swift SDK package.
-- [`java/iroha_android/`](./java/iroha_android): Android SDK package.
-- [`docs/`](./docs): user/operator/developer documentation.
+- [`crates/`](./crates): зэвний үндсэн хайрцаг (`iroha`, `irohad`, `iroha_cli`, `iroha_core`, I108082X, I1080X `norito` гэх мэт).
+- [`integration_tests/`](./integration_tests): бүрэлдэхүүн хэсгүүд хоорондын сүлжээ/интеграцийн туршилтууд.
+- [`IrohaSwift/`](./IrohaSwift): Swift SDK багц.
+- [`java/iroha_android/`](./java/iroha_android): Android SDK багц.
+- [`docs/`](./docs): хэрэглэгч/оператор/хөгжүүлэгчийн баримт бичиг.
 
-## Quickstart
+## Хурдан эхлэл
 
-### Prerequisites
+### Урьдчилсан нөхцөл
 
-- [Rust stable](https://www.rust-lang.org/tools/install)
-- Optional: Docker + Docker Compose for local multi-peer runs
+- [Зэв тогтвортой](https://www.rust-lang.org/tools/install)
+- Нэмэлт: Docker + Docker Орон нутгийн олон үет гүйлтэд зориулж зохиох
 
-### Build and Test (Workspace)
+### Үүсгэх ба турших (Ажлын талбар)
 
 ```bash
 cargo build --workspace
@@ -50,20 +51,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
 
-Notes:
+Тэмдэглэл:
 
-- Full workspace build can take about 20 minutes.
-- Full workspace tests can take multiple hours.
-- The workspace targets `std` (WASM/no-std builds are not supported).
+- Ажлын байрыг бүрэн барихад 20 минут зарцуулагдана.
+- Ажлын талбарыг бүрэн шалгахад олон цаг зарцуулагдана.
+- Ажлын талбар нь `std` зорилтот (WASM/no-std бүтцийг дэмждэггүй).
 
-### Targeted Test Commands
+### Зорилтот туршилтын командууд
 
 ```bash
 cargo test -p <crate>
 cargo test -p <crate> <test_name> -- --nocapture
 ```
 
-### SDK Test Commands
+### SDK тестийн командууд
 
 ```bash
 cd IrohaSwift
@@ -78,77 +79,77 @@ ANDROID_SDK_ROOT=~/Library/Android/sdk \
 ./gradlew test
 ```
 
-## Run a Local Network
+## Дотоод сүлжээ ажиллуулах
 
-Start the provided Docker Compose network:
+Өгөгдсөн Docker Compose сүлжээг эхлүүлнэ үү:
 
 ```bash
 docker compose -f defaults/docker-compose.yml up
 ```
 
-Use the CLI against the default client config:
+CLI-г үйлчлүүлэгчийн өгөгдмөл тохиргооны эсрэг ашиглана уу:
 
 ```bash
 cargo run --bin iroha -- --config ./defaults/client.toml --help
 ```
 
-For daemon-specific native deployment steps, see [`crates/irohad/README.md`](./crates/irohad/README.md).
+Демон-д зориулсан үндсэн байршуулалтын алхмуудыг [`crates/irohad/README.md`](./crates/irohad/README.md) үзнэ үү.
 
-## API and Observability
+## API ба ажиглах чадвар
 
-Torii exposes both Norito and JSON APIs. Common operator endpoints:
+Torii нь Norito болон JSON API-г хоёуланг нь харуулж байна. Нийтлэг операторын төгсгөлийн цэгүүд:
 
 - `GET /status`
 - `GET /metrics`
 - `GET /v1/parameters`
 - `GET /v1/events/sse`
 
-See the full endpoint reference in:
+Төгсгөлийн цэгийн бүрэн лавлагааг дараахаас үзнэ үү:
 
 - [`docs/source/telemetry.md`](./docs/source/telemetry.md)
 - [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
 
-## Core Crates
+## Үндсэн хайрцаг
 
-- [`crates/iroha`](./crates/iroha): client library.
-- [`crates/irohad`](./crates/irohad): peer daemon binaries.
-- [`crates/iroha_cli`](./crates/iroha_cli): reference CLI.
-- [`crates/iroha_core`](./crates/iroha_core): ledger/core execution engine.
-- [`crates/iroha_config`](./crates/iroha_config): typed configuration model.
-- [`crates/iroha_data_model`](./crates/iroha_data_model): canonical data model.
-- [`crates/iroha_crypto`](./crates/iroha_crypto): cryptographic primitives.
-- [`crates/norito`](./crates/norito): deterministic serialization codec.
-- [`crates/ivm`](./crates/ivm): Iroha Virtual Machine.
-- [`crates/iroha_kagami`](./crates/iroha_kagami): key/genesis/config tooling.
+- [`crates/iroha`](./crates/iroha): үйлчлүүлэгчийн номын сан.
+- [`crates/irohad`](./crates/irohad): үе тэнгийн демон хоёртын файлууд.
+- [`crates/iroha_cli`](./crates/iroha_cli): CLI лавлагаа.
+- [`crates/iroha_core`](./crates/iroha_core): дэвтэр/үндсэн гүйцэтгэлийн хөдөлгүүр.
+- [`crates/iroha_config`](./crates/iroha_config): бичсэн тохиргооны загвар.
+- [`crates/iroha_data_model`](./crates/iroha_data_model): каноник өгөгдлийн загвар.
+- [`crates/iroha_crypto`](./crates/iroha_crypto): криптограф командууд.
+- [`crates/norito`](./crates/norito): детерминист цуваа кодлогч.
+- [`crates/ivm`](./crates/ivm): Iroha Виртуал машин.
+- [`crates/iroha_kagami`](./crates/iroha_kagami): түлхүүр/генезис/тохируулгын хэрэгсэл.
 
-## Documentation Map
+## Баримт бичгийн зураг
 
-- Main docs index: [`docs/README.md`](./docs/README.md)
-- Genesis: [`docs/genesis.md`](./docs/genesis.md)
-- Consensus (Sumeragi): [`docs/source/sumeragi.md`](./docs/source/sumeragi.md)
-- Transaction pipeline: [`docs/source/pipeline.md`](./docs/source/pipeline.md)
-- P2P internals: [`docs/source/p2p.md`](./docs/source/p2p.md)
-- IVM syscalls: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
-- Kotodama grammar: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
-- Norito wire format: [`norito.md`](./norito.md)
-- Current work tracking: [`status.md`](./status.md), [`roadmap.md`](./roadmap.md)
+- Үндсэн баримтын индекс: [`docs/README.md`](./docs/README.md)
+- Эхлэл: [`docs/genesis.md`](./docs/genesis.md)
+- Зөвшилцөл (Sumeragi): [`docs/source/sumeragi.md`](./docs/source/sumeragi.md)
+- Гүйлгээ дамжуулах хоолой: [`docs/source/pipeline.md`](./docs/source/pipeline.md)
+- P2P дотоод: [`docs/source/p2p.md`](./docs/source/p2p.md)
+- IVM системийн дуудлага: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
+- Kotodama дүрэм: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
+- Norito утасны формат: [`norito.md`](./norito.md)
+- Одоогийн ажлын хяналт: [`status.md`](./status.md), [`roadmap.md`](./roadmap.md)
 
-## Translations
+## Орчуулга
 
-Japanese overview: [`README.ja.md`](./README.ja.md)
+Японы тойм: [`README.ja.md`](./README.ja.md)
 
-Other overviews:
+Бусад тойм:
 [`README.he.md`](./README.he.md), [`README.es.md`](./README.es.md), [`README.pt.md`](./README.pt.md), [`README.fr.md`](./README.fr.md), [`README.ru.md`](./README.ru.md), [`README.ar.md`](./README.ar.md), [`README.ur.md`](./README.ur.md)
 
-Translation workflow: [`docs/i18n/README.md`](./docs/i18n/README.md)
+Орчуулгын ажлын урсгал: [`docs/i18n/README.md`](./docs/i18n/README.md)
 
-## Contributing and Help
+## Хувь нэмэр оруулж, тусалж байна
 
-- Contribution guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- Community/support channels: [`CONTRIBUTING.md#contact`](./CONTRIBUTING.md#contact)
+- Хувь нэмэр оруулах гарын авлага: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- Олон нийтийн/тусламжийн сувгууд: [`CONTRIBUTING.md#contact`](./CONTRIBUTING.md#contact)
 
-## License
+## Лиценз
 
-Iroha is licensed under Apache-2.0. See [`LICENSE`](./LICENSE).
+Iroha нь Apache-2.0 дагуу лицензтэй. [`LICENSE`](./LICENSE) харна уу.
 
-Documentation is licensed under CC-BY-4.0: http://creativecommons.org/licenses/by/4.0/
+Баримт бичгийг CC-BY-4.0: http://creativecommons.org/licenses/by/4.0/ дагуу лицензжүүлсэн.

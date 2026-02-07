@@ -7,321 +7,308 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da7119ab99121dbcfc268f5406f43b16ac9149cef6500a45c6717ad16c02ab80
 source_last_modified: "2026-01-28T15:38:09.507154+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android SDK Operations Runbook
+# Android ཨེསི་ཌི་ཀེ་ བཀོལ་སྤྱོད་རན་བུལ།
 
-This runbook supports operators and support engineers managing Android SDK
-deployments for AND7 and beyond. Pair with the Android Support Playbook for SLA
-definitions and escalation paths.
+རན་དེབ་འདི་གིས་ Android SDK འཛིན་སྐྱོང་འཐབ་མི་ བཀོལ་སྤྱོད་པ་དང་རྒྱབ་སྐྱོར་བཟོ་རིག་པ་ཚུ་ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན།
+AND7 དང་དེ་ལས་ལྷག་པའི་ བཀྲམ་སྤེལ་ཚུ། ཨེས་ཨེལ་ཨེ་གི་དོན་ལུ་ ཨེན་ཌོརཌི་རྒྱབ་སྐྱོར་ རྩེད་དེབ་དང་གཅིག་ཁར་ ཆ་སྒྲིག་འབད།
+ངེས་ཚིག་དང་ཡར་འཕར་གྱི་ལམ་ཚུ།
 
-> **Note:** When updating incident procedures, also refresh the shared
-> troubleshooting matrix (`docs/source/sdk/android/troubleshooting.md`) so the
-> scenario table, SLAs, and telemetry references stay aligned with this runbook.
+> **དྲན་འཛིན་:** བྱུང་རྐྱེན་བྱ་རིམ་ཚུ་དུས་མཐུན་བཟོ་བའི་སྐབས་ བརྗེ་སོར་འདི་ཡང་གསར་བསྐྲུན་འབད།
+> དཀའ་ངལ་སེལ་ཐབས་མེ་ཊིགསི་ (Grafana) དེ་འབདཝ་ལས་
+> གནས་སྟངས་ཐིག་ཁྲམ་དང་ ཨེསི་ཨེལ་ཨེ་ཚུ་ དེ་ལས་ ཊེ་ལི་མི་ཊི་གཞི་བསྟུན་ཚུ་ རན་དེབ་འདི་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབདཝ་ཨིན།
 
-## 0. Quickstart (when pagers fire)
+## ༠.
 
-Keep this sequence handy for Sev 1/Sev 2 alerts before diving into the detailed
-sections below:
+ཁ་གསལ་ནང་མ་འཛུལ་བའི་ཧེ་མ་ Sev1/Sev2 ཉེན་བརྡ་ཚུ་གི་དོན་ལུ་ གོ་རིམ་འདི་ ལག་ལེན་འཐབ་བཏུབ་སྦེ་བཞག།
+འོག་གི་དབྱེ་ཚན་ཚུ།
 
-1. **Confirm the active config:** Capture the `ClientConfig` manifest checksum
-   emitted at app startup and compare it to the pinned manifest in
-   `configs/android_client_manifest.json`. If hashes diverge, halt releases and
-   file a config drift ticket before touching telemetry/overrides (see §1).
-2. **Run the schema diff gate:** Execute the `telemetry-schema-diff` CLI against
-   the accepted snapshot
-   (`docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`).
-   Treat any `policy_violations` output as Sev 2 and block exports until the
-   discrepancy is understood (see §2.6).
-3. **Check dashboards + status CLI:** Open the Android Telemetry Redaction and
-   Exporter Health boards, then run
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>`. If
-   authorities are under the floor or exports error, capture screenshots and
-   CLI output for the incident doc (see §2.4–§2.5).
-4. **Decide on overrides:** Only after the above steps and with incident/owner
-   recorded, issue a limited override via `scripts/android_override_tool.sh`
-   and log it in `telemetry_override_log.md` (see §3). Default expiry: <24 h.
-5. **Escalate per contact list:** Page the Android on-call and Observability TL
-   (contacts in §8), then follow the escalation tree in §4.1. If attestation or
-   StrongBox signals are involved, pull the latest bundle and run the harness
-   checks from §7 before re-enabling exports.
+1. **ཤུགས་ལྡན་རིམ་སྒྲིག་:** `ClientConfig` གསལ་སྟོན་ཞིབ་དཔྱད་བསྡོམས་རྩིས་འདི་ ངེས་འཛིན་འབད།
+   གློག་རིམ་འགོ་འཛུགས་འབད་དེ་ དེ་ནང་ལུ་ པིན་འབད་ཡོད་པའི་གསལ་སྟོན་དང་ ག་བསྡུར་འབདཝ་ཨིན།
+   `configs/android_client_manifest.json`. །གལ་ཏེ་ཧ་ཤེ་སོ་སོར་ཕྱེ་བ་དང་།
+   ཡིག་སྣོད་ཅིག་ ཊེ་ལི་མི་ཊི་/ཨོ་ཝར་རིཌ་ཚུ་ ལགཔ་མ་རྐྱབ་པའི་ཧེ་མ་ རིམ་སྒྲིག་འབད་མི་ ཌིཕཊ་ ཊིཀ། (§༡ བལྟ།)
+2. **ལས་འཆར་ཁྱད་པར་སྒོ་འདི་གཡོག་བཀོལ།:** `telemetry-schema-diff` CLI འདི་ རྒྱབ་འགལ་འབད་དགོ།
+   ངོས་ལེན་འབད་མི་ པར་ལེན་པ།
+   (I 18NI00000053X).
+   - ཚུན་ཚོད་ - 18NI00000054X ཐོན་འབྲས་གང་རུང་ཅིག་ སེབ་༢ སྦེ་ བརྩི་འཇོག་འབད།
+   ཁྱད་པར་ཧ་གོ་ཡོད། (§2.6 བལྟ།)
+3. **ཌེཤ་བོརཌི་ཚུ་བརྟག་དཔྱད་འབད། + གནས་ཚད་ CLI:** ཨེན་ཌོརཌི་ཊེ་ལི་མི་ཊི་རི་ཌེག་ཊིག་དང་ ཁ་ཕྱེ་དགོ།
+   ཕྱིར་ཚོང་པ་གསོ་བའི་བང་འཁོར།, དེ་ལས་ གཡོག་བཀོལ།
+   Grafana. གལ་སྲིད
+   དབང་འཛིན་དབང་འཛིན་ཚུ་ ས་ཁར་ཡང་ན་ ཕྱིར་འདྲེན་འཛོལ་བ་ པར་ལེན་གསལ་གཞི་པར་ཚུ་ དང་།
+   བྱུང་རྐྱེན་ཡིག་ཆ་གི་དོན་ལུ་ CLI ཐོན་འབྲས་ (§2.4–§2.5 བལྟ།)
+4. ** བརྒལ་བའི་ཐོག་ལུ་ ཐག་བཅད་ནི།:** གོང་འཁོད་ཀྱི་གོ་རིམ་ཚུ་གི་ཤུལ་ལས་རྐྱངམ་ཅིག་ བྱུང་རྐྱེན་/ཇོ་བདག་དང་གཅིག་ཁར་ཨིན།
+   redu, `scripts/android_override_tool.sh` བརྒྱུད་དེ་ ཚད་འཛིན་ཅན་གྱི་ བཀག་ཆ་ཅིག་ བཏོན་ཡོདཔ།
+   དེ་ལས་ `telemetry_override_log.md` ནང་ (§3 བལྟ།) སྔོན་སྒྲིག་དུས་ཚོད་: <24h.
+5. **འབྲེལ་འཐུད་ཐོ་ཡིག་རེ་ལུ་:** ཤོག་ངོས་འདི་ Android on-call དང་ བལྟ་བརྟོག་འབད་ཚུགསཔ་ TL
+   (§8 ནང་འབྲེལ་བ་འཐབ་ཨིན།) དེ་ལས་ §4.1 ནང་ ཡར་འཕར་གྱི་ཤིང་འདི་ རྗེས་སུ་འཇུག་དགོ། བདེན་དཔང་འབད་བ་ཅིན།
+   StrongBox བརྡ་རྟགས་ཚུ་འབྲེལ་གཏོགས་ཡོདཔ་ལས་ གསརཔ་འདི་ འཐེན་ཞིནམ་ལས་ ཧར་ནིསི་འདི་ གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན།
+   ཕྱིར་འདྲེན་ཚུ་ལོག་སྟེ་ལྕོགས་ཅན་མ་བཟོ་བའི་ཧེ་མ་ §7 ལས་ཞིབ་དཔྱད་འབད།
 
-## 1. Configuration & Deployment
+## 1. རིམ་སྒྲིག་དང་ བཀྲམ་སྤེལ་
 
-- **ClientConfig sourcing:** Ensure Android clients load Torii endpoint, TLS
-  policies, and retry knobs from `iroha_config`-derived manifests. Validate
-  values during app startup and log checksum of the active manifest.
-  Implementation reference: `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
-  threads `TelemetryOptions` from `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/TelemetryOptions.java`
-  (plus the generated `TelemetryObserver`) so hashed authorities are emitted automatically.
-- **Hot reload:** Use the configuration watcher to pick up `iroha_config`
-  updates without app restarts. Failed reloads should emit the
-  `android.telemetry.config.reload` event and trigger retry with exponential
-  backoff (max 5 attempts).
-- **Fallback behaviour:** When configuration is missing or invalid, fall back to
-  safe defaults (read-only mode, no pending queue submission) and surface a user
-  prompt. Record the incident for follow-up.
+- **ཀི་ལིནཊི་ཀོན་ཕིག་འཚོལ་ཞིབ་:** ཨེན་ཌོརཌི་མཁོ་སྤྲོད་པ་ཚུ་ Torii མཐའམ་ཚག་ ཊི་ཨེལ་ཨེསི།
+  སྲིད་བྱུས་, དང་ `iroha_config`-derived གསལ་སྟོན་ལས་ བསྐྱར་དུ་འབད་རྩོལ་བསྐྱེད། བདེན་དཔྱད་འབད།
+  གློག་རིམ་འགོ་བཙུགས་པའི་སྐབས་དང་ དྲན་ཐོ་ཞིབ་དཔྱད་སམ་ ཤུགས་ལྡན་གྱི་གསལ་སྟོན་གྱི་ གནས་གོང་ཚུ།
+  བཀོལ་སྤྱོད་གཞི་བསྟུན་: `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
+  ཐགསཔ་ `TelemetryOptions` ལས་ `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/TelemetryOptions.java`
+  (`TelemetryObserver` བཏོན་ཡོད་པའི་ (བཟོ་བཏོན་འབད་མི་) དེ་འབདཝ་ལས་ དབང་འཛིན་ཚུ་ རང་བཞིན་གྱིས་ བཏོན་བཏངམ་ཨིན།
+- **Hot reload:** `iroha_config` འཐུ་ནིའི་དོན་ལུ་ རིམ་སྒྲིག་བལྟ་མི་ལག་ལེན་འཐབ།
+  གློག་རིམ་མེད་པའི་དུས་མཐུན་ཚུ་ ལོག་འགོ་བཙུགས། འཐུས་ཤོར་བྱུང་ཡོད་པའི་སླར་མངོན་གསལ་ཚུ་གིས་ བཏོན་གཏང་དགོ།
+  `android.telemetry.config.reload` བྱུང་ལས་དང་ མགྱོགས་འཕེལ་དང་གཅིག་ཁར་ ལོག་འབད་རྩོལ་བསྐྱེད་ནི།
+  backoff (མཐོ་ཤོས་ ༥ དཔའ་བཅམ་མི)།
+- **Fallback སྤྱོད་ལམ་:** རིམ་སྒྲིག་འདི་བརླག་སྟོར་ཞུགས་ཡོདཔ་ ཡང་ན་ ནུས་མེད་ཀྱི་སྐབས་ལུ་ ལུ་ལོག་འགྱོ།
+  བདེ་སྒྲིག་སྔོན་སྒྲིག་ཚུ་ (ལྷག་ནི་རྐྱངམ་གཅིག་ཐབས་ལམ་ བསྒྱིར་བའི་བང་རིམ་ཕུལ་ནི་མེདཔ) དང་ལག་ལེན་པ་ཅིག་ལུ།
+  འདི་འཕྲོ་ལས། རྗེས་འཇུག་འབད་ནིའི་དོན་ལུ་ བྱུང་རྐྱེན་འདི་ཐོ་བཀོད་འབད།
 
-### 1.1 Config reload diagnostics
-
-- The config watcher emits `android.telemetry.config.reload` signals with
-  `source`, `result`, `duration_ms`, and optional `digest`/`error` fields (see
-  `configs/android_telemetry.json` and
+### 1.1 བསྐྱར་དུ་མངོན་གསལ་བྱེད་པ།- རིམ་སྒྲིག་ལྟ་རྟོག་པ་གིས་ `android.telemetry.config.reload` བརྡ་རྟགས་ཚུ་དང་གཅིག་ཁར་ བཏོནམ་ཨིན།
+  `source`, `result`, `duration_ms`, དང་ གདམ་ཁའི་Grafana/`error` ས་སྒོ་ (བལྟ།
+  `configs/android_telemetry.json` དང་།
   `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ConfigWatcher.java`).
-  Expect a single `result:"success"` event per applied manifest; repeated
-  `result:"error"` records indicate the watcher exhausted its 5 backoff attempts
-  starting at 50 ms.
-- During an incident, capture the latest reload signal from the collector
-  (OTLP/span store or the redaction status endpoint) and log the `digest` +
-  `source` in the incident doc. Compare the digest to
-  `configs/android_client_manifest.json` and the release manifest distributed to
-  operators.
-- If the watcher continues to emit errors, run the targeted harness to reproduce
-  the parse failure with the suspect manifest:
+  འཇུག་སྤྱོད་འབད་ཡོད་པའི་མངོན་གསལ་རེ་ལུ་ `result:"success"` བྱུང་ལས་གཅིག་རེ་རེ་བ་བསྐྱེད། ཡང་བསྐྱར་
+  `result:"error"` དྲན་ཐོ་ཚུ་གིས་ བལྟ་རྟོག་པ་གིས་ རྒྱབ་ཐག་ཚོད་ལྟའི་ ༥ འདི་ བརླག་སྟོར་ཞུགས་ཡོདཔ་སྦེ་སྟོནམ་ཨིན།
+  ༥༠ms ལས་འགོ་བཙུགས།
+- བྱུང་རྐྱེན་ཅིག་གི་སྐབས་ལུ་ བསྡུ་ལེན་པ་ལས་ བསྐྱར་མངོན་གསལ་བརྡ་རྟགས་གསརཔ་འདི་ བཟུང་།
+  (OTLP/span ཚོང་ཁང་ཡང་ན་ བཏོན་གཏང་ནིའི་གནས་རིམ་མཇུག་བསྡུ) དང་ `digest` + ནང་བསྐྱོད་འབད།
+  བྱུང་རྐྱེན་གྱི་ཡིག་ཆ་ནང་ `source`. འཇུ་བྱེད་འདི་ ལུ་ག་བསྡུར་འབད།
+  Grafana དང་ གསར་བཏོན་མངོན་རྟགས་འདི་ ལུ་བཀྲམ་སྤེལ་འབད་ཡོདཔ་ཨིན།
+  བཀོལ་སྤྱོད་པ་ཚུ།
+- བལྟ་རྟོག་པ་གིས་ འཛོལ་བ་ཚུ་ འཕྲོ་མཐུད་དེ་ བཏོན་གཏང་པ་ཅིན་ དམིགས་གཏད་ཅན་གྱི་ སྲབ་འཁོར་དེ་ བསྐྱར་བཟོ་འབད་ནི་ལུ་ གཡོག་བཀོལ།
+  དོགས་ཅན་དང་གཅིག་ཁར་ མིང་དཔྱད་ཀྱི་འཐུས་ཤོར་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
   `ci/run_android_tests.sh org.hyperledger.iroha.android.client.ConfigWatcherTests`.
-  Attach the test output and the failing manifest to the incident bundle so SRE
-  can diff it against the baked configuration schema.
-- When reload telemetry is missing, confirm the active `ClientConfig` carries a
-  telemetry sink and that the OTLP collector still accepts the
-  `android.telemetry.config.reload` ID; otherwise treat it as a Sev 2 telemetry
-  regression (same path as §2.4) and pause releases until the signal returns.
+  བརྟག་དཔྱད་ཨའུཊི་པུཊི་དང་ བྱུང་རྐྱེན་བཱན་ཌལ་ལུ་ འཐུས་ཤོར་བྱུང་མི་ གསལ་སྟོན་འདི་ མཉམ་སྦྲགས་འབད།
+  བེཀ་འབད་ཡོད་པའི་རིམ་སྒྲིག་འཆར་གཞི་འདི་ལུ་རྒྱབ་འགལ་འབད་ཚུགས།
+- བསྐྱར་མངོན་གསལ་འབད་མི་ ཊེ་ལི་མི་ཊི་འདི་ མ་ཐོབ་པའི་སྐབས་ ཤུགས་ལྡན་ `ClientConfig` འདི་ ཅིག་འབགཔ་ཨིན།
+  telemetry sink དང་ OTLP བསྡུ་སྒྲིག་འབད་མི་གིས་ ད་ལྟོ་ཡང་ ངོས་ལེན་འབདཝ་ཨིན།
+  Grafana ID; དེ་མིན་ན་ དེ་ Sev2 བརྡ་ཆད་ཅིག་སྦེ་ བརྩི་འཇོག་འབད།
+  འགྱུར་ལྡོག་ (§2.4 དང་འདྲ་བའི་འགྲུལ་ལམ་) དང་ བརྡ་རྟགས་ལོག་མ་ལྷོད་ཚུན་ཚོད་ བརྡ་སྟོནམ་ཨིན།
 
-### 1.2 Deterministic key export bundles
-- Software exports now emit v3 bundles with per-export salt + nonce, `kdf_kind`, and `kdf_work_factor`.
-  The exporter prefers Argon2id (64 MiB, 3 iterations, parallelism = 2) and falls back to
-  PBKDF2-HMAC-SHA256 with a 350 k iteration floor when Argon2id is unavailable on the device. Bundle
-  AAD still binds to the alias; passphrases must be at least 12 characters for v3 exports and the
-  importer rejects all-zero salt/nonce seeds.
-  `KeyExportBundle.decode(Base64|bytes)`, import with the original passphrase, and re-export to v3 to
-  move to the memory-hard format. The importer rejects all-zero or reused salt/nonce pairs; always
-  rotate bundles instead of reusing old exports between devices.
-- Negative-path tests in `ci/run_android_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests`
-  rejection. Clear passphrase char arrays after use and capture both the bundle version and `kdf_kind`
-  in incident notes when recovery fails.
+### 1.2 གཏན་འབེབས་ལྡེ་མིག་ཕྱིར་འདྲེན་བསྡོམས།
+- མཉེན་ཆས་ཕྱིར་འདྲེན་ཚུ་གིས་ ད་ལྟོ་ ཕྱིར་ཚོང་རེ་ལུ་ ཚྭ་ + nonce དང་ `kdf_kind` དེ་ལས་ `kdf_work_factor` ཚུ་ བཏོནམ་ཨིན།
+  ཕྱིར་འདྲེན་འབད་མི་གིས་ Argon2id (64 MiB, 3 བསྐྱར་ལོག་, མཉམ་འགྲོས་ = ༢) ལུ་དགའ་སྟེ་ ལོག་ལུ་ཚུདཔ་ཨིན།
+  PBKDF2-HMAC-SHA256 འདི་ ཐབས་འཕྲུལ་གུ་ Argon2id མ་ཐོབ་པའི་སྐབས་ 350 k བསྐྱར་ལོག་ཐོག་ཁར་ ཡོདཔ་ཨིན། བམ་ཆག
+  AAD ད་དུང་ཡང་མིང་གཞན་ལུ་མཐུད་དོ་ཡོདཔ་ཨིན། ཆོག་ཡིག་ཚུ་ v3 ཕྱིར་འདྲེན་གྱི་དོན་ལུ་ ཉུང་མཐའ་ཡིག་འབྲུ་༡༢ དང་དགོཔ་ཨིན།
+  ནང་འདྲེན་པ་གིས་ ཀླད་ཀོར་ཆ་མཉམ་/ མིན་པའི་སོན་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+  `KeyExportBundle.decode(Base64|bytes)`, ནང་འདྲེན་ངོ་མ་དང་གཅིག་ཁར་ ནང་འདྲེན་འབད་ཞིནམ་ལས་ ཝི་༣ ལུ་ཕྱིར་ཚོང་འབད།
+  དྲན་ཚད་-ཧརཌི་རྩ་སྒྲིག་ལུ་སྤོ་བཤུད་འབད། ནང་འདྲེན་པ་གིས་ ཀླད་ཀོར་ཆ་མཉམ་ཡང་ན་ ཚྭ་/ནན་སི་ཆ་ཚུ་ ལོག་ལག་ལེན་འཐབ་མ་བཏུབ་ཨིན། ཨ་རྟག་ར་
+  ཐབས་འཕྲུལ་ཚུ་གི་བར་ན་ ཕྱིར་འདྲེན་རྙིངམ་ཚུ་ ལོག་སྟེ་ལག་ལེན་འཐབ་ནི་གི་ཚབ་ལུ་ བུན་ཌལ་ཚུ་ བསྒྱིར་དགོ།
+- `ci/run_android_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests` ནང་ ངན་པའི་ལམ་བརྟག་དཔྱད།
+  དགག་པ་ནི། ལག་ལེན་འཐབ་པའི་ཤུལ་ལས་ ཆོག་ཡིག་ཕྲ་རིང་ཚུ་ གསལ་ཏོག་ཏོ་བཟོ་སྟེ་ བཱན་ཌལ་ཐོན་རིམ་དང་ `kdf_kind` གཉིས་ཆ་ར་ བཟུང་དགོ།
+  བསྐྱར་གསོ་འབད་མ་ཚུགས་པའི་སྐབས་ལུ་ བྱུང་རྐྱེན་གྱི་དྲན་ཐོ་ཚུ་ནང་།
 
-## 2. Telemetry & Redaction
+## 2. བརྒྱུད་འཕྲིན་དང་བསྒྱུར་བཅོས།
 
-> Quick reference: see
-> [`telemetry_redaction_quick_reference.md`](sdk/android/telemetry_redaction_quick_reference.md)
-> for the condensed command/threshold checklist used during enablement
-> sessions and incident bridges.
-
-- **Signal inventory:** Refer to `docs/source/sdk/android/telemetry_redaction.md`
-  for the full list of emitted spans/metrics/events and
-  `docs/source/sdk/android/readiness/signal_inventory_worksheet.md`
-  for owner/validation details and outstanding gaps.
-- **Canonical schema diff:** The approved AND7 snapshot is
+> མགྱོགས་མྱུར་གཞི་བསྟུན་: བལྟ།
+> [I 18NI0000086X](sdk/android/telemetry_redaction_quick_reference.md)
+> ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ལག་ལེན་འཐབ་ཡོད་པའི་ ཀོན་ཌེན་འབད་ཡོད་པའི་བརྡ་བཀོད་/ཐེབས་ཞིབ་དཔྱད་ཐོ་ཡིག་དོན་ལུ་ལག་ལེན་འཐབ་ཡོདཔ།
+> ཚོགས་ཐེངས་དང་བྱུང་རྐྱེན་ཟམ་པ།- **བརྡ་མཚོན་:** `docs/source/sdk/android/telemetry_redaction.md` ལུ་བལྟ།
+  བཏོན་ཡོད་པའི་ སྤེན་/མེ་ཊིགསི་/བྱུང་ལས་ཚུ་གི་ཐོ་ཡིག་ཆ་ཚང་གི་དོན་ལུ་ དང་།
+  Grafana
+  ཇོ་བདག་/བདེན་དཔྱད་ཁ་གསལ་དང་ ཁྱད་འཕགས་ཅན་གྱི་བར་སྟོང་ཚུ་གི་དོན་ལུ་ཨིན།
+- **ཀེ་ན་ནིག་འཆར་གཞི་ dif:** ཆ་འཇོག་གྲུབ་པའི་AND7 པར་ལེན་འདི་ནི།
   `docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`.
-  Every new CLI run must be compared against this artefact so reviewers can see
-  that the accepted `intentional_differences` and `android_only_signals` still
-  match the policy tables documented in
-  `docs/source/sdk/android/telemetry_schema_diff.md` §3. The CLI now adds
-  `policy_violations` when any intentional difference is missing a
-  `status:"accepted"`/`"policy_allowlisted"` (or when Android-only records lose
-  their accepted status), so treat non-empty violations as Sev 2 and stop
-  exports. The `jq` snippets below remain as a manual sanity check on archived
-  artefacts:
+  བསྐྱར་ཞིབ་པ་ཚུ་གིས་མཐོང་ཚུགས་ནིའི་དོན་ལུ་ སི་ཨེལ་ཨའི་ རན་གསརཔ་ག་ར་འདི་ འདི་དང་ག་བསྡུར་འབད་དགོ།
+  དེ་ངོས་ལེན་བྱས་པ་`intentional_differences` དང་ `android_only_signals` ཡིན།
+  ནང་ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ སྲིད་བྱུས་ཐིག་ཁྲམ་ཚུ་དང་མཐུན་སྒྲིག་འབད།
+  Prometheus §3. སི་ཨེལ་ཨའི་ད་ལྟོ་ཁ་སྐོང་འབདཝ་ཨིན།
+  `policy_violations` བསམ་བཞིན་དུ་ཁྱད་པར་གང་རུང་མེད་པའི་སྐབས་སུ་ཨེ་ཨེ་ཨེ་ཨེ་ཨེ།
+  `status:"accepted"`/`"policy_allowlisted"` (ཡང་ན་ཨན་ཌོའིཌ་རྐྱངམ་གཅིག་གི་དྲན་ཐོ་ཚུ་བརླག་སྟོར་ཞུགས་པའི་སྐབས།
+  འདི་ཁོང་ཚོའི་ངོས་ལེན་ཡོད་པའི་གནས་སྟངས།
+  ཕྱིར་གཏོང་། འོག་ལུ་ཡོད་པའི་ `jq` ཡིག་མཛོད་ནང་ ལག་ཐོག་གཙང་སྦྲ་བརྟག་དཔྱད་སྦེ་ ལུས་ཡོདཔ་ཨིན།
+  ལག་ཆས།
   ```bash
   jq '.intentional_differences[] | select(.status != "accepted" and .status != "policy_allowlisted")' "$OUT"
   jq '.android_only_signals[] | select(.status != "accepted")' "$OUT"
   jq '.field_mismatches[] | {signal, field, android, rust}' "$OUT"
   ```
-  Treat any output from these commands as a schema regression that needs an
-  AND7 readiness bug before telemetry exports continue; `field_mismatches`
-  must stay empty per `telemetry_schema_diff.md` §5. The helper now writes
-  `artifacts/android/telemetry/schema_diff.prom` automatically; pass
-  `--textfile-dir /var/lib/node_exporter/textfile_collector` (or set
-  `ANDROID_SCHEMA_DIFF_TEXTFILE_DIR`) when running on staging/production hosts
-  so the `telemetry_schema_diff_run_status` gauge flips to `policy_violation`
-  automatically if the CLI detects drift.
-- **CLI helper:** `scripts/telemetry/check_redaction_status.py` inspects
-  `artifacts/android/telemetry/status.json` by default; pass `--status-url` to
-  query staging and `--write-cache` to refresh the local copy for offline
-  drills. Use `--min-hashed 214` (or set
-  `ANDROID_TELEMETRY_MIN_HASHED_AUTHORITIES=214`) to enforce the governance
-  floor on hashed authorities during every status poll.
-- **Authority hashing:** All authorities are hashed using Blake2b-256 with the
-  quarterly rotation salt stored in the secure secrets vault. Rotations occur on
-  the first Monday of each quarter at 00:00 UTC. Verify the exporter picks up
-  the new salt by checking the `android.telemetry.redaction.salt_version` metric.
-- **Device profile buckets:** Only `emulator`, `consumer`, and `enterprise`
-  tiers are exported (alongside SDK major version). Dashboards compare these
-  counts against Rust baselines; variance >10% raises alerts.
-- **Network metadata:** Android exports `network_type` and `roaming` flags only.
-  Carrier names are never emitted; operators should not request subscriber
-  information in incident logs. The sanitised snapshot is emitted as the
-  `android.telemetry.network_context` event, so ensure apps register a
-  `NetworkContextProvider` (either via
-  `ClientConfig.Builder.setNetworkContextProvider(...)` or the convenience
-  `enableAndroidNetworkContext(...)` helper) before Torii calls are issued.
-- **Grafana pointer:** The `Android Telemetry Redaction` dashboard is the
-  canonical visual check for the CLI output above—confirm the
-  `android.telemetry.redaction.salt_version` panel matches the current salt epoch
-  and the `android_telemetry_override_tokens_active` widget stays at zero
-  whenever no drills or incidents are running. Escalate if either panel drifts
-  before the CLI scripts report a regression.
+  བརྡ་བཀོད་འདི་ཚུ་ལས་ ཐོན་འབྲས་གང་རུང་ཅིག་ ལས་འཆར་ ལོག་སྤྱོད་འབད་མི་ཅིག་སྦེ་ བརྩི་འཇོག་འབད།
+  AND7 གློག་རྒྱུན་ཕྱིར་གཏོང་འཕྲོ་མཐུད་མ་བྱུང་བའི་སྔོན་ལ། `field_mismatches`
+  `telemetry_schema_diff.md` §5 ལུ་སྟོངམ་སྦེ་སྡོད་དགོ། རོགས་རམ་གྱིས་ད་ལྟོ་འབྲི།
+  Grafana རང་བཞིན་གྱིས་; མཐར༌འཁྱོལ༌
+  `--textfile-dir /var/lib/node_exporter/textfile_collector` (ཡང་ན་ གཞི་སྒྲིག་
+  Prometheus གིས་ སྟེགས་རིས་/ཐོན་སྐྱེད་ཧོསཊི་ཚུ་གུ་གཡོག་བཀོལ་བའི་སྐབས།
+  དེ་འབདཝ་ལས་ `telemetry_schema_diff_run_status` འཇལ་ཚད་འདི་ `policy_violation` ལུ་ ཕིལཔ་ཨིན།
+  སི་ཨེལ་ཨའི་གིས་ འཕྱེལ་འགྱོ་མི་འདི་ ཤེས་རྟོགས་འབད་བ་ཅིན་ རང་བཞིན་གྱིས་ཨིན།
+- **CLI གྲོགས་རམ་པ་:** `scripts/telemetry/check_redaction_status.py` བརྟག་དཔྱད།
+  སྔོན་སྒྲིག་གིས་ `artifacts/android/telemetry/status.json`; `--status-url` ལུ་ ཆོག་ཐམ་སྤྲོད་ཡོདཔ་ཨིན།
+  འདྲི་དཔྱད་གནས་རིམ་དང་ `--write-cache` འདི་ ཨོཕ་ལ་ཡིན་གྱི་དོན་ལུ་ ཉེ་གནས་ཀྱི་འདྲ་བཤུས་གསར་བསྐྲུན་འབད་ནི་ལུ་ གསར་བསྐྲུན་འབད་ནི།
+  དྲིལ་བའི། `--min-hashed 214` ལག་ལེན་འཐབ།
+  `ANDROID_TELEMETRY_MIN_HASHED_AUTHORITIES=214`) སྲིད་གཞུང་བསྟར་སྤྱོད་བྱེད་པ།
+  གནས་ཚད་འོས་བསྡུ་རེ་རེའི་སྐབས་ ཧམ་འཛུལ་དབང་འཛིན་གྱི་ ཐོག་ཁར་ .
+- **རྩོམ་སྒྲིག་པ་ཧ་ཤིང་:** དབང་འཛིན་ཆ་མཉམ་ Blake2b-256 དང་མཉམ་ལག་ལེན་འཐབ་སྟེ་ ཧ་ལས་བཏང་ཡོདཔ་ཨིན།
+  ཟླཝ་གསུམ་གྱི་བསྐོར་འཁོར་ཚྭ་འདི་ ཉེན་སྲུང་ཅན་གྱི་གསང་བ་ནང་ བསག་བཞག་སྟེ་ཡོདཔ་ཨིན། འཁོར་སྐྱོད་ཚུ་ ༢༠༡༦ ལུ་འབྱུང་ཡོདཔ།
+  00:00 UTC གི་ཟླ་བ་རེ་རེ་བཞིན་གྱི་གཟའ་ཟླ་བ། ཕྱིར་ཚོང་པ་ཚུ་ བདེན་དཔྱད་འབད།
+  ཚྭ་གསརཔ་འདི་ `android.telemetry.redaction.salt_version` metric འདི་བརྟག་དཔྱད་འབད་དེ་ཨིན།
+- **ཐབས་འཕྲུལ་གསལ་སྡུད་བཱ་ཀེཊི་ཚུ་:** རྐྱངམ་ཅིག་ `emulator`, `consumer`, དང་ `enterprise` རྐྱངམ་ཅིག་ཨིན།
+  tiers ཚུ་ཕྱིར་འདྲེན་འབད་ཡོདཔ་ཨིན་ (SDK གཙོ་བོའི་ཐོན་རིམ་ནང་)། ཌེཤ་བོརཌི་ཚུ་ འདི་ཚུ་ ག་བསྡུར་རྐྱབ་ཨིན།
+  Rust གཞི་རིམ་ལུ་ རྩིས་རྐྱབ་ཨིན། varance >10% གིས་ཉེན་བརྡ་ཚུ་ཡར་སེང་འབདཝ་ཨིན།
+- **ནེཊི་ཝརཀ་མེ་ཊ་ཌེ་ཊ་:** ཨེན་ཌོརཌི་ཕྱིར་འདྲེན་ `network_type` དང་ `roaming` དར་ཚུ་རྐྱངམ་ཅིག།
+  སྐྱེལ་འདྲེན་གྱི་མིང་ཚུ་ ནམ་ཡང་ བཏོན་མི་བཏུབ། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མཁོ་མངགས་འབད་མི་ལུ་ ཞུ་བ་འབད་མི་ཆོག།
+  བྱུང་རྐྱེན་དྲན་དེབ་ནང་གི་བརྡ་དོན། གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་པར་འདི་ འདི་བཟུམ་ཅིག་སྦེ་བཏོན་ཡོདཔ་ཨིན།
+  `android.telemetry.network_context` བྱུང་ལས་དེ་ལས་ གློག་རིམ་ཚུ་ ཐོ་བཀོད་འབད་ནི་ལུ་ ངེས་གཏན་བཟོ།
+  `NetworkContextProvider` (དེ་བཞིན་ བརྒྱུད་དེ།
+  `ClientConfig.Builder.setNetworkContextProvider(...)` ཡང་ན་ སྟབས་བདེ་བ།
+  `enableAndroidNetworkContext(...)` གྲོགས་རམ་པ།) Torii འབོད་བརྡ་མ་གཏང་པའི་ཧེ་མ།
+- **Grafana དཔག་བྱེད་:** `Android Telemetry Redaction` བརྡ་བཀོད་བཀོད་སྒྲིག་འདི་ཨིན།
+  གོང་འཁོད་ཀྱི་སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་གི་དོན་ལུ་ ཀེ་ནོ་ནིཀ་མཐོང་སྣང་ཞིབ་དཔྱད་—འདི་ངེས་འཛིན་འབད།
+  `android.telemetry.redaction.salt_version` ད་ལྟོའི་ཚྭ་དུས་རབས་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+  དང་ `android_telemetry_override_tokens_active` ཝིཇ་ཊི་འདི་ ཀླད་ཀོར་ལུ་སྡོདཔ་ཨིན།
+  ཚེ་སྲོག་དང་བྱུང་རྐྱེན་མེད་པའི་སྐབས་ལུ་ཨིན། པེ་ནཱལ་ཌིཕཊི་ཚུ་ གང་རུང་ཅིག་ཨིན་པ་ཅིན་ ཡར་འཕེལ་གཏང་།
+  CLI ཡིག་ཚུགས་ཚུ་གིས་ འགྱུར་ལྡོག་ཅིག་སྙན་ཞུ་མ་འབད་བའི་ཧེ་མ་ཨིན།
 
-### 2.1 Export pipeline workflow
-
-1. **Config distribution.** `ClientConfig.telemetry.redaction` is threaded from
-   `iroha_config` and hot-reloaded by `ConfigWatcher`. Each reload logs the
-   manifest digest plus salt epoch—capture that line in incidents and during
-   rehearsals.
-2. **Instrumentation.** SDK components emit spans/metrics/events into the
-   `TelemetryBuffer`. The buffer tags every payload with the device profile and
-   current salt epoch so the exporter can verify hashing inputs deterministically.
-3. **Redaction filter.** `RedactionFilter` hashes `authority`, `alias`, and
-   device identifiers before they leave the device. Failures emit
-   `android.telemetry.redaction.failure` and block the export attempt.
-4. **Exporter + collector.** Sanitised payloads are shipped through the Android
-   OpenTelemetry exporter to the `android-otel-collector` deployment. The
-   collector fans outputs to traces (Tempo), metrics (Prometheus), and Norito
+### 2.1 མདོང་ལཱ་གི་ལས་དོན་ཕྱིར་འདྲེན་འབད།1. **རིམ་སྒྲིག་བགོ་འགྲེམས་ཡོདཔ།** `ClientConfig.telemetry.redaction` འདི་ ཐགས་བཏང་ཡོདཔ་ཨིན།
+   `iroha_config` དང་ `ConfigWatcher` གིས་ ཚ་དྲོད་བསྐྱར་མངོན་གསལ་འབད་ཡོདཔ། བསྐྱར་ལོག་རེ་རེ་མངོན་གསལ་རེ་རེ་བཞིན་དྲན་ཐོ་བཀོད།
+   བཞུ་བའི་བརྡ་རྟགས་དང་ཚྭ་དུས་ཀྱི་དུས་སྐབས་—བྱུང་རྐྱེན་གྱི་ཐིག་དང་ སྐབས་སུ་བླངས།
+   བསྐྱར་སྦྱོང་།
+2. **བཙུགས་བཀོད།** ཨེསི་ཌི་ཀེ་ཆ་ཤས་ཚུ་གིས་ ཨིས་པིན/མེ་ཊིགསི་/བྱུང་ལས་ཚུ་ ༡ ༡.
+   `TelemetryBuffer`. བཱ་ཕར་ངོ་རྟགས་ཚུ་གིས་ ཐབས་འཕྲུལ་གསལ་སྡུད་དང་གཅིག་ཁར་ པེ་ལོཌི་རེ་རེ་དང་ དེ་ལས་ དང་།
+   ད་ལྟོའི་ཚྭ་གི་དུས་སྐབས་འདི་གིས་ ཕྱིར་ཚོང་པ་གིས་ ཧ་ཤིང་ཨིན་པུཊ་ཚུ་ གཏན་འབེབས་བཟོ་ཚུགས།
+3. **འོད་རླབས་ཚགས་མ་.** `RedactionFilter` ཧ་ཤེད་ `authority`, `alias`, དང་།
+   ཐབས་འཕྲུལ་ངོས་འཛིན་འབད་མི་ཚུ་ དེ་ཚུ་གིས་ ཐབས་འཕྲུལ་ལས་མ་ཐོན་པའི་ཧེ་མ་ཨིན། འཐུས་ཤོར་ཚུ་ བཏོནམ་ཨིན།
+   `android.telemetry.redaction.failure` དང་ ཕྱིར་འདྲེན་འབད་རྩོལ་འདི་བཀག་བཞག།
+4. **Exporter + བསྡུ་ལེན་པ་།** གཙང་སྦྲ་ཅན་གྱི་དངུལ་འབབ་ཚུ་ Android བརྒྱུད་དེ་བཏང་ཡོདཔ་ཨིན།
+   OpenTelemetry ཕྱིར་འདྲེན་པ་ `android-otel-collector` བཀྲམ་སྤེལ་འབད་མི་ལུ་ཨིན། ཚིག༌ཕྲད
+   བསྡུ་སྒྲིག་འབད་མི་དགའ་མི་ཚུ་གིས་ (Tempo), དང་ metric (Prometheus) དེ་ལས་ Norito ལུ་ འཚོལ་ཞིབ་འབདཝ་ཨིན།
    log sinks.
-5. **Observability hooks.** `scripts/telemetry/check_redaction_status.py` reads
-   collector counters (`android.telemetry.export.status`,
-   `android.telemetry.redaction.salt_version`) and produces the status bundle
-   referenced throughout this runbook.
+5. **བལྟ་རྟོག་འབད་ཚུགས་པའི་ ཧུཀ།** Prometheus ཀློག་པ།
+   བསྡུ་སྒྲིག་པ་ (`android.telemetry.export.status`,
+   `android.telemetry.redaction.salt_version`) དང་ གནས་རིམ་གྱི་བང་རིམ་འདི་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+   རན་དེབ་འདི་ནང་གཞི་བསྟུན་འབད་ཡོདཔ།
 
-### 2.2 Validation gates
+### ༢.༢ བདེན་དཔྱད་ཀྱི་སྒོ་ར་ཚུ།
 
-- **Schema diff:** Run
+- **སྒྲིག་བཀོད་ཁྱད་པར་:** གཡོག་བཀོལ།
   `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json`
-  whenever manifests change. After each run, confirm every
-  `intentional_differences[*]` and `android_only_signals[*]` entry is stamped
-  `status:"accepted"` (or `status:"policy_allowlisted"` for hashed/bucketed
-  fields) as recommended in `telemetry_schema_diff.md` §3 before attaching the
-  artefact to incidents and chaos lab reports. Use the approved snapshot
-  (`android_vs_rust-20260305.json`) as a guardrail and lint the freshly emitted
-  JSON before it is filed:
+  ག་དེམ་ཅིག་སྦེ་འགྱུར་བཅོས་འགྱོཝ་ཨིན་ན། རྒྱུག་ཚར་རེ་རེ་གི་ཤུལ་ལས་ ག་ར་ངེས་གཏན་བཟོ།
+  `intentional_differences[*]` དང་ `android_only_signals[*]` ཐོ་བཀོད་འདི་ རྟགས་བཀོད་ཡོད།
+  `status:"accepted"` (ཡང་ན་ ཧད་ཤོས/བག་བག་གི་དོན་ལུ་ `status:"policy_allowlisted"`
+  field)
+  བྱུང་རྐྱེན་དང་ ཟང་ཟིང་བརྟག་དཔྱད་སྙན་ཞུ་ཚུ་ལུ་ ཅ་རྙིང་། ཆ་འཇོག་གྲུབ་པའི་པར་ལེན་འདི་ལག་ལེན་འཐབ།
+  (`android_vs_rust-20260305.json`) སྲུང་སྐྱོབ་ཀྱི་དབང་ཆ་དང་ གསརཔ་བཏོན་མི་འདི་ ནང་ན་ནང་ཁུལ།
+  JSON མ་བཙུགས་པའི་ཧེ་མ་:
   ```bash
   LATEST=docs/source/sdk/android/readiness/schema_diffs/$(date -u +%Y%m%d).json
   jq '.intentional_differences[] | select(.status != "accepted" and .status != "policy_allowlisted") | {signal, field, status}' "$LATEST"
   jq '.android_only_signals[] | select(.status != "accepted") | {signal, status}' "$LATEST"
   ```
-  Compare `$LATEST` against
+  `$LATEST` དང་མཐུན་སྒྲིག་འབད།
   `docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`
-  to prove that the allowlist stayed unchanged. Missing or blank `status`
-  entries (for example on `android.telemetry.redaction.failure` or
-  `android.telemetry.redaction.salt_version`) are now treated as regressions and
-  must be resolved before the review can close; the CLI surfaces the accepted
-  state directly, so the manual §3.4 cross-reference only applies when
-  explaining why a non-`accepted` status appears.
+  ཐོ་ཡིག་འདི་ འགྱུར་བ་མེད་པར་སྡོད་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བཀལ་ནིའི་དོན་ལུ་ཨིན། བརླག་སྟོར་ཡང་ན་ `status` སྟོང་ཆ།
+  ཐོ་བཀོད་ཚུ་ (དཔེར་ན་ `android.telemetry.redaction.failure` ཡང་ན་ གུ་ལུ།
+  ད་ལྟ་`android.telemetry.redaction.salt_version`) ད་ལྟ་ འགྱུར་ལྡོག་དུ་བརྩི་འཇོག་དང་།
+  བསྐྱར་ཞིབ་འདི་ཁ་མ་བསྡམ་པའི་ཧེ་མ་ བསལ་དགོ། CLI གིས་ ངོས་ལེན་འབད་མི་འདི་ཨིན།
+  མངའ་སྡེ་ཐད་ཀར་དུ་ ལག་དེབ་ §3.4 ཕར་ཚུར་གཞི་བསྟུན་འདི་ཡོད་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་འཇུག་སྤྱོད་འབདཝ་ཨིན།
+  non-`accepted` གནས་རིམ་ཅིག་ག་ཅི་འབད་འབྱུངམ་ཨིན་ན་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
 
-  **Canonical AND7 signals (2026-03-05 snapshot)**
+  **ཀེ་ན་ནིག་ཨེ་ཨེན་ཌི་༧ བརྡ་རྟགས་ (༢༠༢༦-༠༣-༠༥ པར་ལེན་)**| བརྡ་རྟགས་ | རྒྱུན་ལམ་ | གནས་ཚད་ | གཞུང་སྐྱོང་དྲན་ཐོ། | བདེན་དཔྱད་ཧུཀ་ |
+  | |
+  | `android.telemetry.redaction.override` | བྱུང་ལས། | `accepted` | མེ་ལོང་ཚུ་གིས་ གསལ་སྟོན་ཚུ་ བཀག་ཆ་འབད་དེ་ `telemetry_override_log.md` ཐོ་བཀོད་ཚུ་དང་མཐུན་དགོ། | §3 རེ་ལུ་ `android_telemetry_override_tokens_active` དང་གཏན་མཛོད་ཀྱི་མངོན་རྟགས་ཚུ་བལྟ། |
+  | `android.telemetry.network_context` | བྱུང་ལས། | `accepted` | Android གིས་ ཤེས་བཞིན་དུ་ འབག་མི་མིང་ཚུ་ བཅོ་ཁ་རྐྱབ་ཨིན། `network_type` དང་ `roaming` རྐྱངམ་གཅིག་ཕྱིར་འདྲེན་འབདཝ་ཨིན། | གློག་རིམ་ཚུ་གིས་ `NetworkContextProvider` ཐོ་བཀོད་འབད་ནི་ལུ་ ངེས་གཏན་བཟོཝ་མ་ཚད་ `Android Telemetry Overview` གུ་ Torii གི་འགྲུལ་བསྐྱོད་འདི་ ངེས་གཏན་བཟོ། |
+  | `android.telemetry.redaction.failure` | ཀའུན་ཊར་ | `accepted` | ག་དེམ་ཅིག་སྦེ་ ཧ་ཤིང་འདི་ མ་ཚངམ་ལས་ གཞི་བསྟུན་འབདཝ་ཨིན། ད་ལྟོ་གཞུང་གིས་ ལས་རིམ་མ་འདྲཝ་གི་བཟོ་བཀོད་ནང་ གནས་སྡུད་གསལ་ཏོག་ཏོ་སྦེ་དགོཔ་ཨིན། | `Redaction Compliance` ཌེཤ་བོརཌ་པེ་ནཱལ་དང་ `check_redaction_status.py` ལས་ CLI ཐོན་འབྲས་འདི་ སྦྱོང་བརྡར་གྱི་སྐབས་ལུ་མ་གཏོགས་ ཀླད་ཀོར་ནང་སྡོད་དགོ། |
+  | `android.telemetry.redaction.salt_version` | སྤྱི་ཟླ་༢ པ། `accepted` | ཕྱིར་ཚོང་པ་གིས་ ད་ལྟོའི་ ཟླཝ་གསུམ་གྱི་ ཚྭ་དུས་ཀྱི་ དུས་སྐབས་འདི་ ལག་ལེན་འཐབ་དོ་ཡོདཔ་ཨིན། | Grafana གི་ གསང་བའི་དངུལ་བཟོའི་ཨི་པོཆ་དང་གཅིག་ཁར་ ཚྭ་གི་ཝིཌི་གེཊ་འདི་ ག་བསྡུར་རྐྱབ་སྟེ་ ལས་རིམ་གྱི་ཁྱད་པར་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན། |
 
-  | Signal | Channel | Status | Governance note | Validation hook |
-  |--------|---------|--------|-----------------|-----------------|
-  | `android.telemetry.redaction.override` | Event | `accepted` | Mirrors override manifests and must match `telemetry_override_log.md` entries. | Watch `android_telemetry_override_tokens_active` and archive manifests per §3. |
-  | `android.telemetry.network_context` | Event | `accepted` | Android intentionally redacts carrier names; only `network_type` and `roaming` are exported. | Ensure apps register a `NetworkContextProvider` and confirm the event volume follows Torii traffic on `Android Telemetry Overview`. |
-  | `android.telemetry.redaction.failure` | Counter | `accepted` | Emits whenever hashing fails; governance now requires explicit status metadata in the schema diff artefact. | The `Redaction Compliance` dashboard panel and CLI output from `check_redaction_status.py` must stay at zero except during drills. |
-  | `android.telemetry.redaction.salt_version` | Gauge | `accepted` | Proves the exporter is using the current quarterly salt epoch. | Compare Grafana’s salt widget with the secrets-vault epoch and ensure schema diff runs retain the `status:"accepted"` annotation. |
+  གོང་འཁོད་ཀྱི་ཐིག་ཁྲམ་ནང་ཐོ་བཀོད་གང་རུང་གིས་ `status` ཅིག་བཀོག་བཞག་པ་ཅིན་ ཁྱད་པར་ཅན་གྱི་ཅ་མཛོད་འདི་འོང་དགོ།
+  བསྐྱར་བཟོ་ **དང་** `telemetry_schema_diff.md` དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན།
+  གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ཚུ་ བསྐོར་ར་རྐྱབ་སྟེ་ཡོདཔ་ཨིན། གསར་བསྐྲུན་འབད་ཡོད་པའི་JSON འདི་ ༡ ནང་བཙུགས།
+  `docs/source/sdk/android/readiness/schema_diffs/` ལས་འབྲེལ་མཐུད་འབད།
+  བྱུང་རྐྱེན་ ཟང་ཟིང་བརྟག་དཔྱད་ཁང་ ཡང་ན་ ལྕོགས་ཅན་སྙན་ཞུ་ཚུ་ ལོག་གཡོག་བཀོལ་བའི་སྙན་ཞུ་ཚུ་ཨིན།
+- **སི་ཨའི་/ཡུ་ནིཊི་ཁྱབ་ཁོངས་:** `ci/run_android_tests.sh` འདི་གི་ཧེ་མ་ལས་ ཆ་འཇོག་འབད་དགོ།
+  དཔར་བསྐྲུན་གྱི་བཟོ་བསྐྲུན་འབདཝ་ཨིན། ཆ་ཤས་འདི་གིས་ ལུས་སྦྱོང་འབད་དེ་ ཧ་ཤིང་/བཀག་ཆ་འབད་ནིའི་སྤྱོད་ལམ་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  དཔེ་ཚད་ཀྱི་ གླ་ཆ་ཡོད་པའི་ ཊེ་ལི་མི་ཊི་ཕྱིར་ཚོང་པ་ཚུ།
+- **injector senity བརྟག་དཔྱད།:** ལག་ལེན་འཐབ།
+  `scripts/telemetry/inject_redaction_failure.sh --dry-run` བསྐྱར་སྦྱོང་གི་སྔོན་ལ།
+  འཐུས་ཤོར་གྱི་སྨན་ཁབ་ཀྱི་ལཱ་ཚུ་ ངེས་གཏན་བཟོ་ནི་དང་ ཉེན་བརྡ་འབད་མི་ ཉེན་བརྡ་ཚུ་ ཧེ་ཤིང་སྲུང་སྐྱོབ་འབད་བའི་སྐབས་ མེ་བཏངམ་ཨིན།
+  འཕྱུར་ཡོདཔ། `--clear` ཚར་གཅིག་བདེན་དཔྱད་འབད་དེ་ སྨན་ཁབ་བཙུགས་མི་འདི་ ཨ་རྟག་རང་ གསལ་རི་རི་བཟོ།
+  ཆ་ཚང་།
 
-  If any entry in the table above drops a `status`, the diff artefact must be
-  regenerated **and** `telemetry_schema_diff.md` updated before the AND7
-  governance packet is circulated. Include the refreshed JSON in
-  `docs/source/sdk/android/readiness/schema_diffs/` and link it from the
-  incident, chaos lab, or enablement report that triggered the rerun.
-- **CI/unit coverage:** `ci/run_android_tests.sh` must pass before
-  publishing builds; the suite enforces hashing/override behaviour by exercising
-  the telemetry exporters with sample payloads.
-- **Injector sanity checks:** Use
-  `scripts/telemetry/inject_redaction_failure.sh --dry-run` ahead of rehearsals
-  to confirm failure injection works and that alerts fire when hashing guards
-  are tripped. Always clear the injector with `--clear` once validation
-  completes.
+### 2.3 འཕྲུལ་རིག ↔ རུ་ཊི་ བརྒྱུད་འཕྲིན་ ཆ་སྙོམས་དཔྱད་གཞི།
 
-### 2.3 Mobile ↔ Rust telemetry parity checklist
+Android ཕྱིར་ཚོང་པ་དང་ Rust node ཞབས་ཏོག་ཚུ་ ཕྲང་སྒྲིག་འབད་དེ་བཞག་དགོ།
+༢༠༠༨ ལུ་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ བསྐྱར་གསོའི་དགོས་མཁོ་སོ་སོ་ཚུ།
+`docs/source/sdk/android/telemetry_redaction.md`. འོག་གི་ཐིག་ཁྲམ་འདི་གིས་ འདི་བཟུམ་སྦེ་ལཱ་འབདཝ་ཨིན།
+AND7 ལམ་གྱི་ས་ཁྲ་འཛུལ་ཞུགས་ནང་ གཞི་བསྟུན་འབད་ཡོད་པའི་ཐོ་ཡིག་གཉིས་འབད་ཆོགཔ་ཨིན།
+schema diff གིས་ ས་སྒོ་ཚུ་ ངོ་སྤྲོད་ཡང་ན་ རྩ་བསྐྲད་གཏངམ་ཨིན།| དབྱེ་ཁག་ | Android ཕྱིར་གཏོང་པ་ | རསཊ་ཞབས་ཏོག་ | བདེན་དཔྱད་ཧུཀ་ |
+|----------------------------------------------------------------- |
+| དབང་འཛིན་ / འགྲུལ་ལམ་སྐབས་དོན། | Hash `authority`/`alias` བེལེཀ་༢བི་-༢༥༦ བརྒྱུད་དེ་ ཕྱིར་གཏོང་མ་འབད་བའི་ཧེ་མར་ Torii ཧོསིཊི་མིང་ཚུ་ བཀོ་བཞག་དགོ། emit `android.telemetry.redaction.salt_version` ཚྭ་བསྒྱིར་བའི་བདེན་པ། | འབྲེལ་མཐུན་གྱི་དོན་ལུ་ Prometheus ཧོསིཊི་མིང་དང་ མཉམ་རོགས་ཨའི་ཌི་ཚུ་ ཆ་ཚང་འཇལཝ་ཨིན། | Grafana vs `torii.http.request` ཐོ་བཀོད་ཚུ་ `readiness/schema_diffs/` གི་འོག་ལུ་ གསར་ཤོས་ལས་རིམ་ནང་ ག་བསྡུར་རྐྱབ་སྟེ་ དེ་ལས་ `android.telemetry.redaction.salt_version` `scripts/telemetry/check_redaction_status.py` གཡོག་བཀོལ་ཐོག་ལས་ ཀླད་ཀོར་ཚྭ་ཚུ་དང་མཐུན་སྒྲིག་འབད། |
+| ཐབས་འཕྲུལ་དང་མིང་རྟགས་བཀོད་མི་ངོ་རྟགས། | བཱ་ཀེཊི་ `hardware_tier`/`device_profile`, ཧེཤ་ཚད་འཛིན་གྱི་ བརྡ་རྟགས་ཚུ་, དེ་ལས་ རིམ་སྒྲིག་ཨང་གྲངས་ཚུ་ ནམ་ཡང་ཕྱིར་འདྲེན་འབདཝ་ཨིན། | ཐབས་འཕྲུལ་གྱི་མེ་ཊ་ཌེ་ཊ་མེད། nodes eit བདེན་དཔྱད་པ་ `peer_id` དང་ཚད་འཛིན་པ་ `public_key` verbatim. | བརྟག་དཔྱད་ཁང་ཚུ་ནང་ རྩིས་ཞིབ་ `PendingQueueInspector` ནང་ སབ་ཁྲ་ཚུ་ མེ་ལོང་ནང་ དང་ `ci/run_android_tests.sh` ནང་ན་ མིང་གཞན་ ཧེ་ཤིང་བརྟག་དཔྱད་ཚུ་ ལྗང་ཁུ་སྦེ་ ལུས་ཡོདཔ་ངེས་གཏན་བཟོ། |
+| ཡོངས་འབྲེལ་མེ་ཊ་ཌེ་ཊ་ | ཕྱིར་འདྲེན་ `network_type` + `roaming` བུ་ལིན་; `carrier_name` བཏོན་བཏང་ཡོད། | རཱསིཊི་གིས་ མཉམ་རོགས་ཀྱི་མིང་དང་ ཊི་ཨེལ་ཨེསི་ མཇུག་སྣོད་མེ་ཊ་ཌེ་ཊ་ ཆ་ཚང་སྦེ་བཞགཔ་ཨིན། | `readiness/schema_diffs/` ནང་ལུ་ JSON གསརཔ་འདི་ གསོག་འཇོག་འབད་ཞིནམ་ལས་ Android གི་ཕྱོགས་འདི་གིས་ ད་ལྟོ་ཡང་ `carrier_name` འདི་ བཀོ་བཞགཔ་ཨིན་ན་ ངེས་གཏན་བཟོཝ་ཨིན། Grafana གི་ “Network Context” ཝིཌི་གེཊི་གིས་ འབག་མི་ཡིག་རྒྱུན་ཚུ་སྟོནམ་ཨིན། |
+| ཀླད་ཀོར་ / ཟང་ཟིང་གི་སྒྲུབ་བྱེད་ | འཁྲབ་རྩེདཔ་གི་འགན་ཁུར་ཚུ་དང་གཅིག་ཁར་ `android.telemetry.redaction.override` དང་ `android.telemetry.chaos.scenario` ལས་རིམ་ཚུ་ ཕྱིར་འཐེན་འབདཝ་ཨིན། | རསཊ་ཞབས་ཏོག་ཚུ་གིས་ འགན་ཁུར་གྱི་གདོང་ཁེབས་དང་ ཟང་ཟིང་མེད་པའི་ ཆ་འཇོག་ཚུ་ ཆ་མེད་བཏངམ་ཨིན། | དམག་སྦྱོང་འབད་བའི་ཤུལ་ལས་ `docs/source/sdk/android/readiness/and7_operator_enablement.md` བརྟག་དཔྱད་འབད་དེ་ རྟགས་མཚན་དང་ ཟང་ཟིང་གི་ཅ་ཆས་ཚུ་ རྟགས་མ་བཀོད་པའི་ Rust ལས་རིམ་ཚུ་ གཏན་མཛོད་འབད་ཡོདཔ་ཨིན། |
 
-Keep the Android exporters and Rust node services aligned while respecting the
-different redaction requirements documented in
-`docs/source/sdk/android/telemetry_redaction.md`. The table below serves as the
-dual allowlist referenced in the AND7 roadmap entry—update it whenever the
-schema diff introduces or removes fields.
+མཉམ་པའི་ལས་ཀའི་རྒྱུན་རིམ།
 
-| Category | Android exporters | Rust services | Validation hook |
-|----------|-------------------|---------------|-----------------|
-| Authority / route context | Hash `authority`/`alias` via Blake2b-256 and drop raw Torii hostnames before export; emit `android.telemetry.redaction.salt_version` to prove salt rotation. | Emit full Torii hostnames and peer IDs for correlation. | Compare `android.torii.http.request` vs `torii.http.request` entries in the latest schema diff under `readiness/schema_diffs/`, then confirm `android.telemetry.redaction.salt_version` matches the cluster salt by running `scripts/telemetry/check_redaction_status.py`. |
-| Device & signer identity | Bucket `hardware_tier`/`device_profile`, hash controller aliases, and never export serial numbers. | No device metadata; nodes emit validator `peer_id` and controller `public_key` verbatim. | Mirror the mappings in `docs/source/sdk/mobile_device_profile_alignment.md`, audit `PendingQueueInspector` outputs during labs, and ensure the alias hashing tests inside `ci/run_android_tests.sh` remain green. |
-| Network metadata | Export only `network_type` + `roaming` booleans; `carrier_name` is dropped. | Rust retains peer hostnames plus full TLS endpoint metadata. | Store the latest diff JSON in `readiness/schema_diffs/` and confirm that the Android side still omits `carrier_name`. Alert if Grafana’s “Network Context” widget shows any carrier strings. |
-| Override / chaos evidence | Emit `android.telemetry.redaction.override` and `android.telemetry.chaos.scenario` events with masked actor roles. | Rust services emit override approvals without role masking and no chaos-specific spans. | Cross-check `docs/source/sdk/android/readiness/and7_operator_enablement.md` after every drill to ensure override tokens and chaos artefacts are archived alongside the unmasked Rust events. |
-
-Parity workflow:
-
-1. After each manifest or exporter change, run
+༡ གསལ་སྟོན་ཡང་ན་ཕྱིར་འདྲེན་གྱི་བསྒྱུར་བཅོས་རེ་རེ་གི་ཤུལ་ལས་ གཡོག་བཀོལ།
    `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json --out docs/source/sdk/android/readiness/schema_diffs/$(date -u +%Y%m%d).json --textfile-dir /var/lib/node_exporter/textfile_collector`
-   so the JSON artefact and the mirrored metrics both land in the evidence bundle
-   (the helper still writes `artifacts/android/telemetry/schema_diff.prom` by default).
-2. Review the diff against the table above; if Android now emits a field that is
-   only allowed on Rust (or vice versa), file an AND7 readiness bug and update
-   the redaction plan.
-3. During weekly checks, run
+   དེ་འབདཝ་ལས་ JSON གི་ཅ་རྙིང་དང་ མེ་ལོང་གི་ཚད་གཞི་གཉིས་ཆ་ར་ སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ནང་ལུ་ ས་གཞི་བཟོཝ་ཨིན།
+   (གྲོགས་རམ་པ་འདི་གིས་ ད་ལྟོ་ཡང་ སྔོན་སྒྲིག་གིས་ `artifacts/android/telemetry/schema_diff.prom` བྲིས།)
+༢ གོང་འཁོད་ཀྱི་ཐིག་ཁྲམ་གྱི་རྒྱབ་འགལ་ལུ་ ཁྱད་པར་བསྐྱར་ཞིབ་འབད་ནི། གལ་ཏེ་Android ད་ལྟ་དེ་ཡི་ས་ཁོངས་ཅིག་བཏོན་ཡོད།
+   རསཊ་གུ་རྐྱངམ་ཅིག་ གནང་བ་བྱིན་ (ཡང་ན་ ཕར་ཚུན), AND7 གྲ་སྒྲིག་འཛོལ་བ་དང་ དུས་མཐུན་བཟོ་ནི།
+   བསྐྱར་བཟོ་འཆར་གཞི།
+3. བདུན་ཕྲག་རེའི་ཞིབ་དཔྱད་སྐབས་ གཡོག་བཀོལ།
    `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`
-   to confirm salt epochs match the Grafana widget and note the epoch in the
-   on-call journal.
-4. Record any deltas in
-   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` so
-   governance can audit parity decisions.
+   ཚྭ་གི་དུས་སྐབས་ཚུ་ Grafana དང་མཐུན་སྒྲིག་འབད་དེ་ དུས་སྐབས་འདི་ ནང་ན་དྲན་འཛིན་འབདཝ་ཨིན།
+   on-call དུས་དེབ་།
+༤ ༢༠༢༠ ལོར་ཌེལ་ཊ་གང་རུང་ཐོ་བཀོད་འབད།
+   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` སོ།
+   གཞུང་སྐྱོང་གིས་ འདྲ་མཉམ་གྱི་གྲོས་ཐག་ཚུ་ རྩིས་ཞིབ་འབད་ཚུགས།
 
-### 2.4 Observability dashboards & alert thresholds
+### 2.4 བལྟ་རྟོག་འབད་བཏུབ་པའི་ ཌེཤ་བོརཌི་དང་ དྲན་སྐུལ་ཚད་གཞི་ཚུ།
 
-Keep dashboards and alerts aligned with the AND7 schema diff approvals when
-reviewing `scripts/telemetry/check_redaction_status.py` output:
+ཌེཤ་བོརཌི་དང་ ཉེན་བརྡ་ཚུ་ AND7 ལས་འཆར་སོ་སོ་གི་ ཆ་འཇོག་དང་ ཕྲང་སྒྲིག་འབད་དེ་ ག་དེམ་ཅིག་སྦེ་ བཞག་དགོ།
+བསྐྱར་ཞིབ་ `scripts/telemetry/check_redaction_status.py` ཐོན་འབྲས་:
 
-- `Android Telemetry Redaction` — Salt epoch widget, override token gauge.
-- `Redaction Compliance` — `android.telemetry.redaction.failure` counter and
-  injector trend panels.
-- `Exporter Health` — `android.telemetry.export.status` rate breakdowns.
-- `Android Telemetry Overview` — device profile buckets and network context volume.
+- `Android Telemetry Redaction` — ཚྭ་ཨེ་པོཆ་ཝིཌི་གེཊ།
+- `Redaction Compliance` — Prometheus གྱངས་ཁ་དང་།
+  injector འགྲོས་ཀྱི་པེ་ནཱལ།
+- `Exporter Health` — `android.telemetry.export.status` ཚད་གཞི།
+- `Android Telemetry Overview` — ཐབས་འཕྲུལ་གསལ་སྡུད་བཱ་ཀེཊི་དང་ཡོངས་འབྲེལ་སྐབས་དོན་སྐད་ཡིག།
 
-The following thresholds mirror the quick-reference card and must be enforced
-during incident response and rehearsals:
+འོག་གི་ཐེམ་སྐས་ཚུ་གིས་ མགྱོགས་དྲགས་སྦེ་གཞི་བསྟུན་ཤོག་བྱང་འདི་ མེ་ལོང་དང་ བསྟར་སྤྱོད་འབད་དགོ།
+བྱུང་རྐྱེན་ལན་འདེབས་དང་ སྦྱོང་བརྡར་གྱི་སྐབས་ལུ།| མེ་ཊིག་ / ཚོགས་ཆུང་ | ཐེརེ་ཤོལཌ | བྱ་བ་ |
+|----------------------------------------------------- |
+| `android.telemetry.redaction.failure` (`Redaction Compliance` བཀོད་ཚོགས་) | >0 བསྐོར་བའི་ 15min སྒོ་སྒྲིག་ཅིག་གུ་ | འཐུས་ཤོར་གྱི་བརྡ་རྟགས་ཞིབ་དཔྱད་འབད་ གསལ་སྟོན་ནང་ དྲན་ཐོ་ CLI ཐོན་འབྲས་ + Grafanahot གཡོག་བཀོལ། |
+| `android.telemetry.redaction.salt_version` (`Android Telemetry Redaction` བཀོད་ཚོགས་) | གསང་བའི་གནས་ཚུལ་ལས་ ཁྱད་པར་ | ཧལཊི་གསར་བཏོན་ཚུ་ གསང་བའི་བསྒྱིར་ཚད་དང་མཉམ་འབྲེལ་འབད་ ཡིག་སྣོད་ཨེན་ཌི་༧ དྲན་ཐོ་། |
+| `android.telemetry.export.status{status="error"}` (`Exporter Health` བཀོད་ཚོགས་) | >1% ཕྱིར་གཏོང་ | བསྡུ་སྒྲིག་འབད་མི་གསོ་བའི་བརྟག་དཔྱད་, CLI བརྟག་དཔྱད་ཚུ་ བཟུང་ཞིནམ་ལས་ SRE ལུ་ ཡར་སེང་འབད། |
+| `android.telemetry.device_profile{tier="enterprise"}` vs རསཊ་ འདྲ་མཉམ་ (`Android Telemetry Overview`) | འགྱུར་ལྡོག་>༡༠% ལས་ Rust baseline | ཡིག་སྣོད་གཞུང་གི་རྗེས་སྙེག་འབད་ནི། སྒྲིག་ཆས་ཆུ་རྫིང་ཚུ་བདེན་དཔྱད་འབད། |
+| `android.telemetry.network_context` འབོར་ཚད་ (`Android Telemetry Overview`) | Torii གི་འགྲུལ་སྐྱོད་ཡོད་པའི་སྐབས་ ཀླད་ཀོར་དང་ཀླད་ཀོར་བཀོག་བཞགཔ་ཨིན། | ས་སྒོ་ཚུ་བསྒྱུར་བཅོས་མེདཔ་ངེས་གཏན་བཟོ་ནི་ལུ་ `NetworkContextProvider` ལོག་སྟེ་ལས་རིམ་གྱི་ཁྱད་པར་དེ་ བསྐྱར་གཡོག་འབད། |
+| `android.telemetry.redaction.override` / `android_telemetry_override_tokens_active` (`Android Telemetry Redaction`) | ཕྱི་རོལ་ཀླད་ཀོར་མིན་པའི་ཆ་འཇོག་འབད་ཡོདཔ་/དྲི་རིལ་སྒོ་སྒྲིག་ | བྱུང་རྐྱེན་ཅིག་ལུ་ Tie token གིས་ བཞུ་བཅུད་ལོག་སྟེ་བཟོ་ནི། |
 
-| Metric / panel | Threshold | Action |
-|----------------|-----------|--------|
-| `android.telemetry.redaction.failure` (`Redaction Compliance` board) | >0 over a rolling 15 min window | Investigate failing signal, run injector clear, log CLI output + Grafana screenshot. |
-| `android.telemetry.redaction.salt_version` (`Android Telemetry Redaction` board) | Differs from secrets-vault salt epoch | Halt releases, coordinate with secrets rotation, file AND7 note. |
-| `android.telemetry.export.status{status="error"}` (`Exporter Health` board) | >1 % of exports | Inspect collector health, capture CLI diagnostics, escalate to SRE. |
-| `android.telemetry.device_profile{tier="enterprise"}` vs Rust parity (`Android Telemetry Overview`) | Variance >10 % from Rust baseline | File governance follow-up, verify fixture pools, annotate schema diff artefact. |
-| `android.telemetry.network_context` volume (`Android Telemetry Overview`) | Drops to zero while Torii traffic exists | Confirm `NetworkContextProvider` registration, rerun schema diff to ensure fields unchanged. |
-| `android.telemetry.redaction.override` / `android_telemetry_override_tokens_active` (`Android Telemetry Redaction`) | Non-zero outside approved override/drill window | Tie token to an incident, regenerate digest, revoke via workflow in §3. |
+### 2.5 བཀོལ་སྤྱོད་པའི་གྲ་སྒྲིག་དང་ལྕོགས་ཅན་ལམ།
 
-### 2.5 Operator readiness & enablement trail
+ལམ་སྟོན་གྱི་ཅ་ཆས་ AND7 གིས་ བློ་གཏད་ཅན་གྱི་ བཀོལ་སྤྱོད་སློབ་ཚན་ཅིག་ འབོཝ་ཨིན།
+བཏོན་གཏང་མི་ འབྲེལ་གཏོགས་ཅན་ཚུ་གིས་ རན་དེབ་མ་འགྱོ་བའི་ཧེ་མ་ གོང་ལུ་ ཆ་སྙོམས་ཐིག་ཁྲམ་ཚུ་ ཧ་གོ་ནི།
+GA. ནང་ཐིག་འདི་ ༡ ནང་ལག་ལེན་འཐབ།
+`docs/source/sdk/android/telemetry_readiness_outline.md` ཀེ་ན་ནིག་ བཅའ་སྒྲིག་དོན་ལུ་
+(གྲོས་ཚད།, གསལ་བཤད་པ་དུས་ཚོད།) དང་ `Exporter Health`
+ཁ་གསལ་གྱི་ཞིབ་དཔྱད་ཐོ་ཡིག་དང་ སྒྲུབ་བྱེད་འབྲེལ་ལམ་ དེ་ལས་ བྱ་བ་དྲན་ཐོ་ཚུ་གི་དོན་ལུ་ཨིན། གཤམ་གསལ་ཚུ་བཞག་དགོ།
+ཊེ་ལི་མི་ཊི་རི་འཆར་གཞི་འདི་བསྒྱུར་བཅོས་འགྱོཝ་ད་ མཉམ་འབྱུང་ནང་ དུས་རིམ་ཚུ།| དུས་རིམ་ | འགྲེལ་བཤད་ | སྒྲུབ་བྱེད་ཀྱི་བང་རིམ། | གཞི་རིམ་བདག་པོ། |
+|-------------------------------------------------------------- |
+| སྔོན་འགྲོའི་བགོ་འགྲེམས་ | སྲིད་བྱུས་ཚུ་ སྔོན་སྒྲིག་འབད་དེ་ `telemetry_redaction.md` དང་ བཤད་པ་མ་རྐྱབ་པའི་ཧེ་མ་ ཉུང་ཤོས་རང་ ཚོང་འབྲེལ་ཉུང་ཤོས་རང་ ཉིནམ་ལྔ་གི་རིང་ མགྱོགས་དྲགས་སྦེ་ རྒྱབ་རྟེན་ཤོག་བྱང་ཚུ་ བཏང་དགོ། བཀོད་རིས་ཀྱི་ཡིག་ཆ་དྲན་ཐོ་ནང་ངོས་ལེན་ཚུ་འཚོལ་ཞིབ་འབད། | `docs/source/sdk/android/telemetry_readiness_outline.md` (Session Logistics + བརྡ་སྤྲོད་ལོག་བཀོད) དང་ `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` ནང་ཡིག་མཛོད་གློག་འཕྲིན་ཚུ། | ཡིག་ཆ་/རྒྱབ་སྐྱོར་འཛིན་སྐྱོང་པ། |
+| འཚོ་བའི་གྲ་སྒྲིག་ལཱ་ཡུན་ | སྐར་མ་༦༠ གི་སྦྱོང་བརྡར་ (སྲིད་བྱུས་གཏིང་ཟབ་ཀྱི་ མཆོང་ལྡིང་དང་ རྐང་འགྲོས་ ཌེཤ་བོརཌ་ ཟང་ཟིང་བརྟག་དཔྱད་ཁང་ ཟང་ཟིང་གི་ བརྡ་སྟོན་ཚུ་) ཚུ་ བཀྲམ་སྤེལ་འབད་དེ་ དུས་མཉམ་མེན་པའི་ ལྟདམོ་ལྟ་མི་ཚུ་གི་དོན་ལུ་ སྒྲ་བཟུང་འབད་བཞག་དགོ། | དྲན་ཐོ་ + བཤུད་ཚུ་ `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` གི་འོག་ལུ་གསོག་འཇོག་འབད་དེ་ བཀོད་སྒྲིག་ཚུ་དང་གཅིག་ཁར་ གཞི་བསྟུན་ཚུ་ བཀོད་སྒྲིག་གི་ §2 ནང་ བཟུང་ཡོདཔ་ཨིན། | LLM (ལཱ་འབད་ཐངས་ AND7 ཇོ་བདག་) |
+| ཟང་ཟིང་བརྟག་དཔྱད་བཀོལ། | ཉུང་མཐའ་ལུ་ C2 (averride) + C6 (queue replay) ལས་ Torii ལས་ ཐད་རི་བ་རི་ `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` ལས་ ཐད་རི་བ་རི་ དྲན་ཐོ་/གསལ་གཞི་ཚུ་ ལྕོགས་ཅན་ཆས་ཆས་ལུ་མཉམ་སྦྲགས་འབད། | གནས་སྟངས་སྙན་ཞུ་དང་གསལ་གཞི་ `docs/source/sdk/android/readiness/labs/reports/<YYYY-MM>/` དང་ `/screenshots/<YYYY-MM>/` ནང་། | Android བལྟ་བཤལ་གྱི་ TL + SRE on-call |
+| ཤེས་བྱ་བརྟག་དཔྱད་དང་ བཅའ་མར་གཏོགས་མི་ | དྲི་བ་དྲིས་ལན་ཚུ་བསྡུ་ཞིནམ་ལས་ བརྒྱ་ཆ་༩༠ གི་ སྐུགས་ཐོབ་མི་ཚུ་གིས་ བཅོ་ཁ་རྐྱབ། མགྱོགས་དྲགས་གཞི་བསྟུན་དྲི་བ་ཚུ་ ཆ་འཇོག་ཞིབ་དཔྱད་ཐོ་ཡིག་དང་གཅིག་ཁར་ཕྲང་སྒྲིག་འབད་བཞག། | ཀིའུ་ཟི་ཕྱིར་འདྲེན་ `docs/source/sdk/android/readiness/forms/responses/` དང་ བཅུད་བསྡུས་ Markown/JSON གིས་ `scripts/telemetry/generate_and7_quiz_summary.py` བརྒྱུད་དེ་ བཏོན་མི་ དེ་ལས་ `and7_operator_enablement.md` ནང་ན་ བཅའ་མར་གཏོགས་མི་ཐིག་ཁྲམ་ཚུ་ཨིན། | རྒྱབ་སྐྱོར་བཟོ་རིག |
+| གཏན་མཛོད་དང་རྗེས་འཇུག་ | ལྕོགས་གྲུབ་ཅན་གྱི་ཅ་ཆས་ཀྱི་བྱ་བ་དྲན་ཐོ་འདི་དུས་མཐུན་བཟོ་ཞིནམ་ལས་ གཏན་མཛོད་ལུ་ ཅ་ཆས་ཚུ་ སྐྱེལ་བཙུགས་འབད་ཞིནམ་ལས་ `status.md` ནང་ལུ་མཇུག་བསྡུ་མི་འདི་ དྲན་འཛིན་འབད། ཚོགས་ཐེངས་འདི་གི་སྐབས་ལུ་བྱིན་མི་ བཅོ་ཁ་དང་ ཡང་ན་ བཀག་ཆ་འབད་མི་ ཊོ་ཀེན་ཚུ་ `telemetry_override_log.md` ནང་ལུ་ འདྲ་བཤུས་རྐྱབ་དགོ། | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 (བྱ་བའི་ལོག), `.../archive/<YYYY-MM>/checklist.md`, དང་ §3 ནང་ལུ་ ཁུངས་གཏུག་འབད་ཡོད་པའི་ བཀག་ཆ་དྲན་ཐོ་འདི་ཨིན། | LLM (ལཱ་འབད་ཐངས་ AND7 ཇོ་བདག་) |
 
-Roadmap item AND7 calls out a dedicated operator curriculum so support, SRE, and
-release stakeholders understand the parity tables above before the runbook goes
-GA. Use the outline in
-`docs/source/sdk/android/telemetry_readiness_outline.md` for canonical logistics
-(agenda, presenters, timeline) and `docs/source/sdk/android/readiness/and7_operator_enablement.md`
-for the detailed checklist, evidence links, and action log. Keep the following
-phases in sync whenever the telemetry plan changes:
+སློབ་ཚན་འདི་ བསྐྱར་ལོག་འབད་བའི་སྐབས་ (བཞི་པ་ ཡང་ན་ ལས་འཆར་གཙོ་བོ་ཚུ་ འགྱུར་བཅོས་མ་འགྱོ་བའི་ཧེ་མ་) གསར་བསྐྲུན་འབད།
+བཀོད་སྒྲིག་གསརཔ་དང་གཅིག་ཁར་ ཕྱི་ཐིག་ བཅའ་མར་གཏོགས་མི་ ཐོ་ཡིག་ད་ལྟོ།
+དྲི་དཔྱད་བཅུད་བསྡུས་ JSON/Markdown གི་ཅ་ཆས་ཚུ་ བསྐྱར་བཟོ་འབད།
+ཁུངས་གཏུག་རིམ་མཐུན་གྱི་སྒྲུབ་བྱེད། AND7 གི་དོན་ལུ་ `status.md` ཐོ་བཀོད་འདི་ འབྲེལ་མཐུད་འབད་དགོ།
+ལྕོགས་ཅན་རྒྱུག་འགྲན་རེ་རེ་གིས་ ཡིག་སྡེབ་རེ་རེ་བཞིན་ཚར་ཅིག་ཁ་བསྡམས།
 
-| Phase | Description | Evidence bundle | Primary owner |
-|-------|-------------|-----------------|---------------|
-| Pre-read distribution | Send the policy pre-read, `telemetry_redaction.md`, and the quick-reference card at least five business days before the briefing. Track acknowledgements in the outline’s comms log. | `docs/source/sdk/android/telemetry_readiness_outline.md` (Session Logistics + Communications Log) and the archived email in `docs/source/sdk/android/readiness/archive/<YYYY-MM>/`. | Docs/Support manager |
-| Live readiness session | Deliver the 60-minute training (policy deep dive, runbook walkthrough, dashboards, chaos lab demo) and keep the recording running for asynchronous viewers. | Recording + slides stored under `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` with references captured in §2 of the outline. | LLM (acting AND7 owner) |
-| Chaos lab execution | Run at least C2 (override) + C6 (queue replay) from `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` immediately after the live session and attach logs/screenshots to the enablement kit. | Scenario reports and screenshots inside `docs/source/sdk/android/readiness/labs/reports/<YYYY-MM>/` and `/screenshots/<YYYY-MM>/`. | Android Observability TL + SRE on-call |
-| Knowledge check & attendance | Collect quiz submissions, remediate anyone scoring <90 %, and record attendance/quiz statistics. Keep the quick-reference questions aligned with the parity checklist. | Quiz exports in `docs/source/sdk/android/readiness/forms/responses/`, summary Markdown/JSON produced via `scripts/telemetry/generate_and7_quiz_summary.py`, and the attendance table inside `and7_operator_enablement.md`. | Support engineering |
-| Archive & follow-ups | Update the enablement kit’s action log, upload artefacts to the archive, and note the completion in `status.md`. Any remediation or override tokens issued during the session must be copied into `telemetry_override_log.md`. | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 (action log), `.../archive/<YYYY-MM>/checklist.md`, and the override log referenced in §3. | LLM (acting AND7 owner) |
+### 2.6 ལས་འཆར་གྱི་ཁྱད་པར་ཐོ་ཡིག་དང་སྲིད་བྱུས་ཞིབ་དཔྱད་འབད་བཅུགཔ་ཨིན།
 
-When the curriculum is rerun (quarterly or before major schema changes), refresh
-the outline with the new session date, keep the attendee roster current, and
-regenerate the quiz summary JSON/Markdown artefacts so governance packets can
-reference consistent evidence. The `status.md` entry for AND7 should link to the
-latest archive folder once each enablement sprint closes.
-
-### 2.6 Schema diff allowlists & policy checks
-
-The roadmap explicitly calls out a dual-allowlist policy (mobile redactions vs
-Rust retention) that is enforced by the `telemetry-schema-diff` CLI housed under
-`tools/telemetry-schema-diff`. Every diff artefact recorded in
-`docs/source/sdk/android/readiness/schema_diffs/` must document which fields are
-hashed/bucketed on Android, which fields remain unhashed on Rust, and whether
-any non-allowlisted signal slipped into the build. Capture those decisions
-directly in the JSON by running:
+ལམ་སྟོན་འདི་གིས་ གསལ་ཏོག་ཏོ་སྦེ་ ཆ་རྐྱེན་གཉིས་ལྡན་གྱི་སྲིད་བྱུས་ཅིག་ འབོད་བརྡ་འབདཝ་ཨིན།
+འདི་ འོག་ལུ་ཡོད་པའི་ `telemetry-schema-diff` གིས་ འོག་ལུ་བཞག་ཡོདཔ་ཨིན།
+`tools/telemetry-schema-diff`. དངོས་མེད་རེ་རེ་བཞིན་ ༢༠༡༦ ལོར་ཐོ་བཀོད་བྱས།
+`docs/source/sdk/android/readiness/schema_diffs/` འདི་ ས་སྒོ་ག་འདི་ཨིན་ན་ ཡིག་ཐོག་ལུ་བཀོད་དགོ།
+ཧཌ་/ཧ་ཤེད་ཨེནཌྲོཌ་ལུ་བརྡུང་ཡོདཔ་ད་ དེ་ཡང་ རསཊ་ལུ་ ས་ཞིང་ཚུ་ མ་བཤིག་པར་ལུས་ཏེ་ཡོདཔ་ཨིན་ན་མེན་ན།
+བཟོ་བསྐྲུན་ནང་ལུ་ཐོ་ཡིག་མེད་པའི་བརྡ་རྟགས་ག་ཅི་རང་འབད་རུང་ བཤུད་བརྡར་འབད་ཡོདཔ། ཐག་གཅོད་དེ་ཚུ་ བཟུང་དགོ།
+ཐད་ཀར་དུ་ JSON ནང་ གཡོག་བཀོལ་ཐོག་ལས་::
 
 ```bash
 cargo run -p telemetry-schema-diff -- \
@@ -334,51 +321,47 @@ if jq -e '.policy_violations | length > 0' "$LATEST" >/dev/null; then
   jq '.policy_violations[]' "$LATEST"
   exit 1
 fi
-```
+```མཐའ་མའི་ `jq` གིས་ སྙན་ཞུ་འདི་ གཙང་མ་བཟོ་བའི་སྐབས་ དོན་མེད་ལུ་ བརྟག་ཞིབ་འབདཝ་ཨིན། ཐོན་འབྲས་གང་རུང་ཅིག་སྨན་བཅོས་འབད།
+བརྡ་བཀོད་དེ་ལས་ Sev2 གྲ་སྒྲིག་འཛོལ་བ་: མི་རློབས་ `policy_violations` ཅིག།
+ཨེ་རེ་ཟེར་མི་འདི་ སི་ཨེལ་ཨའི་གིས་ ཨེན་ཌོརཌི་རྐྱངམ་ཅིག་ཐོ་ཡིག་གུ་མེད་པའི་ བརྡ་མཚོན་ཅིག་ འཚོལ་ཐོབ་ཡོདཔ་ཨིན།
+དེ་བཞིན་ ༢༠ ལོར་ཡིག་ཐོག་བཀོད་པའི་རསཊ་རྐྱངམ་གཅིག་དགོངས་ཡངས་ཐོ་ཡིག་ནང་ཡང་།
+`docs/source/sdk/android/telemetry_schema_diff.md`. འདི་བྱུང་བའི་སྐབས་ བསྡམས།
+ཕྱིར་འདྲེན་དང་ AND7 གི་ཤོག་འཛིན་བཙུགས་ དེ་ལས་ སྲིད་བྱུས་ཚད་གཞི་གི་ཤུལ་ལས་རྐྱངམ་ཅིག་ ཁྱབ་སྤེལ་འདི་ ལོག་གཡོག་བཀོལ།
+དང་ གསལ་སྟོན་གྱི་པར་ཚུ་ བཅོ་ཁ་རྐྱབ་ཡོདཔ་ཨིན། གྲུབ་འབྲས་ཐོན་མི་ JSON འདི་ ༡ ནང་ གསོག་འཇོག་འབད།
+`docs/source/sdk/android/readiness/schema_diffs/` ཚེས་གྲངས་རྗེས་འཇུག་དང་དྲན་ཐོ།
+བྱུང་རྐྱེན་ནང་ ཡང་ན་ བརྟག་དཔྱད་ཁང་གི་སྙན་ཞུ་ནང་ གཞུང་སྐྱོང་གིས་ དངུལ་འཛིན་ཚུ་ ལོག་རྩེད་ཚུགས།
 
-The final `jq` evaluates to a no-op when the report is clean. Treat any output
-from that command as a Sev 2 readiness bug: a populated `policy_violations`
-array means the CLI discovered a signal that is neither on the Android-only list
-nor on the Rust-only exemption list documented in
-`docs/source/sdk/android/telemetry_schema_diff.md`. When this occurs, halt
-exports, file an AND7 ticket, and rerun the diff only after the policy module
-and manifest snapshots have been corrected. Store the resulting JSON in
-`docs/source/sdk/android/readiness/schema_diffs/` with the date suffix and note
-the path inside the incident or lab report so governance can replay the checks.
+**ཧ་ཤིང་དང་ བཀག་སྡོམ་མེ་ཊིགསི་**
 
-**Hashing & retention matrix**
+| བརྡ་རྟགས་.ཕིལཌ་ | Android འཛིན་སྐྱོང་ | རསཊ་འཛིན་སྐྱོང་ | ཐོ་ཡིག་ངོ་རྟགས་ |
+| |
+| `torii.http.request.authority` | བེལེཀ་༢བི་-༢༥༦ ཧམ་ཧཌ་ (`representation: "blake2b_256"`) | འཚོལ་ཞིབ་འབད་ཚུགས་པའི་དོན་ལུ་ ཚིག་དོན་གསོག་འཇོག་འབད་ཡོདཔ། | `policy_allowlisted` (འགྲུལ་འཕྲིན་ཧེཤ་) |
+| `attestation.result.alias` | Blake2b-256 འཚམས། | ཚིག་ཡིག་མིང་གཞན་ (བཀག་འགོག་ཡིག་མཛོད་) | `policy_allowlisted` |
+| `attestation.result.device_tier` | བཱ་ཀེཊ་ (`representation: "bucketed"`) | རིམ་པ་བསྒྱིར་ཚད། | `policy_allowlisted` |
+| `hardware.profile.hardware_tier` | མེད་མི་ — ཨེན་ཌོའིཌ་ཕྱིར་འདྲེན་འབད་མི་ཚུ་གིས་ ས་སྒོ་འདི་ ཡོངས་རྫོགས་སྦེ་ བཀོ་བཞགཔ་ཨིན། | བསྐྱར་བཟོ་མེད་པར་སྟོན་ | `rust_only` (`telemetry_schema_diff.md` གི་ §3 ནང་ཡིག་ཆ།) |
+| `android.telemetry.redaction.override.*` | གདོང་ཁེབས་ཅན་གྱི་འཁྲབ་རྩེདཔ་གི་འཁྲབ་འགན་ཚུ་དང་གཅིག་ཁར་ Android-རྐྱངམ་ཅིག་གི་བརྡ་ཚོད། | འདྲ་མཉམ་གྱི་བརྡ་རྟགས་མ་བཏོན་པ། | `android_only` (`status:"accepted"`) |
 
-| Signal.field | Android handling | Rust handling | Allowlist tag |
-|--------------|-----------------|---------------|---------------|
-| `torii.http.request.authority` | Blake2b-256 hashed (`representation: "blake2b_256"`) | Stored verbatim for traceability | `policy_allowlisted` (mobile hash) |
-| `attestation.result.alias` | Blake2b-256 hashed | Plain text alias (attestation archives) | `policy_allowlisted` |
-| `attestation.result.device_tier` | Bucketed (`representation: "bucketed"`) | Plain tier string | `policy_allowlisted` |
-| `hardware.profile.hardware_tier` | Absent — Android exporters drop the field entirely | Present without redaction | `rust_only` (documented in §3 of `telemetry_schema_diff.md`) |
-| `android.telemetry.redaction.override.*` | Android-only signal with masked actor roles | No equivalent signal emitted | `android_only` (must stay `status:"accepted"`) |
-
-When new signals appear, add them to the schema diff policy module **and** the
-table above so the runbook mirrors the enforcement logic shipped in the CLI.
-Schema runs now fail if any Android-only signal omits an explicit `status` or if
-the `policy_violations` array is non-empty, so keep this checklist in sync with
-`telemetry_schema_diff.md` §3 and the latest JSON snapshots referenced in
+བརྡ་རྟགས་གསརཔ་ཚུ་ཐོན་པའི་སྐབས་ དེ་ཚུ་ ལས་རིམ་ཌིཕ་སྲིད་བྱུས་ཚད་གཞི་ **དང་** ལུ་ཁ་སྐོང་འབད།
+གོང་ལུ་ཐིག་ཁྲམ་ དེ་འབདཝ་ལས་ རན་དེབ་འདི་གིས་ སི་ཨེལ་ཨའི་ནང་ བཀལ་ཡོད་པའི་ བཀག་འཛིན་ཚད་མ་འདི་ མེ་ལོང་སྦེ་ བཏོནམ་ཨིན།
+ད་ལྟོ་ Android རྐྱངམ་ཅིག་གི་བརྡ་རྟགས་ཚུ་གིས་ གསལ་ཏོག་ཏོ་ `status` འདི་ བཏོན་གཏང་པ་ཅིན་ ད་ལྟོ་ ལས་འཆར་འདི་ འཐུས་ཤོར་འགྱོཝ་ཨིན།
+`policy_violations` ཨེ་རེ་འདི་ སྟོང་ཆ་མེདཔ་ལས་ ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་དང་གཅིག་ཁར་ མཉམ་འབྱུང་སྦེ་བཞག།
+`telemetry_schema_diff.md` §3 དང་ JSON གསར་ཤོས་འདི་ ནང་གཞི་བསྟུན་འབད་ཡོདཔ།
 `telemetry_redaction_minutes_*.md`.
 
-## 3. Override Workflow
+## 3. ལཱ་གི་རྒྱུན་རིམ།
 
-Overrides are the “break glass” option when hashing regressions or privacy
-alerts block customers. Apply them only after recording the full decision trail
-in the incident doc.
-
-1. **Confirm drift and scope.** Wait for the PagerDuty alert or the schema diff
-   gate to fire, then run
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>` to
-   prove mismatched authorities. Attach the CLI output and Grafana screenshots
-   to the incident record.
-2. **Prepare a signed request.** Populate
-   `docs/examples/android_override_request.json` with the ticket id, requester,
-   expiry, and justification. Store the file next to the incident artefacts so
-   compliance can audit the inputs.
-3. **Issue the override.** Invoke
+གྱང་ཁོག་ཚུ་ ཧེ་ཤིང་རི་གེ་རེ་ཤཱན་ ཡང་ན་ སྒེར་གསང་སྐབས་ “ཆད་ཆག” གདམ་ཁ་ཨིན།
+ཚོང་མགྲོན་པ་བཀག་ཆ་འབདཝ་ཨིན། ཐག་གཅོད་ལམ་ལུགས་ཆ་ཚང་སྒྲ་བཟུང་འབད་བའི་ཤུལ་ལས་རྐྱངམ་ཅིག་ ལག་ལེན་འཐབ་དགོ།
+བྱུང་རྐྱེན་ཡིག་ཆ་ནང་།1. **འཕྱིད་པ་དང་ཁྱབ་ཚད།** པེ་གར་ཌུ་ཊི་ཉེན་བརྡ་ཡང་ན་ ལས་རིམ་གྱི་ཁྱད་པར་དེ་ བསྒུག་སྡོད།
+   སྒོ་ར་མེ་ལ་དེ་ལས་བརྒྱུགས།
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>` ལས་
+   མཐུན་སྒྲིག་མེད་པའི་དབང་འཛིན་ཚུ་བདེན་དཔང་འབད་ཡོདཔ། སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་དང་ Grafana གསལ་གཞི་ཚུ་མཉམ་སྦྲགས་འབད།
+   བྱུང་རྐྱེན་ཐོ་བཀོད་ལུ་།
+2. **མིང་རྟགས་བཀོད་པའི་ཞུ་བ་ཅིག་གྲ་སྒྲིག་འབད།** མི་འབོར།
+   `docs/examples/android_override_request.json` དང་མཉམ་པའི་ ཊིཀཊ་ཨའི་ཌི་ ཞུ་བ་འབད་མི།
+   དུས་ཡུན་ཚང་བ་དང་བདེན་དཔང་། ཡིག་སྣོད་འདི་ བྱུང་རྐྱེན་གྱི་ ཅ་ཆས་ཚུ་གི་ ཤུལ་ལས་ གསོག་འཇོག་འབད།
+   བསྟུན་ཏེ་ ཨིན་པུཊི་ཚུ་ རྩིས་ཞིབ་འབད་ཚུགས།
+3. **བཀག་ཆ་འདི་གསལ་བཏོན་འབད།** འབོད་བརྡ་འབད།
    ```bash
    scripts/android_override_tool.sh apply \
      --request docs/examples/android_override_request.json \
@@ -387,310 +370,294 @@ in the incident doc.
      --event-log docs/source/sdk/android/readiness/override_logs/override_events.ndjson \
      --actor-role <support|sre|docs|compliance|program|other>
    ```
-   The helper prints the override token, writes the manifest, and appends a row
-   to the Markdown audit log. Never post the token in chat; deliver it directly
-   to the Torii operators applying the override.
-4. **Monitor the effect.** Within five minutes verify a single
-   `android.telemetry.redaction.override` event was emitted, the collector
-   status endpoint shows `override_active=true`, and the incident doc lists the
-   expiry. Watch the Android Telemetry Overview dashboard’s “Override tokens
-   active” panel (`android_telemetry_override_tokens_active`) for the same
-   token count and continue running the status CLI every 10 minutes until
-   hashing stabilises.
-5. **Revoke and archive.** As soon as the mitigation lands, run
-  `scripts/android_override_tool.sh revoke --token <token>` so the audit log
-  captures the revocation time, then execute
+   གྲོགས་རམ་པ་འདི་གིས་ བཀག་ཆ་འབད་ཡོད་པའི་རྟགས་མཚན་འདི་དཔར་བསྐྲུན་འབད་དེ་ གསལ་སྟོན་འདི་བྲིས་ཏེ་ གྲལ་ཐིག་ཅིག་གི་མཐའ།
+   མརཀ་ཌའོན་རྩིས་ཞིབ་དྲན་ཐོ་ལུ་། ཊོ་ཀེན་འདི་ ཁ་སླབ་ནང་ ནམ་ཡང་ མ་བཙུགས། ཐད་ཀར་སྤྲོད་ནི
+   ལུ་ Torii ལུ་ བཀོལ་སྤྱོད་འབད་མི་ བཀོལ་སྤྱོད་འབད་མི་ཚུ།
+4. **ནུས་པ་བལྟ་དགོ།** སྐར་མ་ལྔ་གི་ནང་འཁོད་ལུ་ གཅིག་བདེན་དཔྱད་འབད།
+   `android.telemetry.redaction.override` བྱུང་རིམ་བྱུང་ཡོད།
+   གནས་རིམ་མཇུག་པོ་འདི་ `override_active=true`, དང་ བྱུང་རྐྱེན་གྱི་ཡིག་ཆ་འདི་ ཐོ་བཀོད་འབདཝ་ཨིན།
+   དུས་ཡུན་ཚང་བ། Android Telemetry Aperview གི་ “Override ཊོ་ཀནསི།
+   active” པེ་ནཱལ་ (`android_telemetry_override_tokens_active`) དེ་གི་དོན་ལུ་ཨིན།
+   ཊོ་ཀེན་གྱངས་ཁ་དང་ སྐར་མ་༡༠ རེ་ལུ་ སི་ཨེལ་ཨའི་གནས་རིམ་འདི་ གཡོག་བཀོལ་བའི་བསྒང་།
+   ཧ་ཤིང་བརྟན་ཏོག་ཏོ་ཚུ།
+5. **ཉམས་རྒུད་དང་ཡིག་དཔར་བ།** མར་ཕབ་ས་ཆ་ཚུ་ཚངམ་སྦེ་འགྱོ།
+  `scripts/android_override_tool.sh revoke --token <token>` དེ་འབདཝ་ལས་ རྩིས་ཞིབ་དྲན་ཐོ་འདི་ཨིན།
+  ཆ་མེད་ཀྱི་དུས་ཚོད་བཟུང་ཞིནམ་ལས་ དེ་ལས་ ལག་ལེན་འཐབ་ཨིན།
   `scripts/android_override_tool.sh digest --out docs/source/sdk/android/readiness/override_logs/override_digest_$(date -u +%Y%m%dT%H%M%SZ).json`
-  to refresh the sanitised snapshot that governance expects. Attach the
-  manifest, digest JSON, CLI transcripts, Grafana snapshots, and the NDJSON log
-  produced via `--event-log` to
-  `docs/source/sdk/android/readiness/screenshots/<date>/` and cross-link the
-  entry from `docs/source/sdk/android/telemetry_override_log.md`.
+  གཞུང་སྐྱོང་གིས་རེ་བ་བསྐྱེད་མི་ གཙང་སྦྲ་འཕྲོད་བསྟེན་གྱི་ པར་ཆས་འདི་ གསར་བསྐྲུན་འབད་ནིའི་དོན་ལུ་ཨིན། འདི་མཉམ་སྦྲགས་འབད།
+  bass, design, CLI ཡིག་ཆ་ Grafana པར་ལེན་དང་ NDJSON དྲན་ཐོ་།
+  བསྐྲུན་ཡོད། `--event-log` ལས་ཐོན་ཡོད།
+  `docs/source/sdk/android/readiness/screenshots/<date>/` དང་ ཕར་ཚུར་འབྲེལ་མཐུད་འབད།
+  ལས་ `docs/source/sdk/android/telemetry_override_log.md` ལས་འཛུལ་ཞུགས།
 
-Overrides exceeding 24 hours require SRE Director and Compliance approval and
-must be highlighted in the next weekly AND7 review.
+ཆུ་ཚོད་༢༤ ལས་ལྷག་སྟེ་ དབང་བཟུང་འབད་མི་ཚུ་ལུ་ ཨེསི་ཨར་ཨི་མདོ་ཆེན་དང་ བསྟར་སྤྱོད་ཀྱི་གནང་བ་དགོཔ་ཨིན།
+ཤུལ་མའི་བདུན་ཕྲག་ནང་ AND7 བསྐྱར་ཞིབ་ནང་ འོད་རྟགས་བཀལ་དགོ།
 
-### 3.1 Override escalation matrix
+### 3.1 དབུགས་གཏོང་ལེན་འཕེལ་རྒྱས་ཀྱི་མེ་ཊིགསི།
 
-| Situation | Max duration | Approvers | Required notifications |
-|-----------|--------------|-----------|------------------------|
-| Single-tenant investigation (hashed authority mismatch, customer Sev 2) | 4 hours | Support engineer + SRE on-call | Ticket `SUP-OVR-<id>`, `android.telemetry.redaction.override` event, incident log |
-| Fleet-wide telemetry outage or SRE-requested reproduction | 24 hours | SRE on-call + Program Lead | PagerDuty note, override log entry, update in `status.md` |
-| Compliance/forensics request or any case exceeding 24 hours | Until explicitly revoked | SRE Director + Compliance lead | Governance mailing list, override log, AND7 weekly status |
+| གནས་སྟངས་ | དུས་ཡུན་མཐོ་ཤོས་དུས་ཡུན་ | ཆ་འཇོག་པ། | དགོས་མཁོའི་བརྡ་དོན་ཚུ་ |
+| |
+| ཁང་གླ་ལེན་མཁན་རྐྱང་པའི་ཞིབ་དཔྱད།(དབང་འཛིན་མ་མཐུན་པའི་མཐུན་སྒྲིག་ ཚོང་མགྲོན་པ་ Sev2) | 4hours | རྒྱབ་སྐྱོར་བཟོ་རིག་པ། + SRE on-call | ཤོག་འཛིན་ `SUP-OVR-<id>`, བྱུང་རིམ་, བྱུང་རིམ་དྲན་ཐོ་ |
+| ཕིལིཊ་-ཁྱབ་ཁོངས་ ཊེ་ལི་མི་ཊི་རི་ བཏོན་གཏང་ནི་དང་ ཡང་ན་ ཨེསི་ཨར་ཨི་གིས་ ཞུ་བ་འབད་མི་ སྐྱེ་འཕེལ་ཚུ་ | 24hours | SRE on-call + ལས་རིམ་འགོ་ཁྲིད་ | PagerDuty, rede དྲན་ཐོ་ཐོ་འགོད་, དུས་མཐུན་ `status.md` |
+| བསྟར་སྤྱོད་/བྱ་བའི་ཞུ་བ་ཡང་ན་ ཆུ་ཚོད་༢༤ ལས་ལྷག་པའི་གནད་དོན་གང་རུང་ | གསལ་ཏོག་ཏོ་སྦེ་ ཆ་མེད་མ་འགྱོ་ཚུན་ཚོད་ | SRE བཀོད་ཁྱབ་མདོ་ཆེན་ + བསྟར་སྤྱོད་ཀྱི་ འགོ་ཁྲིད་ | གཞུང་སྐྱོང་ཡིག་འཕྲིན་ཐོ་གཞུང་, བཀག་ཆ་འབད་ཡོད་པའི་དྲན་ཐོ་, AND7 བདུན་ཕྲག་གནས་ཚད། |
 
-#### Role responsibilities
+#### འགན་ཁུར།| འགན་ཁུར་ | འགན་འཁྲིའི་འགན་ཁུར། | SLA / དྲན་ཐོ། |
+|---|-|----------------------------------------------------- |
+| Android telemetry on-call (རྐྱེན་ངན་དམག་དཔོན་) | འདྲེན་བྱེད་བརྟག་དཔྱད་དང་ ལག་ཆས་ཚུ་ ལག་ལེན་འཐབ་ནི་དང་ བྱུང་རྐྱེན་གྱི་ ཡིག་ཆ་ནང་ གནང་བ་ཚུ་ ཐོ་བཀོད་འབད་ནི་ དེ་ལས་ དུས་ཚོད་མ་རྫོགས་པའི་ཧེ་མ་ ཆ་མེད་བཏང་ནི་འདི་ ངེས་གཏན་བཟོ་དགོ། | སྐར་མ་ ༥ གི་ནང་འཁོད་ལུ་ པེ་གར་ཌུཊི་ལུ་ ངོས་ལེན་དང་ དྲན་ཐོ་ཚུ་ སྐར་མ་༡༥ རེ་ལུ་ ཡར་རྒྱས་འགྱོཝ་ཨིན། |
+| Android བལྟ་བཤལ་གྱི་ TL (Haruka Yamamoto) | ཌིརཊི་བརྡ་རྟགས་འདི་བདེན་དཔྱད་འབད་ཞིནམ་ལས་ ཕྱིར་འདྲེན་འབད་མི་/བསྡུ་སྒྲིག་གནས་སྟངས་ངེས་གཏན་བཟོ་ཞིནམ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་མ་བྱིན་པའི་ཧེ་མ་ བཀག་ཆ་འབད་ཡོད་པའི་གསལ་སྟོན་གུ་མིང་རྟགས་བཀོད། | སྐར་མ་༡༠ གི་ནང་འཁོད་ལུ་ ཟམ་ནང་འཛུལ་དགོ། མ་ཐོབ་པ་ཅིན་ གནས་རིམ་གྱི་ ཀླད་ཀོར་གྱི་ཇོ་བདག་ལུ་ འགན་སྤྲོད་འབད། |
+| SRE འབྲེལ་གཏུགས་ (ལི་ཡམ་ཨོ་ཀོ་ནོར་) | བསྡུ་སྒྲིག་འབད་མི་དང་ རྒྱབ་ལོག་ལྟ་རྟོག་འབད་ནི་ དེ་ལས་ Torii-side མར་ཕབ་ཀྱི་དོན་ལུ་ བཏོན་གཏང་བཟོ་རིག་དང་གཅིག་ཁར་ མཉམ་འབྲེལ་འབད་མི་ཚུ་ལུ་ གསལ་སྟོན་འབད། | བྱུང་རྐྱེན་ཡིག་ཆ་ནང་ བསྒྱུར་བཅོས་ཞུ་བ་དང་ སྦྱར་བརྩེགས་བརྡ་བཀོད་ཡིག་ཆ་ནང་ `kubectl` བྱ་བ་རེ་རེ་ནང་བསྐྱོད་འབད། |
+| བསྟར་སྤྱོད་ (སོ་ཕི་ཡ་ མར་ཊིན་ / ཌེ་ནིའལ་པཱརཀ་) | སྐར་མ་༣༠ ལས་ལྷག་སྟེ་ བཀག་ཆ་འབད་ནི་དང་ རྩིས་ཞིབ་དྲན་ཐོ་གྲལ་ཐིག་འདི་ བདེན་དཔྱད་འབད་ནི་ དེ་ལས་ ཁྲིམས་ལུགས་/ཚོང་མགྲོན་པ་འཕྲིན་དོན་གྱི་སྐོར་ལས་ བསླབ་བྱ་བྱིན་ནི། | `#compliance-alerts` ནང་ལུ་ངོས་ལེན་འབད་ནི།; བཟོ་བསྐྲུན་ལས་རིམ་གྱི་དོན་ལུ་ བཀག་ཆ་མ་བྱིན་པའི་ཧེ་མ་ བསྟར་སྤྱོད་དྲན་ཐོ་ཅིག་ ཡིག་སྣོད་ནང་བཙུགས་དགོ། |
+| ཡིག་ཆ་/རྒྱབ་སྐྱོར་འཛིན་སྐྱོང་པ། (Priya Deshpande) | གཏན་མཛོད་ཀྱི་མངོན་རྟགས་/CLI ཐོན་འབྲས་ `docs/source/sdk/android/readiness/…` གི་འོག་ལུ་ བཀག་ཆ་འབད་དེ་ དྲན་ཐོ་འདི་བཞག་ཞིནམ་ལས་ བར་སྟོང་ཚུ་ ཁ་ཐོག་ལུ་བཞག་པ་ཅིན་ དུས་ཚོད་ཀྱི་རྗེས་སུ་འཇུག་པའི་བརྟག་དཔྱད་ཁང་ཚུ་ རྗེས་འཇུག་འབད་དགོ། | བྱུང་རྐྱེན་འདི་ཁ་མ་བསྡམ་པའི་ཧེ་མ་ སྒྲུབ་བྱེད་བཞག་ཐངས་ (༡༣ ཟླ་ནཊ) དང་ ཡིག་སྣོད་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན། |
 
-| Role | Responsibilities | SLA / Notes |
-|------|------------------|-------------|
-| Android telemetry on-call (Incident Commander) | Drive detection, execute the override tooling, record approvals in the incident doc, and ensure revocation happens before expiry. | Acknowledge PagerDuty within 5 minutes and log progress every 15 minutes. |
-| Android Observability TL (Haruka Yamamoto) | Validate the drift signal, confirm exporter/collector state, and sign off on the override manifest before it is handed to operators. | Join the bridge within 10 minutes; delegate to the staging cluster owner if unavailable. |
-| SRE liaison (Liam O’Connor) | Apply the manifest to collectors, monitor backlog, and coordinate with Release Engineering for Torii-side mitigations. | Log every `kubectl` action in the change request and paste command transcripts in the incident doc. |
-| Compliance (Sofia Martins / Daniel Park) | Approve overrides longer than 30 minutes, verify the audit log row, and advise on regulator/customer messaging. | Post acknowledgement in `#compliance-alerts`; for production events file a compliance note before the override is issued. |
-| Docs/Support Manager (Priya Deshpande) | Archive manifests/CLI output under `docs/source/sdk/android/readiness/…`, keep the override log tidy, and schedule follow-up labs if gaps surface. | Confirms evidence retention (13 months) and files AND7 follow-ups before closing the incident. |
+གལ་སྲིད་ མ་བདེན་པའི་རྟགས་མཚན་གང་རུང་ཅིག་གིས་ མེད་པར་ དུས་ཡུན་ཚང་འོང་པ་ཅིན་ དེ་འཕྲོ་ལས་ ཡར་སེང་འབད།
+ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ ཆ་མེད་འཆར་གཞི་།
 
-Escalate immediately if any override token approaches its expiry without a
-documented revocation plan.
+## 4. བྱུང་རྐྱེན་གྱི་ལན་འདེབས།
 
-## 4. Incident Response
+- **Alerts:** པེ་གར་ཌུཊི་ཞབས་ཏོག་ `android-telemetry-primary` གིས་ བསྐྱར་བཟོ་ཚུ་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+  འཐུས་ཤོར་དང་ ཕྱིར་ཚོང་འཐབ་མི་ཚུ་ མེདཔ་འགྱོ་མི་དང་ བཱ་ཀེཊ་ཌིཕཊ་ཚུ་ཨིན། ཨེསི་ཨེལ་ཨེ་སྒོ་སྒྲིག་ཚུ་གི་ནང་འཁོད་ལུ་ངོས་ལེན་འབད།
+  (རྒྱབ་སྐྱོར་རྩེད་དེབ་བལྟ།)།
+- **ནད་བརྟག་:** `scripts/telemetry/check_redaction_status.py` བསྡུ་སྒྲིག་འབད།
+  ད་ལྟའི་ཕྱིར་གཏོང་པ་གསོ་བ་དང་ འཕྲལ་གྱི་ཉེན་བརྡ་ དེ་ལས་ གནོད་འཚེ་ཅན་གྱི་དབང་ཚད་ཀྱི་མེ་ཊིག་ཚུ། རྩིས༌ཏེ
+  བྱུང་རིམ་དུས་ཚོད་ཐིག་ནང་ ཐོན་འབྲས་ (`incident/YYYY-MM-DD-android-telemetry.md`).
+- **གནད་སྡུད་བཀོད་སྒྲིག་ཚུ་:** ཨེན་ཌོརཌི་ཊེ་ལི་མི་ཊི་རེ་ཌེག་སི་ ཨེན་ཌོའིཌ་ཊེ་ལི་མི་ཊི་རི་ ལྟ་རྟོག་པ།
+  སྤྱིར་བཏང་བལྟ་ཞིབ་དང་ བསྐྱར་བཟོ་སྒྲིག་གཞི་ དེ་ལས་ ཕྱིར་འདྲེན་ གསོ་བའི་ དྲ་ཚིགས་ཚུ། བཙན༌བཟུང
+  བྱུང་རྐྱེན་གྱི་ཐོ་བཀོད་ཚུ་གི་དོན་ལུ་ གསལ་གཞི་ཚུ་དང་ ཚྭ་གི་ཐོན་རིམ་གང་རུང་ཅིག་ ཡང་ན་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན།
+  བྱུང་རྐྱེན་ཅིག་ཁ་མ་བསྡམ་པའི་ཧེ་མ་ བརྡ་མཚོན་གྱི་ ཐ་དད།
+- **མཉམ་འབྲེལ་:** ཕྱིར་ཚོང་འཐབ་མི་གནད་དོན་ཚུ་གི་དོན་ལུ་ བཟོ་རིག་བཏོན་ནིའི་བཟོ་རིག་ཚུ་ འབྲེལ་གཏོགས་འབད་ནི།
+  བཀག་ཆ་འབད་ནི་/པི་ཨའི་ཨའི་ དྲི་བ་དང་ བྱུང་རིམ་གཉིས་པ་ གི་དོན་ལུ་ ལས་རིམ་འགོ་འཛིན།
 
-- **Alerts:** PagerDuty service `android-telemetry-primary` covers redaction
-  failures, exporter outages, and bucket drift. Acknowledge within SLA windows
-  (see support playbook).
-- **Diagnostics:** Run `scripts/telemetry/check_redaction_status.py` to gather
-  current exporter health, recent alerts, and hashed authority metrics. Include
-  output in the incident timeline (`incident/YYYY-MM-DD-android-telemetry.md`).
-- **Dashboards:** Monitor the Android Telemetry Redaction, Android Telemetry
-  Overview, Redaction Compliance, and Exporter Health dashboards. Capture
-  screenshots for incident records and annotate any salt-version or override
-  token deviations before closing an incident.
-- **Coordination:** Engage Release Engineering for exporter issues, Compliance
-  for override/PII questions, and Program Lead for Sev 1 incidents.
+### ༤.༡ ཡར་འཕེལ་གྱི་རྒྱུན་འབབ་།
 
-### 4.1 Escalation flow
+Android བྱུང་རྐྱེན་ཚུ་ Android དང་འདྲ་བའི་ཚབས་ཆེ་བའི་གནས་ཚད་ལག་ལེན་འཐབ་སྟེ་ བརྟག་དཔྱད་འབད་ཡོདཔ་ཨིན།
+རྩེད་དེབ་ཀྱི་རྒྱབ་སྐྱོར། (§2.1). འོག་གི་ཐིག་ཁྲམ་འདི་གིས་ སུ་ལུ་ སུ་དང་ག་དེ་སྦེ་འབད་དགོཔ་ཨིན་ན་ བཅུད་བསྡུས་འབདཝ་ཨིན།
+མགྱོགས་པར་ལན་འདེབས་པ་རེ་རེ་གིས་ ཟམ་ནང་འཛུལ་ནི་གི་རེ་བ་ཡོད།| ཚབས་ཆེན། | ཕན་གནོད་ | གཞི་རིམ་ལན་འདེབས་པ་ (≤5min) | གཉིས་པ་ཡར་འཕར་ (≤10min) | ཁ་སྐོང་བརྡ་བསྐུལ་ཚུ། | དྲན་ཐོ། |
+|----------|--------|----------------------------|--------- -----------------------|--------------------------|-------|
+| སེ་བ༡ | ཚོང་མགྲོན་པའི་གདོང་ཐུག་དང་ སྒེར་གསང་བརྡལ་བཤིག་ ཡང་ན་ གནད་སྡུད་ཀྱི་ འཛོལ་བ། | ཨེན་ཌོའིཌ་ ཊེ་ལི་མི་ཊི་ ཁ་པར་ (`android-telemetry-primary`) | Torii on-call + ལས་རིམ་འགོ་ཁྲིད་ | བསྟར་སྤྱོད་ + ཨེསི་ཨར་ཨི་ གཞུང་སྐྱོང་ (`#sre-governance`), གོ་རིམ་ཅན་གྱི་ཀླད་ཀོར་གྱི་ཇོ་བདག་ (`#android-staging`) | དམག་འཁྲུག་གི་ཁང་མིག་འདི་ དེ་འཕྲོ་ལས་ འགོ་བཙུགས་ཞིནམ་ལས་ བརྡ་བཀོད་དྲན་ཐོ་ནང་ རུབ་སྤྱོད་འབད་མི་ ཌོཀ་ཅིག་ཁ་ཕྱེ། |
+| སེབ་༢ | གྲུ་གཟིངས་མར་ཕབ་དང་ ལོག་སྤྱོད་ ཡང་ན་ ཡུན་རིངམོ་སྦེ་ བསྐྱར་རྩེད་ཀྱི་ རྒྱབ་ལོག་ | Android telaymetry on-call | Android Foundation TL + Docs/རྒྱབ་སྐྱོར་འཛིན་སྐྱོང་པ། | ལས་རིམ་འགོ་ཁྲིད་, བཟོ་རིག་གསར་བཏོན་འབད་ནི། | ཆུ་ཚོད་༢༤ ལས་ལྷག་སྟེ་ཡོད་པ་ཅིན་ བསྟར་སྤྱོད་ལུ་ཡར་སེང་འབད་ནི། |
+| སེ་བ༣ | ཁང་གླ་ལེན་མཁན་རྐྱང་པའི་གནད་དོན་དང་ བརྟག་དཔྱད་ཁང་ ཡང་ན་ བསླབ་བྱའི་དྲན་ཤེས་ | རྒྱབ་སྐྱོར་བཟོ་རིག་པ། | Android on-ཁ་པར་ (གདམ་ཁ་ཅན་) | ཡིག་ཆ་/གོ་བརྡའི་དོན་ལུ་རྒྱབ་སྐྱོར་འབད་ནི། | གལ་སྲིད་ ཁྱབ་ཁོངས་རྒྱ་སྐྱེད་འབད་བ་ཅིན་ ཡང་ན་ ཁང་གླར་སྡོད་མི་ལེ་ཤ་ཅིག་ལུ་ གནོད་སྐྱོན་རྐྱབ་ཨིན། |
 
-Android incidents are triaged using the same severity levels as the Android
-Support Playbook (§2.1). The table below summarises who must be paged and how
-quickly each responder is expected to join the bridge.
+| སྒོ་སྒྲིག་ | བྱ་བ་ | ཇོ་བདག་(ཚུ་) | སྒྲུབ་བྱེད་/དྲན་ཐོ། |
+|------------------------------------------------------- |
+| 0–5min | པེ་ཇར་ཌུ་ཊི་ངོས་ལེན་འབད་ཞིནམ་ལས་ བྱུང་ལས་དམག་དཔོན་ (IC) འགན་སྤྲོད་འབད་ཞིནམ་ལས་ `incident/YYYY-MM-DD-android-telemetry.md` གསར་བསྐྲུན་འབད། `#android-sdk-support` ནང་ འབྲེལ་ལམ་དང་ གྲལ་ཐིག་གཅིག་གནས་རིམ་གཅིག་བཀོད། | On-call SRE / རྒྱབ་སྐྱོར་བཟོ་རིག་པ། | བྱུང་རྐྱེན་དྲན་ཐོ་གཞན་ཚུ་གི་སྦོ་ལོགས་ཁར་ ཁས་བླངས་འབད་མི་ PagerDuty ack + བྱུང་རྐྱེན་གྱི་ མཛོད་ཁང་གི་ པར་རིས། |
+| ༥–༡༥min | `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status` གཡོག་བཀོལ་ཞིནམ་ལས་ བྱུང་རིམ་ཡིག་ཆ་ནང་ བཅུད་བསྡུས་འདི་སྦྱར། དུས་ཚོད་ངོ་མའི་ནང་ ལགཔ་བཀག་ནིའི་དོན་ལུ་ པིང་ཨེན་ཌོརཌ་བལྟ་བརྟོག་འབད་བཏུབ་པའི་ TL (Haruka Yamamoto) དང་ རྒྱབ་སྐྱོར་འགོ་ཁྲིད་ (Priya Deshpande) ཚུ་ཨིན། | IC + Android བལྟ་རྟོག་འབད་ཚུགསཔ་ TL | CLI ཐོན་འབྲས་ JSON མཉམ་སྦྲགས་འབད་ཞིནམ་ལས་ དྲན་འཛིན་ dashboard URLs ཁ་ཕྱེ་ཡོདཔ་དང་ ནད་བརྟག་བདག་དབང་འབད་མི་ལུ་ རྟགས་བཀལ། |
+| ༡༥–༢༥སྐར་མ་ | འབྲེལ་གཏོགས་འབད་དེ་ ཀླད་ཀོར་གྱི་ཇོ་བདག་ཚུ་ (Haruka Yamamoto བལྟ་བརྟོག་འབད་ནི་གི་དོན་ལུ་ Haruka Yamamoto, `android-telemetry-stg` ལུ་ བསྐྱར་བཟོ་འབད་ནི། `scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg` དང་ཅིག་ཁར་ སོན་གྱི་མངོན་གསལ་འབད་ཞིནམ་ལས་ ནད་རྟགས་འདྲ་མཉམ་འདི་ ངེས་གཏན་བཟོ་ནི་ལུ་ པིག་སེལ་+ འདྲེས་སྦྱོར་འབད་མི་ལས་ བང་རིམ་ཚུ་ བཀོ་བཞགཔ་ཨིན། | ཀླད་ཀོར་གྱི་ཇོ་བདག་ཚུ་ གནས་རིམ་བཟོ་ནི། | རིམ་སྒྲིག་འབད་ཡོད་མི་ `pending.queue` + `PendingQueueInspector` བྱུང་རིམ་སྣོད་འཛིན་ལུ་ཨའུཊི་པུཊི་འབད། |
+| 25–40min | ཐག་གཅོད་འབད་ནི། Torii ཐོརཊི་ལིང་ ཡང་ན་ ཨིསི་ཊོང་བོགསི་ ཕོལཀ་ཚུ་ ཐག་བཅད། གལ་སྲིད་ PII གི་གདོང་ལེན་དང་ ཡང་ན་ ཐག་མ་བཅད་པའི་ ཧ་ཤིང་ལུ་ དོགས་པ་ཡོདཔ་ཨིན་པ་ཅིན་ ཤོག་ལེབ་བཀག་ཆ་ (Sofia Martins, Daniel Park) འདི་ `#compliance-alerts` བརྒྱུད་དེ་ བྱུང་རྐྱེན་གཅིག་ནང་ ལས་རིམ་འགོ་འཁྲིདཔ་ལུ་ བརྡ་དོན་སྤྲོད་དགོ། | IC + བསྟར་སྤྱོད་ + ལས་རིམ་འགོ་ཁྲིད་ | ལིན་ཀ་གིས་ ཊོ་ཀེན་ཚུ་ བཀག་ཆ་འབད་ཡོདཔ་ད་ Norito གིས་ ངོས་ལེན་གྱི་བསམ་འཆར་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན། |
+| ≥40min | སྐར་མ་ ༣༠ གི་གནས་རིམ་དུས་མཐུན་ཚུ་ (PagerDuty notes + `#android-sdk-support`). དམག་འཁྲུག་ཁང་མིག་ཟམ་འདི་ ཧེ་མ་ལས་ ལཱ་འབད་མ་ཚུགས་པ་ཅིན་ ཡིག་ཆ་ཚུ་ ཡིག་ཆ་བཟོ་སྟེ་ གསར་བཏོན་བཟོ་རིག་ (Alexei Morozov) འདི་ བསྡུ་སྒྲིག་འབད་མི་/ཨེསི་ཌི་ཀེ་ ཅ་རྙིང་ཚུ་ བསྐོར་ར་རྐྱབ་ནི་ལུ་ གྲ་སྒྲིག་ཡོདཔ་ཨིན། | IC | དུས་ཚོད་བཀོད་ཡོད་པའི་དུས་མཐུན་དང་ བྱུང་རྐྱེན་ཡིག་སྣོད་ནང་ གསོག་འཇོག་འབད་དེ་ ཐག་བཅད་དྲན་ཐོ་ཚུ་ ཤུལ་མའི་བདུན་ཕྲག་ནང་ `status.md` ནང་ བཅུད་བསྡུས་འབད་ཡོདཔ་ཨིན། |- ཡར་འཕར་ཚུ་ག་ར་ ཨེན་ཌོརཌི་རྒྱབ་སྐྱོར་གྱི་ ཀི་དེབ་ནང་ལས་ “Ondroid / Next pudite sime” ཐིག་ཁྲམ་ལག་ལེན་འཐབ་སྟེ་ བྱུང་རྐྱེན་ཡིག་ཆ་ནང་ མེ་ལོང་ནང་སྡོད་དགོ།
+- གལ་སྲིད་ བྱུང་རྐྱེན་གཞན་ཅིག་ ཧེ་མ་ལས་ སྒོ་ཕྱེ་སྟེ་ཡོད་པ་ཅིན་ ད་ལྟོ་ཡོད་པའི་དམག་འཁྲུག་གི་ཁང་མིག་ནང་ འཛུལ་ཞུགས་འབད་དེ་ གསརཔ་ཅིག་ འཕྱར་ནི་ལས་ ཨེན་ཌོའིཌ་ སྐབས་དོན་ མཐོ་གཏུགས་འབད་དགོ།
+- བྱུང་རྐྱེན་འདི་གིས་ རན་བུཀ་གི་བར་སྟོང་ཚུ་ལུ་ ཐུག་པའི་སྐབས་ AND7 JIRA གི་ མཐོ་ཚད་དང་ ངོ་རྟགས་ `telemetry-runbook` ནང་ལུ་ རྗེས་འཇུག་ལཱ་ཚུ་ གསར་བསྐྲུན་འབད།
 
-| Severity | Impact | Primary responder (≤5 min) | Secondary escalation (≤10 min) | Additional notifications | Notes |
-|----------|--------|----------------------------|--------------------------------|--------------------------|-------|
-| Sev 1 | Customer-facing outage, privacy breach, or data leak | Android telemetry on-call (`android-telemetry-primary`) | Torii on-call + Program Lead | Compliance + SRE Governance (`#sre-governance`), staging cluster owners (`#android-staging`) | Start war room immediately and open a shared doc for command logging. |
-| Sev 2 | Fleet degradation, override misuse, or prolonged replay backlog | Android telemetry on-call | Android Foundations TL + Docs/Support Manager | Program Lead, Release Engineering liaison | Escalate to Compliance if overrides exceed 24 hours. |
-| Sev 3 | Single-tenant issue, lab rehearsal, or advisory alert | Support engineer | Android on-call (optional) | Docs/Support for awareness | Convert to Sev 2 if scope expands or multiple tenants are affected. |
+## 5. ཟང་ཟིང་དང་གྲ་སྒྲིག་སྦྱོང་བརྡར།
 
-| Window | Action | Owner(s) | Evidence/Notes |
-|--------|--------|----------|----------------|
-| 0–5 min | Acknowledge PagerDuty, assign an incident commander (IC), and create `incident/YYYY-MM-DD-android-telemetry.md`. Drop the link plus one-line status in `#android-sdk-support`. | On-call SRE / Support engineer | Screenshot of PagerDuty ack + incident stub committed beside other incident logs. |
-| 5–15 min | Run `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status` and paste the summary in the incident doc. Ping Android Observability TL (Haruka Yamamoto) and Support lead (Priya Deshpande) for real-time hand-off. | IC + Android Observability TL | Attach CLI output JSON, note dashboard URLs opened, and mark who owns diagnostics. |
-| 15–25 min | Engage staging cluster owners (Haruka Yamamoto for observability, Liam O’Connor for SRE) to reproduce on `android-telemetry-stg`. Seed load with `scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg` and capture queue dumps from the Pixel + emulator to confirm symptom parity. | Staging cluster owners | Upload sanitized `pending.queue` + `PendingQueueInspector` output to the incident folder. |
-| 25–40 min | Decide on overrides, Torii throttling, or StrongBox fallback. If PII exposure or non-deterministic hashing is suspected, page Compliance (Sofia Martins, Daniel Park) via `#compliance-alerts` and notify the Program Lead in the same incident thread. | IC + Compliance + Program Lead | Link override tokens, Norito manifests, and approval comments. |
-| ≥40 min | Provide 30-minute status updates (PagerDuty notes + `#android-sdk-support`). Schedule war-room bridge if not already active, document mitigation ETA, and ensure Release Engineering (Alexei Morozov) is on standby to roll collector/SDK artifacts. | IC | Time-stamped updates plus decision logs stored in the incident file and summarized in `status.md` during the next weekly refresh. |
-
-- All escalations must stay mirrored in the incident doc using the “Owner / Next update time” table from the Android Support Playbook.
-- If another incident is already open, join the existing war room and append Android context rather than spinning up a new one.
-- When the incident touches runbook gaps, create follow-up tasks in the AND7 JIRA epic and tag `telemetry-runbook`.
-
-## 5. Chaos & Readiness Exercises
-
-- Execute the scenarios detailed in
-  `docs/source/sdk/android/telemetry_chaos_checklist.md` quarterly and prior to
-  major releases. Log outcomes with the lab report template.
-- Store evidence (screenshots, logs) under
+- ནང་ཁ་གསལ་སྦེ་བཀོད་ཡོད་པའི་གནས་སྟངས་ཚུ་ལག་ལེན་འཐབ།
+  `docs/source/sdk/android/telemetry_chaos_checklist.md` ཟླ་བ་གསུམ་རེའི་ནང་དང་སྔོན་མ།
+  གསར་བཏོན་གཙོ་བོ་ཚུ། བརྟག་དཔྱད་སྙན་ཞུའི་སྙན་ཞུ་ ཊེམ་པེལེཊི་དང་གཅིག་ཁར་ དྲན་ཐོ་གྲུབ་འབྲས་ཚུ།
+- གཤམ་གསལ་གྱི་སྒྲུབ་བྱེད་ (གསལ་གཞི་ཤོག་ངོས་, དྲན་ཐོ་) གཤམ་གསལ་ལྟར།
   `docs/source/sdk/android/readiness/screenshots/`.
-- Track remediation tickets in the AND7 epic with label `telemetry-lab`.
-- Scenario map: C1 (redaction fault), C2 (override), C3 (exporter brownout), C4
-  (schema diff gate using `run_schema_diff.sh` with a drifted config), C5
-  (device-profile skew seeded via `generate_android_load.sh`), C6 (Torii timeout
-  + queue replay), C7 (attestation rejection). Keep this numbering aligned with
-  `telemetry_lab_01.md` and the chaos checklist when adding drills.
+- AND7 peic ནང་ བཅོ་ཁ་རྐྱབ་ནིའི་ ཤོག་འཛིན་ཚུ་ `telemetry-lab` ནང་ཡོདཔ་ཨིན།
+- ལུགས་སྲོལ་གྱི་ས་ཁྲ་: སི་༡ (བསྒྱུར་བཅོས) སི་༢ (བཀག་ཆ་), སི་༣ (ཨེགསི་པོར་ཊར་བརའུན་ཨའུཊ), སི་༤
+  (ཤེ་མ་ཌིཕ་སྒོ་འདི་ `run_schema_diff.sh` ལག་ལེན་འཐབ་སྟེ་ ཌིཕཊི་འབད་ཡོད་པའི་རིམ་སྒྲིག་ཅིག་དང་གཅིག་ཁར་) C5
+  (ཐབས་འཕྲུལ་གསལ་སྡུད་འབད་མི་ skew འདི་ `generate_android_load.sh`) བརྒྱུད་དེ་ བཙུགས་ཡོདཔ་ཨིན།
+  + གྱལ་རིམ་བསྐྱར་རྩེད་) C7 (བདེན་དཔང་བཀག་ཆ་)། ཨང་བཏགས་ནི་འདི་དང་གཅིག་ཁར་ཕྲང་སྒྲིག་འབད་བཞག།
+  `telemetry_lab_01.md` དང་ སྦྱོང་བརྡར་ཁ་སྐོང་བརྐྱབ་པའི་སྐབས་ ཟང་ཟིང་ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ཨིན།
 
-### 5.1 Redaction drift & override drill (C1/C2)
+### ༥.༡ མེདཔ་བཟོ་ནིའི་ ཌིཕཊ་དང་ བཀག་སྡོམ་འཕྲུལ་ཆས་ (C1/C2)
 
-1. Inject a hashing failure via
-   `scripts/telemetry/inject_redaction_failure.sh` and wait for the PagerDuty
-   alert (`android.telemetry.redaction.failure`). Capture the CLI output from
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>` for
-   the incident record.
-2. Clear the failure with `--clear` and confirm the alert resolves within
-   10 minutes; attach Grafana screenshots of the salt/authority panels.
-3. Create a signed override request using
-   `docs/examples/android_override_request.json`, apply it with
-   `scripts/android_override_tool.sh apply`, and verify the unhashed sample by
-   inspecting the exporter payload in staging (look for
+1. བརྒྱུད་དེ་ཧ་ཤིང་འཐུས་ཤོར་བཙུགས།
+   `scripts/telemetry/inject_redaction_failure.sh` དང་ པེ་གར་ཌུ་ཊི་ལུ་སྒུག་སྡོད།
+   ཉེན་བརྡ་ (`android.telemetry.redaction.failure`). སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་འདི་ ལས་ གཞི་སྒྲིག་འབད།
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>`
+   བྱུང་རྐྱེན་གྱི་ཐོ་འགོད་འདི།
+༢ `--clear` དང་གཅིག་ཁར་ འཐུས་ཤོར་འདི་བསལ་ཞིནམ་ལས་ ཉེན་བརྡ་འདི་ ནང་འཁོད་ལུ་ ཐག་བཅདཔ་ཨིན།
+   ༡༠སྐར་མ་; ཚྭ་/རང་དབང་ཅན་གྱི་པེ་ནཱལ་གྱི་ Grafana གསལ་གཞི་པར་རིས་ཚུ།
+༣ ལག་ལེན་འཐབ་ཐོག་ལས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ བཀག་ཆ་འབད་དགོ་པའི་ཞུ་བ་ཅིག་གསར་བསྐྲུན་འབད།
+   `docs/examples/android_override_request.json`, དང་མཉམ་དུ་འཇུག་སྤྱོད་འབད།
+   `scripts/android_override_tool.sh apply`, དང་ 18NI00000306X, 11 1 གིས་བདེན་དཔང་འབད།
+   ཕྱིར་ཚོང་འཐབ་མི་གིས་ འཁྲབ་སྟོན་ནང་ བརྟག་དཔྱད་འབད་ནི།
    `android.telemetry.redaction.override`).
-4. Revoke the override with `scripts/android_override_tool.sh revoke --token <token>`,
-   append the override token hash plus ticket reference to
-   `docs/source/sdk/android/telemetry_override_log.md`, and mint a digest JSON
-   under `docs/source/sdk/android/readiness/override_logs/`. This closes the
-   C2 scenario in the chaos checklist and keeps the governance evidence fresh.
+༤ `scripts/android_override_tool.sh revoke --token <token>`, དང་མཉམ་དུ་བཀག་འགོག་འབད།
+   ཟུར་ཐོ་ ཊོ་ཀེན་ཧ་ཤི་དང་ ཤོག་འཛིན་གྱི་ གཞི་བསྟུན་ཚུ་ ཟུར་འཛུལ།
+   `docs/source/sdk/android/telemetry_override_log.md`, དང་ མིན་ཊི་ཨེ་ཇེསཊ་ ཇེ་ཨེསི་ཨོ་ཨེན་
+   `docs/source/sdk/android/readiness/override_logs/` གི་འོག་ལུ་ཨིན། འདི་ཁ་བསྡམས།
+   ཟང་ཟིང་བརྟག་དཔྱད་ཐོ་ཡིག་ནང་ལུ་ C2 གི་གནས་སྟངས་དང་ གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཚུ་ གསརཔ་སྦེ་བཞགཔ་ཨིན།
 
-### 5.2 Exporter brownout & queue replay drill (C3/C6)
+### 5.2 ཕྱིར་འདྲེན་བརླན་དང་བང་རིམ་བསྐྱར་རྩེད་ཀྱི་སྦྱོང་ལཱ་ (C3/C6)1. གནས་རིམ་བསྡུ་སྒྲིག་འདི་མར་ཕབ་འབད། (`kubectl scale
+   ཕྱིར་འདྲེན་པ་ཅིག་དཔེ་སྟོན་འབད་ནིའི་དོན་ལུ་ བཀྲམ་སྤེལ་/ཨེན་ཌོའིཌ་-ཊོལ་-བསྡུ་སྒྲིག་--replicas=0`)
+   རྒྱ་སྨུག་. སི་ཨེལ་ཨའི་གནས་རིམ་བརྒྱུད་དེ་ བཱ་ཕར་མེ་ཊིག་ཚུ་ འཚོལ་ཞིབ་འབད་ཞིནམ་ལས་ ཉེན་བརྡ་ཚུ་ ལུ་ ངེས་གཏན་བཟོ།
+   སྐར་མ་ ༡༥ གི་རྟགས་བཀོད།
+2. བསྡུ་སྒྲིག་བྱེད་མཁན་བསྐྱར་བཟོ་བྱས་ནས་བེག་ལོག་ཆུ་གཡུར་ངེས་གཏན་བཟོ་ནས་བསྡུ་སྒྲིག་དྲན་ཐོ་ཡིག་མཛོད་བཟོས།
+   བསྐྱར་རྩེད་མཇུག་བསྡུ་སྟོན་མི་ snippet.
+3. གོ་རིམ་གྱི་པིག་སེལ་དང་ འདྲ་དཔེ་གཉིས་ཆ་རའི་ནང་ ScenarioC6: གཞི་བཙུགས་འབད་ནི།
+   `examples/android/operator-console`, toggle གནམ་གྲུའི་ཐབས་ལམ་, བརྡ་སྟོན།
+   སྤོ་བཤུད་ཚུ་ དེ་ལས་ གནམ་གྲུའི་ཐབས་ལམ་ལྕོགས་མིན་བཟོ་ཞིནམ་ལས་ གྱལ་རིམ་གཏིང་ཚད་མེ་ཊིག་ཚུ་བལྟ།
+4. བསྣར་བའི་བང་རིམ་རེ་རེ་འཐེན་ (`adb shell-run-wis as  cat ཡིག་སྣོད་/ping.གྱལ་> > འཐེན།
+   /tmp/.queueI 18NI00000312Xgradle -p ཇ་བ་/ཨི་རོ་ཧ་_ཨེནཌའིཌ།
+   :core:སྡེ་ཚན། >/dev/nullI00000313Xjava -cp བཟོ་བསྐྲུན་/སྡེ་ཚན།
+   org.hyperledger.iroha.android.tools.ཐབ་ཚང། དཔུང་ཐིག་ཞིབ་དཔྱོད་པ་ --file
+   /tmp/.ཀིའུ་.-json > གྲལ་ཐིག་-བསྐྱར་རྩེད་-.json`. བརྡ་བཀོད་འབད་ཡོད་པའི་མཉམ་སྦྲགས་འབད།
+   ཡིག་ཤུབས་ཚུ་དང་ བརྟག་དཔྱད་ཁང་ནང་ བསྐྱར་རྩེད་འབད་ནི།
+༥ ཕྱིར་ཚོང་པ་མ་འགུལ་བའི་དུས་ཡུན་དང་གཅིག་ཁར་ ཟང་ཟིང་སྙན་ཞུ་འདི་ དུས་མཐུན་བཟོ།
+   དང་ བདེན་དཔང་འདི་ `android_sdk_offline_replay_errors` ལུ་ལུས་ཡོདཔ་ཨིན།
 
-1. Scale the staging collector down (`kubectl scale
-   deploy/android-otel-collector --replicas=0`) to simulate an exporter
-   brownout. Track buffer metrics via the status CLI and confirm alerts fire at
-   the 15-minute mark.
-2. Restore the collector, confirm backlog drain, and archive the collector log
-   snippet showing replay completion.
-3. On both the staging Pixel and emulator, follow Scenario C6: install
-   `examples/android/operator-console`, toggle airplane mode, submit the demo
-   transfers, then disable airplane mode and watch queue depth metrics.
-4. Pull each pending queue (`adb shell run-as <app-id> cat files/pending.queue >
-   /tmp/<serial>.queue`), compile the inspector (`gradle -p java/iroha_android
-   :core:classes >/dev/null`), and run `java -cp build/classes
-   org.hyperledger.iroha.android.tools.PendingQueueInspector --file
-   /tmp/<serial>.queue --json > queue-replay-<serial>.json`. Attach decoded
-   envelopes plus replay hashes to the lab log.
-5. Update the chaos report with exporter outage duration, queue depth before/after,
-   and confirmation that `android_sdk_offline_replay_errors` remained 0.
+### ༥.༣ ཀླད་ཀོར་གྱི་ཟང་ཟིང་ཡིག་གཟུགས་ (ཨེན་ཌོརཌི་ཊི་ལི་མི་ཊི་རི་-ཨེསི་ཊི་ཇི་) ལུ་གནས་རིམ་བཟོ་ནི།
 
-### 5.3 Staging cluster chaos script (android-telemetry-stg)
+ཀླད་ཀོར་གྱི་ཇོ་བདག་ཚུ་ ཧ་རུ་ཀ་ཡ་མོ་ཊོ་ (Android བལྟ་བཤལ་ TL) དང་ ལི་ཡམ་ཨོ་ཀོ་ནོར་ཚུ་ཨིན།
+(SRE) བསྐྱར་སྦྱོང་རྒྱུག་པའི་དུས་ཚོད་བཀོད་པའི་སྐབས་ ཡིག་ཚུགས་འདི་རྗེས་སུ་འཇུག། རིམ་པ་དེ་བཞག་ཡོད།
+བཅའ་མར་གཏོགས་མི་ཚུ་ ཊེ་ལི་མི་ཊི་ཟང་ཟིང་བརྟག་དཔྱད་ཐོ་ཡིག་དང་ མཐུན་སྒྲིག་འབད་བའི་སྐབས་ ངེས་གཏན་བཟོཝ་ཨིན།
+གཞུང་སྐྱོང་གི་དོན་ལུ་ ཅ་རྙིང་ཚུ་ བཟུང་ཡོདཔ་ཨིན།
 
-Staging cluster owners Haruka Yamamoto (Android Observability TL) and Liam O’Connor
-(SRE) follow this script whenever a rehearsal run is scheduled. The sequence keeps
-participants aligned with the telemetry chaos checklist while guaranteeing that
-artefacts are captured for governance.
+**སྨན་པ།**
 
-**Participants**
+| འགན་ཁུར་ | འགན་འཁྲིའི་འགན་ཁུར། | འབྲེལ་གཏུག་ |
+|--|-|-|---------------------------------------- |
+| Android on-ཁ་པར་ IC | དམག་སྦྱོང་འདི་ འདྲེན་བྱེད་ པེ་ཇར་ཌཊི་དྲན་འཛིན་ཚུ་ མཉམ་འབྲེལ་འབདཝ་ཨིན་ བརྡ་བཀོད་དྲན་ཐོ་ | PagerDuty `android-telemetry-primary`, `#android-sdk-support` |
+| ཀླད་ཀོར་གྱི་ཇོ་བདག་ཚུ་ གནས་རིམ་བཟོ་ནི། (ཧ་རུ་ཀ་, ལི་ཡམ) | གཱེཊི་བསྒྱུར་བཅོས་སྒོ་སྒྲིག་ཚུ་, `kubectl` བྱ་བ་ཚུ་ གཡོག་བཀོལ། `#android-staging` |
+| ཡིག་ཆ་/རྒྱབ་སྐྱོར་འབད་མི་ (Priya) | ཐོ་བཀོད་སྒྲུབ་བྱེད་ ལམ་གྱི་བརྟག་དཔྱད་ཐོ་ཡིག་ རྗེས་འཇུག་ཤོག་འཛིན་ཚུ་དཔར་བསྐྲུན་འབད། | `#docs-support` |
 
-| Role | Responsibilities | Contact |
-|------|------------------|---------|
-| Android on-call IC | Drives the drill, coordinates PagerDuty notes, owns command log | PagerDuty `android-telemetry-primary`, `#android-sdk-support` |
-| Staging cluster owners (Haruka, Liam) | Gate change windows, run `kubectl` actions, snapshot cluster telemetry | `#android-staging` |
-| Docs/Support manager (Priya) | Record evidence, track labs checklist, publish follow-up tickets | `#docs-support` |
+**འཕུར་འགྲུལ་མ་འབད་བའི་ཧེ་མའི་མཉམ་འབྲེལ་**
 
-**Pre-flight coordination**
+- བརྟག་ཞིབ་ཀྱི་ཧེ་མ་ 48hours གིས་ འཆར་གཞི་བརྩམས་ཡོད་པའི་ཐོ་ཡིག་འབད་མི་ བསྒྱུར་བཅོས་འབད་བའི་ཞུ་བ་ཅིག་ ཡིག་སྣོད་འབད།
+  མཐོང་སྣང་ (C1–C7) དང་ `#android-staging` ནང་འབྲེལ་ལམ་འདི་སྦྱར་ཏེ་ ཀླད་ཀོར་གྱི་ཇོ་བདག་ཚུ།
+  བཀག་ཐབས་བཀྲམ་སྤེལ་ཚུ་ བཀག་ཚུགས།
+- གསརཔ་ `ClientConfig` ཧ་ཤི་དང་ `kubectl -context stage gear fods བསྡུ་སྒྲིག་འབད།
+  -n android-telemetry-stg` ཐོན་འབྲས་གཞི་བརྟེན་གནས་སྟངས་གཞི་བཙུགས་འབད་ཞིནམ་ལས་ དེ་ལས་ གསོག་འཇོག་འབད།
+  གཉིས་ཆ་ར་ `docs/source/sdk/android/readiness/labs/reports/<date>/` གི་འོག་ལུ་ཨིན།
+- ཐབས་འཕྲུལ་ཁྱབ་ཚད་ (པིག་སེལ་ + འདྲུད་ཆས་) ངེས་དཔྱད་འབད་ཞིནམ་ལས་ ངེས་གཏན་བཟོ།
+  `ci/run_android_tests.sh` བརྟག་དཔྱད་ཁང་གི་སྐབས་ལག་ལེན་འཐབ་མི་ལག་ཆས་ཚུ་བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན།
+  (`PendingQueueInspector`, ཊེ་ལི་མི་ཊི་བཙུགས་མི་ཚུ།)
 
-- 48 hours before the drill, file a change request that lists the planned
-  scenarios (C1–C7) and paste the link in `#android-staging` so cluster owners
-  can block clashing deployments.
-- Collect the latest `ClientConfig` hash and `kubectl --context staging get pods
-  -n android-telemetry-stg` output to establish the baseline state, then store
-  both under `docs/source/sdk/android/readiness/labs/reports/<date>/`.
-- Confirm device coverage (Pixel + emulator) and ensure
-  `ci/run_android_tests.sh` compiled the tools used during the lab
-  (`PendingQueueInspector`, telemetry injectors).
+**ལག་ལེན་འཐབ་པའི་ཞིབ་དཔྱད་ས་ཚིགས་**
 
-**Execution checkpoints**
+- `#android-sdk-support` ནང་ “ཟང་ཟིང་འགོ་བཙུགས་” གསལ་བསྒྲགས་འབད།
+  དང་ `docs/source/sdk/android/telemetry_chaos_checklist.md` མཐོང་ཐུབ།
+  བརྡ་བཀོད་རེ་རེ་བཞིན་ ཡིག་མཁན་གྱི་དོན་ལུ་ བཤད་པ་རྐྱབ་ཨིན།
+- གནས་རིམ་གྱི་ཇོ་བདག་ཅིག་གིས་ སྨན་ཁབ་བཙུགས་ནིའི་བྱ་བ་རེ་རེ་ལུ་ མེ་ལོང་ (`kubectl scale`, ཕྱིར་འདྲེན་འབད།
+  ལོག་འགོ་བཙུགས་ནི་ མངོན་གསལ་འཕྲུལ་ཆས་ཚུ་) དེ་འབདཝ་ལས་ བལྟ་བརྟོག་འབད་ཚུགས་མི་དང་ ཨེསི་ཨར་ཨི་གཉིས་ཆ་ར་གིས་ གོམ་པ་ངེས་གཏན་བཟོཝ་ཨིན།
+- `ཡིག་ཚུགས་/བརྒྱུད་འཕྲིན་/ཅེག་_རེ་ཌེག་ཊི་_status.py ལས་ཐོན་འབྲས་འདི་ བརྐོཝ་ཨིན།
+  --status-url Grafana` རེ་རེ་གི་ཤུལ་ལས་།
+  མཐོང་སྣང་དང་ བྱུང་རྐྱེན་གྱི་ ཡིག་ཆ་ནང་ སྦྱར།
 
-- Announce “chaos start” in `#android-sdk-support`, begin the bridge recording,
-  and keep `docs/source/sdk/android/telemetry_chaos_checklist.md` visible so
-  every command is narrated for the scribe.
-- Have a staging owner mirror each injector action (`kubectl scale`, exporter
-  restarts, load generators) so both Observability and SRE confirm the step.
-- Capture the output from `scripts/telemetry/check_redaction_status.py
-  --status-url https://android-telemetry-stg/api/redaction/status` after each
-  scenario and paste it into the incident doc.
+**ལོག༌ཐོབ**- བཙུགས་ཆས་ཆ་མཉམ་བསལ་མ་ཚར་ཚུན་ཚོད་ ཟམ་ལས་མ་བཞག་པར་ (`inject_redaction_failure.sh --clear`,
+  `kubectl scale ... --replicas=1`) དང་ Grafana གིས་ ལྗང་ཁུ་གནས་རིམ་སྟོནམ་ཨིན།
+- ཡིག་ཆ་/རྒྱབ་སྐྱོར་ཡིག་མཛོད་ཚུ་ གྱལ་རིམ་ནང་བཀོ་ནི་དང་ སི་ཨེལ་ཨའི་དྲན་ཐོ་ཚུ་ དེ་ལས་ གསལ་གཞིའི་པར་རིས་ཚུ།
+  `docs/source/sdk/android/readiness/screenshots/<date>/` དང་ཡིག་མཛོད་ཀྱི་རྟགས་བཀོད།
+  བསྒྱུར་བཅོས་ཀྱི་ཞུ་བ་འདི་ཁ་བསྡམ་པའི་ཧེ་མ་ བརྟག་ཞིབ་ཐོ་ཡིག་།
+- མཐོང་སྣང་གང་རུང་ཅིག་གི་དོན་ལུ་ `telemetry-chaos` ཁ་ཡིག་དང་གཅིག་ཁར་ དྲན་ཐོ་རྗེས་འཇུག་འབད་ནི།
+  འཐུས་ཤོར་ཡང་ན་ རེ་བ་མེད་པའི་མེ་ཊིག་ཚུ་ཐོན་ཡོདཔ་ལས་ `status.md` ནང་ལུ་ གཞི་བསྟུན་འབདཝ་ཨིན།
+  ཤུལ་མའི་བདུན་ཕྲག་བསྐྱར་ཞིབ་ཀྱི་སྐབས་ལུ།
 
-**Recovery**
+| དུས་ཚོད་ | བྱ་བ་ | ཇོ་བདག་(ཚུ་) | ཅ་ཆས། |
+|---|--------------------------------------------------------------------------- |
+| T−3min | `android-telemetry-stg` གསོ་བའི་བདེན་དཔྱད་འབད་: `kubectl --context staging get pods -n android-telemetry-stg`, མཇུག་བསྡུའི་ཡར་འཕེལ་ཚུ་ངེས་གཏན་བཟོ་ནི་དང་ བསྡུ་སྒྲིག་འབད་མི་ཚུ་གི་ཐོན་རིམ་ཚུ་དྲན་འཛིན་འབད། | ཧ་རུ་ཀ | `docs/source/sdk/android/readiness/screenshots/<date>/cluster-health.png` |
+| T−20min | ས་བོན་གཞི་རྟེན་གྱི་ ལྗིད་ཚད་ (`scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg --duration 20m`) དང་ stdout བཟུང་ནི། | ལི་ཡམ། | `readiness/labs/reports/<date>/load-generator.log` |
+| T−15min | འདྲ་བཤུས་ `docs/source/sdk/android/readiness/incident/telemetry_chaos_template.md` ལས་ `docs/source/sdk/android/readiness/incident/<date>-telemetry-chaos.md` དང་ (C1–C7) གཡོག་བཀོལ་ནིའི་དོན་ལུ་ ཐོ་ཡིག་གནས་སྟངས་དང་ ཡིག་དཔར་ཚུ་ འགན་སྤྲོད་འབད་ནི། | པྲི་ཡ་ དེཤ་པན་ཌི་ (རྒྱབ་སྐྱོར་) | བསྐྱར་སྦྱོང་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ བྱུང་རྐྱེན་གྱི་རྟགས་བཀལ་ཡོདཔ། |
+| T−10min | པིག་སེལ་ + འདྲ་བཤུས་རྐྱབ་མི་ ཡོངས་འབྲེལ་ཐོག་ལས་ ངེས་དཔྱད་འབད་ཡོདཔ་ཨིན་ གསརཔ་ ཨེསི་ཌི་ཀེ་ དང་ `ci/run_android_tests.sh` གིས་ `PendingQueueInspector` བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན། | ཧ་རུ་ཀ་, ལི་ཡམ། | `readiness/screenshots/<date>/device-checklist.png` |
+| T−5min | ཟུམ་ཟམ་འགོ་བཙུགས་ཏེ་ གསལ་གཞི་སྒྲ་བཟུང་འགོ་བཙུགས་ཞིནམ་ལས་ `#android-sdk-support` ནང་ལུ་ “ཟང་ཟིང་འགོ་བཙུགས་” གསལ་བསྒྲགས་འབད། | IC / ཡིག་ཆ་/རྒྱབ་སྐྱོར་ | `readiness/archive/<month>/` གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཡོདཔ། |
+| +0min | སེལ་འཐུ་འབད་ཡོད་པའི་གནས་སྟངས་འདི་ `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` ལས་ (སྤྱིར་བཏང་ལུ་ C2 + C6) ལས་ལག་ལེན་འཐབ། བརྟག་དཔྱད་ལམ་སྟོན་འདི་མཐོང་ཚུགསཔ་སྦེ་བཞག་ཞིནམ་ལས་ བརྡ་བཀོད་འབོད་བརྡ་ཚུ་འབྱུང་པའི་སྐབས་ འབོད་བརྡ་གཏང་། | Haruka direces, ལི་ཡམ་མེ་ལོང་ | བྱུང་རྐྱེན་ཡིག་སྣོད་ལུ་ དུས་ཚོད་ངོ་མ་ནང་ མཐུད་ཡོད་པའི་ནང་བསྐྱོད་ཚུ། |
+| +15min | མེ་ཊིག་ཚུ་བསྡུ་ལེན་འབད་ནི་ལུ་ བར་མཚམས་ (`scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`) དང་ Grafana གསལ་གཞི་ཚུ་ འཕྱོག་དགོ། | ཧ་རུ་ཀ | `readiness/screenshots/<date>/status-<scenario>.png` |
+| +25min | བཙུགས་ཡོད་པའི་འཐུས་ཤོར་གང་རུང་ཅིག་ (`inject_redaction_failure.sh --clear`, `kubectl scale ... --replicas=1`) བསྐྱར་རྩེད་ཀྱི་གྱལ་ཚུ་ བསྐྱར་སྒྲིག་འབད་ཞིནམ་ལས་ ཉེན་བརྡ་ཚུ་ ཉེ་འདབས་ལུ་ངེས་གཏན་བཟོ། | ལི་ཡམ། | `readiness/labs/reports/<date>/recovery.log` |
+| +༣༥མིན་ | བརྡ་དོན་: བྱུང་རིམ་གྱི་ཡིག་ཆ་དང་ གནས་སྟངས་རེ་ལུ་ འཐུས་ཤོར་དང་ རྗེས་འཇུག་ཚུ་ ཐོ་བཀོད་འབད་ནི་ དེ་ལས་ གུག་ཤད་ཚུ་ གིཊ་ལུ་ བརྡ་བཀོད་ཚུ་ དུས་མཐུན་བཟོ་དགོ། ཡིག་མཛོད་ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་མཇུག་བསྡུ་ཚུགས་ཟེར་ Docs/རྒྱབ་སྐྱོར་འབད། | IC | བྱུང་རྐྱེན་ཡིག་ཆ་དུས་མཐུན་བཟོ་ཡོདཔ། `readiness/archive/<month>/checklist.md` རྟགས་བཀོད། |
 
-- Do not leave the bridge until all injectors are cleared (`inject_redaction_failure.sh --clear`,
-  `kubectl scale ... --replicas=1`) and Grafana dashboards show green status.
-- Docs/Support archives queue dumps, CLI logs, and screenshots under
-  `docs/source/sdk/android/readiness/screenshots/<date>/` and ticks the archive
-  checklist before the change request closes.
-- Log follow-up tickets with the `telemetry-chaos` label for any scenario that
-  failed or produced unexpected metrics, and reference them in `status.md`
-  during the next weekly review.
+- ཕྱིར་ཚོང་འཐབ་མི་ཚུ་ གསོ་བའི་གནས་སྟངས་ལེགས་ཤོམ་མ་འགྱོ་ཚུན་ཚོད་ ཟམ་གུ་ལས་ འཁྲབ་སྟོན་གྱི་ཇོ་བདག་ཚུ་བཞག་ཞིནམ་ལས་ ཉེན་བརྡ་འབད་མི་ཚུ་ག་ར་ བསལ་ཚར་ནུག།
+- བང་རིམ་གསརཔ་འདི་ `docs/source/sdk/android/readiness/labs/reports/<date>/queues/` ནང་ལུ་བཀོ་ཞིནམ་ལས་ བྱུང་རྐྱེན་དྲན་ཐོ་ནང་ལུ་ ཁོང་གི་ཧ་ཤེ་ཚུ་གཞི་བསྟུན་འབད།
+- གནས་སྟངས་ཅིག་འཐུས་ཤོར་བྱུང་པ་ཅིན་ དེ་འཕྲོ་ལས་ `telemetry-chaos` ཁ་ཡིག་བཏགས་ཡོད་པའི་ JIRA གི་ཤོག་འཛིན་ཅིག་བཟོ་སྟེ་ `status.md` ལས་ འབྲེལ་མཐུད་འབད།
+- རང་བཞིན་གྲོགས་རམ་པ་: `ci/run_android_telemetry_chaos_prep.sh` གིས་ མངོན་གསལ་འཕྲུལ་ཆས་དང་ གནས་ཚད་ཀྱི་པར་ཚུ་ དེ་ལས་ གྱལ་རིམ་ཕྱིར་འདྲེན་གྱི་ ཆུ་བཏོན་འཕྲུལ་ཆས་ཚུ་ བཀབ་བཞགཔ་ཨིན། `ANDROID_TELEMETRY_DRY_RUN=false` གཞི་སྒྲིག་འབད་ཚུགསཔ་ད་ `ANDROID_PENDING_QUEUE_EXPORTS=pixel8=/tmp/pixel.queue,emulator=/tmp/emulator.queue` (etc.) གཞི་སྒྲིག་འབདཝ་ཨིན་ དེ་འབདཝ་ལས་ ཡིག་ཚུགས་འདི་གིས་ གྱལ་རིམ་ཡིག་སྣོད་རེ་རེ་འདྲ་བཤུས་རྐྱབ་ཨིན་ དེ་ལས་ `<label>.sha256` དང་ `PendingQueueInspector` འདི་ གཡོག་བཀོལཝ་ཨིན། `ANDROID_PENDING_QUEUE_INSPECTOR=false` ལག་ལེན་འཐབ། JSON ཐོན་རླུང་འདི་ མཆོང་དགོཔ་ཨིན་ (དཔེར་ན་ JDK འཐོབ་མི་ཚུགས།) **ཆ་རོགས་འདི་གཡོག་མ་བཀོལ་བའི་ཧེ་མ་ རེ་བ་བསྐྱེད་པའི་ཚྭ་ངོས་འཛིན་འབད་མི་ཚུ་ ཕྱིར་འདྲེན་འབད་ཡོདཔ་** `ANDROID_TELEMETRY_EXPECTED_SALT_EPOCH=<YYYYQ#>` དང་ `ANDROID_TELEMETRY_EXPECTED_SALT_ROTATION=<id>` གཞི་སྒྲིག་འབད་དེ་ བཙུགས་ཡོད་པའི་ `check_redaction_status.py` ཚུ་ རཱསིཊི་གཞི་རྟེན་ལས་ བཏོན་ཡོད་པའི་བརྡ་ལམ་ཁ་སྟོར་འགྱོ་བ་ཅིན་ མགྱོགས་དྲགས་སྦེ་འབོད་བརྡ་འབདཝ་ཨིན།
 
-| Time | Action | Owner(s) | Artefact |
-|------|--------|----------|----------|
-| T−30 min | Verify `android-telemetry-stg` health: `kubectl --context staging get pods -n android-telemetry-stg`, confirm no pending upgrades, and note collector versions. | Haruka | `docs/source/sdk/android/readiness/screenshots/<date>/cluster-health.png` |
-| T−20 min | Seed baseline load (`scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg --duration 20m`) and capture stdout. | Liam | `readiness/labs/reports/<date>/load-generator.log` |
-| T−15 min | Copy `docs/source/sdk/android/readiness/incident/telemetry_chaos_template.md` to `docs/source/sdk/android/readiness/incident/<date>-telemetry-chaos.md`, list scenarios to run (C1–C7), and assign scribes. | Priya Deshpande (Support) | Incident markdown committed before rehearsal starts. |
-| T−10 min | Confirm Pixel + emulator online, latest SDK installed, and `ci/run_android_tests.sh` compiled the `PendingQueueInspector`. | Haruka, Liam | `readiness/screenshots/<date>/device-checklist.png` |
-| T−5 min | Start Zoom bridge, begin screen recording, and announce “chaos start” in `#android-sdk-support`. | IC / Docs/Support | Recording saved under `readiness/archive/<month>/`. |
-| +0 min | Execute the selected scenario from `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` (typically C2 + C6). Keep the lab guide visible and call out command invocations as they happen. | Haruka drives, Liam mirrors results | Logs attached to the incident file in real time. |
-| +15 min | Pause to collect metrics (`scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`) and grab Grafana screenshots. | Haruka | `readiness/screenshots/<date>/status-<scenario>.png` |
-| +25 min | Restore any injected failures (`inject_redaction_failure.sh --clear`, `kubectl scale ... --replicas=1`), replay queues, and confirm alerts close. | Liam | `readiness/labs/reports/<date>/recovery.log` |
-| +35 min | Debrief: update incident doc with pass/fail per scenario, list follow-ups, and push artefacts to git. Notify Docs/Support that the archive checklist can be completed. | IC | Incident doc updated, `readiness/archive/<month>/checklist.md` ticked. |
-
-- Keep the staging owners on the bridge until exporters are healthy and all alerts have cleared.
-- Store raw queue dumps in `docs/source/sdk/android/readiness/labs/reports/<date>/queues/` and reference their hashes in the incident log.
-- If a scenario fails, immediately create a JIRA ticket labelled `telemetry-chaos` and cross-link it from `status.md`.
-- Automation helper: `ci/run_android_telemetry_chaos_prep.sh` wraps the load generator, status snapshots, and queue export plumbing. Set `ANDROID_TELEMETRY_DRY_RUN=false` when staging access is available and `ANDROID_PENDING_QUEUE_EXPORTS=pixel8=/tmp/pixel.queue,emulator=/tmp/emulator.queue` (etc.) so the script copies each queue file, emits `<label>.sha256`, and runs `PendingQueueInspector` to produce `<label>.json`. Use `ANDROID_PENDING_QUEUE_INSPECTOR=false` only when JSON emission must be skipped (e.g., no JDK available). **Always export the expected salt identifiers before running the helper** by setting `ANDROID_TELEMETRY_EXPECTED_SALT_EPOCH=<YYYYQ#>` and `ANDROID_TELEMETRY_EXPECTED_SALT_ROTATION=<id>` so the embedded `check_redaction_status.py` calls fail fast if the captured telemetry diverges from the Rust baseline.
-
-## 6. Documentation & Enablement
-
-- **Operator enablement kit:** `docs/source/sdk/android/readiness/and7_operator_enablement.md`
-  links the runbook, telemetry policy, lab guide, archive checklist, and knowledge
-  checks into a single AND7-ready package. Reference it when preparing SRE
-  governance pre-reads or scheduling the quarterly refresh.
-- **Enablement sessions:** A 60-minute enablement recording runs on 2026-02-18
-  with quarterly refreshes. Materials live under
+## 6. ཡིག་ཆ་དང་ལྕོགས་གྲུབ།- **Operator ལྕོགས་ཅན་བཟོ་ཆས་ཆས་ཆས་:** `docs/source/sdk/android/readiness/and7_operator_enablement.md`
+  རན་དེབ་དང་ ཊེ་ལི་མི་ཊི་སྲིད་བྱུས་ བརྟག་དཔྱད་ལམ་སྟོན་ གཏན་མཛོད་ཞིབ་དཔྱད་ཐོ་ཡིག་ དེ་ལས་ ཤེས་ཡོན་ཚུ་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
+  AND7-red ཐུམ་སྒྲིལ་གཅིག་ནང་ལུ་ཞིབ་དཔྱད་འབདཝ་ཨིན། ཨེསི་ཨར་ཨི་གྲ་སྒྲིག་འབད་བའི་སྐབས་ གཞི་བསྟུན་འབད།
+  ལོ་གསུམ་གྱི་རིང་ལུ་ གསརཔ་སྦེ་ལྷག་ནི་དང་ ཡང་ན་ དུས་ཚོད་བཀོད་ནི།
+- **ལྕོགས་གྲུབ།:** སྐར་མ་ ༦༠ གི་ལྕོགས་ཅན་སྒྲ་བཟུང་འདི་ ༢༠༢༦-༠༢-༡༨ ལུ་གཡོག་བཀོལཝ་ཨིན།
+  ཟླཝ་གསུམ་པའི་ བསྐྱར་གསོ་འབད་ནི། དངོས་པོའི་འོག་ལུ་སྡོད་དོ་ཡོདཔ།
   `docs/source/sdk/android/readiness/`.
-- **Knowledge checks:** Staff must score ≥90% via the readiness form. Store
-  results in `docs/source/sdk/android/readiness/forms/responses/`.
-- **Updates:** Whenever telemetry schemas, dashboards, or override policies
-  change, update this runbook, the support playbook, and `status.md` in the same
+- **ཤེས་ཡོན་ཞིབ་དཔྱད་ཚུ་:** ལས་བྱེདཔ་ཚུ་གིས་ གྲ་སྒྲིག་འབྲི་ཤོག་བརྒྱུད་དེ་ ≥90% སྐུགས་ཐོབ་དགོ། བསགས་བཞག་ནི
+  གྲུབ་འབྲས་ `docs/source/sdk/android/readiness/forms/responses/`.
+- **དུས་མཐུན་བཟོ་ནི་:** ག་དུས་འབད་རུང་ ཊེ་ལི་མི་ཊི་ལས་རིམ་ཚུ་ ཌེཤ་བོརཌི་ ཡང་ན་ སྲིད་བྱུས་ཚུ་ བཀག་ཆ་འབད་བའི་སྐབས་ ག་དེམ་ཅིག་སྦེ་ བརྡ་སྟོནམ་ཨིན།
+  འགྱུར་བ། དེ་བཞིན་ རན་བུག་འདི་དུས་མཐུན་བཟོས།
   PR.
-- **Weekly review:** After each Rust release candidate (or at least weekly), verify
-  `java/iroha_android/README.md` and this runbook still reflect current automation,
-  fixture rotation procedures, and governance expectations. Capture the review in
-  `status.md` so the Foundations milestone audit can trace documentation freshness.
+- **བདུན་ཕྲག་རེའི་བསྐྱར་ཞིབ།:* རསཊི་རེ་རེ་གིས་ འདེམས་ངོ་རེ་རེ་ (ཡང་ན་ཉུང་མཐའ་བདུན་ཕྲག་རེ) བདེན་དཔྱད་འབད་ཚར་བའི་ཤུལ་ལས་ བདེན་དཔྱད་འབད།
+  `java/iroha_android/README.md` དང་ དེ་ལས་ རན་དེབ་འདི་གིས་ ད་ལྟོ་ཡང་ ད་ལྟོའི་རང་བཞིན་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+  སྒྲིག་ཆས་བསྒྱིར་བའི་བྱ་རིམ་དང་ གཞུང་སྐྱོང་རེ་བ་ཚུ། བསྐྱར་ཞིབ་འདི་ ༢༠༠༨ ལུ་བཀོད།
+  `status.md` དེ་འབདཝ་ལས་ གཞི་ཚོགས་ཀྱི་རྩིས་ཞིབ་འདི་གིས་ ཡིག་ཆ་ཚུ་ གསརཔ་སྦེ་ འཚོལ་ཞིབ་འབད་ཚུགས།
 
-## 7. StrongBox Attestation Harness
-
-- **Purpose:** Validate hardware-backed attestation bundles before promoting devices into the
-  StrongBox pool (AND2/AND6). The harness consumes captured certificate chains and verifies them
-  against trusted roots using the same policy that production code executes.
-- **Reference:** See `docs/source/sdk/android/strongbox_attestation_harness_plan.md` for the full
-  capture API, alias lifecycle, CI/Buildkite wiring, and ownership matrix. Treat that plan as the
-  source of truth when onboarding new lab technicians or updating finance/compliance artefacts.
-- **Workflow:**
-  1. Collect an attestation bundle on-device (alias, `challenge.hex`, and `chain.pem` with the
-     leaf→root order) and copy it to the workstation.
-  2. Run `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>
-     [--trust-root-dir <dir>] --require-strongbox --output <report.json>` using the appropriate
-     Google/Samsung root (directories allow you to load whole vendor bundles).
-  3. Archive the JSON summary alongside raw attestation material in
+## 7. StrongBox བརྟག་དཔྱད།- **དམིགས་ཡུལ།:* ཐབས་འཕྲུལ་ཚུ་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ མཐུན་རྐྱེན་རྒྱབ་སྐྱོར་གྱི་རྒྱབ་སྐྱོར་ཡོད་པའི་ བདེན་ཁུངས་ཚུ་ བདེན་དཔྱད་འབད།
+  StrongBox ཆུ་རྫིང་ (AND2/AND6). གྱང་ཁོག་འདི་གིས་ བཟུང་ཡོད་པའི་ལག་ཁྱེར་གྱི་རྒྱུན་རིམ་ཚུ་ བཀོལ་སྤྱོད་འབད་དེ་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  བཟོ་བསྐྲུན་ཨང་རྟགས་ལག་ལེན་འཐབ་མི་ སྲིད་བྱུས་གཅིགཔོ་འདི་ལག་ལེན་འཐབ་སྟེ་ བློ་གཏད་ཅན་གྱི་རྩ་ཚུ་ལུ་རྒྱབ་འགལ་འབདཝ་ཨིན།
+-* གཞི་བསྟུན་:** ཆ་ཚང་གི་དོན་ལུ་ `docs/source/sdk/android/strongbox_attestation_harness_plan.md` ལུ་བལྟ།
+  འདྲེན་བཀོལ། | ཕྱིར་ལོག | དོར་བ། འཆར་གཞི་དེ་ བརྩི་འཇོག་འབད།
+  བརྟག་དཔྱད་ཁང་གི་འཕྲུལ་རིག་པ་གསརཔ་ཚུ་ ཡང་ན་ དངུལ་འབྲེལ་/བསྟར་སྤྱོད་ཀྱི་ཅ་ཆས་ཚུ་ དུས་མཐུན་བཟོ་བའི་སྐབས་ བདེན་པ་གི་འབྱུང་ཁུངས།
+- **ཝོར་ཀ་ཕོལོ་:**
+  ༡ བདེན་དཔང་འབད་བའི་ ཐབས་འཕྲུལ་ (alias, `challenge.hex`, དང་ `chain.pem` འདི་ བསྡུ་སྒྲིག་འབད།
+     leaf→རྩ་བའི་གོ་རིམ་) དང་ ལཱ་འབད་སའི་ས་ཁོངས་ནང་ འདྲ་བཤུས་རྐྱབས།
+  2. ཡིག་ཆ་ཚུ་གཡོག་བཀོལ།/ཨེན་ཌོརཌི་_ལྡེ་མིག་_སྔོན་འགོག་། --བཱན་ཌེལ་-ཌིར་  --བདེན་པ་རྩ་བའི་ གཡོག་བཀོལ།
+     [---trust-root-dir ] -འོས་འབབ་ཅན་གྱི་ལག་ལེན་འཐབ་སྟེ་ དགོས་མཁོ་-སྟོབས་ཤུགས་ -ཨའུཊ་པུཊ་ ` དང་།
+     གུ་གུལ་/སེམ་སུང་རྩ་བའི་ (སྣོད་ཐོ་ཚུ་གིས་ ཁྱོད་ལུ་ ཚོང་མགྲོན་པའི་སྡེ་ཚན་ཆ་མཉམ་མངོན་གསལ་འབད་བཅུགཔ་ཨིན།)
+  ༣ ༢༠༠༨ ལུ་ བདེན་ཁུངས་བཀལ་ནིའི་རྒྱུ་ཆ་དང་གཅིག་ཁར་ JSON བཅུད་བསྡུས་འདི་ གཏན་མཛོད་འབད།
      `artifacts/android/attestation/<device-tag>/`.
-- **Bundle format:** Follow `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  for the required file layout (`chain.pem`, `challenge.hex`, `alias.txt`, `result.json`).
-- **Trusted roots:** Obtain vendor-supplied PEMs from the device lab secrets store; pass multiple
-  `--trust-root` arguments or point `--trust-root-dir` to the directory that holds the anchors when
-  the chain terminates in a non-Google anchor.
-- **CI harness:** Use `scripts/android_strongbox_attestation_ci.sh` to batch-verify archived bundles
-  on lab machines or CI runners. The script scans `artifacts/android/attestation/**` and invokes the
-  harness for every directory containing the documented files, writing refreshed `result.json`
-  summaries in place.
-- **CI lane:** After syncing new bundles, run the Buildkite step defined in
+- **བཱན་ཌལ་རྩ་སྒྲིག་:** `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md` གི་རྗེས་སུ་འབྲང་།
+  དགོས་མཁོའི་ཡིག་སྣོད་བཀོད་སྒྲིག་ (`chain.pem`, `challenge.hex`, `alias.txt`, `result.json`).
+- ** བློ་གཏད་ཅན་གྱི་རྩ་བ་:** ཐབས་འཕྲུལ་བརྟག་དཔྱད་ཁང་གི་གསང་བ་ཚོང་ཁང་ལས་ ཚོང་པ་-བཀྲམ་སྤེལ་འབད་མི་ པི་ཨི་ཨེམ་ཚུ་ ཐོབ་ཚུགས། མང་མྱུར།
+  `--trust-root` སྒྲུབ་རྟགས་ཚུ་ ཡང་ན་ `--trust-root-dir` འདི་ ནམ་དུས་ལུ་ ནམ་དུས་ལུ་འཛིན་མི་ སྣོད་ཐོ་ལུ་ ས་ཚིགས་ `--trust-root-dir`
+  རིམ་སྒྲིག་འདི་ གུ་གུལ་མེན་པའི་ ཨེན་ཀོར་ནང་ མཇུག་བསྡུཝ་ཨིན།
+- **CI harness:** `scripts/android_strongbox_attestation_ci.sh` ལག་ལེན་འཐབ།
+  བརྟག་དཔྱད་འཕྲུལ་ཆས་ ཡང་ན་ CI རྒྱུག་འགྲན། ཡིག་ཆ་འདི་གིས་ `artifacts/android/attestation/**` དང་ དེ་ལས་ འདི་ འབོ་འོང་།
+  ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ཡིག་སྣོད་ཚུ་ཡོད་པའི་སྣོད་ཐོ་རེ་རེ་གི་དོན་ལུ་ ཧར་ནེསི་ `result.json` གསར་བསྐྲུན་འབད་ཡོདཔ།
+  ས་གནས་ནང་ བཅུད་བསྡུས་ཚུ།
+- **CI lane:** བཱན་ཌི་གསརཔ་ཚུ་ མཉམ་འབྱུང་འབད་བའི་ཤུལ་ལས་ ནང་ངེས་འཛིན་འབད་ཡོད་པའི་ བཱའིཊི་ཀི་ཊི་རིམ་པ་འདི་གཡོག་བཀོལ།
   `.buildkite/android-strongbox-attestation.yml` (`buildkite-agent pipeline upload --pipeline .buildkite/android-strongbox-attestation.yml`).
-  The job executes `scripts/android_strongbox_attestation_ci.sh`, generates a summary with
-  `scripts/android_strongbox_attestation_report.py`, uploads the report to `artifacts/android_strongbox_attestation_report.txt`,
-  and annotates the build as `android-strongbox/report`. Investigate any failures immediately and
-  link the build URL from the device matrix.
-- **Reporting:** Attach the JSON output to governance reviews and update the device matrix entry in
-  `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` with the attestation date.
-- **Mock rehearsal:** When hardware is unavailable, run `scripts/android_generate_mock_attestation_bundles.sh`
-  (which uses `scripts/android_mock_attestation_der.py`) to mint deterministic test bundles plus a shared mock root so CI and docs can exercise the harness end-to-end.
-- **In-code guardrails:** `ci/run_android_tests.sh --tests
-  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` covers empty vs challenged
-  attestation regeneration (StrongBox/TEE metadata) and emits `android.keystore.attestation.failure`
-  on challenge mismatch so cache/telemetry regressions are caught before shipping new bundles.
+  ལཱ་གཡོག་འདི་གིས་ `scripts/android_strongbox_attestation_ci.sh` ལག་ལེན་འཐབ་ཨིན་, འདི་དང་གཅིག་ཁར་བཅུད་བསྡུས་ཅིག་བཏོནམ་ཨིན།
+  `scripts/android_strongbox_attestation_report.py`, སྙན་ཞུ་འདི་ `artifacts/android_strongbox_attestation_report.txt` ལུ་སྐྱེལ་བཙུགས་འབདཝ་ཨིན།
+  དང་ བཟོ་བསྐྲུན་འདི་ `android-strongbox/report` སྦེ་ གསལ་བཀོད་འབད་ཡོདཔ་ཨིན། འཐུས་ཤོར་ག་ཅི་རང་བྱུང་རུང་ དེ་འཕྲོ་ལས་ དང་།
+  ཐབས་འཕྲུལ་མེ་ཊིགསི་ལས་ བཟོ་བསྐྲུན་ཡུ་ཨར་ཨེལ་འདི་འབྲེལ་མཐུད་འབད།
+- **སྙན་ཞུ་:** ནང་ ཐབས་འཕྲུལ་མེ་ཊིགསི་ཐོ་བཀོད་འདི་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་དང་ དུས་མཐུན་བཟོ་ནི་ལུ་ ཇེ་ཨེསི་ཨོ་ཨའུཊི་པུཊི་འདི་ མཉམ་སྦྲགས་འབད།
+  Prometheus དང་བཅས་པའི་བདེན་དཔང་ཚེས་གྲངས་དང་བཅས་པ།
+- **ཧམ་བསྐྱར་སྦྱོང་:** མཐུན་རྐྱེན་མེད་པའི་སྐབས་ `scripts/android_generate_mock_attestation_bundles.sh` གཡོག་བཀོལ།
+  ༼`scripts/android_mock_attestation_der.py`༽ གིས་ བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ བརྟག་དཔྱད་འབད་དེ་ མཉམ་རུབ་འབད་དེ་ CI དང་ docs གིས་ མཐའ་མཇུག་ལས་མཇུག་ཚུན་ཚོད་ ལག་ལེན་འཐབ་ཚུགས།
+- **གསང་ཨང་སྲུང་སྐྱོབ།:** `crun_android_tests.sh --tests
+  org.hyperledger.iroha.android.crypto.keyestore.ཀེ་སི་ཊོར་ཀེ་པྲོ་ཝིར་ཝར་ཊི་` གིས་གདོང་ལེན་འབད་ཡོདཔ།
+  བདེན་དཔང་བསྐྱར་བཟོ་ (StrongBox/TEE metadada) དང་ `android.keystore.attestation.failure` བཏོནམ་ཨིན།
+  གདོང་ལེན་འདི་ མ་མཐུནམ་ལས་ འདྲ་མཛོད་/འཕྲུལ་རིག་གི་ ལོག་ལྟ་ཚུ་ མ་འགྲིགས་པའི་ཧེ་མ་ འཛིན་བཟུང་འབདཝ་ཨིན།
 
-## 8. Contacts
+## 8. འབྲེལ་གཏུགས།
 
-- **Support Engineering On-call:** `#android-sdk-support`
-- **SRE Governance:** `#sre-governance`
-- **Docs/Support:** `#docs-support`
-- **Escalation Tree:** See Android Support Playbook §2.1
+- **རྒྱབ་སྐྱོར་བཟོ་རིག་ཐོག་ཁ་པར་:** `#android-sdk-support`
+- **SRE གཞུང་སྐྱོང་:** `#sre-governance`
+- **ཡིག་ཆ་/རྒྱབ་སྐྱོར་:** `#docs-support`
+- **ཡར་འཕར་ཤིང་:** Android རྒྱབ་སྐྱོར། རྩེད་དེབ་ §2.1.
 
-## 9. Troubleshooting Scenarios
+## 9. དཀྲུགས་པའི་གནས་སྟངས།རོ་ཌི་མེཔ་ཅ་ཆས་དང་ཨེ་ཨེན་ཌི་༧-པི་༢
+Android on-call: Torii/network timeouts, StrongBox གི་བརྟག་དཔྱད་འཐུས་ཤོར་, དང་།
+`iroha_config` གསལ་སྟོན་གྱི་ ཌིརཕཊི་། འབྲེལ་ཡོད་ཞིབ་དཔྱད་ཐོ་ཡིག་ནང་ ཡིག་ཆ་མ་བཙུགས་པའི་ཧེ་མ་ལས་ ལཱ་འབད་དགོ།
+Sev1/2 རྗེས་འཇུག་དང་ `incident/<date>-android-*.md` ནང་ སྒྲུབ་བྱེད་གཏན་མཛོད།
 
-Roadmap item AND7-P2 calls out three incident classes that repeatedly page the
-Android on-call: Torii/network timeouts, StrongBox attestation failures, and
-`iroha_config` manifest drift. Work through the relevant checklist before filing
-Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
+### 9.1 Torii & ཡོངས་འབྲེལ་དུས་ཚོད།
 
-### 9.1 Torii & Network Timeouts
+**བརྡ་མཚོན་**
 
-**Signals**
+- `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`, གུ་ཉེན་བརྡ་ཚུ།
+  `android_sdk_offline_replay_errors`, དང་ Torii `/v1/pipeline` འཛོལ་བའི་ཚད་གཞི།
+- `operator-console` ཝིཌི་གེཊི་ཚུ་ (དཔེར་ན་/ཨེན་ཌརའིཌ་) གིས་ བང་རིམ་ཅན་གྱི་བང་རིམ་ཅན་གྱི་བང་རིམ་གྱི་ཆུ་གཡུར་ཡང་ན་ སྟོནམ་ཨིན།
+  retries མགྱོགས་འཕེལ་གྱི་རྒྱབ་ལོག་ནང་བཀག་བཞག་ཡོདཔ།
 
-- Alerts on `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`,
-  `android_sdk_offline_replay_errors`, and the Torii `/v1/pipeline` error rate.
-- `operator-console` widgets (examples/android) showing stalled queue drain or
-  retries stuck in exponential backoff.
+**དེ་འཕྲོ་ལན་***
 
-**Immediate response**
+1. ངོས་ལེན (`android-networking`) དང་བྱུང་རྐྱེན་དྲན་དེབ་འགོ་བཙུགས།
+2. འཛིན་བཟུང་ Grafana པར་ལེན་ (Sobrese latency + Queue Depth) གིས་ དེ་ ཁྱབ་ཚུགསཔ་ཨིན།
+   མཐའ་མའི་སྐར་མ་༣༠།
+༣ ཐབས་འཕྲུལ་དྲན་ཐོ་ཚུ་ལས་ ཤུགས་ལྡན་ `ClientConfig` ཧེ་ཤི་འདི་ཐོ་བཀོད་འབད། (`ConfigWatcher`)
+   བསྐྱར་མངོན་གསལ་གྱི་གྲུབ་འབྲས་དང་ ཡང་ན་ འཐུས་ཤོར་བྱུང་པའི་སྐབས་ གསལ་སྟོན་གྱི་ བཅུད་ལྡན་འདི་ དཔར་བསྐྲུན་འབདཝ་ཨིན།)
 
-1. Acknowledge PagerDuty (`android-networking`) and start an incident log.
-2. Capture Grafana snapshots (Submission Latency + Queue Depth) covering the
-   last 30 minutes.
-3. Record the active `ClientConfig` hash from the device logs (`ConfigWatcher`
-   prints the manifest digest whenever a reload succeeds or fails).
+**ནད་བརྟག་**
 
-**Diagnostics**
-
-- **Queue health:** Pull the configured queue file from a staging device or the
-  emulator (`adb shell run-as <app-id> cat files/pending.queue >
-  /tmp/pending.queue`). Decode the envelopes with
-  `OfflineSigningEnvelopeCodec` as described in
-  `docs/source/sdk/android/offline_signing.md#4-queueing--replay` to confirm the
-  backlog matches operator expectations. Attach the decoded hashes to the
-  incident.
-- **Hash inventory:** After downloading the queue file, run the inspector helper
-  to capture canonical hashes/aliases for the incident artefacts:
+- **Queue Healup:** རིམ་སྒྲིག་ཐབས་འཕྲུལ་ཅིག་ལས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་གྲལ་ཐིག་ཡིག་སྣོད་འདི་འཐུ།
+  olyator (`adbhell-run-wive a  ཀེཊི་ཡིག་སྣོད་ཚུ་/punding.queue > ཨིན།
+  /tmp/pending.queue`). ཡིག་ཤུབས་ཚུ་ དང་གཅིག་ཁར་ ཌི་ཀོཌ།
+  Grafana ནང་གསལ་ལྟར་ .
+  `docs/source/sdk/android/offline_signing.md#4-queueing--replay` འདི་བདེན་དཔང་བྱེད་པར་
+  backlogs བཀོལ་སྤྱོད་པའི་རེ་བ་དང་མཐུན་པ། བརྡ་རྟགས་བཀོད་ཡོད་པའི་ཧ་ཤེ་ཚུ་ མཉམ་སྦྲགས་འབད།
+  བྱུང༌རྐྱེན།
+- **Hase incortory:** གྱལ་རིམ་ཡིག་སྣོད་ཕབ་ལེན་འབད་ཚར་བའི་ཤུལ་ལས་ ཞིབ་དཔྱད་པ་གྲོགས་རམ་པ་གཡོག་བཀོལ།
+  བྱུང་རྐྱེན་གྱི་ཅ་ཆས་ཚུ་གི་དོན་ལུ་ ཀེ་ནོ་ནིག་ཧ་ཤེ་/མིང་གཞན་ཚུ་ བཟུང་ནི།
 
   ```bash
   gradle -p java/iroha_android :core:classes >/dev/null  # compiles classes if needed
@@ -698,187 +665,187 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
     --file /tmp/pending.queue --json > queue-inspector.json
   ```
 
-  Attach `queue-inspector.json` and the pretty-printed stdout to the incident
-  and link it from the AND7 lab report for Scenario D.
-- **Torii connectivity:** Run the HTTP transport harness locally to rule out SDK
-  regressions: `ci/run_android_tests.sh` exercises
-  `HttpClientTransportTests`, `HttpClientTransportHarnessTests`, and
-  `ToriiMockServerTests`. Failures here indicate a client bug rather than a
-  Torii outage.
-- **Fault injection rehearsal:** On the staging Pixel (StrongBox) and the AOSP
-  emulator, toggle connectivity to reproduce pending-queue growth:
-  `adb shell cmd connectivity airplane-mode enable` → submit two demo
-  transactions via operator-console → `adb shell cmd connectivity airplane-mode
-  disable` → verify the queue drains and `android_sdk_offline_replay_errors`
-  remains 0. Record hashes of the replayed transactions.
-- **Alert parity:** When tuning thresholds or after Torii changes, execute
-  `scripts/telemetry/test_torii_norito_rpc_alerts.sh` so Prometheus rules stay
-  aligned with the dashboards.
+  `queue-inspector.json` དང་ བྱུང་རྐྱེན་ལུ་ པར་སྐྲུན་འབད་ཡོད་པའི་ བརྡ་རྟགས་འདི་ མཉམ་སྦྲགས་འབད།
+  དེ་ལས་ Scenario D གི་དོན་ལུ་ AND7 བརྟག་དཔྱད་སྙན་ཞུ་ལས་ འབྲེལ་མཐུད་འབད།
+- **Torii མཐུད་ལམ་:** ཨེསི་ཌི་ཀེ་ ཕྱིར་བཏོན་འབད་ནིའི་དོན་ལུ་ ཨེཆ་ཊི་ཊི་པི་སྐྱེལ་འདྲེན་འདི་ ཉེ་གནས་ལུ་ བཏོན་གཏང་།
+  འགྱུར་ལྡོག་: `ci/run_android_tests.sh` ལུས་སྦྱོང་།
+  `HttpClientTransportTests`, `HttpClientTransportHarnessTests`, དང་།
+  `ToriiMockServerTests`. འདི་ན་འཐུས་ཤོར་བྱུང་བ་གིས་ ལས་ མཁོ་མངགས་འབད་མི་ འབུཔ་ཅིག་ བརྡ་སྟོནམ་ཨིན།
+  Torii བཤུད།
+- **ཕལ་ཊི་བཙུགས་པའི་སྦྱོང་བརྡར་:** གནས་རིམ་གྱི་པིག་སེལ་ (StrongBox) དང་ AOSP ལུ།
+  འདྲེ་ཤིང་དང་ མཐུད་འབྲེལ་འབད་ནི་གི་དོན་ལུ་ བང་རིམ་གོང་འཕེལ་གཏང་ནི།
+  `adb shell cmd connectivity airplane-mode enable` → → བརྡ་སྟོན་གཉིས་བཙུགས།
+  ཚོང་འབྲེལ་ཚུ་ བཀོལ་སྤྱོད་པ་-ཀོན་སོལ་ → `adb shell cmd མཐུད་འབྲེལ་གནམ་གྲུའི་ཐབས་ལམ་-ཐབས་ལམ།
+  disableI` → verify the queue drains and `android_sdk_offline_replay_errors
+  ལྷག་ལུས་ ༠ བསྐྱར་རྩེད་ཀྱི་ཚོང་འབྲེལ་ཚུ་གི་སྐོར་ལས་ ཧ་ཤེ་ཐོ་བཀོད་འབད།
+- **ཨེ་ལར་ཊི་ ཆ་སྙོམས་:** ཚད་གཞི་ཚུ་ ཡང་ན་ Torii གི་ཤུལ་ལས་ བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ ལག་ལེན་འཐབ།
+  `scripts/telemetry/test_torii_norito_rpc_alerts.sh` དེ་འབདཝ་ལས་ Prometheus ཁྲིམས་ལུགས་ཚུ་སྡོད།
+  ཌེཤ་བོརཌི་ཚུ་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་ཡོདཔ།
 
-**Recovery**
+**ལོག༌ཐོབ**
 
-1. If Torii is degraded, engage the Torii on-call and continue replaying the
-   queue once `/v1/pipeline` accepts traffic.
-2. Reconfigure affected clients only via signed `iroha_config` manifests. The
-   `ClientConfig` hot-reload watcher must emit a success log before the incident
-   can close.
-3. Update the incident with the queue size before/after replay plus hashes of
-   any dropped transactions.
+1. གལ་ཏེ་Torii འདི་ཉམས་ཆག་བྱུང་ན་ Torii འདི་འབྲེལ་གཏོགས་འབད་དེ་ འཕྲོ་མཐུད་དེ་ འཕྲོ་མཐུད་དེ་འབད་དགོ།
+   གྱལ་རིམ་ཅིག་ `/v1/pipeline` གིས་ འགྲུལ་སྐྱོད་ལུ་ངོས་ལེན་འབདཝ་ཨིན།
+༢ མཚན་རྟགས་བཀོད་ཡོད་པའི་ `iroha_config` གསལ་སྟོན་ཚུ་བརྒྱུད་དེ་ གནོད་སྐྱོན་ཕོག་མི་ མཁོ་མངགས་ཚུ་ བསྐྱར་སྒྲིག་འབད། ཚིག༌ཕྲད
+   `ClientConfig` ཧོཊ་-བསྐྱར་ལེན་ལྟ་རྟོག་པ་གིས་ བྱུང་རྐྱེན་མ་བྱུང་པའི་ཧེ་མ་ མཐར་འཁྱོལ་དྲན་ཐོ་ཅིག་ བཏོན་དགོ།
+   བསྡམ་ཚུགས།
+3. བྱུང་རྐྱེན་འདི་ བང་རིམ་གྱི་ཚད་དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ།
+   གང་ལྟར་ཡང་ མར་ཕབ་ཀྱི་ཚོང་འབྲེལ།
 
-### 9.2 StrongBox & Attestation Failures
+### 9.2 StrongBox & བདེན་དཔང་འབད་མ་ཚུགས་པའི་སྐོར།
 
-**Signals**
-
-- Alerts on `android_sdk_strongbox_success_rate` or
+**བརྡ་མཚོན་**- `android_sdk_strongbox_success_rate` ཡང་ན་ ཉེན་བརྡ་ཚུ་ ཡང་ན་ ཉེན་བརྡ་ཚུ་ ཡང་ན་ ཉེན་བརྡ་འབདཝ་ཨིན།
   `android.keystore.attestation.failure`.
-- `android.keystore.keygen` telemetry now records the requested
-  `KeySecurityPreference` and the route used (`strongbox`, `hardware`,
-  `software`) with a `fallback=true` flag when a StrongBox preference lands in
-  TEE/software. STRONGBOX_REQUIRED requests now fail fast instead of silently
-  returning TEE keys.
-- Support tickets referencing `KeySecurityPreference.STRONGBOX_ONLY` devices
-  falling back to software keys.
+- `android.keystore.keygen` ད་ལྟ་ཞུ་བ་བྱས་པའི་བརྡ་ཆད་ཐོ་བཀོད་བྱེད་པ།
+  `KeySecurityPreference` དང་ལམ་འདི་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན། (`strongbox`, `hardware`,
+  `software`)
+  TEE/མཉེན་ཆས། STRONGBOX_REQUIRED ཞུ་བ་ཚུ་ ད་ལྟོ་ ཁུ་སིམ་སིམ་སྦེ་གི་ཚབ་ལུ་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན།
+  TEE ལྡེ་མིག་ཚུ་ལོག་འོང་།
+- རྒྱབ་སྐྱོར་གྱི་ཤོག་འཛིན་ `KeySecurityPreference.STRONGBOX_ONLY` ཐབས་འཕྲུལ་ཚུ་ལུ་གཞི་བསྟུན་འབད་ནི།
+  མཉེན་ཆས་ལྡེ་མིག་ཚུ་ལུ་ལོག་འོང་།
 
-**Immediate response**
+**དེ་འཕྲོ་ལན་***
 
-1. Acknowledge PagerDuty (`android-crypto`) and capture the affected alias label
-   (salted hash) plus device profile bucket.
-2. Check the attestation matrix entry for the device in
-   `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` and
-   record the last verified date.
+1. ངོས་ལེན (`android-crypto`) དང་ གནོད་སྐྱོན་ཅན་གྱི་མིང་རྟགས་ཀྱི་ཁ་ཡིག་འདི་ བཟུང་།
+   (salted hash) དང་ ཐབས་འཕྲུལ་གསལ་སྡུད་བཱ་ཀེཊ།
+2. ནང་ ཐབས་འཕྲུལ་གྱི་དོན་ལུ་ བདེན་དཔང་མེ་ཊིགསི་ཐོ་བཀོད་ཞིབ་དཔྱད་འབད།
+   `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` དང་།
+   བདེན་དཔྱད་འབད་ཡོད་པའི་ཚེས་གྲངས་འདི་ཐོ་བཀོད་འབད།
 
-**Diagnostics**
+**ནད་བརྟག་**
 
-- **Bundle verification:** Run
-  `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>`
-  on the archived attestation to confirm whether the failure is due to device
-  misconfiguration or a policy change. Attach the generated `result.json`.
-- **Challenge regen:** Challenges are not cached. Each challenge request regenerates a fresh
-  attestation and caches by `(alias, challenge)`; challenge-less calls reuse the cache. Unsupported
-- **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` so every
-  stored bundle is revalidated; this guards against systemic issues introduced
-  by new trust anchors.
-- **Device drill:** On hardware without StrongBox (or by forcing the emulator),
-  set the SDK to require StrongBox only, submit a demo transaction, and confirm
-  the telemetry exporter emits the `android.keystore.attestation.failure` event
-  with the expected reason. Repeat on a StrongBox-capable Pixel to ensure the
-  happy path stays green.
-- **SDK regression check:** Run `ci/run_android_tests.sh` and pay
-  attention to the attestation-focused suites (`AndroidKeystoreBackendDetectionTests`,
+- **བཱན་ཌལ་བདེན་དཔྱད་:** གཡོག་བཀོལ།
+  ```bash
+  gradle -p java/iroha_android :core:classes >/dev/null  # compiles classes if needed
+  java -cp build/classes org.hyperledger.iroha.android.tools.PendingQueueInspector \
+    --file /tmp/pending.queue --json > queue-inspector.json
+  ```
+  འཐུས་ཤོར་འདི་ ཐབས་འཕྲུལ་ལས་བརྟེན་ཏེ་ཨིན་ན་མེན་ན་ ངེས་གཏན་བཟོ་ནི་ལུ་ གཏན་མཛོད་ཀྱི་བདེན་དཔང་།
+  རིམ་སྒྲིག་ལོག་སྤྱོད་ཡང་ན་ སྲིད་བྱུས་བསྒྱུར་བཅོས་ཅིག། བཏོན་ཡོད་པའི་ <!--
+  SPDX-License-Identifier: Apache-2.0
+--> མཉམ་སྦྲགས་འབད།
+- **གློག་ཐག་བསྐྱར་བཟོ་:** གདོང་ལེན་ཚུ་ འདྲ་མཛོད་མ་འབད་བས། གདོང་ལེན་གྱི་ཞུ་བ་རེ་རེ་གིས་ གསརཔ་བསྐྱར་བཟོ་འབདཝ་ཨིན།
+  མགོ་སྐོར་དང་ འདྲ་མཛོད་ཚུ་ `(alias, challenge)` གིས་; གདོང་ལེན་མེད་པའི་འབོད་བརྡ་ཚུ་གིས་ འདྲ་མཛོད་འདི་ལོག་ལག་ལེན་འཐབ། རྒྱབ་སྐྱོར།
+- **CI ཕྱགས་བརྡར་:** བཀོལ་སྤྱོད་ `scripts/android_strongbox_attestation_ci.sh` དེ་འབདཝ་ལས་ རེ་རེ་བཞིན་
+  གསོག་འཇོག་འབད་ཡོད་པའི་བཱན་ཌལ་འདི་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན། འདི་ལམ་ལུགས་ཀྱི་གནད་དོན་ལས་སྲུང་སྐྱོབ་འབད་མི་ཚུ་གིས་ འགོ་བཙུགས་ཡོདཔ་ཨིན།
+  བློ་གཏད་ཀྱི་ཨེན་ཀོར་གསརཔ་བྲིས།
+- **ཐབས་འཕྲུལ་སྦྱོང་བརྡར་:** StrongBox མེད་པའི་སྲ་ཆས་གུ་ (ཡང་ན་ དཔེ་སྟོན་འཕྲུལ་ཆས་འདི་བཀག་ཆ་འབད་ཐོག་ལས་)།
+  ཨེསི་ཌི་ཀེ་འདི་ StrongBox རྐྱངམ་ཅིག་དགོཔ་སྦེ་གཞི་སྒྲིག་འབད་ཞིནམ་ལས་ བརྡ་སྟོན་གྱི་ཚོང་འབྲེལ་ཅིག་བཙུགས་ཞིནམ་ལས་ ངེས་གཏན་བཟོ།
+  ཊེ་ལི་མི་ཊི་ཕྱིར་ཚོང་པ་གིས་ `android.keystore.attestation.failure` བྱུང་ལས་འདི་ བཏོནམ་ཨིན།
+  རེ་བ་བསྐྱེད་པའི་རྒྱུ་མཚན་དང་གཅིག་ཁར། བསྐྱར་དུ་ StrongBox-actable Pixel འདི་ངེས་གཏན་བཟོ་དགོ།
+  སྐྱིད་པའི་ལམ་ལྗང་ཁུ་སྦེ་སྡོད་དོ་ཡོདཔ་ཨིན།
+- **SDK འགྱུར་ལྡོག་བརྟག་དཔྱད་:** `ci/run_android_tests.sh` གཡོག་བཀོལ་ཞིནམ་ལས་ གླ་ཆ་སྤྲོད་དགོ།
+  བདེན་དཔང་ལུ་གཙོ་བོར་བསྟེན་པའི་ཁང་མིག་ཚུ་ལུ་ དོ་སྣང་འབད་ (`AndroidKeystoreBackendDetectionTests`,
   `AttestationVerifierTests`, `IrohaKeyManagerDeterministicExportTests`,
-  `KeystoreKeyProviderTests` for cache/challenge separation). Failures here
-  indicate a client-side regression.
+  འདྲ་མཛོད་/གདོང་ལེན་ཁ་ཕྱེ་ནིའི་དོན་ལུ་ `KeystoreKeyProviderTests`)། འདི་ཁར་འཐུས་ཤོར་ཡོད།
+  མཁོ་སྤྲོད་པ་-ཕྱོགས་ཀྱི་འགྱུར་ལྡོག་ཅིག་སྟོནམ་ཨིན།
 
-**Recovery**
+**ལོག༌ཐོབ**
 
-1. Regenerate attestation bundles if the vendor rotated certificates or if the
-   device recently received a major OTA.
-2. Upload the refreshed bundle to `artifacts/android/attestation/<device>/` and
-   update the matrix entry with the new date.
-3. If StrongBox is unavailable in production, follow the override workflow in
-   Section 3 and document the fallback duration; long-term mitigation requires
-   device replacement or a vendor fix.
+༡ ཚོང་པ་དེ་གིས་ ལག་ཁྱེར་ཚུ་ བསྒྱིར་ཡོདཔ་ཨིན་པ་ཅིན་ ཡང་ན་ གལ་སྲིད་ བདེན་དཔང་འབད་བ་ཅིན་ བདེན་དཔང་འབད་ནི།
+   ཐབས་འཕྲུལ་འདི་གིས་ འཕྲལ་ཁམས་ཅིག་ཁར་ OTA སྦོམ་ཅིག་ཐོབ་ཡོདཔ་ཨིན།
+2. གསར་བསྐྲུན་འབད་ཡོད་པའི་བཱན་ཌལ་འདི་ `artifacts/android/attestation/<device>/` དང་ སྐྱེལ་བཙུགས་འབད།
+   ཚེས་གྲངས་གསརཔ་དང་གཅིག་ཁར་ མེ་ཊིགསི་ཐོ་བཀོད་འདི་དུས་མཐུན་བཟོ།
+3. གལ་ཏེ་ StrongBox འདི་ བཟོ་སྐྲུན་ནང་མེད་པ་ཅིན་ སྤྱི་ལོ་ ༢༠༡༨ ལུ་ བཀག་ཆ་འབད་བའི་ལཱ་གི་རྒྱུན་རིམ་འདི་ ལག་ལེན་འཐབ་དགོ།
+   དོན་ཚན་ ༣ པ་དང་ ཕོལོ་བེག་དུས་ཡུན་འདི་ ཡིག་ཐོག་ལུ་བཀོད་ནི། ཡུན་རིང་ཉམས་བཅོས་འབད་དགོཔ།
+   ཐབས་འཕྲུལ་ཚབ་བཙུགས་ནི་ཡང་ན་ ཚོང་པ་ཅིག་གིས་ བཅོ་ཁ་རྐྱབ་ནི།
 
-### 9.2a Deterministic Export Recovery
+### 9.2a གཏན་འཁེལ་ཕྱིར་གཏོང་སླར་གསོ།
 
-- **Formats:** Current exports are v3 (per-export salt/nonce + Argon2id, recorded as
-- **Passphrase policy:** v3 enforces ≥12 character passphrases. If users supply shorter
-  passphrases, instruct them to re-export with a compliant passphrase; v0/v1 imports are
-  exempt but should be rewrapped as v3 immediately after import.
-- **Tamper/reuse guards:** Decoders reject zero/short salt or nonce lengths and repeated
-  salt/nonce pairs surface as `salt/nonce reuse` errors. Regenerate the export to clear
-  the guard; do not attempt to force reuse.
-  `SoftwareKeyProvider.importDeterministic(...)` to rehydrate the key, then
-  `exportDeterministic(...)` to emit a v3 bundle so desktop tooling records the new KDF
-  parameters.
+- **རྩ་སྒྲིག་ཚུ་:** ད་ལྟོའི་ཕྱིར་འདྲེན་ཚུ་ v3 ཨིན། (ཕྱིར་འདྲེན་ཚྭ་/ནོན་སི་ + Argon2id, 1 1 10014-18-15
+- **Passphrase སྲིད་བྱུས།:* v3 གིས་ ≥12 ཡིག་འབྲུའི་ཆོག་ཡིག་ཚུ་ ཤུགས་བཏོནམ་ཨིན། ལག་ལེན་པ་ཚུ་གིས་བཀྲམ་སྤེལ་ཐུང་ཀུ་འབད་བ་ཅིན།
+  pasyphrase, དེ་ཚུ་ལུ་ མཐུན་སྒྲིག་ཅན་གྱི་ཆོག་ཡིག་དང་གཅིག་ཁར་ ལོག་སྟེ་ཕྱིར་ཚོང་འབད་དགོ་པའི་བཀའ་རྒྱ་གནང། v0/v1 ནང་འདྲེན་ཚུ།
+  དགོངས་ཞུ་འབད་ དེ་འབདཝ་ད་ ནང་འདྲེན་འབད་བའི་ཤུལ་ལས་ v3 བཟུམ་སྦེ་ ལོག་བཙུགས་དགོ།
+- **Tamper/reuse sarders:** ཌི་ཀོཌར་ཚུ་གིས་ ཀླད་ཀོར་/ཐུང་ཚྭ་ཡང་ན་ ནན་སི་རིང་ཚད་ཚུ་ ངོས་ལེན་མ་འབད་བར་ བསྐྱར་ལོག་འབདཝ་ཨིན།
+  ཚྭ་/མེན་པའི་ཆ་གཅིག་ `salt/nonce reuse` འཛོལ་བ་སྦེ་ཐོན་དོ་ཡོདཔ་ཨིན། ཕྱིར་ཚོང་འདི་ གསལ་རི་རི་སྦེ་ ལོག་བཟོ་ནི།
+  སྲུང་རྒྱབ་དང་། ལོག་སྟེ་ལག་ལེན་འཐབ་ནི་ལུ་ དཔའ་བཅམ་མི་བཏུབ།
+  `SoftwareKeyProvider.importDeterministic(...)` ལྡེ་མིག་འདི་ལོག་སྟེ་ཆུ་བཏང་དགོ།
+  `exportDeterministic(...)` གིས་ v3 bundle འདི་ ཌེཀསི་ཊོཔ་ ལག་ཆས་འདི་གིས་ ཀེ་ཌི་ཨེཕ་གསརཔ་འདི་ཐོ་བཀོད་འབདཝ་ཨིན།
+  ཚད་གཞི་ཚུ།### 9.3 མ་ཕལ་དང་ ཀོན་ཕིག་མི་མཐུན་པ།
 
-### 9.3 Manifest & Config Mismatches
+**བརྡ་མཚོན་**
 
-**Signals**
+- `ClientConfig` ལོག་མངོན་གསལ་འབད་མ་ཚུགས་མི་ཚུ་, མ་མཐུན་པའི་ Grafana ཧོསཊི་མིང་ཚུ་, ཡང་ན་ ཊེ་ལི་མི་ཊི།
+  schema diff གིས་ AND7 diff ལག་ཆས་ཀྱིས་ དར་ཁྱབ་བཏང་ཡོདཔ།
+- བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཐབས་འཕྲུལ་ཚུ་ནང་ལས་ ལོག་འབད་རྩོལ་/རྒྱབ་ལོག་མཛུབ་གནོན་སོ་སོ་ཚུ་ སྙན་ཞུ་འབད་ནི།
+  འཕུར་འགྲུལ་།
 
-- `ClientConfig` reload failures, mismatched Torii hostnames, or telemetry
-  schema diffs flagged by the AND7 diff tool.
-- Operators reporting different retry/backoff knobs across devices in the same
-  fleet.
+**དེ་འཕྲོ་ལན་***
 
-**Immediate response**
-
-1. Capture the `ClientConfig` digest printed in the Android logs and the
-   expected digest from the release manifest.
-2. Dump the running node configuration for comparison:
+1. Android logs དང་ the Android དྲན་ཐོ་ནང་དཔར་བསྐྲུན་འབད་ཡོད་པའི་ `ClientConfig` བཞུ་བཅོས་འབད།
+   རེ་བ་སྐྱེད་པའི་ གསལ་བསྒྲགས་ལས་ བཞུ་ནི།
+༢ ག་བསྡུར་གྱི་དོན་ལུ་ གཡོག་བཀོལ་བའི་ མཐུད་མཚམས་རིམ་སྒྲིག་འདི་ བཀོ་བཞག།
    `iroha_cli config show --actual > /tmp/iroha_config.actual.json`.
 
-**Diagnostics**
+**ནད་བརྟག་**
 
-- **Schema diff:** Run `scripts/telemetry/run_schema_diff.sh --android-config
-  <android.json> --rust-config <rust.json> --textfile-dir /var/lib/node_exporter/textfile_collector`
-  to generate a Norito diff report, refresh the Prometheus textfile, and attach the
-  JSON artefact plus metrics evidence to the incident and AND7 telemetry readiness log.
-- **Manifest validation:** Use `iroha_cli runtime capabilities` (or the runtime
-  audit command) to retrieve the node’s advertised crypto/ABI hashes and ensure
-  they match the mobile manifest. A mismatch confirms the node was rolled back
-  without reissuing the Android manifest.
-- **SDK regression check:** `ci/run_android_tests.sh` covers
-  `ClientConfigNoritoRpcTests`, `ClientConfig.ValidationTests`, and
-  `HttpClientTransportStatusTests`. Failures signal that the shipped SDK cannot
-  parse the manifest format currently deployed.
+- **ལས་རིམ་ཌིཕ:** ཡིག་ཚུགས་/བརྒྱུད་འཕྲིན་/རན_སི་ཀེ་མ་_ཌིཕ་.sh --android-config
+   --rust-config
+  Norito ཁྱད་པར་སྙན་ཞུ་འབད་ནི་གི་དོན་ལུ་ Prometheus ཚིག་ཡིག་ཡིག་སྣོད་འདི་གསར་བསྐྲུན་འབད་ཞིནམ་ལས་ ཚིག་ཡིག་འདི་མཉམ་སྦྲགས་འབད་དགོ།
+  JSON ཅ་མཛོད་དང་ བྱུང་རྐྱེན་འདི་ལུ་ མེ་ཊིགསི་སྒྲུབ་བྱེད་དང་ AND7 བརྡ་འཕྲིན་གྱི་གྲ་སྒྲིག་དྲན་ཐོ་ལུ་ མེ་ཊིགསི་སྒྲུབ་བྱེད་ཨིན།
+- **བདེན་བཤད་འཛིན་སྐྱོང་པ་འཛིན་སྐྱོང་:** `iroha_cli runtime capabilities` (ཡང་ན་ རན་དུས་འདི་ལག་ལེན་འཐབ།
+  རྩིས་ཞིབ་བརྡ་བཀོད་)
+  འགྲུལ་འཕྲིན་གྱི་གསལ་སྟོན་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན། མ་མཐུན་མི་ཅིག་གིས་ མཐུད་མཚམས་འདི་ལོག་བསྐོར་ཏེ་ཡོདཔ་ངེས་གཏན་བཟོཝ་ཨིན།
+  Android གསལ་པོ་མེད་པར་བསྐྱར་མ་བླངས།
+- **SDK འགྱུར་ལྡོག་བརྟག་དཔྱད།:** `ci/run_android_tests.sh` ཁ་དོག་ཚུ།
+  `ClientConfigNoritoRpcTests`, `telemetry-schema-diff`, དང་།
+  `HttpClientTransportStatusTests`. འཐུས་ཤོར་ཚུ་གིས་ གཏང་ཡོད་པའི་ ཨེསི་ཌི་ཀེ་ མི་བཏུབ་ཟེར་བའི་ བརྡ་སྟོན།
+  ད་ལྟོ་བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ གསལ་སྟོན་རྩ་སྒྲིག་འདི་དབྱེ་དཔྱད་འབད།
 
-**Recovery**
+**ལོག༌ཐོབ**
 
-1. Regenerate the manifest via the authorized pipeline (usually
-   `iroha_cli runtime Capabilities` → signed Norito manifest → config bundle) and
-   redeploy it through the operator channel. Never edit `ClientConfig`
-   overrides on-device.
-2. Once a corrected manifest lands, watch for the `ConfigWatcher` “reload ok”
-   message on each fleet tier and close the incident only after the telemetry
-   schema diff reports parity.
-3. Record the manifest hash, schema diff artefact path, and incident link in
-   `status.md` under the Android section for auditability.
+༡ དབང་ཚད་ཡོད་པའི་ ཆུ་མཛོད་བརྒྱུད་དེ་ གསལ་སྟོན་འདི་ བསྐྱར་བཟོ་འབད་ནི། (སྤྱིར་བཏང་ལུ་)
+   `iroha_cli runtime Capabilities` → མིང་རྟགས་བཀོད་ཡོད་པའི་ Norito གསལ་སྟོན་ →རིམ་སྒྲིག་བུནཌལ་) དང་།
+   བཀོལ་སྤྱོད་རྒྱུ་ལམ་བརྒྱུད་དེ་ ལོག་ལོག་འབད། ནམ་ཡང་ `ClientConfig` ཞུན་དག་མ་འབད་བས།
+   ཐབས་འཕྲུལ་ནང་ལུ་ བརྒལ་གཏངམ་ཨིན།
+2. བདེན་དཔང་འབད་ཡོད་པའི་ གསལ་སྟོན་ས་ཁོངས་ཚུ་ ཚར་གཅིག་ 18NI00000456X “reload ok” ལུ་བལྟ།
+   གྲུ་གཟིངས་རིམ་པ་རེ་རེའི་ནང་བརྡ་འཕྲིན་དང་ བྱུང་རྐྱེན་འདི་ བརྡ་འཕྲིན་གྱི་ཤུལ་ལས་རྐྱངམ་ཅིག་ སྒོ་བསྡམ་དགོ།
+   schema diff ཆ་སྙོམས་སྙན་ཞུ་འབདཝ་ཨིན།
+༣ གསལ་སྟོན་གྱི་ ཧ་ཤི་དང་ ལས་རིམ་མ་འདྲཝ་ ཅ་རྙིང་ལམ་ དེ་ལས་ བྱུང་རྐྱེན་འབྲེལ་མཐུད་ཚུ་ ༢༠༠༨ ལུ་ ཐོ་བཀོད་འབད།
+   རྩིས་ཞིབ་འབད་ནི་གི་དོན་ལུ་ Android དབྱེ་ཚན་འོག་ལུ་ `status.md` ཨིན།
 
-## 10. Operator enablement curriculum
+## 10. བཀོལ་འཇུག ལྕོགས་གྲུབ།
 
-Roadmap item **AND7** requires a repeatable training package so operators,
-support engineers, and SRE can adopt the telemetry/redaction updates without
-guesswork. Pair this section with
-`docs/source/sdk/android/readiness/and7_operator_enablement.md`, which contains
-the detailed checklist and artefact links.
+ལམ་སྟོན་རྣམ་གྲངས་ **AND7** ལུ་ བསྐྱར་ལོག་འབད་ཚུགས་པའི་ སྦྱོང་བརྡར་གྱི་ཐུམ་སྒྲིལ་དགོཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་,
+རྒྱབ་སྐྱོར་བཟོ་རིག་པ་ཚུ་དང་ ཨེསི་ཨར་ཨི་གིས་ ཊེ་ལི་མི་ཊི་རི་/སེལཌ་ཊིག་དུས་མཐུན་བཟོ་ནི་ཚུ་ མེད་པར་ ངོས་ལེན་འབད་ཚུགས།
+ཕོ་ཚོད་. དབྱེ་ཚན་འདི་དང་གཅིག་ཁར་ཆ་སྒྲིག་འབད།
+`docs/source/sdk/android/readiness/and7_operator_enablement.md`, གང་ཡོད།
+ཁ་གསལ་གྱི་ བརྟག་ཞིབ་ཐོ་ཡིག་དང་ ཅ་རྙིང་འབྲེལ་མཐུད་ཚུ།
 
-### 10.1 Session modules (60-minute briefing)
+### ༡༠.༡ ཚོགས་ཐེངས་ཚད་གཞི་ (སྐར་མ་ ༦༠ གི་བརྡ་དོན།)
 
-1. **Telemetry architecture (15 min).** Walk through the exporter buffer,
-   redaction filter, and schema diff tooling. Demo
-   `scripts/telemetry/run_schema_diff.sh --textfile-dir /var/lib/node_exporter/textfile_collector` plus
-   `scripts/telemetry/check_redaction_status.py` so attendees see how parity is
-   enforced.
-2. **Runbook + chaos labs (20 min).** Highlight Sections 2–9 of this runbook,
-   rehearse one scenario from `readiness/labs/telemetry_lab_01.md`, and show how
-   to archive artefacts under `readiness/labs/reports/<stamp>/`.
-3. **Override + compliance workflow (10 min).** Review Section 3 overrides,
-   demonstrate `scripts/android_override_tool.sh` (apply/revoke/digest), and
-   update `docs/source/sdk/android/telemetry_override_log.md` plus the latest
+༡ **ཊེ་ལི་མི་ཊི་བཟོ་བཀོད། (༡༥min)** ཕྱིར་འདྲེན་པ་བཱ་ཕར་བརྒྱུད་དེ་འགྱོ་ནི།
+   redaction ཚགས་མ་དང་ ལས་རིམ་མ་འདྲཝ་ ལག་ཆས་ཚུ། གཙོ༌བོ༌
+   `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java` དང་།
+   `scripts/telemetry/check_redaction_status.py` དེ་འབདཝ་ལས་ བཅའ་མར་གཏོགས་མི་ཚུ་གིས་ འདྲ་མཉམ་འདི་ ག་དེ་སྦེ་ཨིན་ན་ མཐོངམ་ཨིན།
+   བསྟར་སྤྱོད་འབད་ཡོདཔ།
+2. **Runbook + ཟང་ཟིང་བརྟག་དཔྱད་ཁང་ (20min) (20min),** འདི་གི་དོན་ལུ་ དབྱེ་ཚན་༢–༩ ལུ་ གཙོ་བོར་བཏོནམ་ཨིན།
+   `readiness/labs/telemetry_lab_01.md` ལས་ མཐོང་སྣང་གཅིག་ བསྐྱར་སྦྱོང་འབད་ཞིནམ་ལས་ ག་དེ་སྦེ་སྟོན།
+   གཏན་མཛོད་ཀྱི་ཅ་ཆས་ཚུ་ `readiness/labs/reports/<stamp>/` གི་འོག་ལུ་ཨིན།
+3. **Override + ལཱ་གི་རྒྱུན་རིམ་ (10min),** བསྐྱར་ཞིབ་དོན་ཚན་ ༣ བསྐྱར་ལོག་འབདཝ་ཨིན།
+   `scripts/android_override_tool.sh` (འཇུག་སྤྱོད་/བཀག་ཆ་/བཞུ་) དང་།
+   དུས་མཐུན་ `docs/source/sdk/android/telemetry_override_log.md` དང་གསར་ཤོས་འདི་ དུས་མཐུན་བཟོ་ཡོདཔ།
    digest JSON.
-4. **Q&A / knowledge check (15 min).** Use the quick-reference card in
-   `readiness/cards/telemetry_redaction_qrc.md` to anchor questions, then
-   capture follow-ups in `readiness/and7_operator_enablement.md`.
+4. **Q&A / ཤེས་བྱའི་བརྟག་དཔྱད།(15min);
+   `readiness/cards/telemetry_redaction_qrc.md` དྲི་བ་ཨེན་ཀོར་གྱི་དྲི་བ་ཚུ་ལུ་།
+   `readiness/and7_operator_enablement.md` ནང་ལུ་ རྗེས་འཇུག་ཚུ་ བཟུང་ཚུགས།### 10.2 རྒྱུ་ནོར་དང་བདག་པོ།
 
-### 10.2 Asset cadence & owners
+| རྒྱུ་དངོས་ | ཀེ་ཌེནསི། | ཇོ་བདག་(ཚུ་) | གཏན་མཛོད་ཀྱི་ས་གནས་ |
+|--|-|-|----------------------------------------------------------- -|
+| ཐོ་བཀོད་འབད་ཡོད་པའི་ འགྲུལ་ལམ་ (Zoom/Teams) | ཚྭ་བསྒྱིར་ཚད་རེ་རེ་གི་ཧེ་མ་ | Android བལྟ་རྟོགས་ TL + Docs/རྒྱབ་སྐྱོར་འཛིན་སྐྱོང་པ་ | `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` (ཐོ་བཀོད་ + ཞིབ་དཔྱད་ཐོ་ཡིག་) |
+| བཤུད་བརྙན་དང་མགྱོགས་མྱུར་གཞི་བསྟུན་ཤོག་བྱང་ | སྲིད་བྱུས་/རན་དེབ་བསྒྱུར་བཅོས་འགྱོ་བའི་སྐབས་ དུས་མཐུན་བཟོ། | ཡིག་ཆ་/རྒྱབ་སྐྱོར་འཛིན་སྐྱོང་པ། | `docs/source/sdk/android/readiness/deck/` དང་ `/cards/` (ཕྱིར་འདྲེན་པི་ཌི་ཨེཕ་ + མརཀ་ཌའོན་) |
+| ཤེས་བྱ་ཞིབ་བཤེར་ + བཅའ་མར་གཏོགས་ཤོག་ | ཐད་རི་བ་རི་ ཡུན་རེ་གི་ཤུལ་ལས་ | རྒྱབ་སྐྱོར་བཟོ་རིག | `docs/source/sdk/android/readiness/forms/responses/` དང་ `and7_operator_enablement.md` བཅའ་མར་གཏོགས་མི་བཀག་ཆ་ |
+| དྲི་བ་&A backlog / བྱ་བའི་དྲན་ཐོ་ | རོ་ལིང་; ལཱ་ཡུན་རེ་རེ་གི་ཤུལ་ལས་ དུས་མཐུན་བཟོ་ཡོདཔ། | LLM (བྱ་སྤྱོད་DRI) | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 |
 
-| Asset | Cadence | Owner(s) | Archive location |
-|-------|---------|----------|------------------|
-| Recorded walkthrough (Zoom/Teams) | Quarterly or before every salt rotation | Android Observability TL + Docs/Support manager | `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` (recording + checklist) |
-| Slide deck & quick-reference card | Update whenever policy/runbook changes | Docs/Support manager | `docs/source/sdk/android/readiness/deck/` and `/cards/` (export PDF + Markdown) |
-| Knowledge check + attendance sheet | After each live session | Support engineering | `docs/source/sdk/android/readiness/forms/responses/` and `and7_operator_enablement.md` attendance block |
-| Q&A backlog / action log | Rolling; updated after every session | LLM (acting DRI) | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 |
+### 10.3 སྒྲུབ་བྱེད་དང་བསམ་འཆར།
 
-### 10.3 Evidence & feedback loop
-
-- Store session artefacts (screenshots, incident drills, quiz exports) in the
-  same dated directory used for chaos rehearsals so governance can audit both
-  readiness tracks together.
-- When a session completes, update `status.md` (Android section) with links to
-  the archive directory and note any open follow-ups.
-- Outstanding questions from the live Q&A must be turned into issues or doc
-  pull requests within one week; reference the roadmap epics (AND7/AND8) in the
-  ticket description so owners stay aligned.
-- SRE syncs review the archive checklist plus the schema diff artefact listed in
-  Section 2.3 before declaring the curriculum closed for the quarter.
+- ཚོགས་ཐེངས་ཀྱི་ ཅ་རྙིང་ཚུ་ (གློག་བརྙན་ བྱུང་རྐྱེན་གྱི་ དམག་སྦྱོང་དང་ དྲི་བ་དྲིས་ལན་གྱི་ ཕྱིར་ཚོང་) ནང་།
+  ཟང་ཟིང་གི་སྦྱོང་བརྡར་གྱི་དོན་ལུ་ལག་ལེན་འཐབ་མི་ ཐོ་བཀོད་ཀྱི་སྣོད་ཐོ་དེ་སྦེ་ཡོདཔ་ལས་ གཞུང་སྐྱོང་གིས་ གཉིས་ཆ་ར་རྩིས་ཞིབ་འབད་ཚུགས།
+  གྲ་སྒྲིག་འདི་གཅིག་ཁར་བཀོདཔ་ཨིན།
+- ལཱ་ཡུན་ཅིག་མཇུག་བསྡུ་བའི་སྐབས་ `status.md` དུས་མཐུན་བཟོ་སྟེ་ འབྲེལ་ལམ་ཚུ་ ༡ དང་གཅིག་ཁར་ (Android དབྱེ་ཚན་)
+  གཏན་མཛོད་སྣོད་ཐོ་དང་ ཁ་ཕྱེ་ཡོད་པའི་རྗེས་འཇུག་གང་རུང་དྲན་ཐོ་བཀོད།
+- དྲི་བ་དྲིས་ལན་ཨེ་ལས་ ཁྱད་འཕགས་ཅན་གྱི་དྲི་བ་ཚུ་ གནད་དོན་ ཡང་ན་ ཡིག་ཆ་ལུ་བསྒྱུར་དགོ།
+  བདུན་ཕྲག་གཅིག་གི་ནང་འཁོད་ཞུ་བ་ཚུ་འཐེན་ནི། ལམ་གྱི་ས་ཁྲ་ (AND7/AND8) ལུ་གཞི་བསྟུན་འབད།
+  འགྲེམ་སྟོན་འདི་ ཇོ་བདག་ཚུ་ ཕྲང་སྒྲིག་སྦེ་སྡོདཔ་ཨིན།
+- ཨེསི་ཨར་ཨི་མཉམ་འབྱུང་ཚུ་གིས་ ཡིག་མཛོད་ཞིབ་དཔྱད་ཐོ་ཡིག་དང་ ༢༠༠༨ ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ འཆར་གཞིའི་ཁྱད་པར་ཅན་གྱི་ཅ་རྙིང་ཚུ་བསྐྱར་ཞིབ་འབད།
+  སྤྱི་ཟླ་གསུམ་པའི་དོན་ལུ་ སློབ་ཚན་གསལ་བསྒྲགས་མ་འབད་བའི་ཧེ་མ།

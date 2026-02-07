@@ -10,283 +10,278 @@ translation_last_reviewed: 2026-02-07
 id: nexus-spec
 title: Sora Nexus technical specification
 description: Full mirror of `docs/source/nexus.md`, covering the architecture and design constraints for the Iroha 3 (Sora Nexus) ledger.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus.md`. Keep both copies aligned until the translation backlog lands in the portal.
+::: Canonical Source ကို သတိပြုပါ။
+ဤစာမျက်နှာသည် `docs/source/nexus.md` ဖြစ်သည်။ ဘာသာပြန်မှတ်တမ်း ပေါ်တယ်တွင် ပြန်လာသည်အထိ မိတ္တူနှစ်ခုလုံးကို ချိန်ညှိထားပါ။
 :::
 
-#! Iroha 3 – Sora Nexus Ledger: Technical Design Specification
+#! Iroha 3 – Sora Nexus စာရင်းစာအုပ်- နည်းပညာပိုင်းဆိုင်ရာ ဒီဇိုင်းသတ်မှတ်ချက်
 
-This document proposes the Sora Nexus Ledger architecture for Iroha 3, evolving Iroha 2 toward a single global, logically unified ledger organized around Data Spaces (DS). Data Spaces provide strong privacy domains (“private data spaces”) and open participation (“public data spaces”). The design preserves composability across the global ledger while ensuring strict isolation and confidentiality for private‑DS data, and introduces data‑availability scaling via erasure coding across Kura (block storage) and WSV (World State View).
+ဤစာတမ်းသည် Iroha 3 အတွက် Sora Nexus Ledger ဗိသုကာကို အဆိုပြုသည်၊၊ Iroha 2 သည် Data Spaces (DS) ပတ်၀န်းကျင်တွင် ဖွဲ့စည်းထားသော ကမ္ဘာလုံးဆိုင်ရာ၊ ယုတ္တိနည်းကျကျ စုစည်းထားသော စာရင်းဇယားတစ်ခုဆီသို့ ပြောင်းလဲသွားပါသည်။ Data Spaces သည် ခိုင်မာသောကိုယ်ရေးကိုယ်တာဒိုမိန်းများ (“လျှို့ဝှက်ဒေတာနေရာများ”) နှင့် ပွင့်လင်းစွာပါဝင်မှု (“အများပြည်သူဒေတာနေရာများ”) ကို ပေးဆောင်ပါသည်။ ဒီဇိုင်းသည် ပုဂ္ဂလိက-DS ဒေတာအတွက် တင်းကျပ်သော သီးခြားအထီးကျန်မှုနှင့် လျှို့ဝှက်ထားမှုကို အာမခံစေပြီး Kura (ပိတ်ဆို့သိုလှောင်မှု) နှင့် WSV (World State View) တစ်လျှောက် ဒေတာရရှိနိုင်မှုစကေးချဲ့ခြင်းတို့ကို မိတ်ဆက်သည့်အနေဖြင့် ဒီဇိုင်းသည် ကမ္ဘာလုံးဆိုင်ရာစာရင်းဇယားတစ်လျှောက် ပေါင်းစပ်နိုင်စွမ်းကို ထိန်းသိမ်းပေးပါသည်။
 
-The same repository builds both Iroha 2 (self-hosted networks) and Iroha 3 (SORA Nexus). Execution is powered by
-the shared Iroha Virtual Machine (IVM) and Kotodama toolchain, so contracts and bytecode artifacts remain
-portable across self-hosted deployments and the Nexus global ledger.
+တူညီသော repository သည် Iroha 2 (ကိုယ်တိုင် host လုပ်ထားသော ကွန်ရက်များ) နှင့် Iroha 3 (SORA Nexus) နှစ်ခုလုံးကို တည်ဆောက်သည်။ Execution က powered ဖြစ်ပါတယ်။
+မျှဝေထားသော Iroha Virtual Machine (IVM) နှင့် Kotodama toolchain၊ ထို့ကြောင့် စာချုပ်များနှင့် bytecode ပစ္စည်းများ ကျန်ရှိနေသည်
+ကိုယ်တိုင်လက်ခံလုပ်ဆောင်ထားသော ဖြန့်ကျက်မှုများနှင့် Nexus ကမ္ဘာလုံးဆိုင်ရာ စာရင်းဇယားများကို သယ်ဆောင်သွားနိုင်သည်။
 
-Goals
-- One global logical ledger composed from many cooperating validators and Data Spaces.
-- Private Data Spaces for permissioned operation (e.g., CBDCs), with data never leaving the private DS.
-- Public Data Spaces with open participation, Ethereum-like permissionless access.
-- Composable smart contracts across Data Spaces, subject to explicit permissions for access to private‑DS assets.
-- Performance isolation so public activity cannot degrade private‑DS internal transactions.
-- Data availability at scale: erasure‑coded Kura and WSV to support effectively unbounded data while keeping private‑DS data private.
+ပန်းတိုင်
+- ပူးပေါင်းဆောင်ရွက်နေသော တရားဝင်စစ်ဆေးသူများနှင့် Data Spaces များစွာတို့မှ ဖွဲ့စည်းထားသည့် ကမ္ဘာလုံးဆိုင်ရာ ယုတ္တိစာရင်းဇယားတစ်ခု။
+- ဒေတာသီးသန့် DS ကို ဘယ်တော့မှ မချန်ထားဘဲ ခွင့်ပြုထားသော လုပ်ငန်းဆောင်ရွက်မှုအတွက် သီးသန့်ဒေတာနေရာများ (ဥပမာ CBDCs)။
+- ပွင့်လင်းစွာပါဝင်မှု၊ Ethereum ကဲ့သို့သော ခွင့်ပြုချက်မဲ့ဝင်ရောက်ခွင့်ပါရှိသော အများသူငှာဒေတာနေရာများ။
+- သီးသန့်-DS ပိုင်ဆိုင်မှုများကို အသုံးပြုခွင့်အတွက် တိကျပြတ်သားသော ခွင့်ပြုချက်များအရ Data Spaces တစ်လျှောက် ပေါင်းစပ်နိုင်သော စမတ်စာချုပ်များ။
+- စွမ်းဆောင်ရည် သီးခြားခွဲထားခြင်းကြောင့် အများသူငှာ လုပ်ဆောင်ချက်သည် သီးသန့်-DS အတွင်းပိုင်း အရောင်းအ၀ယ်များကို နှိမ့်ချ၍မရပါ။
+- အတိုင်းအတာဖြင့် ဒေတာရရှိနိုင်မှု- သီးသန့်-DS ဒေတာကို သီးသန့်ထိန်းသိမ်းထားစဉ် ထိထိရောက်ရောက် အကန့်အသတ်မဲ့ဒေတာကို ပံ့ပိုးရန်အတွက် ဖျက်-ကုဒ်လုပ်ထားသော Kura နှင့် WSV။
 
-Non‑Goals (Initial Phase)
-- Defining token economics or validator incentives; scheduling and staking policies are pluggable.
-- Introducing a new ABI version; changes target ABI v1 with explicit syscall and pointer‑ABI extensions per IVM policy.
+ပန်းတိုင်မဟုတ်သော (ကနဦးအဆင့်)
+- တိုကင်ဘောဂဗေဒ သို့မဟုတ် တရားဝင်သတ်မှတ်ပေးသော မက်လုံးများကို သတ်မှတ်ခြင်း၊ အချိန်ဇယားဆွဲခြင်းနှင့် လောင်းကြေးမူဝါဒများကို ပလပ်ထိုးနိုင်သည်။
+- ABI ဗားရှင်းအသစ်ကို မိတ်ဆက်ခြင်း။ IVM မူဝါဒအရ တိကျသော syscall နှင့် pointer-ABI extensions များဖြင့် ပစ်မှတ် ABI v1 ကို ပြောင်းလဲပါသည်။
 
-Terminology
-- Nexus Ledger: The global logical ledger formed by composing Data Space (DS) blocks into a single, ordered history and state commitment.
-- Data Space (DS): A bounded execution and storage domain with its own validators, governance, privacy class, DA policy, quotas, and fee policy. Two classes exist: public DS and private DS.
-- Private Data Space: Permissioned validators and access control; transaction data and state never leave the DS. Only commitments/metadata are anchored globally.
-- Public Data Space: Permissionless participation; full data and state are publicly available.
-- Data Space Manifest (DS Manifest): A Norito-encoded manifest that declares DS parameters (validators/QC keys, privacy class, ISI policy, DA parameters, retention, quotas, ZK policy, fees). The manifest hash is anchored on the nexus chain. Unless overridden, DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class) as the default post‑quantum signature scheme.
-- Space Directory: A global on‑chain directory contract that tracks DS manifests, versions, and governance/rotation events for resolvability and audits.
-- DSID: A globally unique identifier for a Data Space. Used to namespace all objects and references.
-- Anchor: A cryptographic commitment from a DS block/header included into the nexus chain to bind DS history into the global ledger.
-- Kura: Iroha block storage. Extended here with erasure‑coded blob storage and commitments.
-- WSV: Iroha World State View. Extended here with versioned, snapshot‑capable, erasure‑coded state segments.
-- IVM: Iroha Virtual Machine for smart contract execution (Kotodama bytecode `.to`).
- - AIR: Algebraic Intermediate Representation. An algebraic view of computation for STARK‑style proofs, describing execution as field‑based traces with transition and boundary constraints.
+အသုံးအနှုန်းများ
+- Nexus Ledger- Data Space (DS) blocks များကို တစ်ခုတည်း၊ မှာထားသော သမိုင်းနှင့် နိုင်ငံတော်ကတိကဝတ်များအဖြစ် ပေါင်းစပ်ဖွဲ့စည်းထားသော ကမ္ဘာလုံးဆိုင်ရာ ယုတ္တိစာရင်းစာအုပ်။
+- Data Space (DS) - ၎င်း၏ကိုယ်ပိုင်တရားဝင်စနစ်၊ အုပ်ချုပ်မှု၊ ကိုယ်ရေးကိုယ်တာအတန်းအစား၊ DA မူဝါဒ၊ ခွဲတမ်းနှင့် အခကြေးငွေမူဝါဒတို့ပါရှိသော ကန့်သတ်လုပ်ဆောင်မှုနှင့် သိုလှောင်မှုဒိုမိန်း။ အတန်းနှစ်ခုရှိပါသည်- public DS နှင့် private DS ။
+- သီးသန့်ဒေတာနေရာ- ခွင့်ပြုချက်ရရှိသူများနှင့် ဝင်ရောက်ထိန်းချုပ်မှု။ ငွေပေးငွေယူဒေတာနှင့်ပြည်နယ်သည် DS ကိုဘယ်တော့မှမထားခဲ့ပါ။ ကတိကဝတ်များ/မက်တာဒေတာများကိုသာ တစ်ကမ္ဘာလုံးတွင် ကျောက်ချထားသည်။
+- အများသူငှာ ဒေတာနေရာ- ခွင့်ပြုချက်မဲ့ ပါဝင်မှု၊ ဒေတာအပြည့်အစုံနှင့် ပြည်နယ်တို့ကို လူသိရှင်ကြား ရရှိနိုင်ပါသည်။
+- Data Space Manifest (DS Manifest)- DS ကန့်သတ်ဘောင်များကို ကြေညာသည့် Norito-encode လုပ်ထားသော မန်နီးဖက်စ်တစ်ခု (တရားဝင်စစ်ဆေးသူများ/QC သော့များ၊ ကိုယ်ရေးကိုယ်တာအတန်းအစား၊ ISI မူဝါဒ၊ DA ကန့်သတ်ချက်များ၊ ထိန်းသိမ်းမှု၊ ခွဲတမ်းများ၊ ZK မူဝါဒ၊ အခကြေးငွေများ)။ manifest hash ကို nexus ကွင်းဆက်ပေါ်တွင် ကျောက်ချထားသည်။ ထပ်မွမ်းမံထားခြင်းမရှိပါက၊ DS ကော်ရမ်အသိအမှတ်ပြုလက်မှတ်များသည် ML-DSA-87 (Dilithium5-class) ကို မူရင်း post-quantum လက်မှတ်အစီအစဉ်အဖြစ် အသုံးပြုသည်။
+- Space Directory- ပြန်လည်ဖြေရှင်းနိုင်မှုနှင့် စာရင်းစစ်များအတွက် DS manifests၊ ဗားရှင်းများနှင့် အုပ်ချုပ်မှု/လည်ပတ်မှုဖြစ်ရပ်များကို ခြေရာခံသည့် ကမ္ဘာလုံးဆိုင်ရာ ကွင်းဆက်လမ်းညွှန်စာချုပ်။
+- DSID- Data Space အတွက် တစ်ကမ္ဘာလုံး အတိုင်းအတာဖြင့် ထူးခြားသော အမှတ်အသားတစ်ခု။ အရာဝတ္တုများနှင့် ရည်ညွှန်းချက်များအားလုံးကို အမည်သတ်မှတ်ရန် အသုံးပြုသည်။
+- Anchor- DS မှတ်တမ်းကို ကမ္ဘာလုံးဆိုင်ရာ လယ်ဂျာတွင် ပေါင်းစည်းရန် nexus ကွင်းဆက်တွင် ပါဝင်သော DS ပိတ်ဆို့ခြင်း/ခေါင်းစီးမှ လျှို့ဝှက်ကတိပြုချက်။
+- Kura- Iroha ပိတ်ဆို့သိုလှောင်မှု။ ဤနေရာတွင် ဖျက်-ကုဒ်လုပ်ထားသော blob သိုလှောင်မှုနှင့် ကတိကဝတ်များဖြင့် တိုးချဲ့ထားသည်။
+- WSV- Iroha World State View။ ဗားရှင်းထုတ်ထားသော၊ လျှပ်တစ်ပြက်ရိုက်နိုင်သော၊ ဖျက်နိုင်-ကုဒ်လုပ်ထားသော အခြေအနေအပိုင်းများဖြင့် ဤနေရာတွင် တိုးချဲ့ထားသည်။
+- IVM- Iroha စမတ်စာချုပ်ကို အကောင်အထည်ဖော်ရန်အတွက် Virtual Machine (Kotodama bytecode `.to`)။
+ - AIR- အက္ခရာသင်္ချာ အလယ်အလတ် ကိုယ်စားပြုမှု။ STARK ပုံစံအထောက်အထားများအတွက် တွက်ချက်ခြင်း၏ အက္ခရာသင်္ချာအမြင်၊ ကွပ်မျက်ခြင်းကို နယ်ပယ်အခြေခံခြေရာများအဖြစ် အကူးအပြောင်းနှင့် နယ်နိမိတ်ကန့်သတ်ချက်များဖြင့် ဖော်ပြခြင်း။
 
-Data Spaces Model
-- Identity: `DataSpaceId (DSID)` identifies a DS and namespaces everything. DS can be instantiated at two granularities:
-  - Domain‑DS: `ds::domain::<domain_name>` — execution and state scoped to a domain.
-  - Asset‑DS: `ds::asset::<domain_name>::<asset_name>` — execution and state scoped to a single asset definition.
-  Both forms coexist; transactions can touch multiple DSIDs atomically.
-- Manifest lifecycle: DS creation, updates (key rotation, policy changes), and retirement are recorded in the Space Directory. Each per‑slot DS artifact references the latest manifest hash.
-- Classes: Public DS (open participation, public DA) and Private DS (permissioned, confidential DA). Hybrid policies are possible via manifest flags.
-- Policies per DS: ISI permissions, DA parameters `(k,m)`, encryption, retention, quotas (min/max tx share per block), ZK/optimistic proof policy, fees.
-- Governance: DS membership and validator rotation defined by the manifest’s governance section (on-chain proposals, multisig, or external governance anchored by nexus transactions and attestations).
+Data Spaces မော်ဒယ်
+- Identity- `DataSpaceId (DSID)` သည် DS တစ်ခုကို ခွဲခြားသတ်မှတ်ပြီး အရာအားလုံးကို namespace ပေးသည်။ DS ကို အသေးစိပ်နှစ်မျိုးဖြင့် ချက်ချင်းသိနိုင်သည်။
+  - Domain-DS- `ds::domain::<domain_name>` — ဒိုမိန်းတစ်ခုသို့ လည်ပတ်လုပ်ဆောင်မှုနှင့် အခြေအနေ။
+  - Asset-DS- `ds::asset::<domain_name>::<asset_name>` — တစ်ခုတည်းသော ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက်အဖြစ် သတ်မှတ်ပေးထားသော လုပ်ဆောင်ချက်နှင့် အခြေအနေ။
+  ပုံစံနှစ်မျိုးလုံးသည် အတူယှဉ်တွဲတည်ရှိနေပါသည်။ ငွေပေးငွေယူများသည် DSID အများအပြားကို အနုမြူစနစ်ဖြင့် ထိနိုင်သည်။
+- ဘဝသံသရာကို ဖော်ပြခြင်း- DS ဖန်တီးမှု၊ အပ်ဒိတ်များ (သော့လည်ပတ်မှု၊ မူဝါဒအပြောင်းအလဲများ) နှင့် အငြိမ်းစားယူမှုများကို Space Directory တွင် မှတ်တမ်းတင်ထားသည်။ per-slot DS artifact တစ်ခုစီသည် နောက်ဆုံးပေါ် manifest hash ကို ကိုးကားသည်။
+- အတန်းများ- အများသူငှာ DS (ပွင့်လင်းစွာပါဝင်မှု၊ အများသူငှာ DA) နှင့် ပုဂ္ဂလိက DS (ခွင့်ပြုချက်၊ လျှို့ဝှက် DA)။ ပေါင်းစပ်မူဝါဒများသည် ထင်ရှားသောအလံများမှတစ်ဆင့် ဖြစ်နိုင်သည်။
+- DS အလိုက် မူဝါဒများ- ISI ခွင့်ပြုချက်များ၊ DA ကန့်သတ်ချက်များ `(k,m)`၊ ကုဒ်ဝှက်ခြင်း၊ ထိန်းသိမ်းခြင်း၊ ခွဲတမ်း (တစ်တုံးလျှင် အနည်းဆုံး / အများဆုံး tx မျှဝေခြင်း)၊ ZK/ အကောင်းမြင် အထောက်အထား မူဝါဒ၊ အခကြေးငွေ။
+- အုပ်ချုပ်မှု- manifest ၏ အုပ်ချုပ်မှုအပိုင်းမှ သတ်မှတ်ထားသော DS အဖွဲ့ဝင်ခြင်းနှင့် တရားဝင်လည်ပတ်ခြင်း (ကွင်းဆက်အဆိုပြုချက်များ၊ များစွာသော၊ သို့မဟုတ် ချိတ်ဆက်ဆောင်ရွက်မှုများနှင့် သက်သေအထောက်အထားများဖြင့် ချိတ်ဆက်ထားသော ပြင်ပအုပ်ချုပ်ရေး)။
 
-Capability manifests & UAID
-- Universal accounts: Every participant receives a deterministic UAID (`UniversalAccountId` in `crates/iroha_data_model/src/nexus/manifest.rs`) that spans all dataspaces. Capability manifests (`AssetPermissionManifest`) bind a UAID to a specific dataspace, activation/expiry epochs, and an ordered list of allow/deny `ManifestEntry` rules that scope `dataspace`, `program_id`, `method`, `asset`, and optional AMX roles. Deny rules always win; the evaluator emits either `ManifestVerdict::Denied` with an audit reason or an `Allowed` grant with the matching allowance metadata.
-- Allowances: Each allow entry carries deterministic `AllowanceWindow` buckets (`PerSlot`, `PerMinute`, `PerDay`) plus an optional `max_amount`. Hosts and SDKs consume the same Norito payload, so enforcement remains identical across hardware and SDK implementations.
-- Audit telemetry: The Space Directory broadcasts `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) whenever a manifest changes state. The new `SpaceDirectoryEventFilter` surface allows Torii/data-event subscribers to monitor UAID manifest updates, revocations, and deny-wins decisions without custom plumbing.
+စွမ်းရည်ပြသမှုများ & UAID
+- Universal အကောင့်များ- ပါဝင်သူတိုင်းသည် dataspaces အားလုံးကို ဖြန့်ကျက်သော `UniversalAccountId` (`UniversalAccountId`) ကို လက်ခံရရှိသည် ။ စွမ်းရည်ဖော်ပြချက်များသည် (`AssetPermissionManifest`) သည် UAID အား သီးခြားဒေတာနေရာ၊ အသက်သွင်းခြင်း/သက်တမ်းကုန်ဆုံးသည့်အချိန်များနှင့် ချိတ်ဆက်ကာ၊ ကန့်သတ်ထားသောစာရင်းတစ်ခုနှင့် `ManifestEntry` စည်းမျဉ်းများ `dataspace`၊ I18NI000000071NIX700000718NI00000071 `asset` နှင့် ရွေးချယ်နိုင်သော AMX အခန်းကဏ္ဍများ။ စည်းကမ်းများကို ငြင်းဆိုခြင်း အမြဲတမ်းအနိုင်ရ; အကဲဖြတ်သူသည် စာရင်းစစ်အကြောင်းပြချက်ဖြင့် `ManifestVerdict::Denied` သို့မဟုတ် ကိုက်ညီသောခွင့်ပြုချက် မက်တာဒေတာနှင့်အတူ `Allowed` ထောက်ပံ့ကြေးကို ထုတ်လွှတ်သည်။
+- စရိတ်စကများ- ဝင်ခွင့်တစ်ခုစီတွင် သတ်မှတ်ထားသော `AllowanceWindow` ပုံးများ (`PerSlot`, `PerMinute`, `PerDay`) နှင့် စိတ်ကြိုက်ရွေးချယ်နိုင်သော `max_amount` ပါရှိသည်။ လက်ခံဆောင်ရွက်ပေးသူများနှင့် SDK များသည် တူညီသော Norito ပေးဆောင်မှုအား စားသုံးသည်၊ ထို့ကြောင့် ခိုင်ခံ့မှုမှာ ဟာ့ဒ်ဝဲနှင့် SDK အကောင်အထည်ဖော်မှုများတွင် တူညီနေပါသည်။
+- စာရင်းစစ် တယ်လီမီတာ- အာကာသလမ်းညွှန်သည် အခြေအနေကို ပြောင်းလဲသည့်အခါတိုင်း `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) ကို ထုတ်လွှင့်သည်။ `SpaceDirectoryEventFilter` မျက်နှာပြင်အသစ်သည် Torii/data-event စာရင်းသွင်းသူများအား UAID ထင်ရှားသော အပ်ဒိတ်များ၊ ရုတ်သိမ်းခြင်းနှင့် စိတ်ကြိုက်ပိုက်ဆက်ခြင်းမရှိဘဲ အနိုင်ရသည့်ဆုံးဖြတ်ချက်များကို စောင့်ကြည့်ရန် ခွင့်ပြုသည်။
 
-For end-to-end operator evidence, SDK migration notes, and manifest publishing checklists, mirror this section with the Universal Account Guide (`docs/source/universal_accounts_guide.md`). Keep both documents aligned whenever UAID policy or tooling changes.
+အဆုံးမှအဆုံးအော်ပရေတာအထောက်အထား၊ SDK ပြောင်းရွှေ့ခြင်းမှတ်စုများနှင့် ထုတ်ဝေခြင်းစစ်ဆေးချက်စာရင်းများကို ဖော်ပြရန်အတွက်၊ ဤကဏ္ဍကို Universal အကောင့်လမ်းညွှန် (`docs/source/universal_accounts_guide.md`) ဖြင့် ပြန်လည်ဖော်ပြပါ။ UAID မူဝါဒ သို့မဟုတ် ကိရိယာတန်ဆာပလာ ပြောင်းလဲသည့်အခါတိုင်း စာရွက်စာတမ်းနှစ်ခုလုံးကို ချိန်ညှိထားပါ။
 
-High‑Level Architecture
+အဆင့်မြင့်ဗိသုကာ
 1) Global Composition Layer (Nexus Chain)
-- Maintains a single, canonical ordering of 1‑second Nexus Blocks that finalize atomic transactions spanning one or more Data Spaces (DS). Every committed transaction updates the unified global world state (vector of per‑DS roots).
-- Contains minimal metadata plus aggregated proofs/QCs to ensure composability, finality, and fraud detection (DSIDs touched, per‑DS state roots before/after, DA commitments, per‑DS validity proofs, and the DS quorum certificate using ML‑DSA‑87). No private data is included.
-- Consensus: Single global, pipelined BFT committee of size 22 (3f+1 with f=7), selected from a pool of up to ~200k potential validators by an epochal VRF/stake mechanism. The nexus committee sequences transactions and finalizes the block within 1s.
+- တစ်ခု သို့မဟုတ် တစ်ခုထက်ပိုသော Data Spaces (DS) တွင်ရှိသော အဏုမြူအရောင်းအ၀ယ်များကို အပြီးသတ်လုပ်ဆောင်သည့် 1-စက္ကန့် Nexus Blocks ၏ တစ်ခုတည်းသော၊ စံသတ်မှတ်ထားသော မှာယူမှုကို ထိန်းသိမ်းပါ။ ကတိကဝတ်ပြုထားသော ငွေပေးငွေယူတိုင်းသည် ပေါင်းစည်းထားသော ကမ္ဘာလုံးဆိုင်ရာ အခြေအနေ (per-DS roots ၏ ကဏ္ဍ) ကို အပ်ဒိတ်လုပ်သည်။
+- ပေါင်းစပ်နိုင်မှု၊ နောက်ဆုံးအခြေအနေနှင့် လိမ်လည်မှုရှာဖွေခြင်းတို့ကို သေချာစေရန်အတွက် အနည်းဆုံး မက်တာဒေတာများအပြင် စုစည်းထားသော သက်သေများ/QC များပါရှိသည် (DSIDs ထိတွေ့မှု၊ per-DS နိုင်ငံတော်အမြစ်များ မတိုင်မီ/နောက်၊ DA ကတိကဝတ်များ၊ per-DS တရားဝင်အထောက်အထားများနှင့် DS ကော်ရမ်လက်မှတ်ကို ML-DSA-87 ကိုအသုံးပြုထားသည်)။ ကိုယ်ပိုင်ဒေတာ မပါဝင်ပါ။
+- အများသဘောတူချက်- အရွယ်အစား 22 (3f+1 နှင့် f=7 ရှိသော BFT ကော်မတီ) ၏ တစ်ကမ္ဘာလုံးဆိုင်ရာ၊ ပိုက်လိုင်းချထားသော BFT ကော်မတီကို ~200k အထိ ဖြစ်နိုင်ချေရှိသော အတည်ပြုသူများ ရေကူးကန်မှ ရွေးချယ်ထားသော epochal VRF/stake ယန္တရား။ ချိတ်ဆက်မှုကော်မတီသည် အရောင်းအဝယ်များကို ဆက်တိုက်လုပ်ဆောင်ပြီး 1s အတွင်း ပိတ်ဆို့ခြင်းကို အပြီးသတ်သည်။
 
-2) Data Space Layer (Public/Private)
-- Executes per‑DS fragments of global transactions, updates DS‑local WSV, and produces per‑block validity artifacts (aggregated per‑DS proofs and DA commitments) that roll up into the 1‑second Nexus Block.
-- Private DS encrypt data‑at‑rest and data‑in‑flight among authorized validators; only commitments and PQ validity proofs leave the DS.
-- Public DS export full data bodies (via DA) and PQ validity proofs.
+2) Data Space Layer (အများပြည်သူ/ပုဂ္ဂလိက)
+- တစ်ကမ္ဘာလုံးဆိုင်ရာ ငွေပေးငွေယူလုပ်ငန်းတစ်ခုချင်းစီ၏ DS အပိုင်းအစများကို လုပ်ဆောင်ပြီး DS-local WSV ကို အပ်ဒိတ်လုပ်ကာ 1-second Nexus Block တွင် စုစည်းထားသော တရားဝင်မှုဆိုင်ရာ ပစ္စည်းများကို ထုတ်လုပ်ပေးပါသည်။
+- သီးသန့် DS သည် ခွင့်ပြုထားသော တရားဝင်စစ်ဆေးသူများကြားတွင် data-at-rest နှင့် data-in-flight တို့ကို ကုဒ်ဝှက်ထားသည်။ ကတိကဝတ်များနှင့် PQ တရားဝင်အထောက်အထားများသာ DS မှထွက်ခွာသည်။
+- အများသူငှာ DS သည် အချက်အလက်အပြည့်အစုံ (DA) နှင့် PQ တရားဝင်အထောက်အထားများမှတဆင့် တင်ပို့သည်။
 
-3) Atomic Cross‑Data‑Space Transactions (AMX)
-- Model: Each user transaction may touch multiple DS (e.g., domain DS and one or more asset DS). It commits atomically in a single Nexus Block or aborts; no partial effects.
-- Prepare‑Commit within 1s: For each candidate transaction, touched DS execute in parallel against the same snapshot (start‑of‑slot DS roots) and produce per‑DS PQ validity proofs (FASTPQ‑ISI) and DA commitments. The nexus committee commits the transaction only if all required DS proofs verify and the DA certificates arrive (≤300 ms target); otherwise the transaction is re‑scheduled for the next slot.
-- Consistency: Read‑write sets are declared; conflict detection occurs at commit against the start‑of‑slot roots. Lock‑free optimistic execution per DS avoids global stalls; atomicity is enforced by the nexus commit rule (all‑or‑nothing across DS).
-- Privacy: Private DS export only proofs/commitments tied to pre/post DS roots. No raw private data leaves the DS.
-
-4) Data Availability (DA) with Erasure Coding
-- Kura stores block bodies and WSV snapshots as erasure-coded blobs. Public blobs are widely sharded; private blobs are stored only within private‑DS validators, with encrypted chunks.
-- DA Commitments are recorded in both DS artifacts and Nexus Blocks, enabling sampling and recovery guarantees without revealing private contents.
+3) Atomic Cross-Data-Space Transactions (AMX)
+- မော်ဒယ်- အသုံးပြုသူ အရောင်းအ၀ယ်တစ်ခုစီသည် DS အများအပြား (ဥပမာ၊ ဒိုမိန်း DS နှင့် တစ်ခု သို့မဟုတ် တစ်ခုထက်ပိုသော ပိုင်ဆိုင်မှု DS) တို့ထိနိုင်သည်။ ၎င်းသည် Nexus Block တစ်ခုတည်းတွင် အက်တမ်ဖြင့် ကျူးလွန်သည် တစိတ်တပိုင်းသက်ရောက်မှုမရှိပါ။
+- 1s အတွင်း ကြိုတင်ပြင်ဆင်-ကတိပြုခြင်း- ကိုယ်စားလှယ်လောင်းတစ်ဦးစီအတွက်၊ DS ကို ထိလိုက်ခြင်းဖြင့် တူညီသောလျှပ်တစ်ပြက်ရိုက်ချက် (start-of-slot DS အမြစ်များ) နှင့် အပြိုင်လုပ်ဆောင်ပြီး DS PQ မှန်ကန်မှုအထောက်အထားများ (FASTPQ‑ISI) နှင့် DA ကတိကဝတ်များကို ထုတ်လုပ်ပါ။ လိုအပ်သော DS အထောက်အထားများအားလုံးကို စစ်ဆေးအတည်ပြုပြီး DA လက်မှတ်များရောက်ရှိမှသာ (≤300 ms ပစ်မှတ်); မဟုတ်ပါက ငွေပေးငွေယူကို နောက်အထိုင်အတွက် ပြန်လည်စီစဉ်ထားသည်။
+- ညီညွတ်မှု- ဖတ်-ရေးအစုံများကို ကြေညာထားသည်။ ပဋိပက္ခရှာဖွေတွေ့ရှိမှုသည် start-of-slot အမြစ်များကိုဆန့်ကျင်သည့်အချိန်တွင် ဖြစ်ပေါ်သည်။ DS အလိုက် သော့ခတ်ခြင်းမရှိဘဲ အကောင်းမြင်သော လုပ်ဆောင်မှုသည် ကမ္ဘာလုံးဆိုင်ရာ ဆိုင်များကို ရှောင်ရှားသည်။ nexus commit rule (DS တစ်လျှောက်လုံး သို့မဟုတ် ဘာမှမလုပ်ပါ) အက်တမ်နစ်အား အက်တမ်နစ်အား ပြဌာန်းထားသည်။
+- ကိုယ်ရေးကိုယ်တာ- ကိုယ်ရေးကိုယ်တာ DS သည် DS အမြစ်အကြို/ပို့စ်နှင့် ဆက်စပ်နေသော အထောက်အထားများ/ကတိကဝတ်များကိုသာ ထုတ်ယူသည်။ DS မှ သီးသန့်ဒေတာအကြမ်းမရှိပါ။4) Erasure Coding ဖြင့် ဒေတာရရှိနိုင်မှု (DA)
+- Kura သည် အလောင်းများနှင့် WSV လျှပ်တစ်ပြက်များကို ဖျက်ရန်ကုဒ်လုပ်ထားသော blobs အဖြစ် သိမ်းဆည်းထားသည်။ အများသူငှာ အတုံးအခဲများကို ကျယ်ကျယ်ပြန့်ပြန့် ခွဲထုတ်ပစ်လိုက်သည်။ သီးသန့် blobs များကို လျှို့ဝှက်ကုဒ်လုပ်ထားသော အတုံးများဖြင့်သာ သီးသန့်-DS အတည်ပြုသူများအတွင်းသာ သိမ်းဆည်းထားသည်။
+- DA ကတိကဝတ်များကို DS artifacts နှင့် Nexus Blocks နှစ်ခုလုံးတွင် မှတ်တမ်းတင်ထားပြီး၊ သီးသန့်အကြောင်းအရာများကို မဖော်ပြဘဲ နမူနာယူခြင်းနှင့် ပြန်လည်ရယူခြင်းဆိုင်ရာ အာမခံချက်များကို ဖွင့်ထားသည်။
 
 Block and Commit Structure
-- Data Space Proof Artifact (per 1s slot, per DS)
-  - Fields: dsid, slot, pre_state_root, post_state_root, ds_tx_set_hash, kura_da_commitment, wsv_da_commitment, manifest_hash, ds_qc (ML‑DSA‑87), ds_validity_proof (FASTPQ‑ISI).
-  - Private‑DS export artifacts without data bodies; public DS allow body retrieval via DA.
+- Data Space Proof Artifact (1s slot တစ်ခု၊ DS တစ်ခုစီ)
+  - အကွက်များ- dsid၊ slot၊ pre_state_root၊ post_state_root၊ ds_tx_set_hash၊ kura_da_commitment၊ wsv_da_commitment၊ manifest_hash၊ ds_qc (ML‑DSA‑87)၊ ds_validity_proof (FASTPQ‑ISI)။
+  - ဒေတာအဖွဲ့များမပါဘဲ Private-DS ပစ္စည်းများ တင်ပို့ခြင်း၊ အများသူငှာ DS သည် DA မှတစ်ဆင့် ခန္ဓာကိုယ်ကို ပြန်လည်ရယူခွင့်ပြုသည်။
 
 - Nexus Block (1s cadence)
-  - Fields: block_number, parent_hash, slot_time, tx_list (atomic cross‑DS transactions with DSIDs touched), ds_artifacts[], nexus_qc.
-  - Function: finalizes all atomic transactions whose required DS artifacts verify; updates the global world state vector of DS roots in one step.
+  - အကွက်များ- block_number၊ parent_hash၊ slot_time၊ tx_list (DSIDs များနှင့် ထိထားသော အနုမြူဖြတ်ကျော် DS လွှဲပြောင်းမှုများ)၊ ds_artifacts[]၊ nexus_qc။
+  - လုပ်ဆောင်ချက်- လိုအပ်သော DS ရှေးဟောင်းပစ္စည်းများကို စစ်ဆေးအတည်ပြုသည့် အနုမြူအရောင်းအ၀ယ်အားလုံးကို အပြီးသတ်သည်။ အဆင့်တစ်ဆင့်တွင် DS roots ၏ ကမ္ဘာလုံးဆိုင်ရာ အခြေအနေကို အပ်ဒိတ်လုပ်သည်။
 
-Consensus and Scheduling
-- Nexus Chain Consensus: Single global, pipelined BFT (Sumeragi-class) with a 22-node committee (3f+1 with f=7) targeting 1s blocks and 1s finality. Committee members are epochally selected via VRF/stake from ~200k candidates; rotation maintains decentralization and censorship resistance.
-- Data Space Consensus: Each DS runs its own BFT among its validators to produce per‑slot artifacts (proofs, DA commitments, DS QC). Lane-relay committees are sized at `3f+1` using the dataspace `fault_tolerance` setting and are sampled deterministically per epoch from the dataspace validator pool using the VRF epoch seed bound with `(dataspace_id, lane_id)`. Private DS are permissioned; public DS allow open liveness subject to anti‑Sybil policies. The global nexus committee remains unchanged.
-- Transaction Scheduling: Users submit atomic transactions declaring touched DSIDs and read‑write sets. DS execute in parallel within the slot; the nexus committee includes the transaction in the 1s block if all DS artifacts verify and DA certificates are timely (≤300 ms).
-- Performance Isolation: Each DS has independent mempools and execution. Per‑DS quotas bound how many transactions touching a given DS can be committed per block to avoid head‑of‑line blocking and protect private DS latency.
+သဘောတူညီမှုနှင့် အချိန်ဇယားဆွဲခြင်း။
+- Nexus ကွင်းဆက်သဘောတူချက်- 1s လုပ်ကွက်များနှင့် 1s နောက်ဆုံးအဆင့်ကို ပစ်မှတ်ထားသော 22-node ကော်မတီ (3f+1 with f=7) ဖြင့် ကမ္ဘာလုံးဆိုင်ရာ၊ ပိုက်လိုင်းပြုလုပ်ထားသော BFT (Sumeragi-class) တစ်ခုတည်း။ ကော်မတီဝင်များကို ~ 200k ကိုယ်စားလှယ်လောင်းများမှ VRF/stake မှတစ်ဆင့် အချိန်ကာလအလိုက် ရွေးချယ်ခံရသည်။ လည်ပတ်မှုသည် ဗဟိုချုပ်ကိုင်မှုလျှော့ချခြင်းနှင့် ဆင်ဆာဖြတ်တောက်မှုကို ထိန်းသိမ်းထားသည်။
+- Data Space Consensus- DS တစ်ခုစီသည် per-slot artifacts (အထောက်အထားများ၊ DA ကတိကဝတ်များ၊ DS QC) ကိုထုတ်လုပ်ရန် ၎င်း၏ကိုယ်ပိုင် BFT ကို လုပ်ဆောင်ပါသည်။ Lane-relay ကော်မတီများသည် dataspace `fault_tolerance` ဆက်တင်ကို အသုံးပြု၍ `3f+1` တွင် အရွယ်အစားရှိပြီး `(dataspace_id, lane_id)` နှင့် ချည်နှောင်ထားသော VRF အပိုင်းမျိုးစေ့ကို အသုံးပြု၍ dataspace validator pool မှ အပိုင်းအလိုက် နမူနာယူထားသည်။ ပုဂ္ဂလိက DS များကို ခွင့်ပြုထားသည်။ အများသူငှာ DS သည် ဆန့်ကျင်သော Sybil မူဝါဒများနှင့်အညီ ပွင့်လင်းမြင်သာမှုကို ခွင့်ပြုသည်။ ကမ္ဘာလုံးဆိုင်ရာ ဆက်စပ်ကော်မတီသည် မပြောင်းလဲပါ။
+- ငွေပေးငွေယူ အစီအစဉ်ဆွဲခြင်း- အသုံးပြုသူများသည် ထိမိသော DSIDs များနှင့် read-write sets များကို ကြေငြာသည့် အနုမြူငွေပေးငွေယူများကို တင်သွင်းသည်။ DS သည် အထိုင်အတွင်း အပြိုင်လုပ်ဆောင်သည်။ DS artifacts အားလုံးကို စစ်ဆေးအတည်ပြုပြီး DA လက်မှတ်များ အချိန်မီ (≤300 ms) ဖြစ်ပါက nexus ကော်မတီတွင် ငွေပေးငွေယူ 1s ပိတ်ဆို့ခြင်းတွင် ပါဝင်ပါသည်။
+- Performance Isolation- DS တစ်ခုစီတွင် သီးခြား mepools နှင့် execution များရှိသည်။ Per‑DS ခွဲတမ်းသည် ပေးထားသော DS ကိုထိသော ငွေပေးငွေယူ မည်မျှလုပ်ဆောင်နိုင်သည်ကို ဘလောက်တစ်ခုလျှင် ခေါင်းပိုင်းလိုင်းပိတ်ဆို့ခြင်းကို ရှောင်ရှားရန်နှင့် သီးသန့် DS latency ကို ကာကွယ်ရန်။
 
-Data Model and Namespacing
-- DS‑Qualified IDs: All entities (domains, accounts, assets, roles) are qualified by `dsid`. Example: `ds::<domain>::account`, `ds::<domain>::asset#precision`.
-- Global References: A global reference is a tuple `(dsid, object_id, version_hint)` and can be placed on‑chain in the nexus layer or in AMX descriptors for cross‑DS use.
-- Norito Serialization: All cross‑DS messages (AMX descriptors, proofs) use Norito codecs. No serde usage in production paths.
+Data Model နှင့် Namespacing
+- DS‑အရည်အချင်းပြည့်မီသော ID များ- အဖွဲ့အစည်းအားလုံး (ဒိုမိန်းများ၊ အကောင့်များ၊ ပိုင်ဆိုင်မှုများ၊ အခန်းကဏ္ဍများ) သည် `dsid` မှ အရည်အချင်းပြည့်မီပါသည်။ ဥပမာ- `ds::<domain>::account`၊ `ds::<domain>::asset#precision`။
+- ကမ္ဘာလုံးဆိုင်ရာ အကိုးအကားများ- ကမ္ဘာလုံးဆိုင်ရာ ကိုးကားချက်သည် tuple `(dsid, object_id, version_hint)` ဖြစ်ပြီး nexus အလွှာတွင် သို့မဟုတ် ဖြတ်ကျော် DS အသုံးပြုရန်အတွက် AMX ဖော်ပြချက်များအား ကွင်းဆက်ပေါ်တွင် ထားရှိနိုင်ပါသည်။
+- Norito အမှတ်စဉ်- ဖြတ်ကျော်-DS မက်ဆေ့ဂျ်များအားလုံး (AMX ဖော်ပြချက်များ၊ အထောက်အထားများ) Norito ကုဒ်ဒစ်များကို အသုံးပြုသည်။ ထုတ်လုပ်မှုလမ်းကြောင်းများတွင် ဆားအသုံးမပြုပါ။
 
-Smart Contracts and IVM Extensions
-- Execution Context: Add `dsid` to IVM execution context. Kotodama contracts always execute within a specific Data Space.
-- Atomic Cross‑DS Primitives:
-  - `amx_begin()` / `amx_commit()` demarcate an atomic multi‑DS transaction in the IVM host.
-  - `amx_touch(dsid, key)` declares read/write intent for conflict detection against slot snapshot roots.
+စမတ်စာချုပ်များနှင့် IVM တိုးချဲ့မှုများ
+- အကောင်အထည်ဖော်မှုအကြောင်းအရာ- `dsid` ကို IVM အကောင်အထည်ဖော်မှုအကြောင်းအရာသို့ ထည့်ပါ။ Kotodama စာချုပ်များသည် သီးခြား Data Space တစ်ခုအတွင်း အမြဲတမ်း လုပ်ဆောင်ပါသည်။
+- Atomic Cross-DS Primitives-
+  - `amx_begin()` / `amx_commit()` သည် IVM host တွင် atomic multi-DS ငွေပေးငွေယူကို အကွက်ချထားသည်။
+  - `amx_touch(dsid, key)` သည် slot snapshot roots များကို ပဋိပက္ခရှာဖွေခြင်းအတွက် ဖတ်ရှု/ရေးရန် ရည်ရွယ်ချက်ကို ကြေညာသည်။
   - `verify_space_proof(dsid, proof, statement)` → bool
-  - `use_asset_handle(handle, op, amount)` → result (operation permitted only if policy allows and handle is valid)
-- Asset Handles and Fees:
-  - Asset operations are authorized by the DS’s ISI/role policies; fees are paid in the DS’s gas token. Optional capability tokens and richer policy (multi‑approver, rate‑limits, geofencing) can be added later without changing the atomic model.
-- Determinism: All new syscalls are pure and deterministic given inputs and declared AMX read/write sets. No hidden time or environment effects.
+  - `use_asset_handle(handle, op, amount)` → ရလဒ် (မူဝါဒခွင့်ပြုပြီး ကိုင်တွယ်မှု မှန်ကန်မှသာ လုပ်ဆောင်မှုကို ခွင့်ပြုသည်)
+- ပိုင်ဆိုင်မှုနှင့် အခကြေးငွေများ-
+  - ပိုင်ဆိုင်မှုလုပ်ငန်းများကို DS ၏ ISI/အခန်းကဏ္ဍမူဝါဒများမှ ခွင့်ပြုထားသည်။ အခကြေးငွေများကို DS ၏ဓာတ်ငွေ့တိုကင်တွင်ပေးဆောင်သည်။ ရွေးချယ်နိုင်သော စွမ်းရည်တိုကင်များနှင့် ပိုမိုကြွယ်ဝသော မူဝါဒ (အများအပြားခွင့်ပြုချက်၊ နှုန်းကန့်သတ်ချက်၊ ဘူမိဇုန်ထုတ်ခြင်း) ကို အက်တမ်ပုံစံကို မပြောင်းလဲဘဲ နောက်ပိုင်းတွင် ထည့်သွင်းနိုင်သည်။
+- Determinism- syscall အသစ်များအားလုံးသည် စစ်မှန်ပြီး အဆုံးအဖြတ်ပေးသော သွင်းအားစုများဖြစ်ပြီး AMX ဖတ်ရှု/ရေးခြင်းအစုံများကို ကြေငြာထားသည်။ လျှို့ဝှက်အချိန် သို့မဟုတ် ပတ်ဝန်းကျင်သက်ရောက်မှုမရှိပါ။
 
-Post‑Quantum Validity Proofs (Generalized ISIs)
-- FASTPQ‑ISI (PQ, no trusted setup): A kernelized, hash‑based argument that generalizes the transfer design to all ISI families while targeting sub‑second proving for 20k‑scale batches on GPU‑class hardware.
-  - Operational profile:
-    - Production nodes construct the prover through `fastpq_prover::Prover::canonical`, which now always initialises the production backend; the deterministic mock has been removed.【crates/fastpq_prover/src/proof.rs:126】
-    - `zk.fastpq.execution_mode` (config) and `irohad --fastpq-execution-mode` allow operators to pin CPU/GPU execution deterministically while the observer hook records requested/resolved/backend triples for fleet audits.【crates/iroha_config/src/parameters/user.rs:1357】【crates/irohad/src/main.rs:270】【crates/irohad/src/main.rs:2192】【crates/iroha_telemetry/src/metrics.rs:8887】
-- Arithmetization:
-  - KV‑Update AIR: Treat WSV as a typed key‑value map committed via Poseidon2‑SMT. Each ISI expands to a small set of read‑check‑write rows over keys (accounts, assets, roles, domains, metadata, supply).
-  - Opcode‑gated constraints: A single AIR table with selector columns enforces per‑ISI rules (conservation, monotonic counters, permissions, range checks, bounded metadata updates).
-  - Lookup arguments: Transparent, hash‑committed tables for permissions/roles, asset precisions, and policy parameters avoid heavy bitwise constraints.
-- State commitments and updates:
-  - Aggregated SMT Proof: All touched keys (pre/post) are proven against `old_root`/`new_root` using a compressed frontier with deduped siblings.
-  - Invariants: Global invariants (e.g., total supply per asset) are enforced via multiset equality between effect rows and tracked counters.
-- Proof system:
-  - FRI‑style polynomial commitments (DEEP‑FRI) with high arity (8/16) and blow‑up 8–16; Poseidon2 hashes; Fiat‑Shamir transcript with SHA‑2/3.
-  - Optional recursion: DS‑local recursive aggregation to compress micro‑batches to one proof per slot if needed.
-- Scope and examples covered:
-  - Assets: transfer, mint, burn, register/unregister asset definitions, set precision (bounded), set metadata.
-  - Accounts/Domains: create/remove, set key/threshold, add/remove signatories (state‑only; signature checks are attested by DS validators, not proven inside the AIR).
-  - Roles/Permissions (ISI): grant/revoke roles and permissions; enforced by lookup tables and monotonic policy checks.
-  - Contracts/AMX: AMX begin/commit markers, capability mint/revoke if enabled; proven as state transitions and policy counters.
-- Out‑of‑AIR checks to preserve latency:
-  - Signatures and heavy cryptography (e.g., ML‑DSA user signatures) are verified by DS validators and attested in the DS QC; the validity proof covers only state consistency and policy compliance. This keeps proofs PQ and fast.
-- Performance targets (illustrative, 32‑core CPU + single modern GPU):
-  - 20k mixed ISIs with small key‑touch (≤8 keys/ISI): ~0.4–0.9 s prove, ~150–450 KB proof, ~5–15 ms verify.
-  - Heavier ISIs (more keys/rich constraints): micro‑batch (e.g., 10×2k) + recursion to keep per‑slot <1 s.
-- DS Manifest configuration:
+Post-Quantum validity အထောက်အထားများ (အထွေထွေ ISI များ)
+- FASTPQ‑ISI (PQ၊ ယုံကြည်စိတ်ချရခြင်းမရှိသော စနစ်ထည့်သွင်းမှု)- GPU-အတန်းအစား ဟာ့ဒ်ဝဲတွင် 20k-စကေးအသုတ်အတွက် သက်သေပြနေစဉ် စက္ကန့်ခွဲခွဲများအတွက် ပစ်မှတ်ထားနေစဉ် လွှဲပြောင်းဒီဇိုင်းကို ISI မိသားစုအားလုံးထံ ယေဘုယျသဘောဆောင်သည့် kernelized၊ hash-based အငြင်းအခုံတစ်ခု။
+  - လည်ပတ်မှုပရိုဖိုင်-
+    - Production nodes များသည် ယခု production backend ကို အမြဲတမ်း အစပြုသည့် `fastpq_prover::Prover::canonical` မှတဆင့် သက်သေကို တည်ဆောက်ပါသည်။ အဆုံးအဖြတ်ပေးသော အတုအယောင်ကို ဖယ်ရှားလိုက်ပါပြီ။【crates/fastpq_prover/src/proof.rs:126】
+    - `zk.fastpq.execution_mode` (config) နှင့် `irohad --fastpq-execution-mode` သည် အော်ပရေတာများအား CPU/GPU လုပ်ဆောင်ချက်ကို တိကျပြတ်သားစွာ ပင်ထိုးရန် ခွင့်ပြုသည် စာရင်းစစ်။ 【crates/iroha_config/src/parameters/user.rs:1357】【crates/irohad/src/main.rs:270】【crates/irohad/src/main.rs:2192】【crates/iroha_telemetry/src/metrics7】
+- ဂဏန်းတွက်နည်း
+  - KV-Update AIR- Poseidon2-SMT မှတစ်ဆင့် ရိုက်ထည့်ထားသော သော့တန်ဖိုးမြေပုံအဖြစ် WSV ကို ဆက်ဆံပါ။ ISI တစ်ခုစီသည် သော့များပေါ်မှ သေးငယ်သော အတန်းများ (အကောင့်များ၊ ပိုင်ဆိုင်မှုများ၊ အခန်းကဏ္ဍများ၊ ဒိုမိန်းများ၊ မက်တာဒေတာ၊ ထောက်ပံ့မှု) သို့ ချဲ့ထွင်သည်။
+  - Opcode-gated ကန့်သတ်ချက်များ- ရွေးချယ်ရေးကော်လံများပါရှိသော AIR ဇယားတစ်ခုသည် per-ISI စည်းမျဉ်းများ (ထိန်းသိမ်းမှု၊ monotonic ကောင်တာများ၊ ခွင့်ပြုချက်များ၊ အပိုင်းအခြားစစ်ဆေးမှုများ၊ ကန့်သတ်ထားသော မက်တာဒေတာမွမ်းမံမှုများ) ကို ပြဋ္ဌာန်းထားသည်။
+  - ရှာဖွေခြင်းဆိုင်ရာ အကြောင်းပြချက်များ- ခွင့်ပြုချက်/အခန်းကဏ္ဍများအတွက် ပွင့်လင်းမြင်သာသော၊ hash-commited tables၊ ပိုင်ဆိုင်မှုတိကျမှုနှင့် မူဝါဒဘောင်ကန့်သတ်ချက်များသည် လေးလံသော ကန့်သတ်ချက်များကို ရှောင်ရှားပါ။
+- နိုင်ငံတော်ကတိကဝတ်များနှင့် အပ်ဒိတ်များ-
+  - ပေါင်းစည်းထားသော SMT အထောက်အထား- ထိမိသောသော့များ (အကြို/ပို့စ်) အားလုံးကို `old_root`/`new_root` နှင့် ဆန့်ကျင်ပြီး ကွဲထွက်နေသော ညီအစ်ကိုမောင်နှမများပါရှိသော နယ်နိမိတ်ကို အသုံးပြု၍ သက်သေပြထားပါသည်။
+  - မျိုးကွဲများ- ကမ္ဘာလုံးဆိုင်ရာပုံစံကွဲများ (ဥပမာ၊ ပစ္စည်းတစ်ခုလျှင် စုစုပေါင်းထောက်ပံ့မှု) ကို အကျိုးသက်ရောက်အတန်းများနှင့် ခြေရာခံထားသောကောင်တာများကြားတွင် အစုံလိုက်ညီမျှမှုဖြင့် ပြဌာန်းထားသည်။
+- သက်သေစနစ်
+  - FRI-style polynomial ကတိကဝတ်များ (DEEP-FRI) မြင့်မားသော အာနိသင် (8/16) နှင့် မှုတ်ထုတ်ခြင်း 8-16; Poseidon2 hashes; SHA-2/3 ဖြင့် Fiat-Shamir မှတ်တမ်း
+  - စိတ်ကြိုက်ပြန်ယူခြင်း- လိုအပ်ပါက အပေါက်တစ်ခုလျှင် အထောက်အထားတစ်ခုသို့ micro-batch များကို ချုံ့ရန် DS-local recursive စုစည်းမှု။
+- နယ်ပယ်နှင့် ဥပမာများ ပါဝင်သည်-
+  - ပိုင်ဆိုင်မှုများ- လွှဲပြောင်းခြင်း၊ mint၊ မီးရှို့ခြင်း၊ မှတ်ပုံတင်ခြင်း/စာရင်းသွင်းခြင်း ပိုင်ဆိုင်မှုဆိုင်ရာ အဓိပ္ပါယ်ဖွင့်ဆိုချက်များ၊ သတ်မှတ်တိကျမှု (ကန့်သတ်ချက်)၊ မက်တာဒေတာကို သတ်မှတ်ပါ။
+  - အကောင့်များ/ဒိုမိန်းများ- ဖန်တီး/ဖယ်ရှားရန်၊ သော့/အဆင့်သတ်မှတ်သတ်မှတ်ရန်၊ လက်မှတ်ထိုးထားသူများကို ပေါင်းထည့်/ဖယ်ရှားခြင်း (နိုင်ငံတော်အတွက်သာ၊ လက်မှတ်စစ်ဆေးမှုများကို DS တရားဝင်စစ်ဆေးသူများမှ သက်သေမပြပါ၊ AIR အတွင်းတွင် သက်သေမပြပါ)။
+  - ရာထူး/ခွင့်ပြုချက်များ (ISI)- အခန်းကဏ္ဍများနှင့် ခွင့်ပြုချက်များကို ပေးအပ်/ပြန်လည်ရုပ်သိမ်းခြင်း။ ရှာဖွေမှုဇယားများနှင့် monotonic မူဝါဒစစ်ဆေးမှုများဖြင့် ပြဋ္ဌာန်းထားသည်။
+  - စာချုပ်များ/AMX- AMX စတင်/ကတိကဝတ်များ၊ စွမ်းဆောင်ရည်ကို ဖွင့်ထားလျှင် mint/revoke၊ ပြည်နယ်အကူးအပြောင်းများနှင့် မူဝါဒဆိုင်ရာ တန်ပြန်မှုများအဖြစ် သက်သေပြခဲ့သည်။
+- လေနေချိန်ကို ထိန်းသိမ်းရန် ပြင်ပလေကြောင်းစစ်ဆေးမှုများ
+  - လက်မှတ်များနှင့် လေးလံသော လျှို့ဝှက်စာဝှက်များ (ဥပမာ၊ ML-DSA အသုံးပြုသူ လက်မှတ်များ) ကို DS validators မှ စစ်ဆေးပြီး DS QC တွင် သက်သေပြပါသည်။ တရားဝင်အထောက်အထားသည် နိုင်ငံတော်၏ညီညွတ်မှုနှင့် မူဝါဒလိုက်နာမှုတို့ကိုသာ အကျုံးဝင်ပါသည်။ ၎င်းသည် PQ သက်သေများကို မြန်ဆန်စွာ ထိန်းသိမ်းပေးသည်။
+- စွမ်းဆောင်ရည်ပစ်မှတ်များ (ဥပမာ၊ 32-core CPU + ခေတ်မီ GPU တစ်ခုတည်း)။
+  - သေးငယ်သောသော့ထိတွေ့မှု (≤8 သော့များ/ISI) ပါရှိသော ရောစပ်ထားသော ISI 20k ပေါင်းစပ်ထားသည်- ~0.4–0.9 စက္ကန့်၊ သက်သေပြချက် ~150–450 KB၊ ~5–15 ms စစ်ဆေးပါ။
+  - ပိုမိုလေးလံသော ISI များ (သော့များ/ကြွယ်ဝသောကန့်သတ်ချက်များ)- micro-batch (ဥပမာ၊ 10×2k) + per-slot <1 s ကို ထိန်းသိမ်းရန် ပြန်လှည့်ခြင်း။
+- DS Manifest ဖွဲ့စည်းမှုပုံစံ-
   - `zk.policy = "fastpq_isi"`
-  - `zk.hash = "poseidon2"`, `zk.fri = { blowup: 8|16, arity: 8|16 }`
+  - `zk.hash = "poseidon2"`၊ `zk.fri = { blowup: 8|16, arity: 8|16 }`
   - `state.commitment = "smt_poseidon2"`
   - `zk.recursion = { none | local }`
-  - `attestation.signatures_in_proof = false` (signatures verified by DS QC)
-  - `attestation.qc_signature = "ml_dsa_87"` (default; alternatives must be explicitly declared)
-- Fallbacks:
-  - Complex/custom ISIs may use a general STARK (`zk.policy = "stark_fri_general"`) with deferred proof and 1 s finality via QC attestation + slashing on invalid proofs.
-  - Non‑PQ options (e.g., Plonk with KZG) require a trusted setup and are no longer supported in the default build.
+  - `attestation.signatures_in_proof = false` (DS QC မှအတည်ပြုထားသောလက်မှတ်များ)
+  - `attestation.qc_signature = "ml_dsa_87"` (မူလ၊ အခြားရွေးချယ်စရာများကို အတိအလင်းကြေညာရပါမည်)
+- မှားယွင်းမှုများ-
+  - ရှုပ်ထွေးသော/စိတ်ကြိုက် ISI များသည် ရွှေ့ဆိုင်းထားသောအထောက်အထားနှင့် 1 s နောက်ဆုံးအဆင့်နှင့်အတူ ယေဘူယျ STARK (`zk.policy = "stark_fri_general"`) ကို QC ထောက်ခံချက်ဖြင့် + မမှန်ကန်သောအထောက်အထားများကို မျဉ်းစောင်းဖြင့်သုံးနိုင်သည်။
+  - Non-PQ ရွေးစရာများ (ဥပမာ၊ Plonk with KZG) သည် ယုံကြည်စိတ်ချရသော စနစ်ထည့်သွင်းမှု လိုအပ်ပြီး ပုံသေတည်ဆောက်မှုတွင် ပံ့ပိုးမှုမရှိတော့ပါ။
 
-AIR Primer (for Nexus)
-- Execution trace: A matrix with width (register columns) and length (steps). Each row is a logical step of ISI processing; columns hold pre/post values, selectors, and flags.
-- Constraints:
-  - Transition constraints: enforce row‑to‑row relations (e.g., post_balance = pre_balance − amount for a debit row when `sel_transfer = 1`).
-  - Boundary constraints: bind public I/O (old_root/new_root, counters) to the first/last rows.
-  - Lookups/permutations: ensure membership and multiset equalities against committed tables (permissions, asset params) without bit‑heavy circuits.
-- Commitment and verification:
-  - Prover commits to traces via hash‑based encodings and constructs low‑degree polynomials that are valid iff constraints hold.
-  - Verifier checks low‑degree via FRI (hash‑based, post‑quantum) with a few Merkle openings; cost is logarithmic in steps.
-- Example (Transfer): registers include pre_balance, amount, post_balance, nonce, and selectors. Constraints enforce non‑negativity/range, conservation, and nonce monotonicity, while an aggregated SMT multi‑proof links pre/post leaves to old/new roots.
+AIR Primer (Nexus အတွက်)
+- အကောင်အထည်ဖော်မှုခြေရာခံ- အကျယ် (ကော်လံများစာရင်းသွင်း) နှင့် အရှည် (ခြေလှမ်းများ) ပါသည့် matrix တစ်ခု။ အတန်းတစ်ခုစီသည် ISI လုပ်ဆောင်ခြင်း၏ ယုတ္တိအဆင့်တစ်ခုဖြစ်သည်။ ကော်လံများတွင် အကြို/ပို့စ်တန်ဖိုးများ၊ ရွေးချယ်မှုများနှင့် အလံများကို ကိုင်ဆောင်ထားသည်။
+- ကန့်သတ်ချက်များ
+  - အကူးအပြောင်းကန့်သတ်ချက်များ- အတန်းမှအတန်းဆက်နွယ်မှုကို တွန်းအားပေးပါ (ဥပမာ၊ post_balance = pre_balance − `sel_transfer = 1` သောအခါ ငွေထုတ်တန်းတစ်ခုအတွက် ပမာဏ)။
+  - နယ်နိမိတ်ကန့်သတ်ချက်များ- အများသူငှာ I/O (old_root/new_root၊ ကောင်တာများ) ကို ပထမ/နောက်ဆုံးအတန်းများနှင့် စည်းပါ။
+  - ရှာဖွေမှုများ/ပြောင်းလဲခြင်း- bit-heavy circuit များမပါဘဲ ကတိပြုထားသောဇယားများ (ခွင့်ပြုချက်များ၊ ပိုင်ဆိုင်မှုဘောင်များ) နှင့် စပ်လျဉ်း၍ အသင်းဝင်ခြင်းနှင့် အစုံလိုက်ညီမျှမှုကို သေချာစေပါ။
+- ကတိကဝတ်နှင့် အတည်ပြုခြင်း-
+  - Prover သည် hash-based encodings များမှတစ်ဆင့် ခြေရာခံရန် ကတိပြုပြီး ခိုင်လုံသော iff ကန့်သတ်ချက်များရှိနေသော low-degree polynomials များကို တည်ဆောက်သည်။
+  - Verifier သည် Merkle အဖွင့်အနည်းငယ်ဖြင့် FRI (hash-based၊ post-quantum) မှတစ်ဆင့် အနိမ့်ဒီဂရီစစ်ဆေးသည်။ ကုန်ကျစရိတ်သည် အဆင့်အလိုက် လော့ဂရစ်သမ်ဖြစ်သည်။
+- ဥပမာ (လွှဲပြောင်းခြင်း)- မှတ်ပုံတင်များတွင် pre_balance၊ ပမာဏ၊ post_balance၊ nonce နှင့် ရွေးပေးသူများ ပါဝင်သည်။ ကန့်သတ်ချက်များသည် စုစည်းထားသော SMT multi-proof လင့်ခ်များကို ကြိုတင်/ပို့စ် အဟောင်း/အသစ်များသို့ ထွက်ခွာသွားစဉ်တွင် ကန့်သတ်ချက်များသည် အနုတ်လက္ခဏာမဟုတ်သော/အပိုင်းအခြား၊ ထိန်းသိမ်းမှု၊ABI နှင့် Syscall Evolution (ABI v1)
+- ထည့်ရန် Syscalls (ဥပမာအမည်များ)
+  - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`။
+- ထည့်ရန် Pointer-ABI အမျိုးအစားများ-
+  - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`။
+- လိုအပ်သောအပ်ဒိတ်များ
+  - `ivm::syscalls::abi_syscall_list()` သို့ထည့်ပါ (အော်ဒါမှာယူထားပါ) မူဝါဒအရ ဂိတ်ပေါက်။
+  - host များတွင် `VMError::UnknownSyscall` သို့ အမည်မသိနံပါတ်များကို မြေပုံဆွဲပါ။
+  - အပ်ဒိတ်စစ်ဆေးမှုများ- syscall စာရင်းရွှေရောင်၊ ABI hash၊ pointer type ID ရွှေရောင်များနှင့် မူဝါဒစမ်းသပ်မှုများ။
+  - Docs- `crates/ivm/docs/syscalls.md`၊ `status.md`၊ `roadmap.md`။
 
-ABI and Syscall Evolution (ABI v1)
-- Syscalls to add (illustrative names):
-  - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- Pointer‑ABI Types to add:
-  - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`.
-- Required updates:
-  - Add to `ivm::syscalls::abi_syscall_list()` (keep ordering), gate by policy.
-  - Map unknown numbers to `VMError::UnknownSyscall` in hosts.
-  - Update tests: syscall list golden, ABI hash, pointer type ID goldens, and policy tests.
-  - Docs: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.
+ကိုယ်ရေးကိုယ်တာပုံစံ
+- Private Data Containment- ငွေပေးငွေယူအဖွဲ့များ၊ ပြည်နယ်ကွဲပြားမှုများနှင့် ပုဂ္ဂလိက DS အတွက် WSV လျှပ်တစ်ပြက်ရိုက်ချက်များသည် သီးသန့်တရားဝင်စနစ်ခွဲခွဲကို ဘယ်သောအခါမှ မထားခဲ့ပါ။
+- အများသူငှာ ထိတွေ့မှု- ခေါင်းစီးများ၊ DA ကတိကဝတ်များနှင့် PQ တရားဝင်အထောက်အထားများကိုသာ တင်ပို့သည်။
+- ရွေးချယ်နိုင်သော ZK အထောက်အထားများ- ကိုယ်ပိုင် DS သည် ZK အထောက်အထားများ (ဥပမာ၊ လုံလောက်သော၊ မူဝါဒကျေနပ်မှု) ကို အတွင်းပိုင်းအခြေအနေကို ထုတ်ဖော်ပြသခြင်းမရှိဘဲ DS လုပ်ဆောင်ချက်များကို ဖွင့်ပေးသည့် ZK အထောက်အထားများကို ထုတ်လုပ်နိုင်သည်။
+- Access Control- ခွင့်ပြုချက်အား DS အတွင်းရှိ ISI/role policy မှ ပြဌာန်းထားသည်။ စွမ်းဆောင်ရည် တိုကင်များကို စိတ်ကြိုက်ရွေးချယ်နိုင်ပြီး လိုအပ်ပါက နောက်ပိုင်းတွင် မိတ်ဆက်နိုင်ပါသည်။
 
-Privacy Model
-- Private Data Containment: Transaction bodies, state diffs, and WSV snapshots for private DS never leave the private validator subset.
-- Public Exposure: Only headers, DA commitments, and PQ validity proofs are exported.
-- Optional ZK Proofs: Private DS may produce ZK proofs (e.g., balance sufficient, policy satisfied) enabling cross‑DS actions without revealing internal state.
-- Access Control: Authorization is enforced by ISI/role policies inside the DS. Capability tokens are optional and can be introduced later if needed.
+Performance Isolation နှင့် QoS
+- DS တစ်ခုစီအလိုက် သဘောတူညီမှု၊ mempool နှင့် သိုလှောင်မှု သီးခြားစီ။
+- Nexus သည် ကျောက်ဆူးပါဝင်သည့်အချိန်ကို ကန့်သတ်ရန်နှင့် ထိပ်ပိုင်းပိတ်ဆို့ခြင်းကို ရှောင်ရှားရန် DS တစ်ခုစီအတွက် ခွဲတမ်းကို အချိန်ဇယားဆွဲခြင်း။
+- IVM host မှ ပြဋ္ဌာန်းထားသော DS (compute/memory/IO) အလိုက် အရင်းအမြစ်ဘတ်ဂျက်များ။ Public-DS ပြိုင်ဆိုင်မှုသည် ကိုယ်ပိုင်-DS ဘတ်ဂျက်များကို သုံးစွဲ၍မရပါ။
+- Asynchronous cross-DS ခေါ်ဆိုမှုများသည် သီးသန့်-DS လုပ်ဆောင်မှုအတွင်း အချိန်အတော်ကြာ ထပ်တူကျသောစောင့်ဆိုင်းမှုများကို ရှောင်ကြဉ်ပါ။
 
-Performance Isolation and QoS
-- Separate consensus, mempools, and storage per DS.
-- Nexus scheduling quotas per DS to bound anchor inclusion time and avoid head-of-line blocking.
-- Contract resource budgets per DS (compute/memory/IO), enforced by IVM host. Public‑DS contention cannot consume private‑DS budgets.
-- Asynchronous cross‑DS calls avoid long synchronous waits inside private‑DS execution.
-
-Data Availability and Storage Design
+ဒေတာရရှိနိုင်မှုနှင့် သိုလှောင်မှုဒီဇိုင်း
 1) Erasure Coding
-- Use systematic Reed‑Solomon (e.g., GF(2^16)) for blob‑level erasure coding of Kura blocks and WSV snapshots: parameters `(k, m)` with `n = k + m` shards.
-- Default parameters (proposed, public DS): `k=32, m=16` (n=48), enabling recovery from up to 16 shard losses with ~1.5× expansion. For private DS: `k=16, m=8` (n=24) within the permissioned set. Both are configurable per DS Manifest.
-- Public Blobs: Shards distributed across many DA nodes/validators with sampling‑based availability checks. DA commitments in headers allow light clients to verify.
-- Private Blobs: Shards encrypted and distributed only within private‑DS validators (or designated custodians). Global chain carries only DA commitments (no shard locations or keys).
+- Kura blocks များနှင့် WSV လျှပ်တစ်ပြက်ရိုက်ချက်များ- ဘောင်များ `n = k + m` ၏ blob-level erasure coding အတွက် စနစ်တကျ Reed-Solomon (ဥပမာ GF(2^16)) ကို အသုံးပြုပါ။
+- မူရင်းဘောင်များ (အဆိုပြုထားသော၊ အများသူငှာ DS)- `k=32, m=16` (n=48)၊ ~1.5× ချဲ့ထွင်ခြင်းဖြင့် ဆုံးရှုံးမှု 16 ခုအထိ ပြန်လည်ရယူခြင်းကို ဖွင့်ပေးသည်။ သီးသန့် DS အတွက်: `k=16, m=8` (n=24) ခွင့်ပြုချက်သတ်မှတ်မှုအတွင်း။ နှစ်ခုလုံးကို DS Manifest အလိုက် ပြင်ဆင်သတ်မှတ်နိုင်သည်။
+- အများသူငှာ Blobs- နမူနာ-အခြေခံရရှိနိုင်မှုစစ်ဆေးမှုများဖြင့် DA node/validators အများအပြားတွင် Shards များကို ဖြန့်ဝေပါသည်။ ခေါင်းစီးများရှိ DA ကတိကဝတ်များသည် အလင်းဖောက်သည်များကို အတည်ပြုရန် ခွင့်ပြုသည်။
+- Private Blobs- Shards များကို လျှို့ဝှက်ကုဒ်ဝှက်ထားပြီး သီးသန့်-DS validators (သို့မဟုတ် သတ်မှတ်ထားသော စောင့်ထိန်းသူများ) အတွင်းသာ ဖြန့်ဝေပါသည်။ ကမ္ဘာလုံးဆိုင်ရာ ကွင်းဆက်သည် DA ကတိကဝတ်များသာ သယ်ဆောင်သည် (ခက်ခဲသော တည်နေရာ သို့မဟုတ် သော့များ မရှိပါ)။
 
-2) Commitments and Sampling
-- For each blob: compute a Merkle root over shards and include it in `*_da_commitment`. Remain PQ by avoiding elliptic‑curve commitments.
-- DA Attesters: VRF‑sampled regional attesters (e.g., 64 per region) issue an ML‑DSA‑87 certificate attesting successful shard sampling. Target DA attestation latency ≤300 ms. Nexus committee validates certificates instead of pulling shards.
+2) ကတိကဝတ်များနှင့် နမူနာယူခြင်း။
+- blob တစ်ခုစီအတွက်- Merkle root ကို shards များပေါ်တွင်တွက်ချက်ပြီး `*_da_commitment` တွင် ထည့်သွင်းပါ။ elliptic-curve ကတိကဝတ်များကို ရှောင်ကြဉ်ခြင်းဖြင့် PQ ကို ဆက်လက်ထားရှိပါ။
+- DA စမ်းသပ်သူများ- VRF-နမူနာယူထားသော ဒေသဆိုင်ရာ သက်သေများ (ဥပမာ၊ ဒေသတစ်ခုလျှင် 64) သည် အောင်မြင်သော ခွဲခြမ်းနမူနာကို သက်သေပြသည့် ML-DSA-87 လက်မှတ်ကို ထုတ်ပေးပါသည်။ ပစ်မှတ် DA သက်သေပြနေချိန် ≤300 ms Nexus ကော်မတီသည် shard များကိုဆွဲမည့်အစား လက်မှတ်များကို တရားဝင်အတည်ပြုသည်။
 
-3) Kura Integration
-- Blocks store transaction bodies as erasure-coded blobs with Merkle commitments.
-- Headers carry blob commitments; bodies are retrievable via DA network for public DS and via private channels for private DS.
+3) Kura ပေါင်းစည်းမှု
+- Merkle ကတိကဝတ်များဖြင့် ဖျက်ပစ်သောကုဒ်ဖြင့်ရေးထားသော blobs များအဖြစ် သိမ်းဆည်းထားသော ငွေလွှဲကောင်များကို ပိတ်ဆို့သည်။
+- ခေါင်းစီးများသည် blob ကတိကဝတ်များကိုသယ်ဆောင်သည်။ အလောင်းများကို အများသူငှာ DS အတွက် DA ကွန်ရက်မှတစ်ဆင့် နှင့် ပုဂ္ဂလိက DS အတွက် သီးသန့်ချန်နယ်များမှတစ်ဆင့် ပြန်လည်ရယူနိုင်သည်။
 
-4) WSV Integration
-- WSV Snapshotting: Periodically checkpoint DS state into chunked, erasure-coded snapshots with commitments recorded in headers. Between snapshots, maintain change logs. Public snapshots are widely sharded; private snapshots remain within private validators.
-- Proof‑Carrying Access: Contracts can provide (or request) state proofs (Merkle/Verkle) anchored by snapshot commitments. Private DS may supply zero‑knowledge attestations instead of raw proofs.
+4) WSV ပေါင်းစည်းမှု
+- WSV လျှပ်တစ်ပြက်ရိုက်ခြင်း- ခေါင်းစီးတွင် မှတ်တမ်းတင်ထားသော ကတိကဝတ်များဖြင့် အပိုင်းပိုင်းဖြတ်ထားသော၊ ဖျက်ပစ်သည့်လျှပ်တစ်ပြက်ပုံများအဖြစ် အချိန်အခါအလိုက် စစ်ဆေးရေးဂိတ်။ လျှပ်တစ်ပြက်ရိုက်ချက်များကြားတွင် ပြောင်းလဲမှုမှတ်တမ်းများကို ထိန်းသိမ်းပါ။ အများသူငှာ လျှပ်တစ်ပြက်ရိုက်ချက်များကို ကျယ်ကျယ်ပြန့်ပြန့် ခွဲဝေပေးသည်။ လျှပ်တစ်ပြက် လျှပ်တစ်ပြက် ဓာတ်ပုံများသည် သီးသန့် အတည်ပြုသူများ အတွင်းတွင် ရှိနေပါသည်။
+- အထောက်အထား-သယ်ဆောင်ခွင့်- စာချုပ်များသည် လျှပ်တစ်ပြက်ကတိကဝတ်များဖြင့် ကျောက်ချထားသည့် (သို့မဟုတ်) နိုင်ငံပိုင်အထောက်အထားများ (Merkle/Verkle) ကို ပံ့ပိုးပေးနိုင်သည်။ ပုဂ္ဂလိက DS သည် အထောက်အထား အထောက်အထားများအစား သုည-အသိပညာ သက်သေခံချက်များကို ပံ့ပိုးပေးနိုင်သည်။
 
-5) Retention and Pruning
-- No pruning for public DS: retain all Kura bodies and WSV snapshots via DA (horizontal scaling). Private DS may define internal retention, but exported commitments remain immutable. Nexus layer retains all Nexus Blocks and DS artifact commitments.
+5) ထိန်းသိမ်းခြင်းနှင့် တံစဉ်များကို ပြုလုပ်ခြင်း။
+- အများသူငှာ DS အတွက် တံစဉ်များကို ဖြတ်တောက်ခြင်းမပြုပါ- DA (အလျားလိုက် အတိုင်းအတာဖြင့်) ဖြတ်၍ Kura အလောင်းများနှင့် WSV လျှပ်တစ်ပြက်အားလုံးကို ထိန်းသိမ်းပါ။ ပုဂ္ဂလိက DS သည် အတွင်းထိန်းသိမ်းမှုကို သတ်မှတ်နိုင်သော်လည်း တင်ပို့သည့်ကတိကဝတ်များသည် မပြောင်းလဲနိုင်ပေ။ Nexus အလွှာသည် Nexus Blocks နှင့် DS artifact ကတိကဝတ်များအားလုံးကို ထိန်းသိမ်းထားသည်။
 
-Networking and Node Roles
-- Global Validators: Participate in nexus consensus, validate Nexus Blocks and DS artifacts, perform DA checks for public DS.
-- Data Space Validators: Run DS consensus, execute contracts, manage local Kura/WSV, handle DA for their DS.
-- DA Nodes (optional): Store/publicize public blobs, facilitate sampling. For private DS, DA nodes are co-located with validators or trusted custodians.
+ကွန်ရက်ချိတ်ဆက်ခြင်းနှင့် Node အခန်းကဏ္ဍများ
+- Global Validators- nexus consensus တွင်ပါဝင်ပါ၊ Nexus Blocks နှင့် DS artifacts များကိုအတည်ပြုပါ၊ အများသူငှာ DS အတွက် DA စစ်ဆေးမှုများကိုလုပ်ဆောင်ပါ။
+- Data Space Validators- DS သဘောတူညီမှုကို လုပ်ဆောင်ပါ၊ စာချုပ်များကို လုပ်ဆောင်ပါ၊ ဒေသတွင်း Kura/WSV ကို စီမံပါ၊ ၎င်းတို့၏ DS အတွက် DA ကို ကိုင်တွယ်ပါ။
+- DA Nodes (ချန်လှပ်ထားနိုင်သည်) : အများသူငှာ blobs များကို သိမ်းဆည်း/အများပြည်သူသို့ ဖြန့်ဝေပါ၊ နမူနာယူခြင်းကို လွယ်ကူချောမွေ့စေပါသည်။ သီးသန့် DS အတွက်၊ DA node များကို validators သို့မဟုတ် trusted custodians နှင့် ပူးတွဲတည်ရှိပါသည်။
 
-System‑Level Improvements and Considerations
-- Sequencing/mempool decoupling: Adopt a DAG mempool (e.g., Narwhal‑style) feeding a pipelined BFT at the nexus layer to lower latency and improve throughput without changing the logical model.
-- DS quotas and fairness: Per‑DS per‑block quotas and weight caps to avoid head‑of‑line blocking and ensure predictable latency for private DS.
-- DS attestation (PQ): Default DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class). This is post‑quantum and larger than EC signatures but acceptable at one QC per slot. DS may explicitly opt for ML‑DSA‑65/44 (smaller) or EC signatures if declared in the DS Manifest; public DS are strongly encouraged to keep ML‑DSA‑87.
-- DA attesters: For public DS, use VRF‑sampled regional attesters that issue DA certificates. The nexus committee validates certificates instead of raw shard sampling; private DS keep DA attestations internal.
-- Recursion and epoch proofs: Optionally aggregate multiple micro‑batches within a DS into one recursive proof per slot/epoch to keep proof sizes and verify time steady under high load.
-- Lane scaling (if needed): If a single global committee becomes a bottleneck, introduce K parallel sequencing lanes with a deterministic merge. This preserves a single global order while scaling horizontally.
-- Deterministic acceleration: Provide SIMD/CUDA feature‑gated kernels for hashing/FFT with a bit‑exact CPU fallback to preserve cross‑hardware determinism.
-- Lane activation thresholds (proposal): Enable 2–4 lanes if either (a) p95 finality exceeds 1.2 s for >3 consecutive minutes, or (b) per‑block occupancy exceeds 85% for >5 minutes, or (c) incoming tx rate would require >1.2× block capacity at sustained levels. Lanes deterministically bucket transactions by DSID hash and merge in the nexus block.
+စနစ်အဆင့် မြှင့်တင်မှုများနှင့် ထည့်သွင်းစဉ်းစားမှုများ
+- Sequencing/mempool decoupling- DAG mempool (ဥပမာ၊ Narwhal-style) ကို nexus အလွှာတွင် ပိုက်လိုင်းထည့်ထားသော BFT ကို ကျွေးသည့် DAG mempool ကို အသုံးပြုပြီး latency ကို လျှော့ချရန်နှင့် ယုတ္တိစံနမူနာကို မပြောင်းလဲဘဲ ပိုမိုကောင်းမွန်အောင် ပြုလုပ်ပါ။
+- DS ခွဲတမ်းနှင့် မျှတမှု- ကန့်သတ်ချက်တစ်ခုချင်းအလိုက် DS ခွဲတမ်းများနှင့် အလေးချိန်ထုပ်များ နှင့် ပုဂ္ဂလိက DS အတွက် ကြိုတင်မှန်းဆနိုင်သော ကြာချိန်ကို သေချာစေရန်။
+- DS သက်သေခံချက် (PQ)- မူရင်း DS ကော်ရမ် လက်မှတ်များသည် ML-DSA-87 (Dilithium5-class) ကို အသုံးပြုသည်။ ၎င်းသည် ကွမ်တမ်လွန်ပြီး EC လက်မှတ်များထက် ပိုကြီးသော်လည်း slot တစ်ခုစီတွင် QC တစ်ခုဖြင့် လက်ခံနိုင်သည်။ DS Manifest တွင်ကြေငြာပါက DS သည် ML-DSA-65/44 (သေးငယ်သည်) သို့မဟုတ် EC လက်မှတ်များကို အတိအလင်းရွေးချယ်နိုင်သည်။ အများသူငှာ DS သည် ML‑DSA-87 ကို ထိန်းသိမ်းထားရန် ပြင်းပြင်းထန်ထန် တိုက်တွန်းထားသည်။
+- DA သက်သေများ- အများသူငှာ DS အတွက်၊ DA လက်မှတ်များထုတ်ပေးသည့် VRF-နမူနာဒေသဆိုင်ရာ သက်သေများကို အသုံးပြုပါ။ အကြမ်းဖျင်းနမူနာအစား ချိတ်ဆက်မှုကော်မတီသည် သက်သေခံလက်မှတ်များကို သက်သေပြသည်။ သီးသန့် DS သည် DA သက်သေခံချက်များကို အတွင်းပိုင်း၌ သိမ်းဆည်းထားသည်။
+- ထပ်ခါတလဲလဲ နှင့် ခေတ်အထောက်အထားများ- DS အတွင်းရှိ မိုက်ခရို-အသုတ်များစွာကို သက်သေအရွယ်အစားကို ထိန်းသိမ်းရန်နှင့် ဝန်ကြီးမားသောအချိန်ကို တည်ငြိမ်စွာစစ်ဆေးရန်အတွက် အပေါက်/အပိုင်းတစ်ခုစီတွင် တစ်ထပ်တည်းပါသော အထောက်အထားများကို တစ်ခုတည်းဖြင့် ပေါင်းစပ်နိုင်သည်။
+- လမ်းကြောချဲ့ထွင်ခြင်း (လိုအပ်ပါက)- ကမ္ဘာလုံးဆိုင်ရာကော်မတီတစ်ခုသည် ပိတ်ဆို့မှုတစ်ခုဖြစ်လာပါက၊ K parallel sequencing lanes ကို အဆုံးအဖြတ်ပေးသည့်ပေါင်းစပ်မှုဖြင့် မိတ်ဆက်ပေးပါ။ ၎င်းသည် အလျားလိုက် အတိုင်းအတာ ချဲ့ထွင်နေစဉ် ကမ္ဘာလုံးဆိုင်ရာ အမှာစာတစ်ခုတည်းကို ထိန်းသိမ်းသည်။
+- အဆုံးအဖြတ် အရှိန်မြှင့်ခြင်း- ဟာ့ဒ်ဝဲ အဆုံးအဖြတ်ကို ထိန်းသိမ်းထားနိုင်ရန် ဟာ့ဒ်ဝဲ အဆုံးအဖြတ်ကို ထိန်းထားနိုင်စေရန် ဟက်ဒ်/FFT အတွက် SIMD/CUDA အင်္ဂါရပ် တံခါးပိတ် ကာနယ်များကို ပေးဆောင်ပါ။
+- လမ်းသွားအသက်သွင်းခြင်းအဆင့်များ (အဆိုပြုချက်)- (က) p95 နောက်ဆုံးအဆင့်သည် 1.2 စက္ကန့် ဆက်တိုက် 1.2 စက္ကန့် ကျော်လွန်ပါက သို့မဟုတ် (ခ) တစ်တုံးလျှင် တည်းခိုနှုန်း 85% ကျော်လွန်နေသည် သို့မဟုတ် (ဂ) အဝင် tx နှုန်းသည် > 1.2× ပိတ်ဆို့နိုင်သည့် ပမာဏ လိုအပ်ပါသည်။ ဆက်လက်တည်ရှိသည် လမ်းသွယ်များသည် DSID hash ဖြင့် ငွေပေးငွေယူပုံးများကို အဆုံးအဖြတ်ပေးပြီး ချိတ်ဆက်မှုပိတ်ဆို့ခြင်းတွင် ပေါင်းစည်းသည်။
 
-Fees and Economics (Initial Defaults)
-- Gas unit: per‑DS gas token with metered compute/IO; fees are paid in the DS’s native gas asset. Conversion across DS is an application concern.
-- Inclusion priority: round‑robin across DS with per‑DS quotas to preserve fairness and 1s SLOs; within a DS, fee bidding can break ties.
-- Future: optional global fee market or MEV‑minimizing policies can be explored without changing atomicity or PQ proof design.
+အခကြေးငွေနှင့် စီးပွားရေး (ကနဦး ပုံသေများ)
+- ဓာတ်ငွေ့ယူနစ်- မီတာတိုင်းတာထားသော ကွန်ပျူတာ/IO ပါရှိသော ဓာတ်ငွေ့သင်္ကေတ၊ အခကြေးငွေကို DS ၏ဇာတိဓာတ်ငွေ့ပိုင်ဆိုင်မှုတွင်ပေးဆောင်သည်။ DS ကိုဖြတ်၍ ပြောင်းလဲခြင်းသည် အက်ပ်လီကေးရှင်းအတွက် စိုးရိမ်စရာဖြစ်သည်။
+- ပါဝင်မှုဦးစားပေး- တရားမျှတမှုနှင့် 1s SLOs များကို ထိန်းသိမ်းထားရန်အတွက် DS တွင် per-DS ခွဲတမ်းများပါသော အလှည့်အပြောင်းများ။ DS တွင်၊ အခကြေးငွေဖြင့် လေလံဆွဲခြင်းသည် အဆက်အသွယ်ဖြတ်တောက်နိုင်သည်။
+- အနာဂတ်- ရွေးချယ်နိုင်သော ကမ္ဘာလုံးဆိုင်ရာအခကြေးငွေစျေးကွက် သို့မဟုတ် MEV-အနိမ့်ဆုံးမူဝါဒများကို အနုမြူစွမ်းအင် သို့မဟုတ် PQ သက်သေဒီဇိုင်းကို ပြောင်းလဲခြင်းမရှိဘဲ စူးစမ်းလေ့လာနိုင်ပါသည်။
 
-Cross‑Data‑Space Workflow (Example)
-1) A user submits an AMX transaction touching public DS P and private DS S: move asset X from S to beneficiary B whose account is in P.
-2) Within the slot, P and S each execute their fragment against the slot snapshot. S verifies authorization and availability, updates its internal state, and produces a PQ validity proof and DA commitment (no private data leaked). P prepares the corresponding state update (e.g., mint/burn/locking in P according to policy) and its proof.
-3) The nexus committee verifies both DS proofs and DA certificates; if both verify within the slot, the transaction is committed atomically in the 1s Nexus Block, updating both DS roots in the global world state vector.
-4) If any proof or DA certificate is missing/invalid, the transaction aborts (no effects), and the client may resubmit for the next slot. No private data leaves S at any step.
+Cross-Data-Space အလုပ်အသွားအလာ (ဥပမာ)
+1) အသုံးပြုသူတစ်ဦးသည် အများသူငှာ DS P နှင့် သီးသန့် DS S တို့ထိသော AMX ငွေပေးငွေယူတစ်ခုကို တင်သွင်းသည်- ပိုင်ဆိုင်မှု X မှ S မှ အကျိုးခံစားခွင့် B သို့ အကောင့် P တွင်ရှိသော အကျိုးခံစားခွင့် B သို့ ရွှေ့ပါ။
+2) အထိုင်အတွင်းတွင်၊ P နှင့် S သည် ၎င်းတို့၏အပိုင်းအစများကို အထိုင်လျှပ်တစ်ပြက်ရိုက်ချက်နှင့် ဆန့်ကျင်သည်။ S သည် ခွင့်ပြုချက်နှင့် ရရှိနိုင်မှုကို အတည်ပြုပြီး ၎င်း၏အတွင်းပိုင်းအခြေအနေကို အပ်ဒိတ်လုပ်ကာ PQ တရားဝင်အထောက်အထားနှင့် DA ကတိကဝတ် (ပုဂ္ဂလိကအချက်အလက်များ ပေါက်ကြားခြင်းမရှိပါ)။ P သည် မူဝါဒအရ သက်ဆိုင်ရာပြည်နယ်အပ်ဒိတ်ကို ပြင်ဆင်သည် (ဥပမာ၊ mint/burn/locking/locking) နှင့် ၎င်း၏သက်သေ။
+3) ဆက်စပ်ကော်မတီသည် DS အထောက်အထားများနှင့် DA လက်မှတ်များ နှစ်ခုလုံးကို စစ်ဆေးသည်။ အပေါက်အတွင်း နှစ်ခုစလုံးကို အတည်ပြုပါက၊ 1s Nexus Block တွင် အက်တမ်ဖြင့် ငွေပေးငွေယူလုပ်ဆောင်ပြီး DS root နှစ်ခုလုံးကို global world state vector တွင် အပ်ဒိတ်လုပ်ပါသည်။
+4) မည်သည့်အထောက်အထား သို့မဟုတ် DA လက်မှတ်ပျောက်ဆုံးနေသည်/တရားမ၀င်ပါက၊ ငွေပေးငွေယူသည်ပျက်သွားသည် (သက်ရောက်မှုမရှိ) နှင့် client သည် နောက် slot တစ်ခုအတွက် ပြန်လည်ပေးပို့နိုင်ပါသည်။ မည်သည့်အဆင့်တွင်မဆို ကိုယ်ရေးကိုယ်တာဒေတာ S ကို ချန်ထားခဲ့ခြင်းမရှိပါ။
 
-- Security Considerations
-- Deterministic Execution: IVM syscalls remain deterministic; cross‑DS outcomes are driven by AMX commit and finality, not wall‑clock or network timing.
-- Access Control: ISI permissions in private DS restrict who may submit transactions and what operations are allowed. Capability tokens encode fine‑grained rights for cross‑DS use.
-- Confidentiality: End‑to‑end encryption for private‑DS data, erasure‑coded shards stored only among authorized members, optional ZK proofs for external attestations.
-- DoS Resistance: Isolation at mempool/consensus/storage layers prevents public congestion from impacting private‑DS progress.
+- လုံခြုံရေးဆိုင်ရာ ထည့်သွင်းစဉ်းစားမှုများ
+- Deterministic Execution- IVM syscall များသည် အဆုံးအဖြတ်အတိုင်း ဆက်လက်တည်ရှိနေပါသည်။ cross-DS ရလဒ်များကို AMX ကတိကဝတ်နှင့် နောက်ဆုံးအဆင့်၊ နံရံ-နာရီ သို့မဟုတ် ကွန်ရက်အချိန်ကိုက်ခြင်းမဟုတ်ဘဲ မောင်းနှင်ခြင်းဖြစ်သည်။
+- Access Control- ပုဂ္ဂလိက DS တွင် ISI ခွင့်ပြုချက်များသည် ငွေပေးငွေယူများကို တင်သွင်းမည့်သူနှင့် မည်သည့်လုပ်ငန်းဆောင်တာများကို ခွင့်ပြုထားသည်ကို ကန့်သတ်ထားသည်။ စွမ်းရည် တိုကင်များသည် DS ဖြတ်ကျော်အသုံးပြုမှုအတွက် ကောင်းမွန်သောအခွင့်အရေးများကို ကုဒ်လုပ်ထားသည်။
+- လျှို့ဝှက်ထားမှု- ကိုယ်ရေးကိုယ်တာ-DS ဒေတာအတွက် အဆုံးမှ အဆုံးထိ ကုဒ်ဝှက်ခြင်း၊ ခွင့်ပြုထားသော အဖွဲ့ဝင်များကြားတွင်သာ သိမ်းဆည်းထားသော ဖျက်-ကုဒ်နံပါတ်များ၊ ပြင်ပအထောက်အထားများအတွက် ရွေးချယ်နိုင်သော ZK အထောက်အထားများ။
+- DoS Resistance- mempool/ consensus/storage layers တွင် သီးခြားခွဲထားခြင်းဖြင့် public-DS တိုးတက်မှုကို ထိခိုက်ခြင်းမှ အများသူငှာ ပိတ်ဆို့မှုကို တားဆီးပေးပါသည်။Iroha အစိတ်အပိုင်းများသို့ ပြောင်းလဲခြင်း။
+- iroha_data_model- `DataSpaceId`၊ DS-အရည်အချင်းပြည့်မီသော ခွဲခြားသတ်မှတ်မှုများ၊ AMX သရုပ်ဖော်မှုများ (ဖတ်ရန်/ရေးထားသောအစုံ)၊ အထောက်အထား/DA ကတိကဝတ်အမျိုးအစားများကို မိတ်ဆက်ပါ။ Norito သီးသန့် အမှတ်စဉ်။
+- ivm- AMX (`amx_begin`၊ `amx_commit`၊ `amx_touch`) နှင့် DA အထောက်အထားများအတွက် syscalls နှင့် pointer-ABI အမျိုးအစားများကို ပေါင်းထည့်ပါ။ v1 မူဝါဒအလိုက် ABI စမ်းသပ်မှုများ/စာရွက်စာတမ်းများကို အပ်ဒိတ်လုပ်ပါ။
+- iroha_core- nexus အစီအစဉ်ဆွဲသူ၊ Space Directory၊ AMX လမ်းကြောင်းပြခြင်း/တရားဝင်မှု၊ DS ရှေးဟောင်းပစ္စည်းများ အတည်ပြုခြင်းနှင့် DA နမူနာနှင့် ခွဲတမ်းအတွက် မူဝါဒကို ကျင့်သုံးခြင်း။
+- Space Directory နှင့် manifest loaders များ- Thread FMS endpoint metadata ( DS manifest parsing မှတဆင့် အခြား common-good service descriptors များ) သည် Data Space တွင်ပါဝင်သည့်အခါ nodes များသည် local service endpoints ကို အလိုအလျောက်ရှာဖွေတွေ့ရှိပါသည်။
+- kura- သီးသန့်/အများပြည်သူဆိုင်ရာမူဝါဒများကို လေးစားလိုက်နာသော ကုဒ်နံပါတ်များ၊ ကတိကဝတ်များ၊ ထုတ်ယူခြင်း API များပါရှိသော Blob စတိုး။
+- WSV- လျှပ်တစ်ပြက်ရိုက်ခြင်း၊ အတုံးအခဲများ၊ ကတိကဝတ်များ အထောက်အထား API များ; AMX ပဋ္ဋိပက္ခရှာဖွေခြင်းနှင့် အတည်ပြုခြင်းနှင့်အတူ ပေါင်းစည်းခြင်း။
+- irohad- Node အခန်းကဏ္ဍများ၊ DA အတွက် ကွန်ရက်ချိတ်ဆက်ခြင်း၊ သီးသန့်-DS အဖွဲ့ဝင်ခြင်း/အထောက်အထားစိစစ်ခြင်း၊ `iroha_config` မှတဆင့် ဖွဲ့စည်းမှု (ထုတ်လုပ်မှုလမ်းကြောင်းများတွင် env ခလုတ်များ မပါပါ)။
 
-Changes to Iroha Components
-- iroha_data_model: Introduce `DataSpaceId`, DS‑qualified identifiers, AMX descriptors (read/write sets), proof/DA commitment types. Norito‑only serialization.
-- ivm: Add syscalls and pointer‑ABI types for AMX (`amx_begin`, `amx_commit`, `amx_touch`), and DA proofs; update ABI tests/docs per v1 policy.
-- iroha_core: Implement nexus scheduler, Space Directory, AMX routing/validation, DS artifact verification, and policy enforcement for DA sampling and quotas.
-- Space Directory & manifest loaders: Thread FMS endpoint metadata (and other common-good service descriptors) through DS manifest parsing so nodes auto-discover local service endpoints when joining a Data Space.
-- kura: Blob store with erasure coding, commitments, retrieval APIs respecting private/public policies.
-- WSV: Snapshotting, chunking, commitments; proof APIs; integration with AMX conflict detection and verification.
-- irohad: Node roles, networking for DA, private‑DS membership/authentication, configuration via `iroha_config` (no env toggles in production paths).
+ဖွဲ့စည်းမှုနှင့် အဆုံးအဖြတ်ပေးခြင်း
+- `iroha_config` မှတဆင့် configure လုပ်ထားသော runtime အပြုအမူအားလုံးနှင့် constructors/hosts များမှတဆင့် threaded ။ ထုတ်လုပ်မှု env ခလုတ်များမရှိပါ။
+- ဟာ့ဒ်ဝဲအရှိန်မြှင့်ခြင်း (SIMD/NEON/METAL/CUDA) သည် ရွေးချယ်နိုင်ပြီး အင်္ဂါရပ်ကို ကန့်သတ်ထားသည်။ အဆုံးအဖြတ်ပေးသော မှားယွင်းမှုများသည် ဟာ့ဒ်ဝဲတစ်လျှောက် တူညီသောရလဒ်များကို ထုတ်ပေးရပါမည်။
+ - Post-Quantum ပုံသေ- DS အားလုံးသည် PQ တရားဝင်အထောက်အထားများ (STARK/FRI) နှင့် DS QC များအတွက် ML-DSA‑87 ကို မူရင်းအတိုင်း အသုံးပြုရပါမည်။ အခြားရွေးချယ်စရာများသည် တိကျသော DS Manifest ကြေငြာချက်နှင့် မူဝါဒအတည်ပြုချက် လိုအပ်ပါသည်။
 
-Configuration and Determinism
-- All runtime behavior configured via `iroha_config` and threaded through constructors/hosts. No production env toggles.
-- Hardware acceleration (SIMD/NEON/METAL/CUDA) is optional and feature-gated; deterministic fallbacks must produce identical results across hardware.
- - Post‑Quantum default: All DS must use PQ validity proofs (STARK/FRI) and ML‑DSA‑87 for DS QCs by default. Alternatives require explicit DS Manifest declaration and policy approval.
+ရွှေ့ပြောင်းခြင်းလမ်းကြောင်း (Iroha 2 → Iroha 3)
+1) ဒေတာမော်ဒယ်တွင် data-space-အရည်အချင်းပြည့်မီသော ID များနှင့် nexus ပိတ်ဆို့ခြင်း/ကမ္ဘာ့အခြေအနေဖွဲ့စည်းမှုကို မိတ်ဆက်ပါ။ အကူးအပြောင်းကာလအတွင်း Iroha 2 အမွေအနှစ်မုဒ်များထားရှိရန် အင်္ဂါရပ်အလံများထည့်ပါ။
+2) Kura/WSV အင်္ဂါရပ်အလံများနောက်ကွယ်ရှိ ဖျက်ပစ်ရေး-ကုဒ်ရေးခြင်း နောက်ကွယ်တွင် အကောင်အထည်ဖော်ပါ၊ အစောပိုင်းအဆင့်များအတွင်း လက်ရှိနောက်ကွယ်မှ ပုံသေများကို ထိန်းသိမ်းထားပါ။
+3) AMX (atomic multi-DS) လုပ်ဆောင်ချက်များအတွက် IVM syscalls နှင့် pointer အမျိုးအစားများကို ထည့်ပါ။ စာမေးပွဲများနှင့် စာရွက်စာတမ်းများကို တိုးချဲ့ခြင်း၊ ABI v1 ကိုထားပါ။
+4) အများသူငှာ DS နှင့် 1s လုပ်ကွက်တစ်ခုတည်းဖြင့် အနည်းဆုံး nexus ကွင်းဆက်ကို ပေးပို့ပါ။ ထို့နောက် ပထမပုဂ္ဂလိက-DS ရှေ့ပြေးတင်ပို့သည့် အထောက်အထားများ/ကတိကဝတ်များကိုသာ ထည့်ပါ။
+5) DS-ပြည်တွင်း FASTPQ-ISI အထောက်အထားများနှင့် DA သက်သေအထောက်အထားများဖြင့် အက်တမ်ဖြတ်ကျော် DS လွှဲပြောင်းမှုများ (AMX) သို့ ချဲ့ထွင်ပါ။ DS တစ်လျှောက် ML-DSA-87 QCs ကို ဖွင့်ပါ။
 
-Migration Path (Iroha 2 → Iroha 3)
-1) Introduce data‑space‑qualified IDs and nexus block/global state composition in data model; add feature flags to keep Iroha 2 legacy modes during transition.
-2) Implement Kura/WSV erasure‑coding backends behind feature flags, preserving current backends as defaults during early phases.
-3) Add IVM syscalls and pointer types for AMX (atomic multi‑DS) operations; extend tests and docs; keep ABI v1.
-4) Deliver minimal nexus chain with a single public DS and 1s blocks; then add first private‑DS pilot exporting proofs/commitments only.
-5) Expand to full atomic cross‑DS transactions (AMX) with DS‑local FASTPQ‑ISI proofs and DA attesters; enable ML‑DSA‑87 QCs across DS.
+စမ်းသပ်ခြင်းဗျူဟာ
+- ဒေတာမော်ဒယ်အမျိုးအစားများအတွက် ယူနစ်စမ်းသပ်မှုများ၊ Norito အသွားအပြန်များ၊ AMX syscall အပြုအမူများနှင့် အထောက်အထား ကုဒ်သွင်းခြင်း/ကုဒ်လုပ်ခြင်း။
+- syscall အသစ်များနှင့် ABI ရွှေရောင်များအတွက် IVM စမ်းသပ်မှုများ။
+- အက်တမ်ဖြတ်ကျော် DS အရောင်းအ၀ယ်များအတွက် ပေါင်းစပ်စမ်းသပ်မှုများ (အပြုသဘော/အနုတ်လက္ခဏာ)၊ DA သက်သေခံနေချိန်ပစ်မှတ်များ (≤300 ms)၊ နှင့် ဝန်အောက်တွင် စွမ်းဆောင်ရည် သီးခြားထားရှိခြင်း။
+- DS QC အတည်ပြုခြင်း (ML‑DSA‑87)၊ ပဋိပက္ခရှာဖွေခြင်း/ပျက်ကွက်ခြင်းဆိုင်ရာ အဓိပ္ပါယ်သတ်မှတ်ချက်များနှင့် လျှို့ဝှက်လျှို့ဝှက်ပေါက်ကြားမှုကာကွယ်ခြင်းအတွက် လုံခြုံရေးစစ်ဆေးမှုများ။
 
-Testing Strategy
-- Unit tests for data model types, Norito roundtrips, AMX syscall behaviors, and proof encoding/decoding.
-- IVM tests for new syscalls and ABI goldens.
-- Integration tests for atomic cross‑DS transactions (positive/negative), DA attester latency targets (≤300 ms), and performance isolation under load.
-- Security tests for DS QC verification (ML‑DSA‑87), conflict detection/abort semantics, and confidential shard leakage prevention.
+### NX-18 Telemetry & Runbook ပိုင်ဆိုင်မှုများ
 
-### NX-18 Telemetry & Runbook Assets
+- **Grafana ဘုတ်-** `dashboards/grafana/nexus_lanes.json` သည် NX-18 မှ တောင်းဆိုထားသည့် “Nexus Lane Finality & Oracles” ဒက်ရှ်ဘုတ်ကို ယခု တင်ပို့ပါသည်။ အကန့်များသည် `histogram_quantile()` တွင် `histogram_quantile()`၊ `iroha_da_quorum_ratio`၊ DA ရရှိနိုင်မှုသတိပေးချက်များ (`sumeragi_da_gate_block_total{reason="missing_local_data"}`)၊ oracle price/staleness/TWAP/haircut gauges များနှင့် တိုက်ရိုက် I18NI00001000 ကို သက်သေပြနိုင်သည် စိတ်ကြိုက်မေးခွန်းများမပါဘဲ slot၊ DA နှင့် treasury SLO များ။
+- **Runbook:** `docs/source/runbooks/nexus_lane_finality.md` သည် NX-18 မှ "ထုတ်ဝေသည့် အော်ပရေတာ ဒက်ရှ်ဘုတ်များ/ပြေးစာအုပ်များ" ကျည်ဆန်များကို ဖြည့်ဆည်းပေးသည့် ဒိုင်ခွက်များ၊ အဖြစ်အပျက်အဆင့်များ၊ အထောက်အထားများ ဖမ်းယူခြင်း၊ ပရမ်းပတာလေ့ကျင့်မှုများ) ကို မှတ်တမ်းတင်ထားသည်။
+- **Telemetry helpers-** သည် DA/quorum/oracle/buffer14017 နှင့်00sLONI ကာလအတွင်း `ci/check_nexus_lane_smoke.sh` အတွင်းရှိ `ci/check_nexus_lane_smoke.sh` နှင့် 00sLONI နှင့် 00sLONI40slot ကာလအတွင်း တင်ပို့ထားသော ဒက်ရှ်ဘုတ်များ ကွဲပြားစေရန် (အဆင့်မြှင့်တင်ခြင်း/ထုတ်ကုန်ကြားခံ/အထိုင်များ/အထိုင်များ/အထိုင်များ 40sLONI40s) အတွင်းရှိ `scripts/telemetry/compare_dashboards.py` ကို ပြန်လည်အသုံးပြုပါ။ လမ်းကြောင်းလွဲခြင်း သို့မဟုတ် ပရမ်းပတာ အစမ်းလေ့ကျင့်မှုများကြောင့် NX-18 လေ့ကျင့်မှုတိုင်းသည် ကိုက်ညီသည့် `nexus.audit.outcome` ပါ၀င်မှုအား သိမ်းဆည်းထားသည်။
 
-- **Grafana board:** `dashboards/grafana/nexus_lanes.json` now exports the “Nexus Lane Finality & Oracles” dashboard requested by NX‑18. Panels cover `histogram_quantile()` on `iroha_slot_duration_ms`, `iroha_da_quorum_ratio`, DA availability warnings (`sumeragi_da_gate_block_total{reason="missing_local_data"}`), oracle price/staleness/TWAP/haircut gauges, and the live `iroha_settlement_buffer_xor` buffer panel so operators can prove the 1 s slot, DA, and treasury SLOs without bespoke queries.
-- **Runbook:** `docs/source/runbooks/nexus_lane_finality.md` documents the on-call workflow (thresholds, incident steps, evidence capture, chaos drills) that accompanies the dashboard, fulfilling the “publish operator dashboards/runbooks” bullet from NX‑18.
-- **Telemetry helpers:** reuse the existing `scripts/telemetry/compare_dashboards.py` to diff exported dashboards (preventing staging/prod drift), run `scripts/telemetry/nx18_acceptance.py --json-out artifacts/nx18/nx18_acceptance.json <metrics.prom>` inside `ci/check_nexus_lane_smoke.sh` to gate DA/quorum/oracle/buffer/slot SLOs, and call `scripts/telemetry/check_nexus_audit_outcome.py` during routed-trace or chaos rehearsals so every NX‑18 drill archives the matching `nexus.audit.outcome` payload.
+အဖွင့်မေးခွန်းများ (ရှင်းလင်းချက်လိုအပ်သည်)
+1) ငွေပေးငွေယူ လက်မှတ်များ- ဆုံးဖြတ်ချက် — သုံးစွဲသူများသည် ၎င်းတို့၏ ပစ်မှတ် DS ကြော်ငြာသည့် မည်သည့် လက်မှတ်ထိုးရေး အယ်လဂိုရီသမ် (Ed25519၊ secp256k1၊ ML-DSA စသည်) ကို လွတ်လပ်စွာ ရွေးချယ်နိုင်သည်။ လက်ခံဆောင်ရွက်ပေးသူများသည် manifests များတွင် multisig/curve စွမ်းရည်အလံများကို ခိုင်ခံ့စေရမည်၊ အဆုံးအဖြတ်ပေးသော ဆုတ်ယုတ်မှုများကို ပေးဆောင်ရန်နှင့် အယ်လဂိုရီသမ်များ ရောနှောသည့်အခါ latency သက်ရောက်မှုများကို မှတ်တမ်းတင်ရပါမည်။ ထူးထူးခြားခြား- Torii/SDKs တစ်လျှောက် စွမ်းရည်ညှိနှိုင်းမှုကို အပြီးသတ်ပြီး ဝင်ခွင့်စာမေးပွဲများကို အပ်ဒိတ်လုပ်ပါ။
+2) ဓာတ်ငွေ့စီးပွားရေး- DS တစ်ခုစီသည် ဒေသတွင်း တိုကင်တစ်ခုတွင် ဓာတ်ငွေ့ကို ခွဲခြားသတ်မှတ်နိုင်ပြီး ကမ္ဘာလုံးဆိုင်ရာ အခြေချခများကို SORA XOR ဖြင့် ပေးဆောင်နေချိန်တွင် ဖြစ်သည်။ ထူးထူးခြားခြား- စံပြောင်းလဲခြင်းလမ်းကြောင်း (အများပြည်သူ-လမ်းသွား DEX နှင့် အခြားငွေဖြစ်လွယ်မှုရင်းမြစ်များ)၊ လယ်ဂျာစာရင်းကိုင်ချိတ်များ၊ နှင့် ထောက်ပံ့ကြေး သို့မဟုတ် သုညဈေးဖြင့် လွှဲပြောင်းပေးသည့် DS အတွက် အကာအကွယ်များကို သတ်မှတ်ပါ။
+3) DA သက်သေအထောက်အထားများ- တာရှည်ခံမှုကို ထိန်းသိမ်းထားစဉ်တွင် ≤300 ms ပြည့်မီရန် သတ်မှတ်ထားသော နံပါတ် (ဥပမာ၊ နမူနာ 64၊ 43-of-64 ML-DSA-87 လက်မှတ်များ)။ ပထမနေ့မှစပြီး ကျွန်ုပ်တို့ပါဝင်ရမည့် ဒေသများ။
+4) မူရင်း DA ကန့်သတ်ချက်များ- ကျွန်ုပ်တို့သည် အများသူငှာ DS `k=32, m=16` နှင့် ပုဂ္ဂလိက DS `k=16, m=8` ကို အဆိုပြုထားပါသည်။ အချို့သော DS အတန်းများအတွက် ပိုများသော ထပ်လောင်းပရိုဖိုင် (ဥပမာ၊ `k=30, m=20`) ကို လိုချင်ပါသလား။
+5) DS အသေးစိတ်- ဒိုမိန်းများနှင့် ပိုင်ဆိုင်မှု နှစ်ခုလုံးသည် DS ဖြစ်နိုင်သည်။ မူဝါဒများ၏ စိတ်ကြိုက်အမွေဆက်ခံမှုဖြင့် အထက်အောက် DS (ဒိုမိန်း DS (ဒိုမိန်း DS) ကို ပိုင်ဆိုင်မှု DS ၏ ပင်မအဖြစ်) ပံ့ပိုးပေးသင့်သလား၊ သို့မဟုတ် ၎င်းတို့ကို v1 အတွက် သီးသန့်ထားရှိသင့်ပါသလား။
+6) လေးလံသော ISI များ- ဒုတိယ အထောက်အထားများ မထုတ်ပေးနိုင်သော ရှုပ်ထွေးသော ISI များအတွက်၊ ကျွန်ုပ်တို့သည် ၎င်းတို့အား (က) ငြင်းပယ်သင့်သည်၊ (ခ) လုပ်ကွက်များကိုဖြတ်၍ အနုမြူအဆင့်ငယ်များအဖြစ်သို့ ခွဲထုတ်သင့်သည် သို့မဟုတ် (ဂ) နှောင့်နှေးသောထည့်သွင်းမှုကို တိကျပြတ်သားစွာ အလံများဖြင့် ခွင့်ပြုသင့်ပါသလား။
+7) Cross-DS ပဋိပက္ခများ- client-declared read/write သည် လုံလောက်သည်လော သို့မဟုတ် လက်ခံသူသည် ဘေးကင်းစေရန်အတွက် ၎င်းကို အလိုအလျောက် ချဲ့ထွင်သင့်သလား (ပိုမိုများပြားသော ပဋိပက္ခများကို ကုန်ကျစရိတ်ဖြင့်)။
 
-Open Questions (Clarification Needed)
-1) Transaction signatures: Decision — end users are free to pick any signing algorithm that their target DS advertises (Ed25519, secp256k1, ML‑DSA, etc.). Hosts must enforce multisig/curve capability flags in manifests, provide deterministic fallbacks, and document latency implications when mixing algorithms. Outstanding: finalise capability negotiation flow across Torii/SDKs and update admission tests.
-2) Gas economics: Each DS may denominate gas in a local token, while global settlement fees are paid in SORA XOR. Outstanding: define the standard conversion path (public-lane DEX vs. other liquidity sources), ledger accounting hooks, and safeguards for DS that subsidise or zero-price transactions.
-3) DA attesters: Target number per region and threshold (e.g., 64 sampled, 43‑of‑64 ML‑DSA‑87 signatures) to meet ≤300 ms while maintaining durability. Any regions we must include from day one?
-4) Default DA parameters: We proposed public DS `k=32, m=16` and private DS `k=16, m=8`. Do you want a higher redundancy profile (e.g., `k=30, m=20`) for certain DS classes?
-5) DS granularity: Domains and assets can both be DS. Should we support hierarchical DS (domain DS as parent of asset DS) with optional inheritance of policies, or keep them flat for v1?
-6) Heavy ISIs: For complex ISIs that cannot produce sub‑second proofs, should we (a) reject them, (b) split into smaller atomic steps across blocks, or (c) allow delayed inclusion with explicit flags?
-7) Cross‑DS conflicts: Is client‑declared read/write set sufficient, or should the host infer and expand it automatically for safety (at cost of more conflicts)?
-
-Appendix: Compliance with Repository Policies
-- Norito is used for all wire formats and JSON serialization via Norito helpers.
-- ABI v1 only; no runtime toggles for ABI policies. Syscall and pointer-type additions follow the documented evolution process with golden tests.
-- Determinism preserved across hardware; acceleration is optional and gated.
-- No serde in production paths; no environment-based configuration in production.
+နောက်ဆက်တွဲ- Repository မူဝါဒများကို လိုက်နာခြင်း။
+- Norito ကို Norito အကူအညီပေးသူများမှတစ်ဆင့် ဝိုင်ယာဖော်မတ်များနှင့် JSON အမှတ်စဉ်ပြုလုပ်ခြင်းအတွက် အသုံးပြုသည်။
+- ABI v1 သာ; ABI မူဝါဒများအတွက် runtime ခလုတ်မရှိပါ။ Syscall နှင့် pointer-type ဖြည့်စွက်မှုများသည် ရွှေရောင်စစ်ဆေးမှုများဖြင့် မှတ်တမ်းတင်ထားသော ဆင့်ကဲဖြစ်စဉ်ကို လိုက်နာသည်။
+- ဟာ့ဒ်ဝဲတစ်လျှောက်တွင် ထိန်းသိမ်းထားသော သတ်မှတ်ပြဋ္ဌာန်းချက်များ၊ အရှိန်အဟုန်သည် ရွေးချယ်နိုင်ပြီး ကန့်သတ်ထားသည်။
+- ထုတ်လုပ်မှုလမ်းကြောင်းများတွင် serde မရှိပါ။ ထုတ်လုပ်မှုတွင် ပတ်ဝန်းကျင်အခြေခံဖွဲ့စည်းမှု မရှိပါ။

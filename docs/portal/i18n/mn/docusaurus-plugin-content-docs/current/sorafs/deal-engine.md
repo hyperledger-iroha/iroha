@@ -8,66 +8,68 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Deal Engine
 sidebar_label: Deal Engine
 description: Overview of the SF-8 deal engine, Torii integration, and telemetry surfaces.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
 # SoraFS Deal Engine
 
-The SF-8 roadmap track introduces the SoraFS deal engine, providing
-deterministic accounting for storage and retrieval agreements between
-clients and providers. Agreements are described with the Norito payloads
-defined in `crates/sorafs_manifest/src/deal.rs`, covering deal terms, bond
-locking, probabilistic micropayments, and settlement records.
+SF-8 замын газрын зураг нь SoraFS хэлцлийн хөдөлгүүрийг танилцуулж, хангах боломжийг олгодог.
+хоорондын хадгалалт, олж авах гэрээний тодорхойлогч нягтлан бодох бүртгэл
+үйлчлүүлэгч, үйлчилгээ үзүүлэгч. Гэрээг Norito ачааллын дагуу тайлбарласан болно
+`crates/sorafs_manifest/src/deal.rs`-д тодорхойлсон бөгөөд хэлцлийн нөхцөл, бонд
+түгжих, магадлалын бичил төлбөр, тооцооны бүртгэл.
 
-The embedded SoraFS worker (`sorafs_node::NodeHandle`) now instantiates a
-`DealEngine` instance for every node process. The engine:
+Суулгасан SoraFS ажилтан (`sorafs_node::NodeHandle`) одоо
+Зангилааны процесс бүрийн хувьд `DealEngine` жишээ. Хөдөлгүүр:
 
-- validates and registers deals using `DealTermsV1`;
-- accrues XOR-denominated charges when replication usage is reported;
-- evaluates probabilistic micropayment windows using deterministic
-  Blake3-based sampling; and
-- produces ledger snapshots and settlement payloads suitable for governance
-  publishing.
+- `DealTermsV1` ашиглан хэлцлийг баталгаажуулах, бүртгэх;
+- хуулбарлалтын ашиглалтыг мэдээлэх үед XOR-ээр тооцсон төлбөр хуримтлагддаг;
+- детерминистик ашиглан магадлалын бичил төлбөрийн цонхыг үнэлдэг
+  Блэйк3-д суурилсан дээж авах; болон
+- засаглалд тохирсон бүртгэлийн агшин зуурын зураг болон төлбөр тооцооны ачааллыг гаргадаг
+  хэвлэн нийтлэх.
 
-Unit tests cover validation, micropayment selection, and settlement flows so
-operators can exercise the APIs with confidence. Settlements now emit
-`DealSettlementV1` governance payloads, wiring directly into the SF-12
-publishing pipeline, and update the `sorafs.node.deal_*` OpenTelemetry series
+Нэгжийн тест нь баталгаажуулалт, бичил төлбөрийн сонголт, төлбөр тооцооны урсгалыг хамардаг
+операторууд API-г итгэлтэйгээр ашиглах боломжтой. Суурин газрууд одоо ялгардаг
+`DealSettlementV1` удирдлагын ачааллыг SF-12 руу шууд холбох
+хэвлэх шугам, `sorafs.node.deal_*` OpenTelemetry цувралыг шинэчлэх
 (`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) for Torii dashboards and SLO
-enforcement. Follow-up items focus on auditor-initiated slashing automation and
-coordinating cancellation semantics with governance policy.
+`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) Torii хяналтын самбар болон SLO-д зориулсан
+хэрэгжилт. Дараах зүйлүүд нь аудиторын санаачилсан тайрах автоматжуулалт болон
+цуцлах семантикийг засаглалын бодлоготой уялдуулах.
 
-Usage telemetry now also feeds the `sorafs.node.micropayment_*` metrics set:
+Ашиглалтын телеметр нь одоо `sorafs.node.micropayment_*` хэмжүүрийн багцыг тэжээдэг:
 `micropayment_charge_nano`, `micropayment_credit_generated_nano`,
 `micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, and the ticket counters
+`micropayment_outstanding_nano`, тасалбарын тоолуур
 (`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). These totals expose the probabilistic
-lottery flow so operators can correlate micropayment wins and credit carry-over
-with settlement outcomes.
+`micropayment_tickets_duplicate_total`). Эдгээр нийлбэрүүд нь магадлалыг харуулж байна
+Сугалааны урсгал нь операторууд бичил төлбөрийн ялалт болон зээлийн шилжүүлгийг хооронд нь уялдуулах боломжтой
+төлбөр тооцооны үр дүнтэй.
 
-## Torii Integration
+## Torii Интеграци
 
-Torii exposes dedicated endpoints so providers can report usage and drive the
-deal lifecycle without bespoke wiring:
+Torii нь тусгай зориулалтын төгсгөлийн цэгүүдийг ил гаргадаг тул үйлчилгээ үзүүлэгчид ашиглалтын талаар мэдээлж,
+Захиалгат утасгүйгээр амьдралын мөчлөгийг зохицуулах:
 
-- `POST /v1/sorafs/deal/usage` accepts `DealUsageReport` telemetry and returns
-  deterministic accounting outcomes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalises the current window, streaming the
-  resulting `DealSettlementRecord` alongside a base64-encoded `DealSettlementV1`
-  ready for governance DAG publication.
-- Torii's `/v1/events/sse` feed now broadcasts `SorafsGatewayEvent::DealUsage`
-  records summarising each usage submission (epoch, metered GiB-hours, ticket
-  counters, deterministic charges), `SorafsGatewayEvent::DealSettlement`
-  records that include the canonical settlement ledger snapshot plus the
-  BLAKE3 digest/size/base64 of the on-disk governance artefact, and
-  `SorafsGatewayEvent::ProofHealth` alerts whenever PDP/PoTR thresholds are
-  exceeded (provider, window, strike/cooldown state, penalty amount). Consumers can
-  filter by provider to react to new telemetry, settlements, or proof-health alerts without polling.
+- `POST /v1/sorafs/deal/usage` `DealUsageReport` телеметрийг хүлээн авч буцаана
+  нягтлан бодох бүртгэлийн тодорхой үр дүн (`UsageOutcome`).
+- `POST /v1/sorafs/deal/settle` одоогийн цонхыг дамжуулж дуусгана
+  Үр дүнд нь `DealSettlementRecord`, base64 кодлогдсон `DealSettlementV1`-ийн хажууд
+  засаглалын DAG хэвлэлд бэлэн.
+- Torii-ийн `/v1/events/sse` хангамж одоо `SorafsGatewayEvent::DealUsage`-г цацаж байна
+  хэрэглээ бүрийг хураангуйлсан бүртгэл (эрин үе, хэмжигдсэн ГиБ-цаг, тасалбар
+  тоолуур, тодорхойлогч цэнэгүүд), `SorafsGatewayEvent::DealSettlement`
+  каноник тооцооны дэвтэр агшин зуурын зураг дээр нэмсэн бүртгэлүүд
+  Диск дээрх засаглалын олдворын BLAKE3 дижест/хэмжээ/суурь64, мөн
+  `SorafsGatewayEvent::ProofHealth` нь PDP/PoTR босго өндөр байх бүрт дохио өгдөг.
+  хэтэрсэн (үйлүүлэгч, цонх, ажил хаялт/хөргөх төлөв, торгуулийн хэмжээ). Хэрэглэгчид чадна
+  Санал асуулгагүйгээр шинэ телеметр, тооцоолол эсвэл эрүүл мэндийн баталгааны сэрэмжлүүлэгт хариу өгөхийн тулд үйлчилгээ үзүүлэгчээр шүүнэ үү.
 
-Both endpoints participate in the SoraFS quota framework via the new
-`torii.sorafs.quota.deal_telemetry` window, allowing operators to tune the
-allowed submission rate per deployment.
+Хоёр төгсгөлийн цэг нь шинэ хувилбараар дамжуулан SoraFS квотын хүрээнд оролцдог.
+`torii.sorafs.quota.deal_telemetry` цонх нь операторуудад тохируулах боломжийг олгодог
+байршуулалт бүрт зөвшөөрөгдсөн илгээлтийн хувь хэмжээ.

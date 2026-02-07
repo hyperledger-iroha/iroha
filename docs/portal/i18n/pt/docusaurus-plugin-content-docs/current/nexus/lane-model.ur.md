@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/nexus/lane-model.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-lane-model
-title: Nexus lane model
-description: Sora Nexus کے لئے lanes کی منطقی taxonomy، configuration geometry، اور world-state merge کے اصول۔
+id: modelo nexus-lane
+título: modelo de pista Nexus
+description: Sora Nexus کے لئے pistas کی منطقی taxonomia, geometria de configuração, e fusão de estado mundial کے اصول۔
 ---
 
-# Nexus lane model اور WSV partitioning
+# Modelo de pista Nexus e particionamento WSV
 
-> **Status:** NX-1 deliverable - lane taxonomy، configuration geometry، اور storage layout نفاذ کے لئے تیار ہیں۔  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Roadmap reference:** `roadmap.md` میں NX-1
+> **Status:** Entrega NX-1 - taxonomia de pista, geometria de configuração, e layout de armazenamento نفاذ کے لئے تیار ہیں۔  
+> **Proprietários:** Nexus GT Central, GT de Governança  
+> **Referência do roteiro:** `roadmap.md` Modelo NX-1
 
-یہ پورٹل صفحہ canonical `docs/source/nexus_lanes.md` brief کی عکاسی کرتا ہے تاکہ Sora Nexus آپریٹرز، SDK owners اور reviewers mono-repo tree میں جائے بغیر lane guidance پڑھ سکیں۔ ہدفی architecture world state کی determinism برقرار رکھتا ہے جبکہ انفرادی data spaces (lanes) کو public یا private validator sets کے ساتھ isolated workloads چلانے دیتا ہے۔
+یہ پورٹل صفحہ canonical `docs/source/nexus_lanes.md` brief کی عکاسی کرتا ہے تاکہ Sora Nexus آپریٹرز, proprietários de SDK e revisores árvore mono-repo میں جائے بغیر orientação de faixa پڑھ سکیں۔ ہدفی arquitetura estado mundial کی determinismo برقرار رکھتا ہے جبکہ انفرادی espaços de dados (faixas) کو conjuntos de validadores públicos e privados کے ساتھ cargas de trabalho isoladas چلانے دیتا ہے۔
 
-## Concepts
+## Conceitos
 
-- **Lane:** Nexus ledger کا منطقی shard، اپنے validator set اور execution backlog کے ساتھ۔ اسے ایک مستحکم `LaneId` سے شناخت کیا جاتا ہے۔
-- **Data Space:** governance bucket جو ایک یا زیادہ lanes کو گروپ کرتا ہے جو compliance، routing، اور settlement policies شیئر کرتے ہیں۔
-- **Lane Manifest:** governance-controlled metadata جو validators، DA policy، gas token، settlement rules، اور routing permissions بیان کرتا ہے۔
-- **Global Commitment:** ایک proof جو lane جاری کرتی ہے، نئے state roots، settlement data، اور optional cross-lane transfers کا خلاصہ دیتی ہے۔ global NPoS ring commitments کو ترتیب دیتا ہے۔
+- **Lane:** Nexus ledger کا منطقی shard, اپنے conjunto de validadores e backlog de execução کے ساتھ۔ O modelo `LaneId` é um produto de alta qualidade
+- **Espaço de dados:** balde de governança جو ایک یا زیادہ faixas کو گروپ کرتا ہے جو conformidade, roteamento, políticas de liquidação شیئر کرتے ہیں۔
+- **Lane Manifest:** metadados controlados por governança e validadores, política DA, token de gás, regras de liquidação, e permissões de roteamento بیان کرتا ہے۔
+- **Compromisso Global:** ایک prova جو lane جاری کرتی ہے, نئے raízes estaduais, dados de liquidação, اور transferências cruzadas opcionais کا خلاصہ دیتی ہے۔ compromissos de anel NPoS globais
 
-## Lane taxonomy
+## Taxonomia de pista
 
-Lane types اپنی visibility، governance surface اور settlement hooks کو canonical طور پر بیان کرتے ہیں۔ configuration geometry (`LaneConfig`) ان attributes کو capture کرتی ہے تاکہ nodes، SDKs اور tooling بغیر bespoke logic کے layout کو سمجھ سکیں۔
+Tipos de pista اپنی visibilidade, superfície de governança اور ganchos de liquidação کو canônico طور پر بیان کرتے ہیں۔ geometria de configuração (`LaneConfig`) ان atributos کو captura کرتی ہے تاکہ nós, SDKs اور ferramentas بغیر lógica sob medida کے layout کو سمجھ سکیں۔
 
-| Lane type | Visibility | Validator membership | WSV exposure | Default governance | Settlement policy | Typical use |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
-| `private_permissioned` | restricted | Fixed validator set (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
-| `hybrid_confidential` | restricted | Mixed membership; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| Tipo de pista | Visibilidade | Associação do validador | Exposição ao WSV | Governança padrão | Política de liquidação | Uso típico |
+|-----------|------------|-----------|-------------|--------------------|-------------------|-------------|
+| `default_public` | público | Sem permissão (participação global) | Réplica completa do estado | SORA Parlamento | `xor_global` | Livro-razão público de base |
+| `public_custom` | público | Sem permissão ou controlado por estacas | Réplica completa do estado | Módulo ponderado por estaca | `xor_lane_weighted` | Aplicações públicas de alto rendimento |
+| `private_permissioned` | restrito | Conjunto de validadores fixo (aprovado pela governança) | Compromissos e provas | Conselho Federado | `xor_hosted_custody` | CBDC, cargas de trabalho do consórcio |
+| `hybrid_confidential` | restrito | Associação mista; envolve provas ZK | Compromissos + divulgação seletiva | Módulo monetário programável | `xor_dual_fund` | Dinheiro programável que preserva a privacidade |
 
-تمام lane types کو درج ذیل declare کرنا ہوگا:
+Os tipos de pista que você pode declarar são:
 
-- Dataspace alias - انسان کے لئے پڑھنے کے قابل grouping جو compliance policies کو bind کرتی ہے۔
-- Governance handle - ایسا identifier جو `Nexus.governance.modules` کے ذریعے resolve ہوتا ہے۔
-- Settlement handle - ایسا identifier جو settlement router XOR buffers کو debit کرنے کے لئے استعمال کرتا ہے۔
-- Optional telemetry metadata (description، contact، business domain) جو `/status` اور dashboards کے ذریعے ظاہر ہوتے ہیں۔
+- Alias do espaço de dados - انسان کے لئے پڑھنے کے قابل agrupamento جو políticas de conformidade کو vincular کرتی ہے۔
+- Identificador de governança - ایسا identificador جو `Nexus.governance.modules` کے ذریعے resolver ہوتا ہے۔
+- Identificador de liquidação - Identificador جو buffers XOR do roteador de liquidação کو débito کرنے کے لئے استعمال کرتا ہے۔
+- Metadados de telemetria opcionais (descrição, contato, domínio comercial) جو `/status` اور painéis کے ذریعے ظاہر ہوتے ہیں۔
 
-## Lane configuration geometry (`LaneConfig`)
+## Geometria de configuração da pista (`LaneConfig`)
 
-`LaneConfig` validated lane catalog سے derived runtime geometry ہے۔ یہ governance manifests کو replace نہیں کرتا؛ اس کے بجائے ہر configured lane کے لئے deterministic storage identifiers اور telemetry hints فراہم کرتا ہے۔
+Catálogo de pistas validadas `LaneConfig` سے geometria de tempo de execução derivada ہے۔ یہ manifestos de governança کو substituir نہیں کرتا؛ اس کے بجائے ہر faixa configurada کے لئے identificadores de armazenamento determinísticos اور dicas de telemetria فراہم کرتا ہے۔
 
 ```text
 LaneConfigEntry {
@@ -64,61 +66,57 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` geometry کو دوبارہ compute کرتا ہے جب configuration load ہو (`State::set_nexus`).
-- Aliases کو lowercase slugs میں sanitize کیا جاتا ہے؛ مسلسل non-alphanumeric characters `_` میں collapse ہوتے ہیں۔ اگر alias empty slug دے تو ہم `lane{id}` fallback کرتے ہیں۔
-- `shard_id` catalog metadata key `da_shard_id` سے derive ہوتا ہے (default `lane_id`) اور persisted shard cursor journal کو drive کرتا ہے تاکہ restarts/resharding میں DA replay deterministic رہے۔
-- Key prefixes یہ یقینی بناتے ہیں کہ WSV per-lane key ranges کو جدا رکھے، چاہے backend shared ہو۔
-- Kura segment names hosts کے درمیان deterministic ہوتے ہیں؛ auditors بغیر bespoke tooling کے segment directories اور manifests cross-check کر سکتے ہیں۔
-- Merge segments (`lane_{id:03}_merge`) اس lane کے latest merge-hint roots اور global state commitments محفوظ کرتے ہیں۔
+- Geometria `LaneConfig::from_catalog` کو دوبارہ computação کرتا ہے جب carga de configuração ہو (`State::set_nexus`).
+- Aliases کو slugs minúsculos میں higienizar کیا جاتا ہے؛ مسلسل caracteres não alfanuméricos `_` میں colapso ہوتے ہیں۔ اگر alias vazio slug دے تو ہم `lane{id}` fallback کرتے ہیں۔
+- Chave de metadados do catálogo `shard_id` `da_shard_id` سے derivar ہوتا ہے (padrão `lane_id`) اور diário de cursor de shard persistente کو unidade کرتا ہے تاکہ reinicia/resharding میں DA reproduzir رہے۔ determinístico
+- Prefixos de chave یہ یقینی بناتے ہیں کہ Intervalos de chaves WSV por pista کو جدا رکھے, چاہے backend compartilhado ہو۔
+- Nomes de segmentos Kura hosts کے درمیان determinístico ہوتے ہیں؛ auditores بغیر ferramentas sob medida کے diretórios de segmento اور verificação cruzada de manifestos کر سکتے ہیں۔
+- Mesclar segmentos (`lane_{id:03}_merge`) اس lane کے últimas raízes de dicas de mesclagem اور compromissos estatais globais محفوظ کرتے ہیں۔
 
-## World-state partitioning
+## Particionamento do estado mundial- Espaços de estado por faixa de estado mundial lógico Nexus کا união ہے۔ O estado completo das vias públicas persiste کرتی ہیں؛ pistas privadas/confidenciais Merkle/raízes de compromisso کو razão de mesclagem میں exportação کرتی ہیں۔
+- Chave de armazenamento MV کو `LaneConfigEntry::key_prefix` کے Prefixo de 4 bytes سے prefixo کرتا ہے, جس سے `[00 00 00 01] ++ PackedKey` جیسے chaves بنتے ہیں۔
+- Entradas de tabelas compartilhadas (contas, ativos, gatilhos, registros de governança) کو prefixo de pista کے حساب سے grupo کرتی ہیں، جس سے varreduras de intervalo determinísticas رہتے ہیں۔
+- Metadados do livro-razão de mesclagem اسی layout کو espelho کرتا ہے: ہر lane `lane_{id:03}_merge` میں raízes de dica de mesclagem اور raízes de estado globais reduzidas لکھتی ہے, جس سے lane retirar ہونے پر retenção direcionada یا despejo ممکن ہوتی ہے۔
+- Índices cruzados (aliases de contas, registros de ativos, manifestos de governança) prefixos de faixa explícitos armazenam کرتے ہیں تاکہ entradas de operadores جلد reconciliar کر سکیں۔
+- **Política de retenção** - vias públicas مکمل bloquear corpos رکھتی ہیں؛ pontos de verificação de faixas somente para compromisso کے بعد پرانے corpos compactos کر سکتی ہیں کیونکہ compromissos autoritativos ہیں۔ Diários de texto cifrado de faixas confidenciais کو segmentos dedicados میں رکھتی ہیں تاکہ دوسرے bloco de cargas de trabalho نہ ہوں۔
+- **Ferramentas** - utilitários de manutenção (`kagami`, comandos de administração CLI) کو métricas expõem کرتے, rótulos Prometheus بناتے یا Arquivo de segmentos Kura کرتے وقت namespace slugged consulte کرنا چاہیے۔
 
-- Logical Nexus world state per-lane state spaces کا union ہے۔ Public lanes full state persist کرتی ہیں؛ private/confidential lanes Merkle/commitment roots کو merge ledger میں export کرتی ہیں۔
-- MV storage ہر key کو `LaneConfigEntry::key_prefix` کے 4-byte prefix سے prefix کرتا ہے، جس سے `[00 00 00 01] ++ PackedKey` جیسے keys بنتے ہیں۔
-- Shared tables (accounts, assets, triggers, governance records) entries کو lane prefix کے حساب سے group کرتی ہیں، جس سے range scans deterministic رہتے ہیں۔
-- Merge-ledger metadata اسی layout کو mirror کرتا ہے: ہر lane `lane_{id:03}_merge` میں merge-hint roots اور reduced global state roots لکھتی ہے، جس سے lane retire ہونے پر targeted retention یا eviction ممکن ہوتی ہے۔
-- Cross-lane indexes (account aliases, asset registries, governance manifests) explicit lane prefixes store کرتے ہیں تاکہ operators entries جلد reconcile کر سکیں۔
-- **Retention policy** - public lanes مکمل block bodies رکھتی ہیں؛ commitment-only lanes checkpoints کے بعد پرانے bodies compact کر سکتی ہیں کیونکہ commitments authoritative ہیں۔ Confidential lanes ciphertext journals کو dedicated segments میں رکھتی ہیں تاکہ دوسرے workloads block نہ ہوں۔
-- **Tooling** - maintenance utilities (`kagami`, CLI admin commands) کو metrics expose کرتے، Prometheus labels بناتے یا Kura segments archive کرتے وقت slugged namespace refer کرنا چاہیے۔
+## Roteamento e APIs
 
-## Routing & APIs
+- Torii endpoints REST/gRPC opcionais `lane_id` قبول کرتے ہیں؛ عدم موجودگی `lane_default` کو ظاہر کرتی ہے۔
+- SDKs seletores de pistas فراہم کرتے ہیں اور aliases fáceis de usar کو catálogo de pistas کے ذریعے `LaneId` سے mapa کرتے ہیں۔
+- Catálogo validado de regras de roteamento پر operar کرتے ہیں اور pista اور espaço de dados دونوں منتخب کر سکتے ہیں۔ Painéis `LaneConfig` e logs کے لئے aliases compatíveis com telemetria فراہم کرتا ہے۔
 
-- Torii REST/gRPC endpoints optional `lane_id` قبول کرتے ہیں؛ عدم موجودگی `lane_default` کو ظاہر کرتی ہے۔
-- SDKs lane selectors فراہم کرتے ہیں اور user-friendly aliases کو lane catalog کے ذریعے `LaneId` سے map کرتے ہیں۔
-- Routing rules validated catalog پر operate کرتے ہیں اور lane اور dataspace دونوں منتخب کر سکتے ہیں۔ `LaneConfig` dashboards اور logs کے لئے telemetry-friendly aliases فراہم کرتا ہے۔
+## Liquidação e taxas
 
-## Settlement & fees
+- ہر conjunto de validador global de pista کو taxas XOR ادا کرتی ہے۔ Tokens de gás nativos de faixas جمع کر سکتی ہیں مگر compromissos کے ساتھ Garantia de equivalentes XOR کرنا لازم ہے۔
+- Provas de liquidação میں valor, metadados de conversão, اور prova de garantia شامل ہوتے ہیں (مثلا cofre de taxa global کو transferência)۔
+- Buffers do roteador de liquidação unificado (NX-3) کو انہی prefixos de pista کے ساتھ débito کرتا ہے, لہذا geometria de armazenamento de telemetria de liquidação کے ساتھ alinhar ہوتی ہے۔
 
-- ہر lane global validator set کو XOR fees ادا کرتی ہے۔ Lanes native gas tokens جمع کر سکتی ہیں مگر commitments کے ساتھ XOR equivalents escrow کرنا لازم ہے۔
-- Settlement proofs میں amount، conversion metadata، اور escrow proof شامل ہوتے ہیں (مثلا global fee vault کو transfer)۔
-- Unified settlement router (NX-3) buffers کو انہی lane prefixes کے ساتھ debit کرتا ہے، لہذا settlement telemetry storage geometry کے ساتھ align ہوتی ہے۔
+## Governança
 
-## Governance
+- Faixas اپنی módulo de governança کو catálogo کے ذریعے declarar کرتی ہیں۔ `LaneConfigEntry` اصل alias اور slug ساتھ رکھتا ہے تاکہ telemetria اور trilhas de auditoria legíveis رہیں۔
+- Manifestos de pista assinada do registro Nexus
+- Políticas de governança de ganchos de atualização em tempo de execução (padrão `gov_upgrade_id` بطور) ہیں۔
 
-- Lanes اپنی governance module کو catalog کے ذریعے declare کرتی ہیں۔ `LaneConfigEntry` اصل alias اور slug ساتھ رکھتا ہے تاکہ telemetry اور audit trails readable رہیں۔
-- Nexus registry signed lane manifests تقسیم کرتا ہے جن میں `LaneId`, dataspace binding, governance handle, settlement handle اور metadata شامل ہوتے ہیں۔
-- Runtime-upgrade hooks governance policies (`gov_upgrade_id` بطور default) نافذ کرتے رہتے ہیں اور telemetry bridge (`nexus.config.diff` events) کے ذریعے diffs log کرتے ہیں۔
+## Telemetria e status
 
-## Telemetry & status
+- `/status` aliases de pista, ligações de espaço de dados, identificadores de governança e perfis de liquidação کو expor کرتا ہے, جو catálogo اور `LaneConfig` سے derivar ہوتے ہیں۔
+- Métricas do agendador (`nexus_scheduler_lane_teu_*`) aliases/slugs de pista دکھاتے ہیں تاکہ backlog de operadores اور pressão TEU کو جلد mapa کر سکیں۔
+- Entradas de pista derivadas `nexus_lane_configured_total` Geometria da pista de telemetria بدلنے پر diferenças assinadas emitem کرتی ہے۔
+- Dataspace backlog mede metadados de alias/descrição شامل کرتے ہیں تاکہ pressão de fila de operadores کو domínios de negócios
 
-- `/status` lane aliases، dataspace bindings، governance handles اور settlement profiles کو expose کرتا ہے، جو catalog اور `LaneConfig` سے derive ہوتے ہیں۔
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) lane aliases/slugs دکھاتے ہیں تاکہ operators backlog اور TEU pressure کو جلد map کر سکیں۔
-- `nexus_lane_configured_total` derived lane entries کی تعداد شمار کرتا ہے اور configuration تبدیل ہونے پر دوبارہ compute ہوتا ہے۔ Telemetry lane geometry بدلنے پر signed diffs emit کرتی ہے۔
-- Dataspace backlog gauges alias/description metadata شامل کرتے ہیں تاکہ operators queue pressure کو business domains سے جوڑ سکیں۔
+## Configuração e tipos Norito
 
-## Configuration & Norito types
+- `LaneCatalog`, `LaneConfig`, اور `DataSpaceCatalog` `iroha_data_model::nexus` میں رہتے ہیں اور manifestos e SDKs کے لئے estruturas de formato Norito فراہم کرتے ہیں۔
+- `LaneConfig` `iroha_config::parameters::actual::Nexus` میں رہتا ہے اور catálogo سے خودکار طور پر derivar ہوتا ہے؛ اسے Codificação Norito کی ضرورت نہیں کیونکہ یہ auxiliar de tempo de execução interno ہے۔
+- Configuração voltada para o usuário (`iroha_config::parameters::user::Nexus`) via declarativa e descritores de espaço de dados کو قبول کرتی رہتی ہے؛ análise de derivação de geometria کرتا ہے اور aliases inválidos یا IDs de pista duplicados کو rejeitar کرتا ہے۔
 
-- `LaneCatalog`, `LaneConfig`, اور `DataSpaceCatalog` `iroha_data_model::nexus` میں رہتے ہیں اور manifests و SDKs کے لئے Norito format structures فراہم کرتے ہیں۔
-- `LaneConfig` `iroha_config::parameters::actual::Nexus` میں رہتا ہے اور catalog سے خودکار طور پر derive ہوتا ہے؛ اسے Norito encoding کی ضرورت نہیں کیونکہ یہ internal runtime helper ہے۔
-- User-facing configuration (`iroha_config::parameters::user::Nexus`) declarative lane اور dataspace descriptors کو قبول کرتی رہتی ہے؛ parsing اب geometry derive کرتا ہے اور invalid aliases یا duplicate lane IDs کو reject کرتا ہے۔
+## Excelente trabalho
 
-## Outstanding work
+- atualizações do roteador de liquidação (NX-3) کو نئی geometria کے ساتھ integrar کریں تاکہ Débitos de buffer XOR اور slug de pista de recibos کے مطابق tag ہوں۔
+- Ferramentas de administração کو estender کریں تاکہ lista de famílias de colunas ہوں، pistas aposentadas compactas ہوں، اور espaço de nomes slugged کے ساتھ inspecionar logs de blocos por pista ہوں۔
+- Algoritmo de mesclagem (ordenação, remoção, detecção de conflitos) finalização کریں اور replay cross-lane کے لئے acessórios de regressão شامل کریں۔
+- Listas brancas/listas negras e políticas monetárias programáveis ​​کے لئے ganchos de conformidade شامل کریں (NX-12 میں ٹریک)۔---
 
-- settlement router updates (NX-3) کو نئی geometry کے ساتھ integrate کریں تاکہ XOR buffer debits اور receipts lane slug کے مطابق tag ہوں۔
-- Admin tooling کو extend کریں تاکہ column families list ہوں، retired lanes compact ہوں، اور slugged namespace کے ساتھ per-lane block logs inspect ہوں۔
-- Merge algorithm (ordering, pruning, conflict detection) finalize کریں اور cross-lane replay کے لئے regression fixtures شامل کریں۔
-- Whitelists/blacklists اور programmable-money policies کے لئے compliance hooks شامل کریں (NX-12 میں ٹریک)۔
-
----
-
-*یہ صفحہ NX-2 سے NX-18 کے اترنے کے ساتھ NX-1 follow-ups کو ٹریک کرتا رہے گا۔ براہ کرم کھلے سوالات `roadmap.md` یا governance tracker میں سامنے لائیں تاکہ پورٹل canonical docs کے ساتھ aligned رہے۔*
+*یہ صفحہ NX-2 سے NX-18 کے اترنے کے ساتھ Acompanhamentos NX-1 کو ٹریک کرتا رہے گا۔ براہ کرم کھلے سوالات `roadmap.md` یا rastreador de governança میں سامنے لائیں تاکہ پورٹل canonical docs کے ساتھ alinhado رہے۔*

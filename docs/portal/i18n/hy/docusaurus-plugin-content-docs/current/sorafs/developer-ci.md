@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-# CI Recipes
+# CI բաղադրատոմսեր
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS խողովակաշարերն օգտվում են դետերմինիստական կտրվածքից, մանիֆեստի ստորագրումից և
+ապացույցի ստուգում. `sorafs_cli` հրամանի մակերեսը պահում է այդ քայլերը շարժական
+CI մատակարարների միջև: Այս էջը կարևորում է կանոնական բաղադրատոմսերը և մատնանշում է
+պատրաստի օգտագործման կաղապարներ.
 
-## GitHub Actions (keyless)
+## GitHub գործողություններ (առանց բանալի)
 
 ```yaml
 name: sorafs-artifacts
@@ -93,11 +95,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+Հիմնական կետեր.
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- Ստատիկ ստորագրման ստեղներ չեն պահվում. OIDC նշանները բեռնվում են ըստ պահանջի:
+- Արտեֆակտները (CAR, մանիֆեստ, փաթեթ, ապացույցների ամփոփագրեր) վերբեռնվում են ստուգման համար:
+- Աշխատանքը վերօգտագործում է նույն Norito սխեմաները, որոնք օգտագործվում են արտադրության մեջ:
 
 ## GitLab CI
 
@@ -133,15 +135,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- Տրամադրել `SIGSTORE_ID_TOKEN` GitLab-ի աշխատանքային ծանրաբեռնվածության նույնականացման ֆեդերացիայի միջոցով կամ
+  կնքված գաղտնիք՝ նախքան հրապարակման փուլն իրականացնելը:
+- CLI-ի որևէ քայլի ձախողումը հանգեցնում է խողովակաշարի դադարեցմանը` պահպանելով հետևողականությունը
+  արտեֆակտներ.
 
-## Additional resources
+## Լրացուցիչ ռեսուրսներ
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- End-to-end ձևանմուշներ (ներառում է Bash օգնականներ, դաշնային ինքնության կոնֆիգուրացիա,
+  և մաքրման քայլերը՝ `docs/examples/sorafs_ci.md`
+- CLI տեղեկանք, որն ընդգրկում է յուրաքանչյուր տարբերակ՝ `docs/source/sorafs_cli.md`
+- Կառավարման/փոխանունի պահանջները մինչև ներկայացումը.
   `docs/source/sorafs/provider_admission_policy.md`

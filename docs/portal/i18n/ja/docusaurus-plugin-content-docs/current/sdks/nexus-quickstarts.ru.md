@@ -4,9 +4,11 @@ direction: ltr
 source: docs/portal/docs/sdks/nexus-quickstarts.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Полный quickstart находится в `docs/source/nexus_sdk_quickstarts.md`. Этот обзор портала подчеркивает общие предпосылки и команды для каждого SDK, чтобы разработчики могли быстро проверить настройку.
+`docs/source/nexus_sdk_quickstarts.md` によるクイックスタート。 Этот обзор портала подчеркивает общие предпосылки и команды для каждого SDK, чтобы разработчики могли быстроそうです。
 
 ## Общая настройка
 
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Скачайте конфигурационный пакет Nexus, установите зависимости каждого SDK и убедитесь, что TLS-сертификаты соответствуют профилю релиза (см. `docs/source/sora_nexus_operator_onboarding.md`).
+Скачайте конфигурационный пакет Nexus, установите зависимости каждого SDK и убедитесь, что TLS-сертификаты соответствуют профилю релиза (см. `docs/source/sora_nexus_operator_onboarding.md`)。
 
-## Rust
+## 錆びる
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -36,17 +38,17 @@ cargo run --bin nexus_quickstart \
 npm run demo:nexus
 ```
 
-Скрипт инициализирует `ToriiClient` с переменными окружения выше и печатает последний блок.
+`ToriiClient` は、最高のパフォーマンスを提供します。
 
-## Swift
+## スウィフト
 
 ```bash
 make swift-nexus-demo
 ```
 
-Использует `Torii.Client` из `IrohaSwift`, чтобы получить `FindNetworkStatus`.
+`Torii.Client` または `IrohaSwift`、`FindNetworkStatus` を確認してください。
 
-## Android
+## アンドロイド
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -67,8 +69,8 @@ iroha_cli app nexus quickstart \
 
 ## Устранение неполадок
 
-- Сбои TLS -> проверьте CA bundle из tarball релиза Nexus.
-- `ERR_UNKNOWN_LANE` -> передайте `--lane-id`/`--dataspace-id`, когда будет включена маршрутизация multi-lane.
-- `ERR_SETTLEMENT_PAUSED` -> смотрите [Nexus operations](../nexus/nexus-operations) для процесса инцидента; возможно, governance приостановила lane.
+- TLS -> CA バンドルと tarball の Nexus を確認します。
+- `ERR_UNKNOWN_LANE` -> передайте `--lane-id`/`--dataspace-id`、マルチレーン。
+- `ERR_SETTLEMENT_PAUSED` -> [Nexus 操作](../nexus/nexus-operations) を実行します。 возможно、ガバナンスはレーンです。
 
-Для более глубокого контекста и пояснений по SDK см. `docs/source/nexus_sdk_quickstarts.md`.
+SDK を使用すると、SDK が更新されます。 `docs/source/nexus_sdk_quickstarts.md`。

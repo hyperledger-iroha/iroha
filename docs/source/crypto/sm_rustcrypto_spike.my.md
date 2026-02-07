@@ -7,27 +7,28 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1f133d9489c4bcfae2212e6c5dc098f39c3dea3e5cd42855ba76e8c9b73b4d03
 source_last_modified: "2025-12-29T18:16:35.946614+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes for the RustCrypto SM integration spike.
+//! RustCrypto SM ပေါင်းစပ်မှုတိုးခြင်းအတွက် မှတ်စုများ။
 
-# RustCrypto SM Spike Notes
+# RustCrypto SM Spike မှတ်စုများ
 
-## Objective
-Validate that introducing RustCrypto’s `sm2`, `sm3`, and `sm4` crates (plus `rfc6979`, `ccm`, `gcm`) as optional dependencies compiles cleanly in the `iroha_crypto` crate and yields acceptable build times before wiring the feature flag into the wider workspace.
+##ရည်ရွယ်ချက်
+RustCrypto ၏ `sm2`၊ `sm3` နှင့် `sm4` သေတ္တာများ (အပေါင်း `rfc6979`၊ `ccm`၊ I10NI000 ပေါင်းစည်းထားသော ရွေးချယ်စရာများအတိုင်း သန့်ရှင်းမှုရှိသည်) `iroha_crypto` သေတ္တာသည် ပိုမိုကျယ်ပြန့်သော အလုပ်ခွင်သို့ အင်္ဂါရပ်အလံကို ကြိုးမတပ်မီ လက်ခံနိုင်သော တည်ဆောက်ချိန်များကို ထုတ်ပေးသည်။
 
-## Proposed Dependency Map
+## အဆိုပြုထားသည့် မှီခိုမှုမြေပုံ
 
-| Crate | Suggested Version | Features | Notes |
-|-------|-------------------|----------|-------|
-| `sm2` | `0.13` (RustCrypto/signatures) | `std` | Depends on `elliptic-curve`; verify MSRV matches workspace. |
-| `sm3` | `0.5.0-rc.1` (RustCrypto/hashes) | default | API parallels `sha2`, integrates with existing `digest` traits. |
-| `sm4` | `0.5.1` (RustCrypto/block-ciphers) | default | Works with cipher traits; AEAD wrappers deferred to later spike. |
-| `rfc6979` | `0.4` | default | Reuse for deterministic nonce derivation. |
+| သေတ္တာ | အကြံပြုထားသောဗားရှင်း | အင်္ဂါရပ်များ | မှတ်စုများ |
+|---------|--------------------|----------------|------|
+| `sm2` | `0.13` (RustCrypto/လက်မှတ်များ) | `std` | `elliptic-curve` ပေါ်တွင်မူတည်သည်။ MSRV သည် အလုပ်နေရာနှင့် ကိုက်ညီကြောင်း အတည်ပြုပါ။ |
+| `sm3` | `0.5.0-rc.1` (RustCrypto/hashes) | ပုံသေ | API သည် `sha2` မျဉ်းပြိုင်များ၊ ရှိပြီးသား `digest` စရိုက်များနှင့် ပေါင်းစပ်ထားသည်။ |
+| `sm4` | `0.5.1` (RustCrypto/block-ciphers) | ပုံသေ | cipher လက္ခဏာများနှင့်အလုပ်လုပ်သည်; AEAD ထုပ်ပိုးမှုများကို နောက်ပိုင်းတွင် ဆူးပေါက်ရန် ရွှေ့ဆိုင်းထားသည်။ |
+| `rfc6979` | `0.4` | ပုံသေ | အဆုံးအဖြတ်မဟုတ်သော ဆင်းသက်လာခြင်းအတွက် ပြန်လည်အသုံးပြုပါ။ |
 
-*Versions reflect current releases as of 2024-12; confirm with `cargo search` before landing.*
+* ဗားရှင်းများသည် 2024-12 တွင် လက်ရှိထုတ်ဝေမှုများကို ထင်ဟပ်နေပါသည်။ ဆင်းသက်ခြင်းမပြုမီ `cargo search` ဖြင့် အတည်ပြုပါ။*
 
-## Manifest Changes (draft)
+## Manifest Changes (မူကြမ်း)
 
 ```toml
 [features]
@@ -40,34 +41,32 @@ sm4 = { version = "0.5.1", optional = true }
 rfc6979 = { version = "0.4", optional = true, default-features = false }
 ```
 
-Follow-up: pin `elliptic-curve` to match versions already in `iroha_crypto` (currently `0.13.8`).
+နောက်ဆက်တွဲ- `elliptic-curve` ကို `iroha_crypto` (လက်ရှိ `0.13.8`) တွင် ရှိနှင့်ပြီးသား ဗားရှင်းများနှင့် ကိုက်ညီရန် ပင်နံပါတ်။
 
 ## Spike Checklist
-- [x] Add optional dependencies and feature to `crates/iroha_crypto/Cargo.toml`.
-- [x] Create `signature::sm` module behind `cfg(feature = "sm")` with placeholder structs to confirm wiring.
-- [x] Run `cargo check -p iroha_crypto --features sm` to confirm compile; record build time and new dependency count (`cargo tree --features sm`).
-- [x] Confirm the std-only posture with `cargo check -p iroha_crypto --features sm --locked`; `no_std` builds are no longer supported.
-- [x] File results (timings, dependency tree delta) in `docs/source/crypto/sm_program.md`.
+- [x] `crates/iroha_crypto/Cargo.toml` တွင် ရွေးချယ်နိုင်သော မှီခိုမှုနှင့် အင်္ဂါရပ်များကို ထည့်ပါ။
+- [x] ဝိုင်ယာကြိုးများကိုအတည်ပြုရန် `cfg(feature = "sm")` နောက်ကွယ်ရှိ `signature::sm` မော်ဂျူးကို ဖန်တီးပါ။
+- [x] compile အတည်ပြုရန် `cargo check -p iroha_crypto --features sm` ကိုဖွင့်ပါ။ စံချိန်တင်တည်ဆောက်ချိန်နှင့် မှီခိုမှုအသစ် (`cargo tree --features sm`)။
+- [x] `cargo check -p iroha_crypto --features sm --locked` ဖြင့် std-only ကိုယ်ဟန်အနေအထားကို အတည်ပြုပါ။ `no_std` တည်ဆောက်မှုများကို မပံ့ပိုးတော့ပါ။
+- [x] `docs/source/crypto/sm_program.md` ရှိ ဖိုင်ရလဒ်များ (အချိန်ဇယား၊ မှီခိုမှုသစ်ပင်မြစ်ဝကျွန်းပေါ်ဒေသ)။
 
-## Observations To Capture
-- Additional compile time vs. baseline.
-- Binary size impact (if measurable) with `cargo builtinsize`.
-- Any MSRV or feature conflicts (e.g., with `elliptic-curve` minor versions).
-- Warnings emitted (unsafe code, const-fn gating) that may require upstream patches.
+## ဖမ်းယူကြည့်ရှုရန်
+- ထပ်လောင်းစုစည်းချိန်နှင့် အခြေခံစာရင်း။
+- `cargo builtinsize` ဖြင့် Binary အရွယ်အစားသက်ရောက်မှု (တိုင်းတာနိုင်လျှင်)။
+- မည်သည့် MSRV သို့မဟုတ် အင်္ဂါရပ်များ ကွဲလွဲနေသည် (ဥပမာ၊ `elliptic-curve` အသေးစားဗားရှင်းများ)။
+- အထက်ပိုင်း ဖာထေးမှုများ လိုအပ်နိုင်သည့် (မလုံခြုံသောကုဒ်၊ const-fn gating) မှ ထုတ်လွှတ်သော သတိပေးချက်များ။
 
-## Pending Items
-- Await Crypto WG approval before inflating workspace dependency graph.
-- Confirm whether to vendor crates for review or rely on crates.io (mirrors may be required).
-- Coordinate `Cargo.lock` refresh per `sm_lock_refresh_plan.md` before marking checklist complete.
-- Use `scripts/sm_lock_refresh.sh` once approval is granted to regenerate the lockfile and dependency tree.
+## ဆိုင်းငံ့ထားသောပစ္စည်းများ
+- အလုပ်ခွင်မှီခိုဂရပ်ကို မဖောင်းပွမီ Crypto WG အတည်ပြုချက်ကို စောင့်ပါ။
+- ပြန်လည်သုံးသပ်ရန်အတွက် ရောင်းချသူသေတ္တာများကို ရောင်းချခြင်း ရှိ၊
+- စစ်ဆေးရန်စာရင်းကို အမှတ်အသားပြုခြင်း မပြီးမီ `Cargo.lock` ကို ပြန်လည်စတင်ရန် `sm_lock_refresh_plan.md` ကို ညှိနှိုင်းပါ။
+- သော့ခတ်ဖိုင်နှင့် မှီခိုမှုသစ်ပင်ကို ပြန်လည်ထုတ်ပေးရန် ခွင့်ပြုချက်ရရှိပြီးသည်နှင့် `scripts/sm_lock_refresh.sh` ကို အသုံးပြုပါ။
 
-## 2025-01-19 Spike Log
-- Added optional dependencies (`sm2 0.13`, `sm3 0.5.0-rc.1`, `sm4 0.5.1`, `rfc6979 0.4`) and `sm` feature flag in `iroha_crypto`.
-- Stubbed `signature::sm` module to exercise hashing/block cipher APIs during compilation.
-- `cargo check -p iroha_crypto --features sm --locked` now resolves dependency graph but aborts with `Cargo.lock` update requirement; repository policy forbids lockfile edits, so the compile run remains pending until we coordinate an allowed lock refresh.
-
-## 2026-02-12 Spike Log
-- Resolved the previous lockfile blocker—the dependencies are already captured—so `cargo check -p iroha_crypto --features sm --locked` succeeds (cold build 7.9 s on dev Mac; incremental re-run 0.23 s).
-- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` passes in 1.0 s, confirming the optional feature compiles in `std`-only configurations (no `no_std` path remains).
-- Dependency delta with the `sm` feature enabled introduces 11 crates: `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, `pkcs8`, `polyval`, `primeorder`, `sm2`, `sm3`, `sm4`, and `sm4-gcm`. (`rfc6979` was already part of the baseline graph.)
-- Build warnings persist for unused NEON policy helpers; leave as-is until the metering smoothing runtime re-enables those code paths.
+## 2025-01-19 Spike မှတ်တမ်း
+- ရွေးချယ်နိုင်သော မှီခိုမှုများ (`sm2 0.13`၊ `sm3 0.5.0-rc.1`၊ `sm4 0.5.1`၊ `rfc6979 0.4`) နှင့် `sm` အင်္ဂါရပ်အလံကို `iroha_crypto` တွင် ထည့်သွင်းထားသည်။
+- စုစည်းမှုအတွင်း hashing/block cipher APIs များကို လေ့ကျင့်ရန် `signature::sm` module ကို တုံးထုထားသည်။
+- ယခု `cargo check -p iroha_crypto --features sm --locked` သည် မှီခိုဂရပ်ကို ဖြေရှင်းပေးသော်လည်း `Cargo.lock` အပ်ဒိတ်လိုအပ်ချက်ဖြင့် ပျက်သွားသည် ။ သိုလှောင်ရေးမူဝါဒသည် သော့ခတ်ဖိုင်တည်းဖြတ်မှုများကို တားမြစ်ထားသောကြောင့် ခွင့်ပြုထားသောသော့ကို ပြန်လည်စတင်ခြင်းအား ညှိနှိုင်းမပြီးမချင်း compile run ကို ဆိုင်းငံ့ထားဆဲဖြစ်သည်။## 2026-02-12 Spike မှတ်တမ်း
+- ယခင် lockfile blocker ကိုဖြေရှင်းပြီး-မှီခိုမှုများအားဖမ်းယူထားပြီးဖြစ်သည်- ထို့ကြောင့် `cargo check -p iroha_crypto --features sm --locked` အောင်မြင်သည် (dev Mac တွင်အေးသောတည်ဆောက်မှု 7.9s၊ တိုးမြင့်သောပြန်လည်လည်ပတ်မှု 0.23s)။
+- `cargo check -p iroha_crypto --no-default-features --features "std sm" --locked` သည် `std` သီးသန့်ဖွဲ့စည်းပုံများ (`no_std` လမ်းကြောင်းမကျန်) တွင် ရွေးချယ်နိုင်သောအင်္ဂါရပ်ကို စုစည်းထားကြောင်း အတည်ပြုသည်။
+- `sm` အင်္ဂါရပ်ဖြင့် မှီခိုအားထားရသော မြစ်ဝကျွန်းပေါ်ဒေသ 11 သေတ္တာများကို မိတ်ဆက်ပေးသည်- `base64ct`, `ghash`, `opaque-debug`, `pem-rfc7468`, I180NI55000, I180NI5000, `primeorder`၊ `sm2`၊ `sm3`၊ `sm4` နှင့် `sm4-gcm`။ (`rfc6979` သည် အခြေခံဂရပ်၏ အစိတ်အပိုင်း ဖြစ်နေပါပြီ။)
+- အသုံးမပြုသော NEON မူဝါဒအထောက် အကူများအတွက် သတိပေးချက်များ ဆက်လက်တည်ဆောက်ပါ။ metering smoothing runtime သည် ထိုကုဒ်လမ်းကြောင်းများကို ပြန်ဖွင့်မစမချင်း အတိုင်း ထားခဲ့ပါ။

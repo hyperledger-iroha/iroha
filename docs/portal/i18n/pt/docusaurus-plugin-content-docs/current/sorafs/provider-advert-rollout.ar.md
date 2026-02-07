@@ -4,133 +4,129 @@ direction: ltr
 source: docs/portal/docs/sorafs/provider-advert-rollout.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "خطة طرح وتوافق adverts لمزودي SoraFS"
+título: "خطة طرح وتوافق anúncios لمزودي SoraFS"
 ---
 
 > مقتبس من [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).
 
-# خطة طرح وتوافق adverts لمزودي SoraFS
+# خطة طرح وتوافق anúncios لمزودي SoraFS
 
 تنسق هذه الخطة الانتقال من adverts المسموحة لمزودي التخزين إلى سطح `ProviderAdvertV1`
-الخاضع للحوكمة بالكامل والمطلوب للاسترجاع متعدد المصادر للـ chunks. وهي تركز على
+Cada pedaço é cortado e cortado em pedaços. وهي تركز على
 ثلاثة مخرجات رئيسية:
 
 - **دليل المشغل.** خطوات يجب على مزودي التخزين إكمالها قبل تفعيل كل gate.
-- **تغطية التليمترية.** لوحات معلومات وتنبيهات تستخدمها Observability و Ops
-  للتأكد من أن الشبكة تقبل adverts المتوافقة فقط.
+- **تغطية التليمترية.** Recursos de observação e operações
+  للتأكد من أن الشبكة تقبل anúncios المتوافقة فقط.
 - **الجدول الزمني للتوافق.** تواريخ واضحة لرفض envelopes القديمة حتى تتمكن
-  فرق SDK و tooling من التخطيط لإصداراتها.
+  O SDK e as ferramentas estão disponíveis.
 
-يتماشى الطرح مع معالم SF-2b/2c في
-[خارطة طريق هجرة SoraFS](./migration-roadmap) ويفترض أن سياسة القبول في
-[provider admission policy](./provider-admission-policy) مطبقة بالفعل.
+A melhor opção para SF-2b/2c é
+[Você pode usar SoraFS](./migration-roadmap) para obter mais informações
+[política de admissão do provedor](./provider-admission-policy) مطبقة بالفعل.
 
-## الجدول الزمني للمراحل
-
-| المرحلة | النافذة (الهدف) | السلوك | إجراءات المشغل | تركيز الملاحظة |
+## الجدول الزمني للمراحل| المرحلة | النافذة (الهدف) | السلوك | إجراءات المشغل | تركيز الملاحظة |
 |-------|-----------------|-----------|------------------|-------------------|
-| **R0 - الملاحظة الأساسية** | حتى **2025-03-31** | يقبل Torii كلا من adverts المعتمدة من الحوكمة والـ payloads القديمة التي تسبق `ProviderAdvertV1`. تسجل سجلات ingestion تحذيرات عندما تهمل adverts `chunk_range_fetch` أو `profile_aliases` القياسية. | - إعادة توليد adverts عبر pipeline نشر provider advert (ProviderAdvertV1 + governance envelope) مع ضمان `profile_id=sorafs.sf1@1.0.0` و`profile_aliases` قياسية و`signature_strict=true`. <br />- تشغيل اختبارات `sorafs_fetch` محليا؛ يجب triage تحذيرات capabilities غير المعروفة. | نشر لوحات Grafana المؤقتة (انظر أدناه) وتحديد عتبات التنبيه مع إبقائها في وضع التحذير فقط. |
-| **R1 - بوابة التحذير** | **2025-04-01 → 2025-05-15** | يستمر Torii في قبول adverts القديمة لكنه يزيد `torii_sorafs_admission_total{result="warn"}` عندما يفتقد payload `chunk_range_fetch` أو يحمل capabilities غير معروفة دون `allow_unknown_capabilities=true`. يفشل tooling CLI الآن في إعادة التوليد ما لم يوجد الـ handle القياسي. | - تدوير adverts في staging و production لتضمين payloads `CapabilityType::ChunkRangeFetch`، وعند GREASE testing اضبط `allow_unknown_capabilities=true`. <br />- توثيق الاستعلامات الجديدة للتليمترية في runbooks التشغيل. | ترقية dashboards إلى دوران on-call؛ إعداد تحذيرات عندما تتجاوز أحداث `warn` نسبة 5% من الحركة لمدة 15 دقيقة. |
-| **R2 - Enforcement** | **2025-05-16 → 2025-06-30** | يرفض Torii adverts التي تفتقد envelopes الحوكمة أو الـ handle القياسي للملف الشخصي أو capability `chunk_range_fetch`. لم تعد handles القديمة `namespace-name` تُحلل. تفشل capabilities غير المعروفة دون GREASE opt-in بسبب `reason="unknown_capability"`. | - التأكد من وجود envelopes الإنتاج ضمن `torii.sorafs.admission_envelopes_dir` وتدوير أي adverts قديمة متبقية. <br />- التحقق من أن SDKs تصدر handles قياسية فقط مع aliases اختيارية للتوافق العكسي. | تشغيل pager alerts: `torii_sorafs_admission_total{result="reject"}` > 0 لمدة 5 دقائق يستدعي تدخل المشغل. تتبع نسبة القبول وهيستوغرامات أسباب القبول. |
-| **R3 - إيقاف القديمة** | **اعتبارا من 2025-07-01** | تتخلى Discovery عن دعم adverts الثنائية التي لا تضبط `signature_strict=true` أو التي تفتقد `profile_aliases`. يقوم Torii discovery cache بحذف الإدخالات القديمة التي تجاوزت deadline للتجديد دون تحديث. | - جدولة نافذة decommission النهائية لمكدسات المزودين القديمة. <br />- التأكد من أن تشغيلات GREASE `--allow-unknown` تتم فقط خلال drills مضبوطة ويتم تسجيلها. <br />- تحديث playbooks للحوادث لاعتبار مخرجات تحذير `sorafs_fetch` مانعا قبل الإصدارات. | تشديد التنبيهات: أي نتيجة `warn` تنبه on-call. إضافة فحوصات تركيبية تجلب discovery JSON وتتحقق من قوائم capabilities للمزودين. |
+| **R0 - Nome de usuário** | حتى **31/03/2025** | O Torii é um dos anúncios do `ProviderAdvertV1`. Para evitar a ingestão, você pode usar anúncios `chunk_range_fetch` ou `profile_aliases`. | - إعادة توليد adverts عبر pipeline نشر fornecedor advert (ProviderAdvertV1 + envelope de governança) مع ضمان `profile_id=sorafs.sf1@1.0.0` و`profile_aliases` قياسية و`signature_strict=true`. - تشغيل اختبارات `sorafs_fetch` محليا؛ يجب capacidades de triagem تحذيرات غير المعروفة. | Use o Grafana para obter informações sobre o produto. Não. |
+| **R1 - بوابة التحذير** | **01/04/2025 → 15/05/2025** | Torii é usado para anúncios, mas também para `torii_sorafs_admission_total{result="warn"}`, capacidade de carga útil `chunk_range_fetch` e capacidades O modelo é `allow_unknown_capabilities=true`. As ferramentas CLI não são usadas para lidar com o problema. | - Anúncios de teste em testes e produção em cargas úteis `CapabilityType::ChunkRangeFetch` e testes de GREASE em `allow_unknown_capabilities=true`. - توثيق الاستعلامات الجديدة للتليمترية em runbooks. | Painéis de controle إلى دوران de plantão; Verifique o valor do produto `warn` com 5% de desconto em 15 dias. |
+| **R2 - Aplicação** | **16/05/2025 → 30/06/2025** | يرفض Torii adverts التي تفتقد envelopes الحوكمة أو الـ handle القياسي للملف الشخصي أو capacidade `chunk_range_fetch`. Não há alças no `namespace-name`. Capacidades adicionais غير المعروفة دون GREASE opt-in بسبب `reason="unknown_capability"`. | - Envelopes para todos os tipos de envelopes, `torii.sorafs.admission_envelopes_dir` e anúncios, sem anúncios. - التحقق من أن SDKs تصدر handles قياسية فقط مع aliases اختيارية للتوافق العكسي. | Gere alertas de pager: `torii_sorafs_admission_total{result="reject"}` > 0 para 5 dias após a instalação. Verifique se há algum problema e como isso pode ser feito. |
+| **R3 - إيقاف القديمة** | **Em 2025-07-01** | A descoberta do Discovery tem anúncios no site `signature_strict=true` ou `profile_aliases`. O cache de descoberta Torii é definido como o prazo final do prazo. | - جدولة نافذة descomission النهائية لمكدسات المزودين القديمة. - A graxa GREASE `--allow-unknown` é usada para perfurar brocas e perfurações. - تحديث playbooks للحوادث لاعتبار مخرجات تحذير `sorafs_fetch` مانعا قبل الإصدارات. | تشديد التنبيهات: No `warn` تنبه de plantão. O JSON de descoberta pode ser usado para definir capacidades. |
 
-## قائمة تحقق المشغل
-
-1. **جرد adverts.** احصر كل advert منشور وسجل:
-   - مسار الـ governing envelope (`defaults/nexus/sorafs_admission/...` أو ما يعادله في الإنتاج).
-   - `profile_id` و `profile_aliases` للـ advert.
-   - قائمة capabilities (تتوقع على الأقل `torii_gateway` و `chunk_range_fetch`).
-   - علم `allow_unknown_capabilities` (مطلوب عندما توجد TLVs محجوزة من vendor).
-2. **إعادة التوليد باستخدام tooling المزود.**
-   - أعد بناء payload عبر ناشر provider advert، مع التأكد من:
-     - `profile_id=sorafs.sf1@1.0.0`
-     - `capability=chunk_range_fetch` مع `max_span` محدد
-     - `allow_unknown_capabilities=<true|false>` عند وجود TLVs من GREASE
-   - تحقق عبر `/v1/sorafs/providers` و`sorafs_fetch`; يجب triage تحذيرات
-     capabilities غير المعروفة.
-3. **التحقق من جاهزية multi-source.**
-   - نفذ `sorafs_fetch` مع `--provider-advert=<path>`؛ يفشل CLI الآن عندما
-     يغيب `chunk_range_fetch` ويطبع تحذيرات عند تجاهل capabilities غير المعروفة.
-     التقط تقرير JSON وأرشفه مع سجلات العمليات.
+## قائمة تحقق المشغل1. **جرد anúncios.** احصر كل anúncio منشور وسجل:
+   - مسار الـ envelope governamental (`defaults/nexus/sorafs_admission/...` أو ما يعادله في الإنتاج).
+   - `profile_id` e `profile_aliases` para anúncio.
+   - Recursos de recursos (definidos como `torii_gateway` e `chunk_range_fetch`).
+   - Por `allow_unknown_capabilities` (é possível que os TLVs sejam fornecidos pelo fornecedor).
+2. **إعادة التوليد باستخدام ferramental.**
+   - أعد بناء payload عبر ناشر fornecedor anúncio, مع التأكد من:
+     -`profile_id=sorafs.sf1@1.0.0`
+     - `capability=chunk_range_fetch` ou `max_span`
+     - `allow_unknown_capabilities=<true|false>` e TLVs com GREASE
+   - تحقق عبر `/v1/sorafs/providers` e `sorafs_fetch`; يجب triagem تحذيرات
+     capacidades غير المعروفة.
+3. **التحقق من جاهزية multi-fonte.**
+   - Nome `sorafs_fetch` ou `--provider-advert=<path>`; يفشل CLI الآن عندما
+     O `chunk_range_fetch` é um recurso que pode ser usado para aumentar os recursos.
+     O JSON é definido como algo que não funciona.
 4. **تجهيز التجديدات.**
-   - أرسل envelopes من نوع `ProviderAdmissionRenewalV1` قبل 30 يوما على الأقل من
-     enforcement في gateway (R2). يجب أن تحافظ التجديدات على الـ handle القياسي
-     ومجموعة capabilities؛ ولا تتغير إلا stake أو endpoints أو metadata.
+   - Envelopes de envelopes de `ProviderAdmissionRenewalV1` por 30 dias por mês
+     aplicação no gateway (R2). يجب أن تحافظ التجديدات على الـ handle القياسي
+     Capacidades de ومجموعة; Não há participação, endpoints e metadados.
 5. **التواصل مع الفرق المعتمدة.**
-   - يجب على ملاك SDK إطلاق نسخ تُظهر التحذيرات للمشغلين عندما تُرفض adverts.
-   - يعلن DevRel كل انتقال مرحلة؛ أدرج روابط dashboards ومنطق العتبات أدناه.
-6. **تثبيت dashboards والتنبيهات.**
-   - استورد تصدير Grafana وضعه تحت **SoraFS / Provider Rollout** مع UID
+   - Não use o SDK para exibir anúncios.
+   - يعلن DevRel كل انتقال مرحلة؛ Crie painéis de controle e painéis de controle.
+6. **Painéis de controle e painéis.**
+   - Implementar Grafana e implementar **SoraFS / Implementação de provedor** com UID
      `sorafs-provider-admission`.
    - تأكد من أن قواعد التنبيه تشير إلى قناة `sorafs-advert-rollout` المشتركة
-     في staging و production.
+     Na encenação e produção.
 
 ## التليمترية ولوحات المعلومات
 
-المقاييس التالية مكشوفة بالفعل عبر `iroha_telemetry`:
+O código de barras do dispositivo `iroha_telemetry`:
 
 - `torii_sorafs_admission_total{result,reason}` — يعد القبول والرفض ونتائج التحذير.
-  تشمل الأسباب `missing_envelope` و`unknown_capability` و`stale` و`policy_violation`.
+  Verifique o valor `missing_envelope`, `unknown_capability`, `stale` e `policy_violation`.
 
-تصدير Grafana: [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
+Escolha Grafana: [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
 قم باستيراد الملف إلى مستودع dashboards المشترك (`observability/dashboards`) مع
-تحديث UID لمصدر البيانات فقط قبل النشر.
+Verifique o UID do site no site.
 
-يُنشر اللوح تحت مجلد Grafana **SoraFS / Provider Rollout** مع UID ثابت
-`sorafs-provider-admission`. قواعد التنبيه `sorafs-admission-warn` (warning) و
-`sorafs-admission-reject` (critical) مُعدة مسبقا لاستخدام سياسة الإشعار
-`sorafs-advert-rollout`؛ عدل جهة الاتصال إذا تغيّرت قائمة الوجهات بدلا من تحرير
-JSON الخاص باللوحة.
+Grafana **SoraFS / Implementação de Provedor** com UID ثابت
+`sorafs-provider-admission`. قواعد التنبيه `sorafs-admission-warn` (aviso) e
+`sorafs-admission-reject` (crítico)
+`sorafs-advert-rollout`; عدل جهة الاتصال إذا تغيّرت قائمة الوجهات بدلا من تحرير
+JSON é definido.
 
-لوحات Grafana الموصى بها:
+O código Grafana é o seguinte:
 
-| اللوحة | الاستعلام | الملاحظات |
+| الوحة | الاستعلام | الملاحظات |
 |-------|-------|-------|
-| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | مخطط مكدس لعرض accept vs warn vs reject. تنبيه عند warn > 0.05 * total (warning) أو reject > 0 (critical). |
-| **Warning ratio** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | سلسلة زمنية وحيدة تغذي عتبة pager (نسبة تحذير 5% خلال 15 دقيقة). |
-| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | تدعم triage في runbook؛ أرفق روابط لخطوات التخفيف. |
-| **Refresh debt** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | تشير إلى مزودين فاتتهم مهلة التجديد؛ قارن مع سجلات discovery cache. |
+| **Taxa de resultado de admissão** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | مخطط مكدس لعرض aceitar vs avisar vs rejeitar. É necessário avisar > 0,05 * total (aviso) ou rejeitar > 0 (crítico). |
+| **Taxa de alerta** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Você pode usar um pager de alta qualidade (5% em 15 dias). |
+| **Motivos de rejeição** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Como fazer a triagem no runbook; أرفق روابط لخطوات التخفيف. |
+| **Atualizar dívida** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | تشير إلى مزودين فاتتهم مهلة التجديد؛ Este é o cache de descoberta. |
 
-Artefacts للـ CLI من أجل dashboards يدوية:
-
-- `sorafs_fetch --provider-metrics-out` يكتب عدادات `failures` و`successes` و
-  `disabled` لكل مزود. استوردها في dashboards ad-hoc لمراقبة dry-runs في
-  orchestrator قبل تبديل مزودي الإنتاج.
-- حقلا `chunk_retry_rate` و`provider_failure_rate` في تقرير JSON يسلطان الضوء على
-  throttling أو أعراض payloads stale التي غالبا ما تسبق رفض القبول.
+Artefatos da CLI nos painéis de controle são:- `sorafs_fetch --provider-metrics-out` é compatível com `failures` e `successes` e
+  `disabled` para a maioria. Criar painéis ad-hoc para simulações
+  orquestrador قبل تبديل مزودي الإنتاج.
+- É `chunk_retry_rate` e `provider_failure_rate` no formato JSON.
+  estrangulamento ou estrangulamento de cargas úteis obsoletas.
 
 ### تخطيط لوحة Grafana
 
-تنشر Observability لوحة مخصصة — **SoraFS Provider Admission
-Rollout** (`sorafs-provider-admission`) — ضمن **SoraFS / Provider Rollout**
+Observabilidade لوحة مخصصة — **SoraFS Admissão do Provedor
+Implementação** (`sorafs-provider-admission`) — ضمن **SoraFS / Implementação do provedor**
 مع معرفات اللوحات القياسية التالية:
 
-- Panel 1 — *Admission outcome rate* (stacked area, وحدة "ops/min").
-- Panel 2 — *Warning ratio* (single series)، مع التعبير
-  `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) /
-   sum(rate(torii_sorafs_admission_total[5m]))`.
-- Panel 3 — *Rejection reasons* (time series مجمعة حسب `reason`)، مرتبة حسب
+- Painel 1 — *Taxa de resultado de admissão* (área empilhada, وحدة "ops/min").
+- Painel 2 — *Taxa de advertência* (série única)، مع التعبير
+  `sum(taxa(torii_sorafs_admission_total{result="warn"}[5m])) /
+   soma(taxa(torii_sorafs_admission_total[5m]))`.
+- Painel 3 — *Motivos de rejeição* (série temporal مجمعة حسب `reason`), مرتبة حسب
   `rate(...[5m])`.
-- Panel 4 — *Refresh debt* (stat)، يعكس الاستعلام أعلاه ومُعلق بمهل refresh
-  المستخرجة من migration ledger.
+- Painel 4 — *Atualizar dívida* (estatísticas), يعكس الاستعلام أعلاه ومُعلق بمهل atualizar
+  O registro do livro de migração.
 
-انسخ (أو أنشئ) JSON skeleton في مستودع لوحات البنية التحتية
-`observability/dashboards/sorafs_provider_admission.json`، ثم حدث فقط UID لمصدر
-البيانات؛ معرفات اللوحات وقواعد التنبيه يُرجع إليها runbooks أدناه، لذا تجنب
-إعادة ترقيمها دون تحديث هذا المستند.
+Esqueleto JSON (ou melhor) JSON que está disponível para download
+`observability/dashboards/sorafs_provider_admission.json`, qual é o valor do UID
+البيانات؛ معرفات اللوحات وقواعد التنبيه يُرجع إليها runbooks أدناه, لذا تجنب
+Você pode fazer isso sem problemas.
 
-للتسهيل، يوفر المستودع تعريفا مرجعيا للوحة في
-`docs/source/grafana_sorafs_admission.json`؛ انسخه إلى مجلد Grafana عند الحاجة
+للتسهيل, يوفر المستودع تعريفا مرجعيا للوحة في
+`docs/source/grafana_sorafs_admission.json`; Use o Grafana para obter mais informações
 كنقطة انطلاق للاختبارات المحلية.
 
 ### قواعد تنبيه Prometheus
 
 أضف مجموعة القواعد التالية إلى
 `observability/prometheus/sorafs_admission.rules.yml` (أنشئ الملف إن كانت هذه
-أول مجموعة قواعد SoraFS) وضمنها في إعدادات Prometheus. استبدل `<pagerduty>`
+Você pode usar o SoraFS) e o Prometheus. Modelo `<pagerduty>`
 بعلامة التوجيه الفعلية لدوام المناوبة.
 
 ```yaml
@@ -164,42 +160,40 @@ groups:
             the refresh deadline elapses.
 ```
 
-شغّل `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
-قبل رفع التغييرات للتأكد من أن الصياغة تمر عبر `promtool check rules`.
+Modelo `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
+Verifique se o dispositivo está conectado ao `promtool check rules`.
 
 ## مصفوفة التوافق
 
-| خصائص advert | R0 | R1 | R2 | R3 |
-|------------------------|----|----|----|----|
-| `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` موجود، aliases قياسية، `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
-| غياب capability `chunk_range_fetch` | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
-| TLVs لcapability غير معروفة دون `allow_unknown_capabilities=true` | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| `refresh_deadline` منتهي | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
-| `signature_strict=false` (diagnostic fixtures) | ✅ (للتطوير فقط) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
+| Anúncio de anúncio | R0 | R1 | R2 | R3 |
+|-----|----|----|----|----|
+| `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` Nomes alternativos, `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
+| capacidade de operação `chunk_range_fetch` | ⚠️ Avisar (ingestão + telemetria) | ⚠️Avisar | ❌ Rejeitar (`reason="missing_capability"`) | ❌ Rejeitar |
+| Capacidade de TLVs غير معروفة دون `allow_unknown_capabilities=true` | ✅ | ⚠️ Avisar (`reason="unknown_capability"`) | ❌ Rejeitar | ❌ Rejeitar |
+| `refresh_deadline` Mecanismo | ❌ Rejeitar | ❌ Rejeitar | ❌ Rejeitar | ❌ Rejeitar |
+| `signature_strict=false` (dispositivos de diagnóstico) | ✅ (للتطوير فقط) | ⚠️Avisar | ⚠️Avisar | ❌ Rejeitar |
 
-كل الأوقات بتوقيت UTC. تواريخ enforcement معكوسة في migration ledger ولن تتغير
-بدون تصويت المجلس؛ أي تغيير يتطلب تحديث هذا الملف والـ ledger في نفس PR.
+É o horário UTC. A execução da aplicação é feita no registro de migração e no registro
+بدون تصويت المجلس؛ Você pode usar o livro-razão no PR.
 
-> **ملاحظة تنفيذية:** يقدم R1 سلسلة `result="warn"` في
-> `torii_sorafs_admission_total`. تتبع رقعة ingest في Torii التي تضيف هذه التسمية
-> ضمن مهام تليمترية SF-2؛ وحتى ذلك الحين استخدم أخذ عينات من السجلات لمراقبة
+> **Configurações de uso:** R1 padrão `result="warn"` aqui
+> `torii_sorafs_admission_total`. Ingerir ingest em Torii é uma tarefa simples
+> ضمن مهام تليمترية SF-2; وحتى ذلك الحين استخدم أخذ عينات من السجلات لمراقبة
 
-## التواصل ومعالجة الحوادث
-
-- **رسالة حالة أسبوعية.** يرسل DevRel ملخصا موجزا لمقاييس القبول والتحذيرات
+## التواصل ومعالجة الحوادث- **رسالة حالة أسبوعية.** يرسل DevRel ملخصا موجزا لمقاييس القبول والتحذيرات
   والمواعيد القادمة.
 - **استجابة للحوادث.** إذا انطلقت تنبيهات `reject`، يقوم on-call بما يلي:
-  1. جلب advert المخالف عبر discovery في Torii (`/v1/sorafs/providers`).
-  2. إعادة تشغيل تحقق advert في pipeline المزود ومقارنة النتائج مع
-     `/v1/sorafs/providers` لإعادة إنتاج الخطأ.
-  3. التنسيق مع المزود لتدوير advert قبل اقتراب مهلة refresh التالية.
-- **تجميد التغييرات.** لا تغيرات على schema للـ capabilities خلال R1/R2 ما لم
-  يوافق عليها فريق rollout؛ يجب جدولة تجارب GREASE ضمن نافذة الصيانة الأسبوعية
-  وتسجيلها في migration ledger.
+  1. Abra o anúncio de descoberta em Torii (`/v1/sorafs/providers`).
+  2. Coloque um anúncio no pipeline e envie-o para o pipeline.
+     `/v1/sorafs/providers` não funciona.
+  3. O anúncio do anúncio pode ser atualizado para atualizar o site.
+- **تجميد التغييرات.** para definir o esquema, os recursos, o R1/R2, mas não
+  Implementação de يوافق عليها فريق; Use GREASE para usar com graxa
+  É usado no registro de migração.
 
 ## المراجع
 
-- [SoraFS Node/Client Protocol](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
-- [Provider Admission Policy](./provider-admission-policy)
-- [Migration Roadmap](./migration-roadmap)
-- [Provider Advert Multi-Source Extensions](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)
+- [Protocolo de nó/cliente SoraFS] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
+- [Política de Admissão de Provedor](./provider-admission-policy)
+- [Roteiro de migração](./migration-roadmap)
+- [Extensões de múltiplas fontes de anúncio do provedor] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)

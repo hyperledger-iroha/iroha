@@ -7,45 +7,46 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 05149d624d680d04433be41a4525538c97bd103ae7f80dda2613a6adb181a93d
 source_last_modified: "2025-12-29T18:16:35.968850+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Monitor
+# Iroha Монитор
 
-The refactored Iroha monitor pairs a lightweight terminal UI with animated
-festival ASCII art and the traditional Etenraku theme.  It focuses on two
-simple workflows:
+Дахин засварласан Iroha дэлгэц нь хөдөлгөөнт дүрс бүхий хөнгөн терминал UI-г хослуулсан.
+наадам ASCII урлаг ба уламжлалт Этенраку сэдэв.  Энэ нь хоёрт анхаарлаа хандуулдаг
+энгийн ажлын урсгалууд:
 
-- **Spawn-lite mode** – start ephemeral status/metrics stubs that mimic peers.
-- **Attach mode** – point the monitor at existing Torii HTTP endpoints.
+- **Spawn-lite горим** – үе тэнгийнхнийгээ дуурайдаг түр зуурын статус/ хэмжигдэхүүнийг эхлүүлнэ.
+- **Хавсрах горим** – мониторыг одоо байгаа Torii HTTP төгсгөлийн цэгүүд рүү чиглүүлнэ.
 
-The UI renders three regions on every refresh:
+UI нь шинэчлэх бүрт гурван бүсийг харуулдаг:
 
-1. **Torii skyline header** – animated torii gate, Mt. Fuji, koi waves, and star
-   field that scroll in sync with the refresh cadence.
-2. **Summary strip** – aggregated blocks/transactions/gas plus refresh timing.
-3. **Peer table & festival whispers** – peer rows on the left, rotating event
-   log on the right that captures warnings (timeouts, oversized payloads, etc.).
-4. **Optional gas trend** – enable `--show-gas-trend` to append a sparkline
-   summarising total gas usage across all peers.
+1. **Torii skyline header** – хөдөлгөөнт тории хаалга, Фүжи уул, кои долгион, од
+   сэргээх хэмнэлтэй синхрон гүйлгэх талбар.
+2. **Тогтоон зурвас** – нэгтгэсэн блок/гүйлгээ/хий нэмэх дахин сэргээх хугацаа.
+3. **Үе тэнгийн ширээ, наадмын шивнээ** – зүүн талд байгаа үе тэнгийн эгнээ, эргэлдэх үйл явдал
+   анхааруулга (хугацаа хэтэрсэн, хэт их ачаалал гэх мэт) авдаг баруун талд нэвтэрнэ үү.
+4. **Заавал хийн чиг хандлага** – гялбааны шугам нэмэхийн тулд `--show-gas-trend`-г идэвхжүүлнэ
+   бүх үе тэнгийнхний нийт хийн хэрэглээг нэгтгэн харуулав.
 
-New in this refactor:
+Энэ рефакторт шинэ:
 
-- Animated Japanese-style ASCII scene with koi, torii, and lanterns.
-- Simplified command surface (`--spawn-lite`, `--attach`, `--interval`).
-- Intro banner with optional audio playback of the gagaku theme (external MIDI
-  player or the built-in soft synth when the platform/audio stack supports it).
-- `--no-theme` / `--no-audio` flags for CI or fast smoke runs.
-- Per-peer “mood” column showing the latest warning, commit time, or uptime.
+- Кой, торий, дэнлүү бүхий япон маягийн ASCII хүүхэлдэйн кино.
+- Хялбаршуулсан тушаалын гадаргуу (`--spawn-lite`, `--attach`, `--interval`).
+- Гагаку сэдвийн нэмэлт аудио тоглуулах боломжтой танилцуулга баннер (гадаад MIDI
+  платформ/аудио стек үүнийг дэмждэг үед тоглуулагч эсвэл суурилуулсан зөөлөн синт).
+- CI эсвэл хурдан утааны гүйлтийн `--no-theme` / `--no-audio` тугнууд.
+- Хамгийн сүүлийн үеийн анхааруулга, гүйцэтгэх хугацаа эсвэл ажиллах хугацааг харуулсан "сэтгэлийн байдал" багана.
 
-## Quickstart
+## Хурдан эхлэл
 
-Build the monitor and run it against the stubbed peers:
+Мониторыг бүтээж, бүдүүлэг үе тэнгийнхний эсрэг ажиллуулна уу:
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --peers 3
 ```
 
-Attach to existing Torii endpoints:
+Одоо байгаа Torii төгсгөлийн цэгүүдэд хавсаргана уу:
 
 ```bash
 cargo run -p iroha_monitor -- \
@@ -53,13 +54,13 @@ cargo run -p iroha_monitor -- \
   --interval 500
 ```
 
-CI-friendly invocation (skip intro animation and audio):
+CI-д ээлтэй дуудлага (танилцуулгын хөдөлгөөнт дүрс болон аудиог алгасах):
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
 ```
 
-### CLI flags
+### CLI тугууд
 
 ```
 --spawn-lite         start local status/metrics stubs (default if no --attach)
@@ -77,56 +78,54 @@ cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
                      cap headless fallback to N frames (0 = unlimited)
 ```
 
-## Theme intro
+## Сэдвийн танилцуулга
 
-By default, startup plays a short ASCII animation while the Etenraku score
-begins.  Audio selection order:
+Анхдагч байдлаар, эхлүүлэх үед Etenraku оноо авах үед богино ASCII хөдөлгөөнт дүрс тоглодог
+эхэлдэг.  Аудио сонгох дараалал:
 
-1. If `--midi-player` is provided, generate the demo MIDI (or use `--midi-file`)
-   and spawn the command.
-2. Otherwise, on macOS/Windows (or Linux with `--features iroha_monitor/linux-builtin-synth`)
-   render the score with the built-in gagaku soft synth (no external audio
-   assets required).
-3. If audio is disabled or initialization fails, the intro still prints the
-   animation and immediately enters the TUI.
+1. Хэрэв `--midi-player`-г өгсөн бол үзүүлэнгийн MIDI-г үүсгэнэ үү (эсвэл `--midi-file` ашиглана уу)
+   болон тушаалыг төрүүлнэ.
+2. Үгүй бол macOS/Windows (эсвэл `--features iroha_monitor/linux-builtin-synth`-тэй Linux) дээр
+   Суулгасан гагаку зөөлөн синтезээр оноог гаргах (гадаад аудио байхгүй
+   шаардлагатай хөрөнгө).
+3. Хэрэв дууг идэвхгүй болгосон эсвэл эхлүүлэх ажиллагаа амжилтгүй болсон бол танилцуулга нь хэвлэсэн хэвээр байна
+   хөдөлгөөнт дүрс, тэр даруй TUI-д орно.
 
-The CPAL-powered synth auto-enables on macOS and Windows. On Linux it is
-opt-in to avoid missing ALSA/Pulse headers during workspace builds; enable it
-with `--features iroha_monitor/linux-builtin-synth` if your system provides a
-working audio stack.
+CPAL-ээр ажилладаг synth нь macOS болон Windows дээр автоматаар идэвхждэг. Линукс дээр ийм байна
+ажлын талбарыг бүтээх явцад ALSA/Pulse толгойг орхигдуулахгүйн тулд бүртгүүлэх; идэвхжүүлнэ үү
+Хэрэв таны систем хангадаг бол `--features iroha_monitor/linux-builtin-synth`
+ажиллаж байгаа аудио стек.
 
-Use `--no-theme` or `--no-audio` when running in CI or headless shells.
+CI эсвэл толгойгүй бүрхүүлд гүйх үед `--no-theme` эсвэл `--no-audio` ашиглана уу.
 
-The soft synth now follows the arrangement captured in *MIDI synth design in
-Rust.pdf*: hichiriki and ryūteki share a heterophonic melody while the shō
-provides the aitake pads described in the document.  The timed note data lives
-in `etenraku.rs`; it powers both the CPAL callback and the generated demo MIDI.
-When audio output is unavailable the monitor skips playback but still renders
-the ASCII animation.
+Зөөлөн synth нь одоо *MIDI synth загварт авсан зохицуулалтыг дагаж байна
+Rust.pdf*: хичирики болон рютеки нар шогийн үеэр гетерофоник аялгуу хуваалцдаг.
+баримт бичигт тодорхойлсон aitake дэвсгэрүүдийг хангадаг.  Хугацаатай тэмдэглэлийн өгөгдлүүд амьдардаг
+`etenraku.rs`-д; Энэ нь CPAL-ийн буцаан дуудлагыг болон үүсгэсэн MIDI-г идэвхжүүлдэг.
+Аудио гаралт боломжгүй үед монитор дахин тоглуулахыг алгасах боловч үзүүлсээр байна
+ASCII хөдөлгөөнт дүрс.
 
-## UI overview
+## UI тойм- **Толгойн зураг** – хүрээ бүрийг `AsciiAnimator`-ээр үүсгэсэн; кои, торий дэнлүү,
+  мөн долгион нь тасралтгүй хөдөлгөөнийг бий болгохын тулд шилжинэ.
+- **Тогтоон зурвас** – онлайн үе тэнгийнхэн, мэдээлэгдсэн үе тэнгийн тоо, блокийн нийлбэр,
+  хоосон биш блокийн нийлбэр, tx зөвшөөрөл/татгалзах, хийн хэрэглээ, сэргээх хурд.
+- **Peer хүснэгт** – өөр нэр/төгсгөлийн цэг, блок, гүйлгээ, дарааллын хэмжээ,
+  хийн хэрэглээ, хоцрогдол, "сэтгэлийн байдал"-ын сануулга (сануулга, гүйцэтгэх хугацаа, ажиллах хугацаа).
+- **Баярын шивнээ** – анхааруулга (холболтын алдаа, ачаалал)
+  зөрчлийг хязгаарлах, эцсийн цэгийг удаашруулах).  Мессежүүд урвуу байна (дээд талд нь хамгийн сүүлд).
 
-- **Header art** – generated each frame by `AsciiAnimator`; koi, torii lanterns,
-  and waves drift to give continuous motion.
-- **Summary strip** – shows online peers, reported peer count, block totals,
-  non-empty block totals, tx approvals/rejections, gas usage, and refresh rate.
-- **Peer table** – columns for alias/endpoint, blocks, transactions, queue size,
-  gas usage, latency, and a “mood” hint (warnings, commit time, uptime).
-- **Festival whispers** – rolling log of warnings (connection errors, payload
-  limit breaches, slow endpoints).  Messages are reversed (latest on top).
+Гарын товчлол:
 
-Keyboard shortcuts:
+- `n` / Баруун / Доош – фокусыг дараагийн үе рүү шилжүүлнэ.
+- `p` / Зүүн / Дээш – фокусыг өмнөх үе рүү шилжүүлнэ.
+- `q` / Esc / Ctrl-C – терминалаас гарч, сэргээнэ үү.
 
-- `n` / Right / Down – move focus to the next peer.
-- `p` / Left / Up – move focus to the previous peer.
-- `q` / Esc / Ctrl-C – exit and restore the terminal.
+Дэлгэц нь өөр дэлгэцийн буфер бүхий кроссterm + ratatui ашигладаг; гарахдаа
+курсорыг сэргээж, дэлгэцийг цэвэрлэнэ.
 
-The monitor uses crossterm + ratatui with an alternate-screen buffer; on exit it
-restores the cursor and clears the screen.
+## Утааны шинжилгээ
 
-## Smoke tests
-
-The crate ships integration tests that exercise both modes and the HTTP limits:
+Крат нь горим болон HTTP хязгаарлалтын аль алиныг нь хэрэгжүүлдэг интеграцийн тестийг илгээдэг:
 
 - `spawn_lite_smoke_renders_frames`
 - `attach_mode_with_stubs_runs_cleanly`
@@ -134,46 +133,46 @@ The crate ships integration tests that exercise both modes and the HTTP limits:
 - `status_limit_warning_is_rendered`
 - `attach_mode_with_slow_peer_renders_multiple_frames`
 
-Run just the monitor tests:
+Зөвхөн мониторын туршилтуудыг ажиллуулна уу:
 
 ```bash
 cargo test -p iroha_monitor -- --nocapture
 ```
 
-The workspace has heavier integration tests (`cargo test --workspace`). Running
-the monitor tests separately is still useful for quick validation when you do
-not need the full suite.
+Ажлын талбар нь илүү хүнд интеграцийн тестүүдтэй (`cargo test --workspace`). Гүйж байна
+Мониторын тестийг тусад нь хийх нь таныг хурдан баталгаажуулахад тустай хэвээр байна
+бүрэн иж бүрдэл хэрэггүй.
 
-## Updating screenshots
+## Дэлгэцийн агшинг шинэчилж байна
 
-The docs demo now focuses on the torii skyline and peer table.  To refresh the
-assets, run:
+Docs demo нь одоо torii skyline болон peer table дээр төвлөрч байна.  -г сэргээхийн тулд
+хөрөнгө, ажиллуулах:
 
 ```bash
 make monitor-screenshots
 ```
 
-This wraps `scripts/iroha_monitor_demo.sh` (spawn-lite mode, fixed seed/viewport,
-no intro/audio, dawn palette, art-speed 1, headless cap 24) and writes the
-SVG/ANSI frames plus `manifest.json` and `checksums.json` into
+Энэ нь `scripts/iroha_monitor_demo.sh` (үрсэх горим, тогтмол үр/харах цонх,
+оршил/аудио байхгүй, үүрийн гэгээ палитр, урлагийн хурд 1, толгойгүй таг 24) ба бичнэ.
+SVG/ANSI хүрээ болон `manifest.json` болон `checksums.json`
 `docs/source/images/iroha_monitor_demo/`. `make check-iroha-monitor-docs`
-wraps both CI guards (`ci/check_iroha_monitor_assets.sh` and
-`ci/check_iroha_monitor_screenshots.sh`) so generator hashes, manifest fields,
-and checksums stay in sync; the screenshot check also ships as
-`python3 scripts/check_iroha_monitor_screenshots.py`. Pass `--no-fallback` to
-the demo script if you want the capture to fail instead of falling back to the
-baked frames when the monitor output is empty; when fallback is used the raw
-`.ans` files are rewritten with the baked frames so the manifest/checksums stay
-deterministic.
+CI хамгаалалтыг хоёуланг нь ороосон (`ci/check_iroha_monitor_assets.sh` ба
+`ci/check_iroha_monitor_screenshots.sh`) тиймээс генератор хэш, манифест талбарууд,
+болон шалгах нийлбэрүүд синхрончлолд байх болно; дэлгэцийн агшинг шалгах нь мөн адил илгээгдэнэ
+`python3 scripts/check_iroha_monitor_screenshots.py`. `--no-fallback` руу дамжуулна
+Хэрэв та зураг авалтыг буцааж авахын оронд бүтэлгүйтэхийг хүсвэл демо скриптийг ашиглана уу
+мониторын гаралт хоосон үед шатаасан хүрээ; нөөцийг ашиглах үед түүхий
+`.ans` файлуудыг шатаасан фрэймүүдээр дахин бичсэн тул манифест/шалгах нийлбэрүүд үлдэнэ.
+детерминист.
 
-## Deterministic screenshots
+## Тодорхойлогч дэлгэцийн агшин
 
-The shipped snapshots live in `docs/source/images/iroha_monitor_demo/`:
+Илгээсэн агшин зуурын зургууд нь `docs/source/images/iroha_monitor_demo/` дээр шууд байна:
 
-![monitor overview](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
-![monitor pipeline](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
+![Тоймыг хянах](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
+![хяналтын шугамыг](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
 
-Reproduce them with a fixed viewport/seed:
+Тэдгээрийг тогтмол харах хэсэг/үрээр хуулбарлах:
 
 ```bash
 scripts/iroha_monitor_demo.sh \
@@ -182,26 +181,24 @@ scripts/iroha_monitor_demo.sh \
   --seed iroha-monitor-demo
 ```
 
-The capture helper fixes `LANG`/`LC_ALL`/`TERM`, forwards
-`IROHA_MONITOR_DEMO_SEED`, mutes audio, and pins the art theme/speed so the
-frames render identically across platforms. It writes `manifest.json` (generator
-hashes + sizes) and `checksums.json` (SHA-256 digests) under
-`docs/source/images/iroha_monitor_demo/`; CI runs
-`ci/check_iroha_monitor_assets.sh` and `ci/check_iroha_monitor_screenshots.sh`
-to fail when the assets drift from the recorded manifests.
+Баривчлах туслах нь `LANG`/`LC_ALL`/`TERM`, урагшаа засдаг.
+`IROHA_MONITOR_DEMO_SEED`, дууг хааж, урлагийн сэдэв/хурдыг тогтооно.
+фрэймүүд платформ дээр адилхан дүрслэгддэг. Энэ нь `manifest.json` (генератор
+hashes + sizes) болон `checksums.json` (SHA-256 digests)
+`docs/source/images/iroha_monitor_demo/`; CI ажилладаг
+`ci/check_iroha_monitor_assets.sh` болон `ci/check_iroha_monitor_screenshots.sh`
+эд хөрөнгө бүртгэгдсэн манифестуудаас гарах үед бүтэлгүйтэх.
 
-## Troubleshooting
+## Алдааг олж засварлах- **Аудио гаралтгүй** – монитор дуугүй тоглуулах горимд шилжиж, үргэлжлүүлнэ.
+- **Толгойгүй нөхцлөөс эрт гарна** – монитор толгойгүй гүйлтийг хос руу чиглүүлдэг
+  сэлгэх боломжгүй үед хэдэн арван фрейм (анхдагч интервалаар 12 секунд орчим).
+  терминалыг түүхий горимд оруулах; үргэлжлүүлэн ажиллуулахын тулд `--headless-max-frames 0`-г дамжуулна уу
+  тодорхойгүй хугацаагаар.
+- **Их хэмжээний статусын ачаалал** – үе тэнгийнхний сэтгэлийн багана болон наадмын бүртгэл
+  `body exceeds …`-г тохируулсан хязгаартай (`128 KiB`) харуулах.
+- **Удаан үе тэнгийнхэн** – үйл явдлын бүртгэлд хугацаа хэтэрсэн анхааруулгыг бүртгэдэг; үе тэнгийнхэндээ анхаарлаа төвлөрүүл
+  мөрийг тодруулах.
 
-- **No audio output** – the monitor falls back to muted playback and continues.
-- **Headless fallback exits early** – the monitor caps headless runs to a couple
-  dozen frames (about 12 seconds at the default interval) when it cannot switch
-  the terminal into raw mode; pass `--headless-max-frames 0` to keep it running
-  indefinitely.
-- **Oversized status payloads** – the peer’s mood column and the festival log
-  show `body exceeds …` with the configured limit (`128 KiB`).
-- **Slow peers** – the event log records timeout warnings; focus that peer to
-  highlight the row.
-
-Enjoy the festival skyline!  Contributions for additional ASCII motifs or
-metrics panels are welcome—keep them deterministic so clusters render the same
-frame-by-frame regardless of terminal.
+Наадмын тэнгэрийн шугамыг сайхан өнгөрүүлээрэй!  Нэмэлт ASCII сэдвүүдэд оруулсан хувь нэмэр эсвэл
+хэмжүүрийн самбарыг ашиглах боломжтой—тэдгээрийг детерминатив байлгахын тулд кластерууд ижил байх болно
+терминалаас үл хамааран хүрээ тус бүрээр.

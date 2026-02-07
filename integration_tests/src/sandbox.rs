@@ -550,6 +550,7 @@ fn is_sandbox_message(message: &str) -> bool {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::time::Instant;
 
     use super::*;
     use toml::Value as TomlValue;
@@ -622,6 +623,23 @@ mod tests {
         let state = network_permit_state();
         let guard = state.state.lock().expect("network permit mutex poisoned");
         (guard.limit, guard.in_use)
+    }
+
+    fn wait_for_network_permits_to_drain(context: &str) {
+        let timeout = Duration::from_secs(30);
+        let start = Instant::now();
+        loop {
+            let (_, in_use) = network_permit_snapshot();
+            if in_use == 0 {
+                return;
+            }
+            if start.elapsed() >= timeout {
+                panic!(
+                    "{context}: timed out waiting for network permits to drain; {in_use} still in use"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn skip_if_sandboxed(test_name: &str) -> bool {
@@ -807,6 +825,9 @@ mod tests {
                 let serialized = SerializedNetwork::new_with_handle(network, guard, handle);
                 drop(serialized);
             });
+            wait_for_network_permits_to_drain(
+                "serialized_network_drop_completes_on_current_thread_runtime",
+            );
             let _ = tx.send(());
         });
 
@@ -819,6 +840,7 @@ mod tests {
     #[test]
     fn serial_guard_applies_default_parallelism() {
         let _env_guard = lock_env_guard();
+        wait_for_network_permits_to_drain("serial_guard_applies_default_parallelism");
         let _serialize_guard = EnvRestore::remove(SERIALIZE_NETWORKS_ENV);
         let _parallelism_guard = EnvRestore::remove(NETWORK_PARALLELISM_ENV);
         let _override_guard = override_network_parallelism(Some(false), None);
@@ -843,6 +865,7 @@ mod tests {
     #[test]
     fn network_parallelism_env_override_applies() {
         let _env_guard = lock_env_guard();
+        wait_for_network_permits_to_drain("network_parallelism_env_override_applies");
         let _override_guard = override_network_parallelism(None, Some(2));
 
         let guard = serial_guard();
@@ -855,6 +878,7 @@ mod tests {
     #[test]
     fn serialization_overrides_parallelism_limit() {
         let _env_guard = lock_env_guard();
+        wait_for_network_permits_to_drain("serialization_overrides_parallelism_limit");
         let _override_guard = override_network_parallelism(Some(true), Some(4));
 
         let guard = serial_guard();

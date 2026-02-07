@@ -6,17 +6,18 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7c19e80d060b1ecd57524e7398420990bd9159e7c4ac431ee5b85cfbf3b3df07
 source_last_modified: "2026-01-22T06:58:48.951155+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JavaScript SDK Quickstart
+# JavaScript SDK クイックスタート
 
-`@iroha2/torii-client` provides a browser and Node.js friendly wrapper around Torii.
-This quickstart mirrors the core flows from the SDK recipes so you can get a
-client running in a few minutes. For fuller examples, see
-`javascript/iroha_js/recipes/` in the repository.
+`@iroha2/torii-client` は、Torii のブラウザーおよび Node.js フレンドリーなラッパーを提供します。
+このクイックスタートは SDK レシピのコア フローを反映しているため、
+クライアントは数分以内に実行されます。より完全な例については、を参照してください。
+リポジトリ内の `javascript/iroha_js/recipes/`。
 
-## 1. Install
+## 1. インストール
 
 ```sh
 npm install @iroha2/torii-client
@@ -24,13 +25,13 @@ npm install @iroha2/torii-client
 yarn add @iroha2/torii-client
 ```
 
-If you plan to sign transactions locally, also install the crypto helpers:
+ローカルでトランザクションに署名する予定がある場合は、暗号ヘルパーもインストールします。
 
 ```sh
 npm install @iroha2/crypto-target-node  # Node18+/Bun/Deno
 ```
 
-## 2. Create a Torii client
+## 2. Torii クライアントを作成する
 
 ```ts title="client.ts"
 import {ToriiClient} from '@iroha2/torii-client';
@@ -41,22 +42,22 @@ const client = ToriiClient.create({
 });
 ```
 
-The configuration mirrors the constructor used in the recipes. If your node
-uses basic auth, pass `{username, password}` via the `basicAuth` option.
+この構成は、レシピで使用されるコンストラクターを反映しています。あなたのノードの場合
+基本認証を使用する場合は、`basicAuth` オプションを介して `{username, password}` を渡します。
 
-## 3. Fetch node status
+## 3. ノードのステータスを取得する
 
 ```ts
 const status = await client.getStatus();
 console.log(status.irohaVersion, status.latestBlock.height);
 ```
 
-All read operations return Norito-backed JSON objects. See the generated types in
-`index.d.ts` for field details.
+すべての読み取り操作は、Norito ベースの JSON オブジェクトを返します。生成された型を参照してください。
+フィールドの詳細については `index.d.ts`。
 
-## 4. Submit a transaction
+## 4. トランザクションを送信する
 
-Signers can build transactions with the helper API:
+署名者はヘルパー API を使用してトランザクションを構築できます。
 
 ```ts
 import {createKeyPairFromHex} from '@iroha2/crypto-target-node';
@@ -77,28 +78,28 @@ const hash = await client.submitTransaction(tx);
 console.log('Submitted tx', hash);
 ```
 
-The helper automatically wraps the transaction in the Norito envelope expected
-by Torii. For a richer example (including waits for finality), see
-`javascript/iroha_js/recipes/registration.mjs`.
+ヘルパーは、予期される Norito エンベロープでトランザクションを自動的にラップします。
+Torii による。より豊富な例 (ファイナリティの待機を含む) については、を参照してください。
+`javascript/iroha_js/recipes/registration.mjs`。
 
-## 5. Use high-level helpers
+## 5. 高レベルのヘルパーを使用する
 
-The SDK bundles specialised flows that mirror the CLI:
+SDK には、CLI をミラーリングする特殊なフローがバンドルされています。
 
-- **Governance helpers** – `recipes/governance.mjs` demonstrates staging
-  proposals and ballots with the `governance` instruction builders.
-- **ISO bridge** – `recipes/iso_bridge.mjs` shows how to submit `pacs.008` and
-  poll transfer status using the `/v1/iso20022` endpoints.
-- **SoraFS & triggers** – Pagination helpers under `src/toriiClient.js` expose
-  typed iterators for contracts, assets, triggers, and SoraFS providers.
+- **ガバナンス ヘルパー** – `recipes/governance.mjs` がステージングをデモンストレーションします
+  `governance` 命令ビルダーによる提案と投票。
+- **ISO ブリッジ** – `recipes/iso_bridge.mjs` は、`pacs.008` を送信する方法を示し、
+  `/v1/iso20022` エンドポイントを使用して転送ステータスをポーリングします。
+- **SoraFS とトリガー** – `src/toriiClient.js` の下のページネーション ヘルパーを公開します
+  コントラクト、アセット、トリガー、および SoraFS プロバイダーの型付きイテレーター。
 
-Import the relevant builder functions from `@iroha2/torii-client` to reuse those flows.
+関連するビルダー関数を `@iroha2/torii-client` からインポートして、これらのフローを再利用します。
 
-## 6. Error handling
+## 6. エラー処理
 
-All SDK calls throw rich `ToriiClientError` instances with transport metadata
-and the Norito error payload. Wrap calls in `try/catch` or use `.catch()` to
-surface context to users:
+すべての SDK 呼び出しは、トランスポート メタデータを含む豊富な `ToriiClientError` インスタンスをスローします
+および Norito エラー ペイロード。呼び出しを `try/catch` でラップするか、`.catch()` を使用して
+ユーザーにコンテキストを表面化します。
 
 ```ts
 try {
@@ -108,10 +109,10 @@ try {
 }
 ```
 
-## Next steps
+## 次のステップ
 
-- Explore the recipes in `javascript/iroha_js/recipes/` for end-to-end flows.
-- Read the generated types in `javascript/iroha_js/index.d.ts` for detailed
-  method signatures.
-- Pair this SDK with the Norito quickstart to inspect and debug the payloads
-  you send to Torii.
+- `javascript/iroha_js/recipes/` のエンドツーエンド フローのレシピを調べます。
+- 詳細については、`javascript/iroha_js/index.d.ts` で生成された型を参照してください。
+  メソッドのシグネチャ。
+- この SDK を Norito クイックスタートと組み合わせて、ペイロードを検査およびデバッグします
+  Torii に送信します。

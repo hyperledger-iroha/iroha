@@ -11,65 +11,64 @@ id: registry-schema
 title: Sora Name Service Registry Schema
 sidebar_label: Registry schema
 description: Norito data structures, lifecycle rules, and event contracts for SNS registry smart contracts (SN-2a).
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registry_schema.md` and now serves as the
-canonical portal copy. The source file remains for translation updates.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+ይህ ገጽ `docs/source/sns/registry_schema.md`ን ያንጸባርቃል እና አሁን እንደ የ
+ቀኖናዊ ፖርታል ቅጂ. የምንጭ ፋይሉ ለትርጉም ማሻሻያ ይቀራል።
+::
 
-# Sora Name Service Registry Schema (SN-2a)
+# የሶራ ስም የአገልግሎት መዝገብ እቅድ (SN-2a)
 
-**Status:** Drafted 2026-03-24 -- submitted for SNS program review  
-**Roadmap link:** SN-2a “Registry schema & storage layout”  
-**Scope:** Define the canonical Norito structures, lifecycle states, and emitted events for the Sora Name Service (SNS) so registry and registrar implementations stay deterministic across contracts, SDKs, and gateways.
+**ሁኔታ:** የተረቀቀው 2026-03-24 -- ለኤስኤንኤስ ፕሮግራም ግምገማ ገብቷል  
+** የመንገድ ካርታ አገናኝ፡** SN-2a “የመዝገብ ቤት እቅድ እና የማከማቻ አቀማመጥ”  
+** ወሰን፡** ቀኖናዊውን Norito አወቃቀሮችን፣የህይወት ዑደት ግዛቶችን እና ለሶራ ስም አገልግሎት (ኤስኤንኤስ) የተለቀቁ ክስተቶችን ይግለጹ ስለዚህ የመመዝገቢያ እና የመዝጋቢ አተገባበር በኮንትራቶች፣ ኤስዲኬዎች እና መግቢያ መንገዶች ላይ ቆራጥ ሆነው ይቆያሉ።
 
-This document completes the schema deliverable for SN-2a by specifying:
+ይህ ሰነድ የሚከተሉትን በመግለጽ ለ SN-2a ሊደርስ የሚችለውን እቅድ ያጠናቅቃል፡-
 
-1. Identifiers and hashing rules (`SuffixId`, `NameHash`, selector derivation).
-2. Norito structs/enums for name records, suffix policies, pricing tiers, revenue splits, and registry events.
-3. Storage layout and index prefixes for deterministic replay.
-4. A state machine covering registration, renewal, grace/redemption, freezes, and tombstones.
-5. Canonical events consumed by DNS/gateway automation.
+1. መለያዎች እና የሃሽንግ ደንቦች (`SuffixId`, `NameHash`, የመራጭ አመጣጥ).
+2. Norito የስም መዝገቦችን ፣ ቅጥያ ፖሊሲዎችን ፣ የዋጋ ደረጃዎችን ፣ የገቢ ክፍፍልን እና የመመዝገቢያ ዝግጅቶችን ያዋቅራል።
+3. የማከማቻ አቀማመጥ እና ጠቋሚ ቅድመ-ቅጥያዎች ለዳግም አጫውት።
+4. የምዝገባ፣የእድሳት፣የጸጋ/መቤዠት፣የበረዶ እና የመቃብር ድንጋዮችን የሚሸፍን የመንግስት ማሽን።
+5. ቀኖናዊ ክንውኖች በዲኤንኤስ/ጌትዌይ አውቶማቲክ ፍጆታ።
 
 ## 1. Identifiers & Hashing
 
-| Identifier | Description | Derivation |
-|------------|-------------|------------|
-| `SuffixId` (`u16`) | Registry-wide identifier for top-level suffixes (`.sora`, `.nexus`, `.dao`). Aligned with the suffix catalog in [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Assigned by governance vote; stored in `SuffixPolicyV1`. |
-| `SuffixSelector` | Canonical string form of the suffix (ASCII, lower-case). | Example: `.sora` → `sora`. |
-| `NameSelectorV1` | Binary selector for the registered label. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Label is NFC + lower-case per Norm v1. |
-| `NameHash` (`[u8;32]`) | Primary lookup key used by contracts, events, and caches. | `blake3(NameSelectorV1_bytes)`. |
+| መለያ | መግለጫ | መነሻ |
+|--------|------------|--------|
+| `SuffixId` (`u16`) | ለከፍተኛ ደረጃ ቅጥያ (`.sora`፣ `.nexus`፣ `.dao`) የመመዝገቢያ-ሰፊ መለያ። በ[`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) ውስጥ ካለው ቅጥያ ካታሎግ ጋር የተስተካከለ። | በአስተዳደር ድምጽ የተመደበ; በ `SuffixPolicyV1` ውስጥ ተከማችቷል. |
+| `SuffixSelector` | የቀኖናዊ ሕብረቁምፊ ቅጽ የቅጥያ (ASCII፣ ንዑስ ሆሄ)። | ምሳሌ፡- `.sora` → `sora`። |
+| `NameSelectorV1` | ለተመዘገበው መለያ ሁለትዮሽ መራጭ። | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. መለያው NFC + ንዑስ ሆሄ በእያንዳንዱ Normv1 ነው። |
+| `NameHash` (`[u8;32]`) | በኮንትራቶች፣ ክስተቶች እና መሸጎጫዎች ጥቅም ላይ የዋለ ዋና ፍለጋ ቁልፍ። | `blake3(NameSelectorV1_bytes)`. |
 
-Determinism requirements:
+የውሳኔ መስፈርቶች፡-
 
-- Labels are normalised via Norm v1 (UTS-46 strict, STD3 ASCII, NFC). Incoming user strings MUST be normalised before hashing.
-- Reserved labels (from `SuffixPolicyV1.reserved_labels`) never enter the registry; governance-only overrides emit `ReservedNameAssigned` events.
+- መለያዎች በ Normv1 በኩል መደበኛ ናቸው (UTS-46 ጥብቅ፣ STD3 ASCII፣ NFC)። ገቢ የተጠቃሚ ሕብረቁምፊዎች ከመጥለፍዎ በፊት መደበኛ መሆን አለባቸው።
+- የተያዙ መለያዎች (ከ `SuffixPolicyV1.reserved_labels`) በጭራሽ ወደ መዝገቡ ውስጥ አይገቡም; አስተዳደር-ብቻ የ `ReservedNameAssigned` ክስተቶችን ይሽራል።
 
-## 2. Norito Structures
+## 2. Norito መዋቅሮች
 
-### 2.1 NameRecordV1
+### 2.1 ስም መዝገብ ቪ1| መስክ | አይነት | ማስታወሻ |
+|-------|------|------|
+| `suffix_id` | `u16` | ማጣቀሻዎች `SuffixPolicyV1`. |
+| `selector` | `NameSelectorV1` | ለኦዲት/ለማረም ጥሬ መራጭ ባይት። |
+| `name_hash` | `[u8; 32]` | ለካርታዎች/ክስተቶች ቁልፍ። |
+| `normalized_label` | `AsciiString` | ሰው ሊነበብ የሚችል መለያ (ፖስት Normv1)። |
+| `display_label` | `AsciiString` | በመጋቢ የቀረበ መያዣ; አማራጭ መዋቢያዎች. |
+| `owner` | `AccountId` | እድሳት/ማስተላለፎችን ይቆጣጠራል። |
+| `controllers` | `Vec<NameControllerV1>` | ማጣቀሻዎች መለያ አድራሻዎችን፣ ፈላጊዎችን ወይም የመተግበሪያ ዲበ ውሂብን ያነጣጠሩ። |
+| `status` | `NameStatus` | የሕይወት ዑደት ባንዲራ (ክፍል 4 ይመልከቱ)። |
+| `pricing_class` | `u8` | ወደ ቅጥያ የዋጋ ደረጃዎች (መደበኛ፣ ፕሪሚየም፣ የተያዘ) ማውጫ። |
+| `registered_at` | `Timestamp` | የመጀመሪያውን ማግበር የጊዜ ማህተምን አግድ። |
+| `expires_at` | `Timestamp` | የሚከፈልበት ጊዜ ማብቂያ። |
+| `grace_expires_at` | `Timestamp` | በራስ የመታደስ ጸጋ መጨረሻ (ነባሪ +30 ቀናት)። |
+| `redemption_expires_at` | `Timestamp` | የቤዛ መስኮት መጨረሻ (ነባሪ +60 ቀናት)። |
+| `auction` | `Option<NameAuctionStateV1>` | ደች እንደገና ሲከፈቱ ወይም ፕሪሚየም ጨረታዎች ንቁ ሲሆኑ ያቅርቡ። |
+| `last_tx_hash` | `Hash` | ይህንን እትም ላዘጋጀው ግብይት ቆራጥ ጠቋሚ። |
+| `metadata` | `Metadata` | የዘፈቀደ የመዝጋቢ ዲበዳታ (የጽሑፍ መዝገቦች፣ ማረጋገጫዎች)። |
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `suffix_id` | `u16` | References `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | Raw selector bytes for audit/debug. |
-| `name_hash` | `[u8; 32]` | Key for maps/events. |
-| `normalized_label` | `AsciiString` | Human-readable label (post Norm v1). |
-| `display_label` | `AsciiString` | Steward-provided casing; optional cosmetics. |
-| `owner` | `AccountId` | Controls renewals/transfers. |
-| `controllers` | `Vec<NameControllerV1>` | References target account addresses, resolvers, or application metadata. |
-| `status` | `NameStatus` | Lifecycle flag (see Section 4). |
-| `pricing_class` | `u8` | Index into suffix pricing tiers (standard, premium, reserved). |
-| `registered_at` | `Timestamp` | Block timestamp of the initial activation. |
-| `expires_at` | `Timestamp` | End of paid term. |
-| `grace_expires_at` | `Timestamp` | End of auto-renew grace (default +30 days). |
-| `redemption_expires_at` | `Timestamp` | End of redemption window (default +60 days). |
-| `auction` | `Option<NameAuctionStateV1>` | Present when Dutch reopen or premium auctions are active. |
-| `last_tx_hash` | `Hash` | Deterministic pointer to the transaction that produced this version. |
-| `metadata` | `Metadata` | Arbitrary registrar metadata (text records, proofs). |
-
-Supporting structs:
+ድጋፍ ሰጪ መዋቅሮች፡-
 
 ```text
 Enum NameStatus {
@@ -127,24 +126,24 @@ Enum AuctionKind {
 
 ### 2.2 SuffixPolicyV1
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `suffix_id` | `u16` | Primary key; stable across policy versions. |
-| `suffix` | `AsciiString` | e.g., `sora`. |
-| `steward` | `AccountId` | Steward defined in the governance charter. |
-| `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Default settlement asset identifier (for example `xor#sora`). |
-| `pricing` | `Vec<PriceTierV1>` | Tiered pricing coefficients and duration rules. |
-| `min_term_years` | `u8` | Floor for purchased term regardless of tier overrides. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
-| `max_term_years` | `u8` | Maximum upfront renewal length. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) per charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | Governance supplied list with assignment instructions. |
-| `fee_split` | `SuffixFeeSplitV1` | Treasury / steward / referral shares (basis points). |
-| `fund_splitter_account` | `AccountId` | Account that holds escrow + distributes funds. |
-| `policy_version` | `u16` | Incremented on every change. |
-| `metadata` | `Metadata` | Extended notes (KPI covenant, compliance doc hashes). |
+| መስክ | አይነት | ማስታወሻ |
+|-------|------|------|
+| `suffix_id` | `u16` | ዋና ቁልፍ; በመመሪያ ስሪቶች ላይ የተረጋጋ። |
+| `suffix` | `AsciiString` | ለምሳሌ `sora`. |
+| `steward` | `AccountId` | መጋቢ በአስተዳደር ቻርተር ውስጥ ተገልጿል. |
+| `status` | `SuffixStatus` | `Active`፣ `Paused`፣ `Revoked`። |
+| `payment_asset_id` | `AsciiString` | ነባሪ የሰፈራ ንብረት መለያ (ለምሳሌ `xor#sora`)። |
+| `pricing` | `Vec<PriceTierV1>` | ደረጃውን የጠበቀ የዋጋ አወጣጥ እና የቆይታ ጊዜ ህጎች። |
+| `min_term_years` | `u8` | ደረጃ መሻር ምንም ይሁን ምን ወለል ለተገዛው ጊዜ። |
+| `grace_period_days` | `u16` | ነባሪ 30. |
+| `redemption_period_days` | `u16` | ነባሪ 60. |
+| `max_term_years` | `u8` | ከፍተኛው የፊት እድሳት ርዝመት። |
+| `referral_cap_bps` | `u16` | <=1000 (10%) በቻርተር። |
+| `reserved_labels` | `Vec<ReservedNameV1>` | አስተዳደር ከምደባ መመሪያዎች ጋር የቀረበ ዝርዝር። |
+| `fee_split` | `SuffixFeeSplitV1` | የግምጃ ቤት / መጋቢ / ሪፈራል ማጋራቶች (መሰረታዊ ነጥቦች). |
+| `fund_splitter_account` | `AccountId` | ኤስክሮው + ገንዘብ የሚያከፋፍል መለያ |
+| `policy_version` | `u16` | በእያንዳንዱ ለውጥ ላይ ተጨምሯል. |
+| `metadata` | `Metadata` | የተራዘሙ ማስታወሻዎች (KPI ቃል ኪዳን፣ ተገዢነት ሰነድ hashes)። |
 
 ```text
 Struct PriceTierV1 {
@@ -172,18 +171,16 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 Revenue & Settlement Records
+### 2.3 የገቢ እና የሰፈራ መዝገቦች| መዋቅር | መስኮች | ዓላማ |
+|--------|--------|-----|
+| `RevenueShareRecordV1` | `suffix_id`፣ `epoch_id`፣ `treasury_amount`፣ `steward_amount`፣ `referral_amount`፣ `escrow_amount`፣ Norito፣ Norito፣ | በየመቋቋሚያ ዘመን (በሳምንት) የተላለፉ ክፍያዎች ቆራጥነት። |
+| `RevenueAccrualEventV1` | `name_hash`፣ `suffix_id`፣ `event`፣ `gross_amount`፣ `net_amount`፣ `referral_account`። | በእያንዳንዱ ጊዜ የክፍያ ልጥፎች (ምዝገባ፣ እድሳት፣ ጨረታ) ተለቀቀ። |
 
-| Struct | Fields | Purpose |
-|--------|--------|---------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
+ሁሉም የ`TokenValue` መስኮች የNorito ቀኖናዊ ቋሚ ነጥብ ኢንኮዲንግ በተዛማጅ `SuffixPolicyV1` ውስጥ ከተገለጸው የምንዛሪ ኮድ ጋር ይጠቀማሉ።
 
-All `TokenValue` fields use Norito’s canonical fixed-point encoding with the currency code declared in the associated `SuffixPolicyV1`.
+### 2.4 የመመዝገቢያ ክስተቶች
 
-### 2.4 Registry Events
-
-Canonical events provide a replay log for DNS/gateway automation and analytics.
+ቀኖናዊ ክስተቶች ለዲ ኤን ኤስ/ጌትዌይ አውቶሜሽን እና ትንታኔዎች የመልሶ ማጫወት ምዝግብ ማስታወሻን ይሰጣሉ።
 
 ```text
 Struct RegistryEventV1 {
@@ -212,52 +209,50 @@ Enum RegistryEventKind {
 }
 ```
 
-Events must be appended to a replayable log (e.g., `RegistryEvents` domain) and mirrored to gateway feeds so DNS caches invalidate within SLA.
+የዲ ኤን ኤስ መሸጎጫዎች በኤስኤልኤ ውስጥ ዋጋ እንዳይኖራቸው ክስተቶች እንደገና ሊጫወት በሚችል ምዝግብ ማስታወሻ (ለምሳሌ `RegistryEvents` ጎራ) መታከል እና ወደ መግቢያ በር መግጠም አለባቸው።
 
-## 3. Storage Layout & Indexes
+## 3. የማከማቻ አቀማመጥ እና ኢንዴክሶች
 
-| Key | Description |
-|-----|-------------|
-| `Names::<name_hash>` | Primary map from `name_hash` to `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Secondary index for wallet UI (pagination friendly). |
-| `NamesByLabel::<suffix_id, normalized_label>` | Detect conflicts, power deterministic search. |
-| `SuffixPolicies::<suffix_id>` | Latest `SuffixPolicyV1`. |
-| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` history. |
-| `RegistryEvents::<u64>` | Append-only log keyed by monotonically increasing sequence. |
+| ቁልፍ | መግለጫ |
+|-------------|
+| `Names::<name_hash>` | ዋና ካርታ ከ `name_hash` እስከ `NameRecordV1`። |
+| `NamesByOwner::<AccountId, suffix_id>` | ሁለተኛ ደረጃ መረጃ ጠቋሚ ለኪስ ዩአይ (ገጽ ተስማሚ)። |
+| `NamesByLabel::<suffix_id, normalized_label>` | ግጭቶችን ፈልግ, የኃይል መወሰኛ ፍለጋ. |
+| `SuffixPolicies::<suffix_id>` | የቅርብ ጊዜ `SuffixPolicyV1`. |
+| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` ታሪክ። |
+| `RegistryEvents::<u64>` | አባሪ-ብቻ ምዝግብ ማስታወሻ በተናጥል እየጨመረ በቅደም ተከተል። |
 
-All keys serialise using Norito tuples to keep hashing deterministic across hosts. Index updates occur atomically alongside the primary record.
+ሃሺንግ ቆራጥነት በሁሉም አስተናጋጆች ለመቀጠል ሁሉም ቁልፎች Norito tuples በመጠቀም ተከታታይነት አላቸው። የመረጃ ጠቋሚ ዝማኔዎች ከዋናው መዝገብ ጋር በአቶሚክ ይከሰታሉ።
 
-## 4. Lifecycle State Machine
+## 4. Lifecycle ግዛት ማሽን
 
-| State | Entry Conditions | Allowed Transitions | Notes |
-|-------|-----------------|---------------------|-------|
-| Available | Derived when `NameRecord` absent. | `PendingAuction` (premium), `Active` (standard register). | Availability search reads indexes only. |
-| PendingAuction | Created when `PriceTierV1.auction_kind` ≠ none. | `Active` (auction settles), `Tombstoned` (no bids). | Auctions emit `AuctionOpened` and `AuctionSettled`. |
-| Active | Registration or renewal succeeded. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` drives transition. |
-| GracePeriod | Automatically when `now > expires_at`. | `Active` (on-time renewal), `Redemption`, `Tombstoned`. | Default +30 days; still resolves but flagged. |
-| Redemption | `now > grace_expires_at` but `< redemption_expires_at`. | `Active` (late renewal), `Tombstoned`. | Commands require penalty fee. |
-| Frozen | Governance or guardian freeze. | `Active` (after remediation), `Tombstoned`. | Cannot transfer or update controllers. |
-| Tombstoned | Voluntary surrender, permanent dispute outcome, or expired redemption. | `PendingAuction` (Dutch reopen) or remains tombstoned. | Event `NameTombstoned` must include reason. |
+| ግዛት | የመግቢያ ሁኔታዎች | የተፈቀዱ ሽግግሮች | ማስታወሻ |
+|-------------
+| ይገኛል | `NameRecord` በማይኖርበት ጊዜ የተገኘ። | `PendingAuction` (ፕሪሚየም)፣ `Active` (መደበኛ መዝገብ)። | የተገኝነት ፍለጋ ኢንዴክሶችን ብቻ ያነባል። |
+| በመጠባበቅ ላይ ያለ ጨረታ | `PriceTierV1.auction_kind` ≠ ምንም ሲፈጠር የተፈጠረ። | `Active` (ጨረታ ተሽጧል)፣ `Tombstoned` (ጨረታዎች የሉም)። | ጨረታዎች `AuctionOpened` እና `AuctionSettled` ያወጣሉ። |
+| ንቁ | መመዝገብ ወይም መታደስ ተሳክቷል። | `GracePeriod`፣ `Frozen`፣ `Tombstoned`። | `expires_at` ድራይቮች ሽግግር. |
+| GracePeriod | በራስ-ሰር `now > expires_at`. | `Active` (በጊዜ እድሳት)፣ `Redemption`፣ `Tombstoned`። | ነባሪ +30 ቀናት; አሁንም ይፈታል ግን ምልክት ተደርጎበታል። |
+| ቤዛነት | `now > grace_expires_at` ግን `< redemption_expires_at`። | `Active` (ዘግይቶ መታደስ), `Tombstoned`. | ትዕዛዞች የቅጣት ክፍያ ያስፈልጋቸዋል። |
+| የቀዘቀዘ | አስተዳደር ወይም ሞግዚት ይቀዘቅዛል። | `Active` (ከማስተካከል በኋላ), `Tombstoned`. | መቆጣጠሪያዎችን ማስተላለፍ ወይም ማዘመን አይቻልም። |
+| የመቃብር ድንጋይ | በፈቃደኝነት እጅ መስጠት፣ የቋሚ አለመግባባት ውጤት ወይም ጊዜው ያለፈበት ቤዛነት። | `PendingAuction` (ደች እንደገና ተከፈተ) ወይም የመቃብር ድንጋይ ሆኖ ይቀራል። | ክስተት `NameTombstoned` ምክንያት ማካተት አለበት. |
 
-State transitions MUST emit the corresponding `RegistryEventKind` so downstream caches stay coherent. Tombstoned names entering Dutch reopen auctions attach an `AuctionKind::DutchReopen` payload.
+የስቴት ሽግግሮች ተዛማጁን `RegistryEventKind` መልቀቅ አለባቸው ስለዚህ የታችኛው ተፋሰስ መሸጎጫዎች ወጥነት ይኖራቸዋል። ወደ ደች የተከፈቱ ጨረታዎች የሚገቡ የመቃብር ድንጋይ ስሞች የ`AuctionKind::DutchReopen` ጭነትን አያይዘዋል።
 
-## 5. Canonical Events & Gateway Sync
+## 5. ቀኖናዊ ክስተቶች እና ጌትዌይ ማመሳሰልጌትዌይስ ለ`RegistryEventV1` ደንበኝነት ይመዝገቡ እና ከ DNS/SoraFS ጋር ያመሳስሉ በ፡
 
-Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
+1. በክስተቱ ቅደም ተከተል የተጠቀሰውን የቅርብ ጊዜውን `NameRecordV1` በማምጣት ላይ።
+2. የመፍታት አብነቶችን እንደገና ማመንጨት (የተመረጡ IH58 + ሁለተኛ-ምርጥ የታመቁ (`sora`) አድራሻዎች ፣ የጽሑፍ መዝገቦች)።
+3. በ[`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) ውስጥ በተገለጸው በሶራዲኤንኤስ የስራ ፍሰት በኩል የዘመነውን የዞን መረጃ ማሰር።
 
-1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred IH58 + second-best compressed (`sora`) addresses, text records).
-3. Pinning updated zone data via the SoraDNS workflow described in [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
+የክስተት ማቅረቢያ ዋስትናዎች;
 
-Event delivery guarantees:
+- በ `NameRecordV1` * የግድ* የሚነካ እያንዳንዱ ግብይት በትክክል አንድ ክስተት ከ `version` ጋር መጨመር አለበት።
+- በ `RevenueSharePosted` ክስተቶች የማጣቀሻ ሰፈራዎች በ `RevenueShareRecordV1`.
+- የቀዝቃዛ/የማይዝግ/የመቃብር ድንጋይ ዝግጅቶች በ`metadata` ውስጥ የኦዲት ድጋሚ ለማጫወት የአስተዳደር ቅርስ ሃሽዎችን ያካትታሉ።
 
-- Every transaction affecting a `NameRecordV1` *must* append exactly one event with a strictly increasing `version`.
-- `RevenueSharePosted` events reference settlements emitted by `RevenueShareRecordV1`.
-- Freeze/unfreeze/tombstone events include governance artefact hashes inside `metadata` for audit replay.
+## 6. ምሳሌ Norito ክፍያ
 
-## 6. Example Norito Payloads
-
-### 6.1 NameRecord Example
+### 6.1 የስም መዝገብ ምሳሌ
 
 ```text
 NameRecordV1 {
@@ -287,7 +282,7 @@ NameRecordV1 {
 }
 ```
 
-### 6.2 SuffixPolicy Example
+### 6.2 SuffixPolicy ምሳሌ
 
 ```text
 SuffixPolicyV1 {
@@ -315,10 +310,10 @@ SuffixPolicyV1 {
 }
 ```
 
-## 7. Next Steps
+## 7. ቀጣይ ደረጃዎች
 
-- **SN-2b (Registrar API & governance hooks):** expose these structs via Torii (Norito and JSON bindings) and wire admission checks to governance artefacts.
-- **SN-3 (Auction & registration engine):** reuse `NameAuctionStateV1` to implement commit/reveal and Dutch reopen logic.
-- **SN-5 (Payment & settlement):** leverage `RevenueShareRecordV1` for finance reconciliation and reporting automation.
+- ** SN-2b (የሬጅስትራር ኤፒአይ እና የአስተዳደር መንጠቆዎች):** እነዚህን መዋቅሮች በTorii (Norito እና JSON ማሰሪያ) እና የሽቦ የመግቢያ ቼኮችን ለአስተዳደር ቅርሶች ያጋልጡ።
+- ** SN-3 (ጨረታ እና መመዝገቢያ ሞተር):** `NameAuctionStateV1` ቁርጠኝነት/መግለጥ እና ደች እንደገና ለመክፈት አመክንዮ እንደገና ይጠቀሙ።
+- ** SN-5 (ክፍያ እና ማቋቋሚያ):** ለፋይናንስ ማስታረቅ እና ለሪፖርት አውቶሜሽን `RevenueShareRecordV1` leverage.
 
-Questions or change requests should be filed alongside the SNS roadmap updates in `roadmap.md` and mirrored in `status.md` when merged.
+ጥያቄዎች ወይም የለውጥ ጥያቄዎች ከኤስኤንኤስ የመንገድ ካርታ ዝመናዎች ጋር በ`roadmap.md` እና በ `status.md` ውስጥ ሲዋሃዱ መንጸባረቅ አለባቸው።

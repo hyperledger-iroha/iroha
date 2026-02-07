@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# GPU Zstd (メタル) パイプライン
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+このドキュメントでは、Metal ヘルパーによって使用される決定論的な GPU パイプラインについて説明します。
+zstd圧縮用。の設計および実装ガイドです。
+標準の zstd フレームと確定的バイトを発行する `gpuzstd_metal` ヘルパー
+指定されたシーケンス ストリームの場合。出力は CPU デコーダとラウンドトリップする必要があります。バイトフォー
+シーケンス生成のため、CPU コンプレッサーとのバイト パリティは必要ありません。
+異なります。
 
-## Goals
+## 目標
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- CPU zstd と同じようにデコードする標準 zstd フレームを出力します。バイトパリティ
+  CPU コンプレッサーを使用する必要はありません。
+- ハードウェア、ドライバー、スレッド スケジューリングにわたる確定的な出力。
+- 明示的な境界チェックと予測可能なバッファーの有効期間。
 
-## Current implementation note
+## 現在の実装メモ
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- 一致検索とシーケンス生成は GPU 上で実行されます。
+- 現在ホスト上で実行されているフレーム アセンブリとエントロピー コーディング (ハフマン/FSE)
+  クレート内エンコーダを使用します。 GPU ハフマン/FSE カーネルはパリティ テストされていますが、パリティ テストはされていません
+  まだ完全なフレーム パスに配線されています。
+- デコードでは、サポートされていないフレームに対して CPU zstd フォールバックを備えたクレート内フレーム デコーダーを使用します。
+  完全な GPU ブロックのデコードは進行中のままです。
 
-## Encoding pipeline (high level)
+## エンコーディングパイプライン (高レベル)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. 入力ステージング
+   - 入力をデバイス バッファにコピーします。
+   - 固定サイズのチャンク (シーケンス生成用) とブロック (シーケンス生成用) に分割します。
+     zstd フレーム アセンブリ)。
+2. 一致の検索と配列の出力
+   - GPU カーネルは各チャンクをスキャンし、シーケンス (リテラルの長さ、一致) を出力します。
+     長さ、オフセット)。
+   - シーケンスの順序付けは安定しており、決定的です。
+3. 文字通りの準備
+   - シーケンスによって参照されるリテラルを収集します。
+   - リテラル ヒストグラムを構築し、リテラル ブロック モード (raw、RLE、または
+     ハフマン）決定論的に。
+4. ハフマンテーブル（リテラル）
+   - ヒストグラムからコード長を生成します。
+   - CPU に一致する決定的なタイブレークを使用して正規テーブルを構築する
+     zstd出力。
+5. FSE テーブル (LL/ML/OF)
+   - 頻度カウントを正規化します。
+   - FSE デコード/エンコード テーブルを決定論的に構築します。
+6. ビットストリームライター
+   - ビットをリトルエンディアン (LSB ファースト) でパックします。
+   - バイト境界をフラッシュします。ゼロのみを埋め込みます。
+   - 宣言されたビット幅に値をマスクし、容量チェックを強制します。
+7. ブロックとフレームの組み立て
+   - ブロック ヘッダー (タイプ、サイズ、最終ブロック フラグ) を出力します。
+   - リテラルとシーケンスを圧縮ブロックにシリアル化します。
+   - 標準の zstd フレーム ヘッダーとオプションのチェックサムを出力します。
 
-## Decoding pipeline (high level)
+## デコードパイプライン (高レベル)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. フレーム解析
+   - マジック バイト、ウィンドウ設定、およびフレーム ヘッダー フィールドを検証します。
+2. ビットストリームリーダー
+   - 厳密な境界チェックを使用して LSB ファーストのビット シーケンスを読み取ります。
+3. リテラルデコード
+   - リテラル ブロック (生、RLE、またはハフマン) をリテラル バッファーにデコードします。
+4. シーケンスのデコード
+   - FSE テーブルを使用して LL/ML/OF 値をデコードします。
+   - スライディング ウィンドウを使用して一致を再構築します。
+5. 出力とチェックサム
+   - 再構築されたバイトを出力バッファに書き込みます。
+   - 有効になっている場合は、オプションのチェックサムを検証します。
 
-## Buffer lifetimes and ownership
+## バッファの有効期間と所有権- 入力バッファ: ホスト -> デバイス、読み取り専用。
+- シーケンスバッファ: マッチ検索によって生成され、エントロピーによって消費されるデバイス
+  コーディング;ブロック間の再利用はありません。
+- リテラルバッファ: デバイス、ブロックごとに生成され、ブロック後に解放されます。
+  放出。
+- 出力バッファ: デバイス、ホストがコピーするまで最後のフレームバイトを保持します。
+  アウト。
+- スクラッチ バッファ: カーネル間で再利用されますが、常に決定的に上書きされます。
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## カーネルの責任
 
-## Kernel responsibilities
+- マッチ検索カーネル: マッチを見つけてシーケンス (LL/ML/OF + リテラル) を出力します。
+- ハフマン ビルド カーネル: コード長と正規テーブルを導き出します。
+- FSE ビルド カーネル: LL/ML/OF テーブルとステート マシンをビルドします。
+- ブロック エンコード カーネル: リテラルとシーケンスをビットストリームにシリアル化します。
+- ブロック デコード カーネル: ビットストリームを解析し、リテラル/シーケンスを再構築します。
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## 決定論とパリティ制約
 
-## Determinism and parity constraints
+- 正規テーブルのビルドでは、CPU と同じ順序付けとタイブレークを使用する必要があります
+  zstd。
+- 出力バイトのスレッド スケジューリングに依存するアトミックやリダクションはありません。
+- ビットストリームのパッキングはリトルエンディアン、LSB ファーストです。バイト位置合わせをゼロで埋め込みます。
+- すべての境界チェックは明示的です。無効な入力は決定的に失敗します。
 
-- Canonical table builds must use the same ordering and tie-breaking as CPU
-  zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+## 検証
 
-## Validation
+- ビットストリーム ライター/リーダー用の CPU ゴールデン ベクトル。
+- GPU と CPU の出力を比較するコーパス パリティ テスト。
+- 不正なフレームと境界条件のファズ カバレッジ。
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+## ベンチマーク
 
-## Benchmarking
-
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+`cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` を実行して、
+ペイロード サイズ全体で CPU と GPU のエンコード レイテンシーを比較します。ホストでテストがスキップされる
+Metal 対応デバイスなし。ハードウェアの詳細とともに出力をキャプチャします
+GPU オフロードしきい値を調整するとき。 Norito は同じカットオフを強制します。
+`gpu_zstd::encode_all` なので、直接呼び出し元はヒューリスティック ゲートに一致します。

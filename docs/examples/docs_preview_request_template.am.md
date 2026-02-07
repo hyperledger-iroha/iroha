@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 59948351a84b27efe0d9741545d8f93c7525fa5f545605a0942d9f2f574f6f06
 source_last_modified: "2025-12-29T18:16:35.072823+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Access Request (Template)
+# የሰነዶች ፖርታል ቅድመ እይታ መዳረሻ ጥያቄ (አብነት)
 
-Use this template when capturing reviewer details before granting access to the
-public preview environment. Copy the markdown into an issue or request form and
-replace the placeholder values.
+የመዳረሻ ፍቃድ ከመስጠትዎ በፊት የገምጋሚ ዝርዝሮችን ሲይዙ ይህን አብነት ይጠቀሙ
+የህዝብ ቅድመ እይታ አካባቢ. ምልክቱን ወደ ችግር ወይም የጥያቄ ቅጽ ይቅዱ እና
+የቦታ ያዥ እሴቶችን ይተኩ.
 
 ```markdown
 ## Request Summary
@@ -44,9 +45,9 @@ replace the placeholder values.
 
 ---
 
-## Community-Specific Questions (W2+)
-- Motivation for preview access (one sentence):
-- Primary review focus (SDK, governance, Norito, SoraFS, other):
-- Weekly time commitment & availability window (UTC):
-- Localization or accessibility needs (yes/no + details):
-- Community Code of Conduct + preview acceptable-use addendum acknowledged (yes/no):
+## የማህበረሰብ-ተኮር ጥያቄዎች (W2+)
+- ለቅድመ እይታ መዳረሻ ማበረታቻ (አንድ ዓረፍተ ነገር)
+- የመጀመሪያ ደረጃ ግምገማ ትኩረት (ኤስዲኬ፣ አስተዳደር፣ Norito፣ SoraFS፣ ሌላ)፡
+- ሳምንታዊ የጊዜ ቁርጠኝነት እና ተገኝነት መስኮት (UTC)፦
+- የአካባቢ ወይም የተደራሽነት ፍላጎቶች (አዎ/አይ + ዝርዝሮች)
+- የማህበረሰብ የስነምግባር ህግ + ቅድመ-ዕይታ ተቀባይነት ያለው ጥቅም ላይ ሊውል የሚችል ተጨማሪ ድምር ተቀባይነት አግኝቷል (አዎ/አይ)

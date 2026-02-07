@@ -4,60 +4,62 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 ---
-id: bulk-onboarding-toolkit
-title: SNS Bulk Onboarding Toolkit
-sidebar_label: Bulk onboarding toolkit
-description: CSV to RegisterNameRequestV1 automation for SN-3b registrar runs.
+id: བག་ལེབ་གུ་བསྐུམ་ནི་-ལག་ཐོ།
+temp: SNS Bolk Onboarding ལག་ཐོ།
+sarebar_label: ལག་ཐོག་ལག་ཁྱེར།
+འགྲེལ་བཤད་: CSV ལས་ ReregsterNameRequestV1 རང་བཞིན་གྱིས་ SN-3b registar གཡོག་བཀོལ།
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sns/bulk_onboarding_toolkit.md` so external operators see
-the same SN-3b guidance without cloning the repository.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+མེ་ལོང་ `docs/source/sns/bulk_onboarding_toolkit.md` དེ་ དེ་ དེ་ ཕྱིའི་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བལྟཝ་ཨིན།
+མཛོད་ཁང་འདི་ མ་བཟོ་བར་ SN-3b གི་ལམ་སྟོན་གཅིག།
 :::
 
-# SNS Bulk Onboarding Toolkit (SN-3b)
+# SNS Bolk Onboarding Toolkit (SN-3b)
 
-**Roadmap reference:** SN-3b "Bulk onboarding tooling"  
-**Artifacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**རོཌ་མེཔ་གཞི་བསྟུན་:** ཨེསི་ཨེན་-༣བི་ "བཀོད་སྒྲིག་འབད་ནིའི་ལག་ཆས་སྦོམ།"  
+**བཟོ་བཀོད:** I18NI0000024X, `scripts/tests/test_sns_bulk_onboard.py`,
 `docs/portal/scripts/sns_bulk_release.sh`
 
-Large registrars often pre-stage hundreds of `.sora` or `.nexus` registrations
-with the same governance approvals and settlement rails. Manually crafting JSON
-payloads or re-running the CLI does not scale, so SN-3b ships a deterministic
-CSV to Norito builder that prepares `RegisterNameRequestV1` structures for
-Torii or the CLI. The helper validates every row up front, emits both an
-aggregated manifest and optional newline-delimited JSON, and can submit the
-payloads automatically while recording structured receipts for audits.
+ཐོ་བཀོད་སྦོམ་ཚུ་གིས་ འཕྲལ་འཕྲལ་སྦེ་ར་ `.sora` ཡང་ན་ I18NI000000028X གི་ཐོ་བཀོད་ཚུ་ སྔོན་འགྲོའི་གནས་རིམ་ནང་ སྔོན་སྒྲིག་འབདཝ་ཨིན།
+གཞུང་སྐྱོང་གནང་བ་དང་ གཞིས་ཆགས་ཀྱི་ རེ་ལི་ཚུ་ གཅིག་མཚུངས་སྦེ་ཡོདཔ་ཨིན། ལག་ཐོག་ལས་ JSON བཟོ་ནི།
+སི་ཨེལ་ཨའི་ པེ་ལོསི་ ཡང་ན་ ལོག་གཡོག་བཀོལ་མི་འདི་གིས་ ཚད་འཇལ་མི་ཚུགསཔ་ལས་ ཨེསི་ཨེན་-༣བི་གིས་ གཏན་འབེབས་ཅིག་བཟོཝ་ཨིན།
+CSV ལས་ Norito བཟོ་བསྐྲུན་པ་འདི་གིས་ I18NI0000000029X གི་བཟོ་བཀོད་ཚུ་ གི་དོན་ལུ་གྲ་སྒྲིག་འབདཝ་ཨིན།
+Torii ཡང་ན་ CLI. གྲོགས་རམ་པ་འདི་གིས་ གྲལ་ཐིག་རེ་རེ་གི་གདོང་ཁར་ བདེན་དཔྱད་འབདཝ་ཨིནམ་དང་ གཉིས་ཆ་རང་ བཏོནམ་ཨིན།
+བསྡོམས་རྩིས་གསལ་སྟོན་གསལ་སྟོན་དང་གདམ་ཁ་ཅན་གྱི་གྲལ་ཐིག་གསརཔ་-ཚད་གཞི་བཟོ་ཡོད་མི་ JSON དང་ དེ་ལས་ འདི་བཙུགས་བཏུབ།
+རྩིས་ཞིབ་ཀྱི་དོན་ལུ་ གཞི་བཀོད་ཀྱི་འོང་འབབ་ཐོ་བཀོད་འབད་བའི་སྐབས་ རང་བཞིན་གྱིས་ པེ་ལོཌ་འབདཝ་ཨིན།
 
-## 1. CSV schema
+## 1. CSV ལས་རིམ།
 
-The parser requires the following header row (order is flexible):
+དབྱེ་དཔྱད་འབད་མི་འདི་ལུ་ འོག་གི་མགོ་ཡིག་གྲལ་ཐིག་(གོ་རིམ་འདི་བསྒྱུར་བཅོས་ཅན་ཨིན་):
 
-| Column | Required | Description |
-|--------|----------|-------------|
-| `label` | Yes | Requested label (mixed case accepted; tool normalises per Norm v1 and UTS-46). |
-| `suffix_id` | Yes | Numeric suffix identifier (decimal or `0x` hex). |
-| `owner` | Yes | AccountId string (IH58 literal; optional @domain hint) for the registration owner. |
-| `term_years` | Yes | Integer `1..=255`. |
-| `payment_asset_id` | Yes | Settlement asset (for example `xor#sora`). |
-| `payment_gross` / `payment_net` | Yes | Unsigned integers representing asset-native units. |
-| `settlement_tx` | Yes | JSON value or literal string describing the payment transaction or hash. |
-| `payment_payer` | Yes | AccountId that authorised the payment. |
-| `payment_signature` | Yes | JSON or literal string containing the steward or treasury signature proof. |
-| `controllers` | Optional | Semicolon- or comma-separated list of controller account addresses. Defaults to `[owner]` when omitted. |
-| `metadata` | Optional | Inline JSON or `@path/to/file.json` providing resolver hints, TXT records, etc. Defaults to `{}`. |
-| `governance` | Optional | Inline JSON or `@path` pointing at a `GovernanceHookV1`. `--require-governance` enforces this column. |
+| ཀེར་ཐིག་ | དགོས་མཁོ། | འགྲེལ་བཤད་ |
+|------------------------------------------ |
+| `label` | ཨིན་ | ཞུ་བ་འབད་ཡོད་པའི་ཁ་ཡིག་ (སླ་བསྲེ་བའི་གནད་དོན་ངོས་ལེན་འབད་ཡོདཔ་; ལག་ཆས་ཚུ་ སྤྱིར་བཏང་ཝི་༡ དང་ ཡུ་ཊི་ཨེསི་-༤༦ རེ་ལུ་ སྤྱིར་བཏང་བཟོཝ་ཨིན།) |
+| I18NI0000031X | ཨིན་ | ཨང་གྲངས་རྗེས་འཇུག་ངོས་འཛིན་ (བཅུ་ཚག་ཡང་ན་ `0x` hex). |
+| I18NI0000033X | ཨིན་ | ཐོ་བཀོད་ཀྱི་ཇོ་བདག་གི་དོན་ལུ་ རྩིས་ཐོ་ཨའི་ཌི་ཡིག་རྒྱུན་ (IH58 literal; གདམ་ཁ་ཅན་@domain གོམ)། |
+| I18NI0000034X | ཨིན་ | ཧྲིལ་གྲངས་ `1..=255`. |
+| `payment_asset_id` | ཨིན་ | གཞིས་ཆགས་རྒྱུ་དངོས་ (དཔེར་ན་ I18NI0000037X). |
+| `payment_gross` / `payment_net` | ཨིན་ | མཉམ་བསྡོམས་འབད་ཡོད་པའི་ཧྲིལ་གྲངས་ཚུ་གིས་ རྒྱུ་དངོས་-ས་གནས་ཀྱི་ཆ་ཤས་ཚུ་ངོ་བཏོནམ་ཨིན། |
+| I18NI0000040X | ཨིན་ | གླ་ཆའི་ཚོང་འབྲེལ་ཡང་ན་ ཧེཤ་འགྲེལ་བཤད་རྐྱབ་མི་ JSON གནས་གོང་ ཡང་ན་ ཚིག་དོན་ཡིག་རྒྱུན་ཚུ། |
+| I18NI0000041X | ཨིན་ | དངུལ་སྤྲོད་གནང་བའི་རྩིས་ཐོ་ཨའི་ཌི་། |
+| I18NI0000042X | ཨིན་ | JSON ཡང་ན་ ཡིག་རྒྱུན་ཡིག་རྒྱུན་བཀག་ཆ་ཡང་ན་ དངུལ་ཁང་གི་མིང་རྟགས་བདེན་ཁུངས་ཡོད་པའི་ ཡིག་རྒྱུན་ཚུ། |
+| I18NI0000043X | གདམ་ཁ་ཅན་ | ཚད་འཛིན་རྩིས་ཐོའི་ཁ་བྱང་ཚུ་གི་ སེ་མི་ཀོ་ལོན་ ཡང་ན་ ལྷོད་རྟགས་ཁ་ཕྱེ་ཡོད་པའི་ཐོ་ཡིག། བཏོན་བཏང་པའི་སྐབས་ `[owner]` ལུ་སྔོན་སྒྲིག་ཚུ། |
+| `metadata` | གདམ་ཁ་ཅན་ | ནང་ཐིག་ JSON ཡང་ན་ `@path/to/file.json` གིས་ སེལ་བྱེད་ཀྱི་བརྡ་སྟོན་དང་ ཊི་ཨེགསི་ཊི་དྲན་ཐོ་ དེ་ལས་ དེ་བཟུམ་མའི་ སྔོན་སྒྲིག་ཚུ་ `{}` ལུ་ སྔོན་སྒྲིག་འབདཝ་ཨིན། |
+| I18NI0000048X | གདམ་ཁ་ཅན་ | ནང་ཐིག་ JSON ཡང་ན་ `@path` གིས་ I18NI0000000050X ལུ་སྟོན་ཡོདཔ། I18NI000000051X གིས་ ཀེར་ཐིག་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན། |
 
-Any column may reference an external file by prefixing the cell value with `@`.
-Paths are resolved relative to the CSV file.
+ཀེར་ཐིག་གང་རུང་གིས་ ནང་ཐིག་གནས་གོང་ I18NI0000052X དང་གཅིག་ཁར་ ནང་ཐིག་གནས་གོང་སྔོན་སྒྲིག་འབད་ཐོག་ལས་ ཕྱིའི་ཡིག་སྣོད་ཅིག་གཞི་བསྟུན་འབད་ཚུགས།
+འགྲུལ་ལམ་ཚུ་ སི་ཨེསི་ཝི་ཡིག་སྣོད་ལུ་འབྲེལ་བའི་སེལ་འཐུ་འབད་ཡོདཔ་ཨིན།
 
-## 2. Running the helper
+## 2. རོགས་རམ་བརྒྱུགས་པ།
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -65,16 +67,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-Key options:
+གདམ་ཁ་ལྡེ་མིག་ཚུ།
 
-- `--require-governance` rejects rows without a governance hook (useful for
-  premium auctions or reserved assignments).
-- `--default-controllers {owner,none}` decides whether empty controller cells
-  fall back to the owner account.
-- `--controllers-column`, `--metadata-column`, and `--governance-column` rename
-  optional columns when working with upstream exports.
+- I18NI000000053X གཞུང་སྐྱོང་ཧུཀ་མེད་པར་ གྲལ་ཐིག་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+  མཐོ་རིམ་རིན་བསྡུར་ཡང་ན་ བཀག་བཞག་ཡོད་པའི་ལས་འགན།)
+- I18NI000000054X ཚད་འཛིན་ནང་ཐིག་སྟོངམ་མེན་ན་ ཐག་གཅོད་འབདཝ་ཨིན།
+  ཇོ་བདག་རྩིས་ཐོ་ལུ་ལོག་འགྱོ།
+- I18NI0000005X, `--metadata-column`, དང་ I18NI000000057X
+  ཡར་རྒྱུན་ཕྱིར་འདྲེན་ཚུ་དང་གཅིག་ཁར་ལཱ་འབད་བའི་སྐབས་ གདམ་ཁའི་ཀེར་ཐིག་ཚུ།
 
-On success the script writes an aggregated manifest:
+མཐར་འཁྱོལ་གྱི་ཐོག་ལུ་ ཡིག་ཆ་འདི་གིས་ བསྡོམས་རྩིས་གསལ་སྟོན་ཅིག་བྲིས།
 
 ```json
 {
@@ -111,9 +113,9 @@ On success the script writes an aggregated manifest:
 }
 ```
 
-If `--ndjson` is provided, each `RegisterNameRequestV1` is also written as a
-single-line JSON document so automations can stream requests directly into
-Torii:
+I18NI000000058X བྱིན་པ་ཅིན་ I18NI000000059X རེ་རེ་ཡང་ ༡ ལུ་བྲིས་ཡོདཔ་ཨིན།
+རྐྱང་པ་གྲལ་ཐིག་ཇེ་ཨེསི་ཨོ་ཡིག་ཆ་འདི་གིས་ རང་བཞིན་གྱིས་ ཞུ་བ་ཚུ་ ཐད་ཀར་དུ་ ནང་ལུ་ རྒྱུན་སྤེལ་འབད་ཚུགས།
+I18NT00000005:
 
 ```bash
 jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
@@ -125,12 +127,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. Automated submissions
+## 3. རང་འགུལ་ཕུལ་བའི་ཡིག་ཆ།
 
-### 3.1 Torii REST mode
+### 3.1 Torii REST ཐབས་ལམ།
 
-Specify `--submit-torii-url` plus either `--submit-token` or
-`--submit-token-file` to push every manifest entry directly into Torii:
+I18NI0000060X དང་ `--submit-token` ཡང་ན་ ཡང་ན་ ཡང་གསལ་བཀོད་འབད།
+I18NI000000062X གིས་ གསལ་སྟོན་ཐོ་བཀོད་རེ་རེ་ལུ་ ཐད་ཀར་དུ་ Torii: ནང་ལུ་ བསྐུལ་མ་འབད་ནི་ལུ་:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -141,18 +143,18 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- The helper issues one `POST /v1/sns/registrations` per request and aborts on
-  the first HTTP error. Responses are appended to the log path as NDJSON
-  records.
-- `--poll-status` re-queries `/v1/sns/registrations/{selector}` after each
-  submission (up to `--poll-attempts`, default 5) to confirm that the record is
-  visible. Provide `--suffix-map` (JSON of `suffix_id` to `"suffix"` values) so
-  the tool can derive `{label}.{suffix}` literals for polling.
-- Tunables: `--submit-timeout`, `--poll-attempts`, and `--poll-interval`.
+- གྲོགས་རམ་འབད་མི་གིས་ ཞུ་བ་རེ་ལུ་ `POST /v1/sns/registrations` གཅིག་དང་ མངལ་སྟོངམ་བཏོན་མི་ཚུ་ལུ་ བཀོདཔ་ཨིན།
+  ཨེཆ་ཊི་ཊི་པི་འཛོལ་བ་འགོ་དང་པ་འདི་ཨིན། ལན་ཚུ་ དྲན་ཐོ་འགྲུལ་ལམ་ལུ་ NDJSON སྦེ་ མཐུད་ཡོདཔ་ཨིན།
+  དྲན་ཐོ་ཚུ།
+- I18NI000000064X འདི་གི་ཤུལ་ལས་ I18NI0000000065X འདི་ རེ་རེ་ལུ་འདྲི་དཔྱད་འབདཝ་ཨིན།
+  ཞུ་ཡིག་ (`--poll-attempts`, freect 5) འདི་ ཐོ་བཀོད་འདི་ གཏན་འཁེལ་བཟོ་ནིའི་དོན་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+  མཐོང་གསལ་ཅན། I18NI000000067X (JSON of `suffix_id` ལུ་ `"suffix"` གནས་གོང་ཚུ་) དེ་ S
+  ལག་ཆས་འདི་གིས་ འོས་བསྡུའི་དོན་ལུ་ `{label}.{suffix}` གི་ ཚིག་དོན་ཚུ་ ཐོབ་ཚུགས།
+- ཊུ་ན་བཱལ་: ཊུ་ན་བཱལ་: ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༧༡ཨེགསི་, ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༧༢ཨེགསི་, དང་ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༧༣ཨེགསི་།
 
-### 3.2 iroha CLI mode
+### iroha CLI ཐབས་ལམ།
 
-To route each manifest entry through the CLI, supply the binary path:
+སི་ཨེལ་ཨའི་བརྒྱུད་དེ་ གསལ་སྟོན་རེ་རེ་བཞིན་དུ་ ལམ་འགྲུལ་འབད་ནི་གི་དོན་ལུ་ གཉིས་ལྡན་འགྲུལ་ལམ་བཀྲམ་སྤེལ་འབད།
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -162,20 +164,20 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Controllers must be `Account` entries (`controller_type.kind = "Account"`)
-  because the CLI currently exposes only account-based controllers.
-- Metadata and governance blobs are written to temporary files per request and
-  forwarded to `iroha sns register --metadata-json ... --governance-json ...`.
-- CLI stdout and stderr plus exit codes are logged; non-zero exit codes abort
-  the run.
+- ཚད་འཛིན་པ་ཚུ་ I18NI000000074X ཐོ་བཀོད་ཚུ་ཨིན་ (I18NI000000075X)
+  ག་ཅི་འབད་ཟེར་བ་ཅིན་ སི་ཨེལ་ཨའི་གིས་ ད་ལྟོ་ རྩིས་ཐོ་གཞི་བཞག་པའི་ ཚད་འཛིན་ཚུ་རྐྱངམ་ཅིག་ གསལ་སྟོན་འབདཝ་ཨིན།
+- མེ་ཊ་ཌ་ཊ་དང་ གཞུང་སྐྱོང་ཝེབ་ཚུ་ གནས་སྐབས་ཀྱི་ཡིག་སྣོད་ཚུ་ ཞུ་བ་རེ་ལུ་ དང་།
+  `iroha sns register --metadata-json ... --governance-json ...` ལུ་བཏང་ཡོདཔ།
+- CLI stdout དང་ stderr དང་ ཕྱིར་ཐོན་ཨང་རྟགས་ཚུ་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན། ཀླད་ཀོར་མིན་པའི་ཕྱིར་ཐོན་ཨང་རྟགས་ཚུ།
+  the རན་ཐོབ།
 
-Both submission modes can run together (Torii and CLI) to cross-check registrar
-deployments or rehearse fallbacks.
+ཕུལ་ཐབས་ལམ་གཉིས་ཆ་ར་གིས་ (Torii དང་ CLI) ཐོ་བཀོད་ཞིབ་དཔྱད་འབད་ནི་གི་དོན་ལུ་ གཅིག་ཁར་གཡོག་བཀོལ་ཚུགས།
+བཀྲམ་སྤེལ་ཡང་ན་ བསྐྱར་ལོག་ཚུ་ བསྐྱར་སྦྱོང་འབད་ནི།
 
-### 3.3 Submission receipts
+### ༣་༣ འོས་འཚག་ཐོབ་པ།
 
-When `--submission-log <path>` is provided, the script appends NDJSON entries
-capturing:
+Torii བྱིན་པའི་སྐབས་ ཡིག་ཚུགས་འདི་གིས་ NDJSON ཐོ་བཀོད་ཚུ་ ཟུར་སྦྲགས་འབདཝ་ཨིན།
+བཟུང་ནི་
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -183,17 +185,17 @@ capturing:
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-Successful Torii responses include structured fields extracted from
-`NameRecordV1` or `RegisterNameResponseV1` (for example `record_status`,
+མཐར་འཁྱོལ་བའི་ Torii ལན་འདེབས་ནང་ ལས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ས་སྒོ་ཚུ་ ལས་ བཏོན་ཡོདཔ་ཨིན།
+I18NI000000078X ཡང་ན་ `RegisterNameResponseV1` (དཔེར་ན་ I18NI000000080X,
 `record_pricing_class`, `record_owner`, `record_expires_at_ms`,
-`registry_event_version`, `suffix_id`, `label`) so dashboards and governance
-reports can parse the log without inspecting free-form text. Attach this log to
-registrar tickets alongside the manifest for reproducible evidence.
+I18NI000000084X, `suffix_id`, `label`) རང་ཉིད་ཀྱི་ བརྡ་རྟགས་དང་ གཞུང་སྐྱོང་།
+སྙན་ཞུ་ཚུ་གིས་ རང་དབང་འབྲི་ཤོག་ཚིག་ཡིག་བརྟག་ཞིབ་མ་འབད་བར་ དྲན་ཐོ་འདི་དབྱེ་དཔྱད་འབད་ཚུགས། དྲན་ཐོ་འདི་ ལུ་མཉམ་སྦྲགས་འབད།
+བསྐྱར་བཟོ་འབད་བཏུབ་པའི་སྒྲུབ་བྱེད་ཀྱི་དོན་ལུ་ གསལ་སྟོན་གྱི་ མཉམ་དུ་ ཐོ་བཀོད་ཀྱི་ ཤོག་འཛིན་ཚུ།
 
-## 4. Docs portal release automation
+## 4. ཡིག་ཆའི་དྲ་ཚིགས་གསར་བཏོན་རང་འགན།
 
-CI and portal jobs call `docs/portal/scripts/sns_bulk_release.sh`, which wraps
-the helper and stores artefacts under `artifacts/sns/releases/<timestamp>/`:
+CI དང་ དྲྭ་ཚིགས་ཀྱི་ལཱ་གཡོག་ཚུ་གིས་ `docs/portal/scripts/sns_bulk_release.sh` ཟེར་སླབ་ཨིན།
+རོགས་རམ་དང་ ཅ་ཆས་ཚུ་ `artifacts/sns/releases/<timestamp>/` གི་འོག་ལུ་ གསོག་འཇོག་འབདཝ་ཨིན།
 
 ```bash
 docs/portal/scripts/sns_bulk_release.sh \
@@ -206,25 +208,25 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-The script:
+ཡིག་ཆ་འདི།
 
-1. Builds `registrations.manifest.json`, `registrations.ndjson`, and copies the
-   original CSV into the release directory.
-2. Submits the manifest using Torii and/or the CLI (when configured), writing
-   `submissions.log` with the structured receipts above.
-3. Emits `summary.json` describing the release (paths, Torii URL, CLI path,
-   timestamp) so portal automation can upload the bundle to artefact storage.
-4. Produces `metrics.prom` (override via `--metrics`) containing
-   Prometheus-format counters for total requests, suffix distribution,
-   asset totals, and submission outcomes. The summary JSON links to this file.
+1. `registrations.manifest.json`, I18NI000000090X, དང་འདྲ་པར་བཤུས་ཡོད།
+   གསར་བཏོན་སྣོད་ཐོ་ནང་ CSV ངོ་མ་ངོ་མ།
+༢ གསལ་སྟོན་འདི་ Torii དང་/ཡང་ན་ CLI (རིམ་སྒྲིག་འབད་ཡོད་པའི་སྐབས་) འབྲི་དེ་ལག་ལེན་འཐབ་ཐོག་ལས་ ཕུལཝ་ཨིན།
+   `submissions.log` གོང་འཁོད་སྒྲིག་བཀོད་ཀྱི་འོང་འབབ་དང་བཅས་ཡོད།
+3. བཏོན་གཏང་ནི་ (འགྲུལ་ལམ་ཚུ་, Torii URL, སི་ཨེལ་ཨའི་འགྲུལ་ལམ་,
+   times tamp) དེ་འབདཝ་ལས་ དྲྭ་ཐོག་འཕྲུལ་ཆས་ཀྱིས་ བཱན་ཌལ་འདི་ ཅ་ཆས་གསོག་འཇོག་ནང་ སྐྱེལ་བཙུགས་འབད་ཚུགས།
+4. `metrics.prom` (`--metrics`) གིས་བརྒྱབ་ཡོད།
+   I18NT000000000X-format count ཞུ་བ་ཡོངས་བསྡོམས་དང་རྗེས་འཇུག་བཀྲམ་སྤེལ།
+   རྒྱུ་དངོས་བསྡོམས་རྩིས་དང་ བཙུགས་པའི་གྲུབ་འབྲས། ཡིག་སྣོད་འདི་ལུ་ བཅུད་དོན་ JSON འབྲེལ་ལམ་ཚུ།
 
-Workflows simply archive the release directory as a single artefact, which now
-contains everything governance needs for auditing.
+ལཱ་གི་རྒྱུན་རིམ་ཚུ་གིས་ འཇམ་ཏོང་ཏོ་སྦེ་ གསར་བཏོན་སྣོད་ཐོ་འདི་ ཅ་རྙིང་གཅིག་སྦེ་ གཏན་མཛོད་འབད་ཡོདཔ་དང་ ད་ལྟོ་འདི་ ད་ལྟོ་ འདི་ཨིན།
+རྩིས་ཞིབ་འབད་ནི་གི་དོན་ལུ་ གཞུང་སྐྱོང་དགོས་མཁོ་ག་ར་ཡོདཔ་ཨིན།
 
-## 5. Telemetry & dashboards
+## 5. ཊེ་ལི་མི་ཊི་རི་ དང་ དྲ་རྒྱ།
 
-The metrics file generated by `sns_bulk_release.sh` exposes the following
-series:
+`sns_bulk_release.sh` གིས་བཟོ་བཏོན་འབད་ཡོད་པའི་མེ་ཊིགསི་ཡིག་སྣོད་འདི་གིས་ འོག་གི་འདི་གསལ་སྟོན་འབདཝ་ཨིན།
+བྱུང༌རིམ:
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -235,41 +237,41 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-Feed `metrics.prom` into your Prometheus sidecar (for example via Promtail or a
-batch importer) to keep registrars, stewards, and governance peers aligned on
-bulk progress. Grafana board
-`dashboards/grafana/sns_bulk_release.json` visualises the same data with panels
-for per-suffix counts, payment volume, and submission success/failure ratios.
-The board filters by `release` so auditors can drill into a single CSV run.
+ཁྱོད་ཀྱི་ Prometheus ཟུར་ཁར་ (དཔེར་ན་ Promtail ཡང་ན་ a བརྒྱུད་དེ་ ཕིཌི་ I18NI0000000096X
+ཐོ་བཀོད་དང་ བདག་འཛིན་པ་ དེ་ལས་ གཞུང་སྐྱོང་མཉམ་རོགས་ཚུ་ ཐོ་བཀོད་དང་ བདག་འཛིན་པ་ དེ་ལས་ གཞུང་སྐྱོང་མཉམ་རོགས་ཚུ་ བཞག་ནིའི་དོན་ལུ་ཨིན།
+ཡར་རྒྱས་ཆེ་བའི་ Grafana བགྲེས།
+`dashboards/grafana/sns_bulk_release.json` པེ་ནཱལ་ཚུ་དང་གཅིག་ཁར་ གནད་སྡུད་གཅིག་པ་མཐོང་སྣང་འབདཝ་ཨིན།
+རྗེས་འཇུག་རེ་རེའི་གྲངས་འབོར་དང་ དངུལ་སྤྲོད་ཚད་ དེ་ལས་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་ཆ་ཚད་ཚུ་གི་དོན་ལུ་ཨིན།
+བཀོད་ཚོགས་འདི་གིས་ `release` གིས་ཚགས་མ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་གིས་ CSV རྒྱུག་ཐེངས་གཅིག་ནང་ལུ་ བརྐོ་ཚུགས།
 
-## 6. Validation and failure modes
+## 6. ཆ་འཇོག་དང་འཐུས་ཤོར་གྱི་ཐབས་ལམ།
 
-- **Label canonicalisation:** inputs are normalised with Python IDNA plus
-  lowercase and Norm v1 character filters. Invalid labels fail fast before any
-  network calls.
-- **Numeric guardrails:** suffix ids, term years, and pricing hints must fall
-  within `u16` and `u8` bounds. Payment fields accept decimal or hex integers
-  up to `i64::MAX`.
-- **Metadata or governance parsing:** inline JSON is parsed directly; file
-  references are resolved relative to the CSV location. Non-object metadata
-  produces a validation error.
-- **Controllers:** blank cells honour `--default-controllers`. Provide explicit
-  controller lists (for example `ih58...;ih58...`) when delegating to non-owner
-  actors.
+- **ཡིག་སྡེབ་ ཀེ་ནོ་ནི་ཀཱ་ཤཱན་:** ཨིན་པུཊི་ཚུ་ པའི་ཐོན་ཨའི་ཌི་ཨེན་ཨེ་ པ་ལཱསི་དང་གཅིག་ཁར་ སྤྱིར་བཏང་བཟོ་ཡོདཔ་ཨིན།
+  quarcecase དང་ Norm v1 ཡིག་འབྲུའི་ཚགས་མ་ཚུ། ནུས་མེད་ཁ་ཡིག་ཚུ་ གང་རུང་ཅིག་གི་ཧེ་མར་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་བྱུང་ཡོདཔ།
+  ཡོངས་འབྲེལ་འབོད་བརྡ་ཚུ།
+- **numeric sardrails:** རྗེས་འཇུག་གླེང་ཕྲུག་དང་ ཐ་སྙད་ལོ་ དེ་ལས་ གོང་ཚད་ཀྱི་བརྡ་སྟོན་ཚུ་ མར་འབབ་དགོ།
+  ནང་ནང I18NI0000009X དང་ `u8` མཐའ་མཚམས་. སྤྲོད་ལེན་ས་སྒོ་ཚུ་གིས་ བཅུ་ཚག་ཡང་ན་ ཧེགསི་ཧྲིལ་གྲངས་ཚུ་ དང་ལེན་འབདཝ་ཨིན།
+  ལས་ `i64::MAX`.
+- **མེ་ཊ་ཌེ་ཊ་ ཡང་ན་ གཞུང་སྐྱོང་དབྱེ་དཔྱད་འབད་དོ་:** inline JSON འདི་ཐད་ཀར་དུ་དབྱེ་དཔྱད་འབད་ཡོདཔ་ཨིན། ཡིག༌སྣོད༌
+  གཞི་བསྟུན་ཚུ་ སི་ཨེསི་ཝི་གནས་ཁོངས་ལུ་འབྲེལ་བའི་སེལ་འཐུ་འབད་ཡོདཔ་ཨིན། དངོས་པོའི་མེ་ཊ་ཌེ་ཊ་
+  བདེན་དཔྱད་ཀྱི་འཛོལ་བ་ཅིག་བཏོནམ་ཨིན།
+- **ཚད་འཛིན་:** ནང་ཐིག་སྟོངམ་གུའི་གུས་ཞབས་ `--default-controllers`. གསལ་སྟོན་
+  ཚད་འཛིན་ཐོ་ཡིག་ཚུ་ (དཔེར་ན་ `ih58...;ih58...`) ཇོ་བདག་མེན་མི་ལུ་སྤྲོད་པའི་སྐབས་ཨིན།
+  འཁྲབ་རྩེདཔ་ཚུ།
 
-Failures are reported with contextual row numbers (for example
-`error: row 12 term_years must be between 1 and 255`). The script exits with
-code `1` on validation errors and `2` when the CSV path is missing.
+འཐུས་ཤོར་ཚུ་ སྐབས་དོན་གྲལ་ཐིག་ཨང་གྲངས་ཚུ་དང་གཅིག་ཁར་སྙན་ཞུ་འབདཝ་ཨིན།(དཔེར་ན་ (དཔེར་ན་ )
+`error: row 12 term_years must be between 1 and 255`). ཡིག་ཚུགས་འདི་དང་གཅིག་ཁར་ཕྱིར་འཐོན་འབདཝ་ཨིན།
+གསང་གྲངས་ `1` བདེན་བཤད་འཛོལ་བ་ཚུ་གུ་དང་ སི་ཨེསི་ཝི་འགྲུལ་ལམ་མེད་པའི་སྐབས་ `2` ལུ་།
 
-## 7. Testing and provenance
+## 7. བརྟག་པ་དང་འབྱུང་བ།
 
-- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` covers CSV parsing,
-  NDJSON emission, governance enforcement, and the CLI or Torii submission
-  paths.
-- The helper is pure Python (no additional dependencies) and runs anywhere
-  `python3` is available. Commit history is tracked alongside the CLI in the
-  main repository for reproducibility.
+- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` གིས་ སི་ཨེསི་ཝི་དབྱེ་དཔྱད་ཀྱི་ཁ་བསྡམས།
+  NDJSON ཐོན་རླུང་དང་ གཞུང་སྐྱོང་བསྟར་སྤྱོད་ དེ་ལས་ CLI ཡང་ན་ I18NT0000012X ཕུལ་ཡོདཔ།
+  །།ལམ་དག་དང་།
+- གྲོགས་རམ་པ་འདི་ པའི་ཐོན་ (ཁ་སྐོང་བརྟེན་པ་མེད་) དང་ ག་སྟེ་ཡང་ གཡོག་བཀོལཝ་ཨིན།
+  `python3` ཡོད། ཁས་བླངས་ལོ་རྒྱུས་འདི་ སི་ཨེལ་ཨའི་དང་གཅིག་ཁར་ འཚོལ་ཞིབ་འབདཝ་ཨིན།
+  བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ མཛོད་ཁང་ངོ་མ་།
 
-For production runs, attach the generated manifest and NDJSON bundle to the
-registrar ticket so stewards can replay the exact payloads that were submitted
-to Torii.
+བཟོ་བསྐྲུན་གྱི་ལཱ་ཚུ་གི་དོན་ལུ་ བཟོ་བཏོན་འབད་ཡོད་པའི་གསལ་སྟོན་དང་ ཨེན་ཌི་ཇེ་ཨེསི་ཨོ་ཨེན་ བཱན་ཌལ་ ལུ་ མཉམ་སྦྲགས་འབད།
+ཐོ་བཀོད་ཀྱི་ ཤོག་འཛིན་དེ་སྦེ་ སྤྲོད་མི་ཚུ་གིས་ བཙུགས་ཡོད་པའི་ གླ་ཆ་ངོ་མ་ཚུ་ ལོག་རྩེད་ཚུགས།
+ལས་ Torii.

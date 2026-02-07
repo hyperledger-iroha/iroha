@@ -4,39 +4,41 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: جولة في السجل
-description: اعادة انتاج تدفق حتمي register -> mint -> transfer باستخدام CLI `iroha` والتحقق من حالة السجل الناتجة.
-slug: /norito/ledger-walkthrough
+Название: جولة في السجل
+описание: اعادة انتاج تدفق حتمي Registration -> Mint -> Transfer باستخدام CLI `iroha` والتحقق من حالة السجل Это так.
+слизень: /norito/ledger-walkthrough
 ---
 
-تكمل هذه الجولة [Norito quickstart](./quickstart.md) عبر توضيح كيفية تعديل حالة السجل وفحصها باستخدام CLI `iroha`. ستسجل تعريف اصل جديدا، وتسك وحدات في حساب المشغل الافتراضي، وتنقل جزءا من الرصيد الى حساب اخر، وتتحقق من المعاملات والممتلكات الناتجة. كل خطوة تعكس التدفقات المغطاة في quickstarts الخاصة ب Rust/Python/JavaScript لتتمكن من التحقق من التطابق بين CLI وسلوك SDK.
+Нажмите на [Norito краткое руководство](./quickstart.md) Загрузите CLI `iroha`. Спродюсированный Дэвидом, он был в фильме "Старый город" в Нью-Йорке. В 2013 году он был убит в 1990-х годах в Нью-Йорке. Чтобы получить доступ к кратким руководствам по работе с Rust/Python/JavaScript, нажмите здесь. Используйте CLI и SDK.
 
 ## المتطلبات المسبقة
 
-- اتبع [quickstart](./quickstart.md) لتشغيل شبكة بعقدة واحدة عبر
+- اتبع [быстрый старт](./quickstart.md)
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- تاكد من ان `iroha` (الـ CLI) مبني او محمل وانك تستطيع الوصول الى الـ peer باستخدام `defaults/client.toml`.
-- ادوات اختيارية: `jq` (تنسيق ردود JSON) وصدفة POSIX لمقاطع متغيرات البيئة في الاسفل.
+- Запускается в `iroha` (CLI) и используется для подключения к одноранговому узлу. `defaults/client.toml`.
+- Доступ к файлу: `jq` (отображается в формате JSON) для POSIX-файлов и может быть изменен. الاسفل.
 
-طوال الدليل، استبدل `$ADMIN_ACCOUNT` و `$RECEIVER_ACCOUNT` بمعرفات الحساب التي تخطط لاستخدامها. يتضمن الـ bundle الافتراضي بالفعل حسابين مشتقين من مفاتيح العرض:
+Для этого необходимо установить `$ADMIN_ACCOUNT` и `$RECEIVER_ACCOUNT`. В комплект поставки входит:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-اكد القيم عبر سرد اولى الحسابات:
+По словам президента США:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. فحص حالة genesis
+## 1. فحص حالة генезис
 
-ابدأ باستكشاف السجل الذي يستهدفه CLI:
+Откройте интерфейс командной строки:
 
 ```sh
 # Domains المسجلة في genesis
@@ -51,22 +53,22 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-تعتمد هذه الاوامر على ردود مدعومة ب Norito، لذا يكون الترشيح والتقسيم حتميين ومتطابقين مع ما تتلقاه SDKs.
+Он был использован в программе Norito, а также в 2017 году. Используйте его для создания SDK.
 
 ## 2. تسجيل تعريف اصل
 
-انشئ اصلا جديدا قابلا للسك بلا حدود باسم `coffee` داخل نطاق `wonderland`:
+Для этого необходимо установить `coffee` и установить `wonderland`:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-يطبع CLI hash المعاملة المقدمة (مثلا `0x5f…`). احفظه كي تستعلم عن الحالة لاحقا.
+Проверьте хеш CLI (например, `0x5f…`). Это произошло в 2007 году.
 
-## 3. سك وحدات في حساب المشغل
+## 3. Сделай это в Стиве
 
-توجد كميات الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `coffee#wonderland` في `$ADMIN_ACCOUNT`:
+Установите флажок `(asset definition, account)`. На 250 секунд от `coffee#wonderland` до `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -74,13 +76,13 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-مرة اخرى احفظ hash المعاملة (`$MINT_HASH`) من خرج CLI. للتحقق من الرصيد نفذ:
+Создайте хеш-код (`$MINT_HASH`) в CLI. Сообщение от автора:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-او لاستهداف الاصل الجديد فقط:
+В ответ на вопрос:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -88,9 +90,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. نقل جزء من الرصيد الى حساب اخر
+## 4. В جزء من الرصيد الى حساب اخر
 
-انقل 50 وحدة من حساب المشغل الى `$RECEIVER_ACCOUNT`:
+Через 50 дней после запуска `$RECEIVER_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -99,7 +101,7 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-احفظ hash المعاملة باسم `$TRANSFER_HASH`. استعلم عن الممتلكات في الحسابين للتحقق من الارصدة الجديدة:
+Хэш был создан `$TRANSFER_HASH`. Сообщение о том, что происходит в фильме "Лаборатория", в разделе "Обзор":
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -109,28 +111,28 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. التحقق من ادلة السجل
+## 5. Нажмите на кнопку «Получить»
 
-استخدم الهاشات المحفوظة لتاكيد ان المعاملتين تم التزامهما:
+Сообщение о том, что произошло в 2017 году:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-يمكنك ايضا بث الكتل الحديثة لمعرفة اي كتلة تضمنت التحويل:
+Он сказал, что в фильме "Лидерство" говорится:
 
 ```sh
 # Stream من اخر كتلة والتوقف بعد ~5 ثوان
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-تستخدم كل الاوامر اعلاه نفس payloads الخاصة ب Norito التي تستخدمها SDKs. اذا كررت هذا التدفق عبر الكود (انظر quickstarts للـ SDK ادناه)، فستتطابق الهاشات والارصدة ما دمت تستهدف الشبكة نفسها والافتراضات نفسها.
+Для создания полезных нагрузок используйте Norito для создания SDK. Получите дополнительную информацию (краткие руководства по использованию SDK) и нажмите кнопку «Установить». Он был убит в Нью-Йорке и в Нью-Йорке.
 
-## روابط تكافؤ SDK
+## Открыть SDK
 
-- [Rust SDK quickstart](../sdks/rust) — يوضح تسجيل التعليمات، ارسال المعاملات، واستطلاع الحالة من Rust.
-- [Python SDK quickstart](../sdks/python) — يعرض نفس عمليات register/mint مع مساعدات JSON مدعومة ب Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) — يغطي طلبات Torii، ومساعدات الحوكمة، واغلفة الاستعلامات المtyped.
+- [Краткий старт Rust SDK](../sdks/rust)
+- [Краткое руководство по Python SDK](../sdks/python) — необходимо выполнить команду Register/mint для создания JSON-файла Norito.
+- [Краткое руководство по JavaScript SDK](../sdks/javascript) Напечатал.
 
-نفذ جولة CLI اولا ثم كرر السيناريو باستخدام SDK المفضل لديك للتأكد من تطابق السطحين في هاشات المعاملات والارصدة ومخرجات الاستعلام.
+Для работы с CLI используйте приложение SDK, а затем нажмите кнопку «Удалить». Он был создан в 1990-х годах в Нью-Йорке.

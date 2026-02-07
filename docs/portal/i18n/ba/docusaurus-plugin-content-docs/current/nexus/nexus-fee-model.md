@@ -7,41 +7,43 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus fee model updates
 description: Mirror of `docs/source/nexus_fee_model.md`, documenting the lane settlement receipts and reconciliation surfaces.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_fee_model.md`. Keep both copies aligned while Japanese, Hebrew, Spanish, Portuguese, French, Russian, Arabic, and Urdu translations migrate.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Был биттә `docs/source/nexus_fee_model.md` көҙгөһө. Ике дана ла япон, еврей, испан, португал, француз, рус, ғәрәп һәм урду тәржемәләре күсеп йөрөгәндә, тура килтерелгән.
+::: 1990 й.
 
-# Nexus Fee Model Updates
+# I18NNT0000000000X хаҡы Модель яңыртыу
 
-The unified settlement router now captures deterministic per-lane receipts so
-operators can reconcile gas debits against the Nexus fee model.
+Берҙәм ҡасаба маршрутизаторы хәҙер детерминистик юл буйынса квитанцияларҙы тота, шулай
+операторҙары I18NT0000000001X түләү моделенә ҡаршы газ дебеттарын яраштыра ала.
 
-- For the full router architecture, buffer policy, telemetry matrix, and rollout
-  sequencing see `docs/settlement-router.md`. That guide explains how the
-  parameters documented here tie into the NX-3 roadmap deliverable and how SREs
-  should monitor the router in production.
-- Gas asset configuration (`pipeline.gas.units_per_gas`) includes a
-  `twap_local_per_xor` decimal, a `liquidity_profile` (`tier1`, `tier2`,
-  or `tier3`), and a `volatility_class` (`stable`, `elevated`, `dislocated`).
-  These flags feed the settlement router so the resulting XOR
-  quote matches the canonical TWAP and haircut tier for the lane.
-- Every transaction that pays gas records a `LaneSettlementReceipt`.  Each
-  receipt stores the caller-provided source identifier, the local micro-amount,
-  the XOR due immediately, the XOR expected after the haircut, the realised
-  variance (`xor_variance_micro`), and the block timestamp in milliseconds.
-- Block execution aggregates receipts per lane/dataspace and publishes them
-  via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
-  expose `total_local_micro`, `total_xor_due_micro`, and
-  `total_xor_after_haircut_micro` summed over the block for nightly
-  reconciliation exports.
-- A new `total_xor_variance_micro` counter tracks how much safety margin was
-  consumed (difference between the due XOR and the post-haircut expectation),
-  and `swap_metadata` documents the deterministic conversion parameters
-  (TWAP, epsilon, liquidity profile, and volatility_class) so auditors can
-  verify the quote inputs independent of runtime configuration.
+- Тулы маршрутизатор архитектураһы өсөн, буфер сәйәсәте, телеметрия матрицаһы һәм ролл-аут
+  секвенирование ҡарағыҙ I18NI000000004X. Шул ҡулланма аңлата, нисек
+  параметрҙары документлаштырылған бында бәйләү NX-3 юл картаһы тапшырыу һәм нисек SREs
+  маршрутизаторҙы етештереүҙә күҙәтергә тейеш.
+- Газ активы конфигурацияһы (I18NI000000005X) инә.
+  I18NI000000006X демаль, I18NI000000007X (`tier1`, `tier2`,
+  йәки I18NI0000010X), һәм `volatility_class` (I18NI000000012X, `elevated`, `dislocated`).
+  Был флагтар ҡасаба маршрутизаторы туҡлана, шуға күрә һөҙөмтәлә XOR
+  цитата тура килә канон TWAP һәм стрижка ярус өсөн һыҙат.
+- Газ түләгән һәр операция `LaneSettlementReceipt` тип яҙылған.  Һәр
+  квитанция шылтыратыусылар менән тәьмин ителгән сығанаҡ идентификаторын, урындағы микро-сумында һаҡлай,
+  XOR тейешле шунда уҡ, XOR көткәндән һуң сәс ҡырҡыу, тормошҡа ашырылған
+  дисперсияһы (`xor_variance_micro`), һәм миллисекундтарҙа блоклы ваҡыт тамғаһы.
+- Блок башҡарыу агрегаттары квитанциялары бер һыҙат/мәғлүмәттәр буйынса һәм уларҙы баҫтырып сығара .
+  I18NI0000017X аша I18NI000000018X-та.  Дөйөм алғанда
+  фашлау I18NI000000019X, I18NI000000020X, һәм
+  I18NI0000000021X төн өсөн блок аша йомғаҡ яһаны
+  ярашыу экспорты.
+- Яңы I18NI000000022X ҡаршы тректар күпме хәүефһеҙлек маржаһы булды
+  ҡулланыла (тейешле XOR һәм сәс-сүкештән һуңғы көтөү араһында айырма),
+  һәм I18NI000000023X детерминистик конверсия параметрҙарын документлаштырыу
+  (TWAP, эпсилон, ликвидлыҡ профиле, һәм волатильный_класс) шулай аудиторҙар ала
+  раҫлау цитата индереүҙәре бойондороҡһоҙ йөрөү ваҡыты конфигурацияһы.
 
-Consumers can watch `lane_settlement_commitments` alongside the existing lane
-and dataspace commitment snapshots to verify that fee buffers, haircut tiers,
-and swap execution match the configured Nexus fee model.
+Ҡулланыусылар I18NI000000024X ҡарай ала, ғәмәлдәге һыҙат менән бер рәттән .
+һәм мәғлүмәттәр киңлек йөкләмәһе снимоктар, тип раҫлау өсөн, тип түләү буферҙары, стрижка ярустары,
+һәм алмаштырыу башҡарыу тура килә конфигурацияланған I18NT0000000002X түләү моделе.

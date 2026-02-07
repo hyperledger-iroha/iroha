@@ -4,35 +4,37 @@ direction: rtl
 source: docs/portal/docs/devportal/observability.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# مراقبة البوابة والتحليلات
+# البوابة والتحليلات
 
-خارطة طريق DOCS-SORA تتطلب تحليلات، وprobes اصطناعية، واتمتة الروابط المكسورة لكل build معاينة.
-توثق هذه الملاحظة التوصيلات التي تأتي مع البوابة حتى يتمكن المشغلون من ربط المراقبة دون تسريب بيانات الزوار.
+بخارة طريق DOCS-SORA تتطلب تحليلات، ومسبارات اصطناعية، واتمتة الروابط المكسورة لكل بناء معاينة.
+تتفوق هذه المزايا التي تأتي مع البوابة حتى تتمكن من المساهمة في جذب دون ما يمكن من بيانات الزوار.
 
-## وسم الاصدار
+##اتصال الاصدار
 
 - اضبط `DOCS_RELEASE_TAG=<identifier>` (يرجع الى `GIT_COMMIT` او `dev` عند الغياب) عند
   بناء البوابة. يتم حقن القيمة في `<meta name="sora-release">`
-  حتى تتمكن probes وdashboards من تمييز عمليات النشر.
-- `npm run build` ينتج `build/release.json` (يكتبه
-  `scripts/write-checksums.mjs`) ويصف الوسم والطابع الزمني و`DOCS_RELEASE_SOURCE` الاختياري.
-  يتم تضمين الملف نفسه في اثار المعاينة ويشار اليه في تقرير فحص الروابط.
+  حتى المبتدئين تحقيقات ولوحات المعلومات من تمييز عمليات النشر.
+- `npm run build` النتيجة `build/release.json` (يكتبه
+  `scripts/write-checksums.mjs`) ويصف الوسم والطابعة الزمنيّة و`DOCS_RELEASE_SOURCE` الاختياري.
+  يتم تضمين الملف نفسه في اثار المعاينة ويشار إليه في تقرير فحص الروابط.
 
 ## تحليلات تحافظ على الخصوصية
 
-- اضبط `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` لتمكين المتتبع الخفيف.
-  تحتوي الحمولات على `{ event, path, locale, release, ts }` دون metadata مرجع او IP، ويتم استخدام
-  `navigator.sendBeacon` كلما امكن لتجنب حجب التنقلات.
-- تحكم في اخذ العينات عبر `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). يخزن المتتبع اخر path مرسل ولا يرسل
-  احداثا مكررة لنفس التنقل.
-- التنفيذ موجود في `src/components/AnalyticsTracker.jsx` ويتم تركيبه عالميا عبر `src/theme/Root.js`.
+- اضبط `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` متابعة التتبع الخفيف.
+  تحتوي الحمولات على `{ event, path, locale, release, ts }` دون بيانات وصفية مرجع او IP، وربما استخدام
+  `navigator.sendBeacon` كلما امكن تعديل حجبات الطيران.
+- المراقب في أخذ الهدف عبر `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). يخزن المتتبع اخر المسار مرسل ولا يرسل
+  احداثا مكررة وبعضها .
+- التنفيذ موجود في `src/components/AnalyticsTracker.jsx` ويتم تركيبه عالميًا عبر `src/theme/Root.js`.
 
-## probes اصطناعية
+## مجسات اصطناعية
 
 - `npm run probe:portal` يرسل طلبات GET الى المسارات الشائعة
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, وغيرها) ويتحقق من ان وسم
+  (`/`, `/norito/overview`, `/reference/torii-swagger`, وغيرها) ويتحقق من ان اتصال
   `sora-release` يطابق `--expect-release` (او `DOCS_RELEASE_TAG`). مثال:
 
 ```bash
@@ -41,51 +43,51 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-يتم الابلاغ عن الاخفاقات لكل path، ما يسهل بوابة CD على نجاح probes.
+يتم الابلاغ عن الاخفاقات لكل مسار، ما نقوم ببناء بوابة CD على مجسات النجاح.
 
-## اتتمة الروابط المكسورة
+## اتمة الروابط المكسورة
 
-- `npm run check:links` يفحص `build/sitemap.xml`، ويتاكد ان كل مدخل يطابق ملفا محليا
-  (مع التحقق من fallbacks `index.html`)، ويكتب `build/link-report.json` الذي يحتوي على
-  metadata الاصدار، الاجمالي، الاخفاقات، وبصمة SHA-256 لـ `checksums.sha256`
-  (معروضة كـ `manifest.id`) حتى يرتبط كل تقرير بmanifest الاثر.
-- السكربت يخرج بكود غير صفري عند فقدان صفحة، لذا يمكن لـ CI منع الاصدارات عند وجود مسارات قديمة او
-  مكسورة. التقارير تذكر المسارات المرشحة التي تمت تجربتها، ما يساعد على تتبع تراجعات التوجيه
-  الى شجرة docs.
+- `npm run check:links` يفحص `build/sitemap.xml`، ويتأكد ان كل مدخل يطابق ملفا محليا
+  (مع التحقق من الاحتياطيات `index.html`)، ويكتب `build/link-report.json` الذي يحتوي على
+  البيانات الوصفية الاصدار، الاجمالي، الاخفاقات، وبصمة SHA-256 لـ `checksums.sha256`
+  (معرضة كـ `manifest.id`) حتى يرتبط كل تقرير بمانيفست الاثر.
+- السكربت يخرج بكود غير صفري عند اكتشاف صفحة، لذا يمكن لـ CI منع الاصدارات عند وجود مسارات قديمة او غير متوقعة
+  مكسورة. التسجيل تذكر المسارات التي ساعدتنا، ما يساعد على تتبع مسارات الرحلة
+  الى شجرة مستندات.
 
 ## لوحة Grafana والتنبيهات
 
-- `dashboards/grafana/docs_portal.json` ينشر لوحة Grafana **Docs Portal Publishing**.
-  وتتضمن اللوحات التالية:
-  - *Gateway Refusals (5m)* يستخدم `torii_sorafs_gateway_refusals_total` بنطاق
-    `profile`/`reason` حتى يتمكن SRE من كشف دفعات سياسة خاطئة او فشل رموز.
-  - *Alias Cache Refresh Outcomes* و*Alias Proof Age p90* تتبع
-    `torii_sorafs_alias_cache_*` لاثبات وجود proofs حديثة قبل DNS cut over.
-  - *Pin Registry Manifest Counts* واحصائية *Active Alias Count* تعكس backlog pin-registry
-    واجمالي alias حتى تتمكن الحوكمة من تدقيق كل اصدار.
-  - *Gateway TLS Expiry (hours)* يبرز عندما يقترب TLS cert لبوابة النشر من الانتهاء
-    (عتبة التنبيه 72 h).
-  - *Replication SLA Outcomes* و*Replication Backlog* تراقب telemetria
-    `torii_sorafs_replication_*` لضمان ان كل النسخ تحقق معيار GA بعد النشر.
-- استخدم متغيرات القالب المدمجة (`profile`, `reason`) للتركيز على ملف نشر `docs.sora`
+- `dashboards/grafana/docs_portal.json` ينشر لوحة Grafana **نشر بوابة المستندات**.
+  العلامات التالية:
+  - *رفض البوابة (5m)* يستخدم `torii_sorafs_gateway_refusals_total` بنطاق
+    `profile`/`reason` حتى يتمكن SRE من كشف الدفعات بناء على او فشل الرموز.
+  - *نتائج تحديث ذاكرة التخزين المؤقت للاسم المستعار* و*الاسم المستعار لإثبات العمر ص90* تتبع
+    `torii_sorafs_alias_cache_*` لا يوجد إثباتات حديثة قبل قطع DNS.
+  - *عدد بيانات بيان التسجيل* واحصائية *عدد الأسماء المستعارة النشطة*
+    واجمالي الاسم المستعار حتى البناء والتكامل من تدقيق كل اصدار.
+  - *انتهاء بوابة TLS (ساعات)* يبرز بمجرد شهادة TLS لبوابة النشر من النهاية
+    (عتبة التنبيه 72 ح).
+  - *نتائج النسخ المتماثل لاتفاقية مستوى الخدمة* و*تراكم النسخ المتماثل* مراقبة القياس عن بعد
+    `torii_sorafs_replication_*` ودائما ان كل النوى تحقق معايير GA بعد النشر.
+- استخدم التنسيقات المبتكرة على موقع إلكتروني مدمج (`profile`, `reason`) للتركيز على ملف النشر `docs.sora`
   او التحقيق في الطفرات عبر كل البوابات.
-- توجيه PagerDuty يستخدم لوحات dashboard كدليل: التنبيهات
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, و`DocsPortal/TLSExpiry`
-  تطلق عندما تتجاوز السلاسل المقابلة عتباتها. اربط runbook التنبيه بهذه الصفحة حتى يتمكن
-  مهندسو on-call من اعادة تشغيل استعلامات Prometheus الدقيقة.
+- توجيه PagerDuty يستخدم لوحة القيادة كدليل: الإشعارات
+  `DocsPortal/GatewayRefusals`، `DocsPortal/AliasCache`، و`DocsPortal/TLSExpiry`
+  عندما تتجاوز السلاسل عتباتها. قم بتشغيل Runbook التنبيه بهذه اللحظة حتى ولو كان
+  مهندسو عملية إعادة البناء عند الطلب هي علامات Prometheus الدقيقة.
 
-## جمع الخطوات
+##جمع الخطوات
 
-1. اثناء `npm run build`، اضبط متغيرات بيئة release/analytics ودع خطوة ما بعد البناء تصدر
-   `checksums.sha256`, `release.json`, و`link-report.json`.
-2. شغل `npm run probe:portal` مقابل hostname المعاينة مع
-   `--expect-release` مربوطا بنفس الوسم. احفظ stdout لقائمة نشر النشر.
-3. شغل `npm run check:links` للفشل السريع على مدخلات sitemap المكسورة وارشف تقرير JSON الناتج
-   مع اثار المعاينة. تقوم CI بوضع اخر تقرير في `artifacts/docs_portal/link-report.json` حتى تتمكن
-   الحوكمة من تنزيل حزمة الادلة مباشرة من سجلات البناء.
-4. وجه endpoint التحليلات الى مجمع يحافظ على الخصوصية (Plausible، OTEL ingest مستضاف ذاتيا، وغيرها)
-   وتاكد من توثيق معدلات العينة لكل اصدار حتى تفسر لوحات التحكم العدادات بدقة.
-5. CI تربط هذه الخطوات بالفعل عبر workflows المعاينة/النشر
-   (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`)، لذلك يكفي ان تغطي الاختبارات المحلية
-   سلوك الاسرار فقط.
+1. أثناء `npm run build`، ضبط التنوعات البيئية والإصدار/التحليلات وداعًا خطوة ما بعد البناء
+   `checksums.sha256`، `release.json`، و`link-report.json`.
+2. الوظيفة `npm run probe:portal` مقابل اسم المضيف المعاينة مع
+   `--expect-release` مربوطا بنفسي الوسم. احفظ stdout لقائمة نشر النشر.
+3. الوظيفة `npm run check:links` للفشل السريع في واردات خريطة الموقع المكسورة واشف تقرير JSON الناتج
+   مع اثار المعاينة. تقوم CI بوضع اخر تقرير في `artifacts/docs_portal/link-report.json` حتى البدء
+   يتم تنزيل حزمة التعويضات مباشرة من خلال السجلات التأسيسية.
+4. وجه تحليلات نقطة النهاية الى مجمع الحفاظ على الخصوصية (معقول، OTEL ingest مستضاف ذاتيا، وغيرها)
+   وتأكد من تجهيزات العينة لكل اصدار حتى تفسر لوحات التحكم بالعدادات بدقة.
+5. CI موضحة هذه الخطوة بالفعل عبر سير العمل والمعاينة/النشر
+   (`.github/workflows/docs-portal-preview.yml`،
+   `.github/workflows/docs-portal-deploy.yml`)، لذلك يكفي ان تغطي المعالجة المحلية
+   منع الاسرار فقط.

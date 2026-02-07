@@ -4,45 +4,47 @@ direction: rtl
 source: docs/portal/docs/sorafs/quickstart.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Démarrage rapide SoraFS
+# فوری آغاز SoraFS
 
-Ce guide pratique passe en revue le profil de chunker SF-1 déterministe,
-la signature des manifestes et le flux de récupération multi-fournisseurs qui
-sous-tendent le pipeline de stockage SoraFS. Complétez-le par
-l'[analyse approfondie du pipeline de manifestes](manifest-pipeline.md)
-pour les notes de conception et la référence des flags CLI.
+یہ عملی گائیڈ ڈٹرمینسٹک SF-1 چنکر پروفائل کا جائزہ لیتا ہے ،
+منشور پر دستخط اور ملٹی وینڈر کی بازیابی کا بہاؤ جو
+اسٹوریج پائپ لائن SoraFS کو دبائیں۔ اس کے ساتھ مکمل کریں
+[منشور پائپ لائن گہری تجزیہ] (manifest-pipeline.md)
+ڈیزائن نوٹ اور سی ایل آئی جھنڈوں کے حوالہ کے ل .۔
 
-## Prérequis
+## شرائط
 
-- Toolchain Rust (`rustup update`), workspace cloné localement.
-- Optionnel : [paire de clés Ed25519 générée par OpenSSL](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  pour signer les manifestes.
-- Optionnel : Node.js ≥ 18 si vous prévoyez de prévisualiser le portail Docusaurus.
+- ٹولچین زنگ (`rustup update`) ، مقامی طور پر کلونڈ ورک اسپیس۔
+- اختیاری: [ED25519 کلیدی جوڑی اوپن ایس ایل کے ذریعہ تیار کردہ] (https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  منشور پر دستخط کرنے کے لئے۔
+- اختیاری: اگر آپ پورٹل Docusaurus کا پیش نظارہ کرنے کا ارادہ رکھتے ہیں تو نوڈ ڈاٹ جے ایس ≥ 18۔
 
-Définissez `export RUST_LOG=info` pendant les essais pour afficher des messages CLI utiles.
+مفید CLI پیغامات کو ظاہر کرنے کے لئے جانچ کے دوران `export RUST_LOG=info` سیٹ کریں۔
 
-## 1. Rafraîchir les fixtures déterministes
+## 1. ریفریش ڈٹرمینسٹک فکسچر
 
-Régénérez les vecteurs de découpage SF-1 canoniques. La commande produit aussi des
-enveloppes de manifeste signées lorsque `--signing-key` est fourni ; utilisez
-`--allow-unsigned` uniquement en développement local.
+کیننیکل SF-1 کلپنگ ویکٹرز کو دوبارہ تخلیق کریں۔ کمانڈ بھی تیار کرتا ہے
+جب `--signing-key` فراہم کیا جاتا ہے تو دستخط شدہ منشور لفافے ؛ استعمال کریں
+`--allow-unsigned` صرف مقامی ترقی میں۔
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-Sorties :
+نتائج:
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (si signé)
+- `fixtures/sorafs_chunker/manifest_signatures.json` (اگر دستخط شدہ)
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Découpez un payload et inspectez le plan
+## 2۔ ایک پے لوڈ کاٹ کر منصوبے کا معائنہ کریں
 
-Utilisez `sorafs_chunker` pour découper un fichier ou une archive arbitraire :
+کسی صوابدیدی فائل یا محفوظ شدہ دستاویزات کے لئے `sorafs_chunker` استعمال کریں:
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -50,24 +52,24 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Champs clés :
+کلیدی فیلڈز:
 
-- `profile` / `break_mask` – confirme les paramètres de `sorafs.sf1@1.0.0`.
-- `chunks[]` – offsets ordonnés, longueurs et empreintes BLAKE3 des chunks.
+- `profile` / `break_mask` - `sorafs.sf1@1.0.0` کی ترتیبات کی تصدیق کرتا ہے۔
+- `chunks[]` - ٹکڑوں کے آفسیٹس ، لمبائی اور بلیک 3 فنگر پرنٹ کا آرڈر دیا گیا۔
 
-Pour des fixtures plus volumineuses, exécutez la régression basée sur proptest afin
-d'assurer que le découpage en streaming et par lot reste synchronisé :
+بڑے فکسچر کے لئے ، پریپٹیسٹ پر مبنی رجعت چلائیں
+اس بات کو یقینی بنائیں کہ ہم آہنگی میں اسٹریمنگ اور بیچ سلائسنگ قیام کریں:
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Construire et signer un manifeste
+## 3. ایک منشور کی تعمیر اور دستخط کریں
 
-Enveloppez le plan de chunks, les alias et les signatures de gouvernance dans un
-manifeste via `sorafs-manifest-stub`. La commande ci-dessous illustre un payload à
-fichier unique ; passez un chemin de répertoire pour empaqueter un arbre (la CLI le
-parcourt en ordre lexicographique).
+ایک میں حصہ ، عرفیت اور گورننس کے دستخطوں کو لپیٹیں
+`sorafs-manifest-stub` کے ذریعے منشور۔ نیچے دیئے گئے کمانڈ میں پے لوڈ کی وضاحت کی گئی ہے
+ایک فائل ؛ کسی درخت کو پیک کرنے کے لئے ڈائریکٹری کا راستہ پاس کریں (سی ایل آئی یہ کرتا ہے
+لغت میں براؤز)۔
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -79,22 +81,22 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Examinez `/tmp/docs.report.json` pour :
+`/tmp/docs.report.json` کے لئے جانچ پڑتال کریں:
 
-- `chunking.chunk_digest_sha3_256` – empreinte SHA3 des offsets/longueurs, correspond aux
-  fixtures du chunker.
-- `manifest.manifest_blake3` – empreinte BLAKE3 signée dans l'enveloppe du manifeste.
-- `chunk_fetch_specs[]` – instructions de récupération ordonnées pour les orchestrateurs.
+- `chunking.chunk_digest_sha3_256` - SHA3 آفسیٹس/لمبائی کا فنگر پرنٹ ، مساوی ہے
+  چنکر فکسچر۔
+- `manifest.manifest_blake3` - بلیک 3 امپرنٹ نے مینی فیسٹ لفافے میں دستخط کیے۔
+- `chunk_fetch_specs[]` - آرکیسٹریٹرز کے لئے بحالی کی ہدایات کا آرڈر دیا گیا۔
 
-Quand vous êtes prêt à fournir de vraies signatures, ajoutez les arguments
-`--signing-key` et `--signer`. La commande vérifie chaque signature Ed25519 avant
-d'écrire l'enveloppe.
+جب آپ حقیقی دستخط فراہم کرنے کے لئے تیار ہوں تو ، دلائل شامل کریں
+`--signing-key` اور `--signer`۔ کمانڈ اس سے پہلے ہر ED25519 دستخط کی جانچ پڑتال کرتا ہے
+لفافہ لکھنے کے لئے۔
 
-## 4. Simuler une récupération multi-fournisseurs
+## 4. ملٹی وینڈر کی بازیابی کا نقالی کریں
 
-Utilisez la CLI de fetch de développement pour rejouer le plan de chunks contre un ou
-plusieurs fournisseurs. C'est idéal pour les smoke tests CI et le prototypage
-d'orchestrateur.
+ایک کے خلاف حصہ کے منصوبے کو دوبارہ چلانے کے لئے ڈویلپمنٹ بازیافت سی ایل آئی کا استعمال کریں
+کئی سپلائرز۔ یہ CI دھواں ٹیسٹنگ اور پروٹو ٹائپنگ کے لئے مثالی ہے
+آرکیسٹریٹر۔
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -104,28 +106,26 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Vérifications :
+تصدیق:- `payload_digest_hex` کو مینی فیسٹ رپورٹ سے ملنا چاہئے۔
+- `provider_reports[]` فراہم کنندہ کے ذریعہ پاس/فیل گنتی کو بے نقاب کرتا ہے۔
+-ایک غیر صفر `chunk_retry_total` بیک دباؤ ایڈجسٹمنٹ کو نمایاں کرتا ہے۔
+- `--max-peers=<n>` کو پاس کریں تاکہ سپلائی کرنے والوں کی تعداد کو محدود کیا جاسکے
+  پھانسی اور CI کے نقالی کو اہم امیدواروں پر مرکوز رکھیں۔
+- `--retry-budget=<n>` فی حصہ (3) کی کوششوں کی پہلے سے طے شدہ تعداد کو تبدیل کرتا ہے تاکہ
+  انجیکشن کے دوران آرکیسٹریٹر ریگریشنز کو زیادہ تیزی سے اجاگر کریں
+  شطرنج
 
-- `payload_digest_hex` doit correspondre au rapport du manifeste.
-- `provider_reports[]` expose les comptes de succès/échec par fournisseur.
-- Un `chunk_retry_total` non nul met en évidence les ajustements de back-pressure.
-- Passez `--max-peers=<n>` pour limiter le nombre de fournisseurs planifiés pour une
-  exécution et garder les simulations CI centrées sur les candidats principaux.
-- `--retry-budget=<n>` remplace le nombre de tentatives par chunk par défaut (3) afin de
-  mettre en évidence plus vite les régressions de l'orchestrateur lors de l'injection
-  d'échecs.
+ناکام ہونے کے لئے `--expect-payload-digest=<hex>` اور `--expect-payload-len=<bytes>` شامل کریں
+جلدی سے جب تعمیر نو پے لوڈ منشور سے ہٹ جاتا ہے۔
 
-Ajoutez `--expect-payload-digest=<hex>` et `--expect-payload-len=<bytes>` pour échouer
-rapidement lorsque le payload reconstruit s'écarte du manifeste.
+## 5. اگلے اقدامات
 
-## 5. Étapes suivantes
-
-- **Intégration gouvernance** – acheminer l'empreinte du manifeste et
-  `manifest_signatures.json` dans le flux du conseil afin que le Pin Registry puisse
-  annoncer la disponibilité.
-- **Négociation du registre** – consultez [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  avant d'enregistrer de nouveaux profils. L'automatisation doit privilégier les handles
-  canoniques (`namespace.name@semver`) plutôt que les ID numériques.
-- **Automatisation CI** – ajoutez les commandes ci-dessus aux pipelines de release pour que
-  la documentation, les fixtures et les artefacts publient des manifestes déterministes
-  avec des métadonnées signées.
+- ** گورننس انضمام ** - منشور کے نقش کو پہنچائیں اور
+  `manifest_signatures.json` ٹپ کے بہاؤ میں تاکہ پن کی رجسٹری کر سکے
+  دستیابی کا اعلان کریں۔
+- ** مذاکرات کو رجسٹر کریں ** - دیکھیں [`sorafs/chunker_registry.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  نئے پروفائلز کو بچانے سے پہلے۔ آٹومیشن کو ہینڈلز کو ترجیح دینی چاہئے
+  عددی IDs کے بجائے کیننیکل (`namespace.name@semver`)۔
+- ** سی آئی آٹومیشن ** - ریلیز پائپ لائنوں میں مذکورہ بالا احکامات شامل کریں تاکہ
+  دستاویزات ، فکسچر اور نوادرات اختیاری مظہر کو شائع کرتے ہیں
+  دستخط شدہ میٹا ڈیٹا کے ساتھ۔

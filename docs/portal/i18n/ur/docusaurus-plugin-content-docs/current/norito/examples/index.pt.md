@@ -4,18 +4,20 @@ direction: rtl
 source: docs/portal/docs/norito/examples/index.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Exemplos de Norito
-description: Trechos Kotodama selecionados com roteiros do livro razao.
-slug: /norito/examples
+عنوان: Norito کی مثالیں
+تفصیل: اقتباسات Kotodama نے لیجر اسکرپٹ کے ساتھ منتخب کیا۔
+سلگ: /نوریٹو /مثالیں
 ---
 
-Estes exemplos espelham os quickstarts do SDK e os roteiros do livro razao. Cada trecho inclui uma lista de verificacao do livro razao e aponta para os guias de Rust, Python e JavaScript para que voce possa repetir o mesmo cenario do inicio ao fim.
+یہ مثالیں SDK کوئیک اسٹارٹ اور لیجر اسکرپٹس کو آئینہ دار کرتی ہیں۔ ہر ٹکڑے میں ایک لیجر چیک لسٹ شامل ہوتی ہے اور وہ زنگ ، ازگر اور جاوا اسکرپٹ کے لئے ہدایت نامہ کے لئے اشارہ کرتا ہے تاکہ آپ شروع سے ختم ہونے تک اسی منظر کو دہرا سکیں۔
 
-- **[Esqueleto do entrypoint Hajimari](./hajimari-entrypoint)** - Estrutura minima de contrato Kotodama com um unico entrypoint publico e um handle de estado.
-- **[Registrar dominio e cunhar ativos](./register-and-mint)** - Mostra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
-- **[Invocar transferencia do host a partir de Kotodama](./call-transfer-asset)** - Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
-- **[Transferir ativo entre contas](./transfer-asset)** - Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.
-- **[Cunhar, transferir e queimar um NFT](./nft-flow)** - Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
+- **۔
+- **۔
+۔
+- **۔
+- **۔

@@ -4,102 +4,104 @@ direction: ltr
 source: docs/portal/docs/sorafs/provider-advert-multisource.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Multi-Source Provider Adverts & Scheduling
+# მრავალ წყაროს პროვაიდერის რეკლამა და დაგეგმვა
 
-This page distils the canonical spec in
+ეს გვერდი ასახავს კანონიკურ სპეციფიკას
 [`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md).
-Use that document for verbatim Norito schemas and changelogs; the portal copy
-keeps operator guidance, SDK notes, and telemetry references close to the rest
-of the SoraFS runbooks.
+გამოიყენეთ ეს დოკუმენტი სიტყვასიტყვით Norito სქემებისა და ცვლილებების ჟურნალებისთვის; პორტალის ასლი
+ინახავს ოპერატორის მითითებებს, SDK შენიშვნებს და ტელემეტრიის მითითებებს დანარჩენებთან ახლოს
+SoraFS წიგნებიდან.
 
-## Norito schema additions
+## Norito სქემის დამატებები
 
-### Range capability (`CapabilityType::ChunkRangeFetch`)
-- `max_chunk_span` – largest contiguous span (bytes) per request, `≥ 1`.
-- `min_granularity` – seek resolution, `1 ≤ value ≤ max_chunk_span`.
-- `supports_sparse_offsets` – permits non-contiguous offsets in one request.
-- `requires_alignment` – when true, offsets must align with `min_granularity`.
-- `supports_merkle_proof` – indicates PoR witness support.
+### დიაპაზონის შესაძლებლობა (`CapabilityType::ChunkRangeFetch`)
+- `max_chunk_span` - ყველაზე დიდი მომიჯნავე დიაპაზონი (ბაიტი) თითო მოთხოვნაზე, `≥ 1`.
+- `min_granularity` - გარჩევადობის ძიება, `1 ≤ value ≤ max_chunk_span`.
+- `supports_sparse_offsets` - ნებადართულია არამიმღები ოფსეტები ერთ მოთხოვნაში.
+- `requires_alignment` – როდესაც მართალია, ოფსეტები უნდა შეესაბამებოდეს `min_granularity`-ს.
+- `supports_merkle_proof` – მიუთითებს PoR მოწმის მხარდაჭერაზე.
 
-`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` enforce canonical encoding
-so gossip payloads remain deterministic.
+`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` აღასრულოს კანონიკური კოდირება
+ასე რომ, ჭორის დატვირთვა დეტერმინისტული რჩება.
 
 ### `StreamBudgetV1`
-- Fields: `max_in_flight`, `max_bytes_per_sec`, optional `burst_bytes`.
-- Validation rules (`StreamBudgetV1::validate`):
+- ველები: `max_in_flight`, `max_bytes_per_sec`, სურვილისამებრ `burst_bytes`.
+- ვალიდაციის წესები (`StreamBudgetV1::validate`):
   - `max_in_flight ≥ 1`, `max_bytes_per_sec > 0`.
-  - `burst_bytes`, when present, must be `> 0` and `≤ max_bytes_per_sec`.
+  - `burst_bytes`, როდესაც არსებობს, უნდა იყოს `> 0` და `≤ max_bytes_per_sec`.
 
 ### `TransportHintV1`
-- Fields: `protocol: TransportProtocol`, `priority: u8` (0–15 window enforced by
+- ველები: `protocol: TransportProtocol`, `priority: u8` (0–15 ფანჯარა იძულებით
   `TransportHintV1::validate`).
-- Known protocols: `torii_http_range`, `quic_stream`, `soranet_relay`,
+- ცნობილი პროტოკოლები: `torii_http_range`, `quic_stream`, `soranet_relay`,
   `vendor_reserved`.
-- Duplicate protocol entries per provider are rejected.
+- პროტოკოლის დუბლიკატი ჩანაწერები თითო პროვაიდერზე უარყოფილია.
 
-### `ProviderAdvertBodyV1` additions
-- Optional `stream_budget: Option<StreamBudgetV1>`.
-- Optional `transport_hints: Option<Vec<TransportHintV1>>`.
-- Both fields now flow through `ProviderAdmissionProposalV1`, governance
-  envelopes, CLI fixtures, and telemetric JSON.
+### `ProviderAdvertBodyV1` დამატებები
+- სურვილისამებრ `stream_budget: Option<StreamBudgetV1>`.
+- სურვილისამებრ `transport_hints: Option<Vec<TransportHintV1>>`.
+- ორივე ველი ახლა გადის `ProviderAdmissionProposalV1`, მმართველობით
+  კონვერტები, CLI მოწყობილობები და ტელემეტრიული JSON.
 
-## Validation & governance binding
+## ვალიდაცია და მმართველობა სავალდებულოა
 
-`ProviderAdvertBodyV1::validate` and `ProviderAdmissionProposalV1::validate`
-reject malformed metadata:
+`ProviderAdvertBodyV1::validate` და `ProviderAdmissionProposalV1::validate`
+არასწორი მეტამონაცემების უარყოფა:
 
-- Range capabilities must decode and satisfy span/granularity limits.
-- Stream budgets / transport hints require a matching
-  `CapabilityType::ChunkRangeFetch` TLV and non-empty hint list.
-- Duplicate transport protocols and invalid priorities raise validation
-  errors before adverts are gossiped.
-- Admission envelopes compare proposal/adverts for range metadata via
-  `compare_core_fields` so mismatched gossip payloads are rejected early.
+- დიაპაზონის შესაძლებლობები უნდა გაშიფროს და აკმაყოფილებდეს სივრცის/გრანულარობის ლიმიტებს.
+- ნაკადის ბიუჯეტები / ტრანსპორტის მინიშნებები მოითხოვს შესაბამისობას
+  `CapabilityType::ChunkRangeFetch` TLV და არა ცარიელი მინიშნებების სია.
+- სატრანსპორტო პროტოკოლების დუბლიკატი და არასწორი პრიორიტეტები ზრდის ვალიდაციას
+  შეცდომები რეკლამების ჭორაობამდე.
+- მისაღები კონვერტები ადარებენ წინადადებას/რეკლამებს დიაპაზონის მეტამონაცემებისთვის
+  `compare_core_fields` ასე შეუსაბამო ჭორების დატვირთვა უარყოფილია ადრეულ პერიოდში.
 
-Regression coverage lives in
+რეგრესიის გაშუქება ცხოვრობს
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
-## Tooling & fixtures
+## ხელსაწყოები და მოწყობილობები
 
-- Provider advert payloads must include `range_capability`, `stream_budget`, and
-  `transport_hints` metadata. Validate via `/v1/sorafs/providers` responses and
-  admission fixtures; JSON summaries should include the parsed capability,
-  stream budget, and hint arrays for telemetry ingestion.
-- `cargo xtask sorafs-admission-fixtures` surfaces stream budgets and transport
-  hints inside its JSON artefacts so dashboards track feature adoption.
-- Fixtures under `fixtures/sorafs_manifest/provider_admission/` now include:
-  - canonical multi-source adverts,
-  - `multi_fetch_plan.json` so SDK suites can replay a deterministic multi-peer
-    fetch plan.
+- პროვაიდერის რეკლამის დატვირთვა უნდა შეიცავდეს `range_capability`, `stream_budget` და
+  `transport_hints` მეტამონაცემები. დადასტურება `/v1/sorafs/providers` პასუხებით და
+  მისაღები მოწყობილობები; JSON შეჯამებები უნდა შეიცავდეს გაანალიზებულ შესაძლებლობებს,
+  სტრიმინგის ბიუჯეტი და მინიშნებების მასივები ტელემეტრიის გადაყლაპვისთვის.
+- `cargo xtask sorafs-admission-fixtures` ზედაპირების ნაკადის ბიუჯეტები და ტრანსპორტი
+  მინიშნებები მისი JSON არტეფაქტების შიგნით, ასე რომ, დაფები თვალყურს ადევნებენ ფუნქციების მიღებას.
+- `fixtures/sorafs_manifest/provider_admission/`-ის ქვეშ მყოფი მოწყობილობები ახლა მოიცავს:
+  - კანონიკური მრავალ წყაროს რეკლამები,
+  - `multi_fetch_plan.json`, რათა SDK კომპლექტებმა შეძლონ განმსაზღვრელი მრავალ თანატოლის გამეორება
+    გეგმის მიღება.
 
-## Orchestrator & Torii integration
+## ორკესტრატორი და Torii ინტეგრაცია
 
-- Torii `/v1/sorafs/providers` returns parsed range capability metadata along
-  with `stream_budget` and `transport_hints`. Downgrade warnings fire when
-  providers omit the new metadata, and gateway range endpoints enforce the same
-  constraints for direct clients.
-- The multi-source orchestrator (`sorafs_car::multi_fetch`) now enforces range
-  limits, capability alignment, and stream budgets when assigning work. Unit
-  tests cover chunk-too-large, sparse‑seek, and throttling scenarios.
-- `sorafs_car::multi_fetch` streams downgrade signals (alignment failures,
-  throttled requests) so operators can trace why specific providers were
-  skipped during planning.
+- Torii `/v1/sorafs/providers` აბრუნებს გაანალიზებული დიაპაზონის შესაძლებლობების მეტამონაცემებს ერთად
+  `stream_budget`-ით და `transport_hints`-ით. დაქვეითების გაფრთხილებები გაშვებულია, როდესაც
+  პროვაიდერები გამოტოვებენ ახალ მეტამონაცემებს და კარიბჭის დიაპაზონის საბოლოო წერტილები იგივეს ახორციელებენ
+  შეზღუდვები პირდაპირი კლიენტებისთვის.
+- მრავალ წყაროს ორკესტრი (`sorafs_car::multi_fetch`) ახლა აძლიერებს დიაპაზონს
+  სამუშაოს მინიჭებისას ლიმიტები, შესაძლებლობების გასწორება და ბიუჯეტების ნაკადი. ერთეული
+  ტესტები მოიცავს ცალი ძალიან დიდ, მწირი ძიების და ჩახშობის სცენარებს.
+- `sorafs_car::multi_fetch` ავრცელებს შემცირების სიგნალებს (გასწორების შეფერხებები,
+  შემცირებული მოთხოვნები) ასე რომ, ოპერატორებს შეუძლიათ დაადგინონ, რატომ იყვნენ კონკრეტული პროვაიდერები
+  დაგეგმვისას გამოტოვებული.
 
-## Telemetry reference
+## ტელემეტრიის მითითება
 
-The Torii range fetch instrumentation feeds the **SoraFS Fetch Observability**
-Grafana dashboard (`dashboards/grafana/sorafs_fetch_observability.json`) and the
-paired alert rules (`dashboards/alerts/sorafs_fetch_rules.yml`).
+Torii დიაპაზონის ჩამოტანის ინსტრუმენტაცია კვებავს **SoraFS Fetch Observability**
+Grafana დაფა (`dashboards/grafana/sorafs_fetch_observability.json`) და
+დაწყვილებული გაფრთხილების წესები (`dashboards/alerts/sorafs_fetch_rules.yml`).
 
-| Metric | Type | Labels | Description |
+| მეტრული | ტიპი | ეტიკეტები | აღწერა |
 |--------|------|--------|-------------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Providers advertising range capability features. |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Throttled range fetch attempts grouped by policy. |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | Active guarded streams consuming the shared concurrency budget. |
+| `torii_sorafs_provider_range_capability_total` | ლიანდაგი | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | პროვაიდერები სარეკლამო დიაპაზონის შესაძლებლობების მახასიათებლები. |
+| `torii_sorafs_range_fetch_throttle_events_total` | მრიცხველი | `reason` (`quota`, `concurrency`, `byte_rate`) | შემცირებული დიაპაზონის მოპოვების მცდელობები დაჯგუფებულია წესების მიხედვით. |
+| `torii_sorafs_range_fetch_concurrency_current` | ლიანდაგი | — | აქტიური დაცული ნაკადები, რომლებიც მოიხმარენ საერთო კონკურენტულ ბიუჯეტს. |
 
-Example PromQL snippets:
+PromQL ფრაგმენტების მაგალითი:
 
 ```promql
 sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)
@@ -107,6 +109,6 @@ max(torii_sorafs_range_fetch_concurrency_current)
 torii_sorafs_provider_range_capability_total
 ```
 
-Use the throttle counter to confirm quota enforcement before enabling
-multi-source orchestrator defaults, and alert when concurrency approaches the
-stream budget maxima for your fleet.
+გამოიყენეთ დროსელის მრიცხველი, რათა დაადასტუროთ კვოტის შესრულება ჩართვამდე
+მრავალ წყაროს ორკესტრატორის ნაგულისხმევი პარამეტრები და გაფრთხილება, როდესაც კონკურენტულობა უახლოვდება
+თქვენი ფლოტის საბიუჯეტო მაქსიმუმების ნაკადი.

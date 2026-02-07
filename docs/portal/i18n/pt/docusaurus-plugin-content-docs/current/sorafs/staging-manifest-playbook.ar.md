@@ -4,22 +4,24 @@ direction: ltr
 source: docs/portal/docs/sorafs/staging-manifest-playbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: دليل مانيفست الـstaging
+id: manual de preparação do manifesto
+título: دليل مانيفست الـstaging
 sidebar_label: دليل مانيفست الـstaging
 description: قائمة تحقق لتمكين ملف chunker المصادق عليه برلمانياً على نشرات Torii الخاصة بـ staging.
 ---
 
 :::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. احرص على إبقاء نسخة Docusaurus ونسخة Markdown القديمة متطابقتين حتى يتم إيقاف مجموعة Sphinx بالكامل.
+Verifique o valor `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Use o Docusaurus e Markdown para usar o Sphinx Então.
 :::
 
 ## نظرة عامة
 
-يرشد هذا الدليل إلى تمكين ملف chunker المصادق عليه برلمانياً في نشر Torii الخاص بـ staging قبل ترقية التغيير إلى الإنتاج. يفترض أن ميثاق حوكمة SoraFS تم التصديق عليه وأن الـ fixtures المعتمدة متاحة داخل المستودع.
+Você pode usar o chunker para fazer o teste no Torii do staging. ترقية التغيير إلى الإنتاج. Verifique se o SoraFS está equipado com um dispositivo de fixação que pode ser usado para configurar os dispositivos elétricos.
 
 ## 1. المتطلبات المسبقة
 
@@ -32,8 +34,8 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
    ci/check_sorafs_fixtures.sh
    ```
 
-2. حضّر دليل أظرف القبول الذي يقرأه Torii عند الإقلاع (مسار مثال): `/var/lib/iroha/admission/sorafs`.
-3. تأكد من أن إعدادات Torii تفعّل مخبأ discovery وتطبيق القبول:
+2. Digite o nome do arquivo Torii na versão (referência): `/var/lib/iroha/admission/sorafs`.
+3. Use o Torii para descobrir a descoberta e fazer o seguinte:
 
    ```toml
    [torii.sorafs.discovery]
@@ -53,40 +55,40 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
 
 ## 2. نشر أظرف القبول
 
-1. انسخ أظرف قبول المزوّدين المعتمدة إلى الدليل المشار إليه في `torii.sorafs.discovery.admission.envelopes_dir`:
+1. Verifique o código de barras do dispositivo no `torii.sorafs.discovery.admission.envelopes_dir`:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. أعد تشغيل Torii (أو أرسل SIGHUP إذا كانت أداة التحميل تدعم إعادة التحميل الفورية).
+2. Verifique Torii (ou use SIGHUP para obter mais informações).
 3. راقب السجلات لرسائل القبول:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. التحقق من انتشار discovery
+## 3. Descoberta do livro
 
-1. انشر حمولة provider advert الموقعة (بايتات Norito) الناتجة عن خط المزوّد:
+1. Anúncio do fornecedor do anúncio do fornecedor (بايتات Norito) do seguinte modo:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. استعلم عن نقطة discovery وتأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:
+2. استعلم عن نقطة Discovery وتأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   تأكد من أن `profile_aliases` تتضمن `"sorafs.sf1@1.0.0"` كأول إدخال.
+   O `profile_aliases` deve ser substituído por `"sorafs.sf1@1.0.0"`.
 
-## 4. اختبار نقاط نهاية manifest وplan
+## 4. اختبار نقاط نهاية manifesto e plano
 
-1. اجلب بيانات manifest الوصفية (يتطلب stream token إذا كان القبول مفعّلًا):
+1. Definindo o manifesto do token (token de fluxo e o token de fluxo):
 
    ```bash
    sorafs-fetch \
@@ -97,25 +99,25 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
      --json-out=reports/staging_manifest.json
    ```
 
-2. افحص إخراج JSON وتحقق من:
-   - أن `chunk_profile_handle` يساوي `sorafs.sf1@1.0.0`.
-   - أن `manifest_digest_hex` يطابق تقرير الحتمية.
+2. Defina o JSON como exemplo:
+   - Em `chunk_profile_handle` ou `sorafs.sf1@1.0.0`.
+   - Em `manifest_digest_hex` você pode usar o software.
    - أن `chunk_digests_blake3` تتطابق مع الـ fixtures المعاد توليدها.
 
 ## 5. فحوصات التليمترية
 
-- تأكد من أن Prometheus يعرض مقاييس الملف الجديد:
+- Verifique o valor do Prometheus:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- يجب أن تعرض لوحات المتابعة مزوّد staging تحت الاسم المستعار المتوقع وأن تبقى عدادات brownout عند الصفر أثناء تفعيل الملف.
+- يجب أن تعرض لوحات المتابعة مزوّد staging تحت الاسم المستعار المتوقع وأن تبقى عدادات brownout عند Você pode fazer isso.
 
 ## 6. الجاهزية للإطلاق
 
-1. التقط تقريرًا مختصرًا يتضمن عناوين URL ومعرّف manifest ولقطة التليمترية.
-2. شارك التقرير في قناة Nexus rollout مع نافذة التفعيل المخطط لها في الإنتاج.
-3. انتقل إلى قائمة التحقق الخاصة بالإنتاج (Section 4 في `chunker_registry_rollout_checklist.md`) بعد موافقة أصحاب المصلحة.
+1. Verifique o URL e o manifesto e o manifesto.
+2. Execute o rollout Nexus no final do programa para obter mais informações.
+3. Consulte o manual de instruções (Seção 4 em `chunker_registry_rollout_checklist.md`) para obter mais informações.
 
-الحفاظ على هذا الدليل محدثًا يضمن أن كل إطلاق لـ chunker/admission يتبع نفس الخطوات الحتمية بين staging والإنتاج.
+الحفاظ على هذا الدليل محدثًا يضمن أن كل إطلاق لـ chunker/admission يتبع نفس الخطوات الحتمية بين staging Então.

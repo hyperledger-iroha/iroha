@@ -4,68 +4,68 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/plan.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-plan
-title: Plan de preflight partenaires W1
-sidebar_label: Plan W1
-description: Taches, responsables et checklist de preuve pour la cohorte de preview partenaires.
+идентификатор: предварительный просмотр-обратная связь-w1-план
+Название: Предполетный партнерский план W1
+Sidebar_label: План W1
+описание: Специалисты, ответственные и контрольный список предварительной проверки для группы партнеров по предварительному просмотру.
 ---
 
-| Element | Details |
+| Элемент | Подробности |
 | --- | --- |
-| Vague | W1 - Partenaires et integrateurs Torii |
-| Fenetre cible | Q2 2025 semaine 3 |
-| Tag d'artefact (planifie) | `preview-2025-04-12` |
-| Issue tracker | `DOCS-SORA-Preview-W1` |
+| Неопределенный | W1 - Партнеры и интеграторы Torii |
+| Кабель Фенетре | 2 квартал 2025 года, третий сезон |
+| Артефакт (планификация) | `preview-2025-04-12` |
+| Трекер проблем | `DOCS-SORA-Preview-W1` |
 
-## Objectifs
+## Цели
 
-1. Obtenir les approbations legales et governance pour les termes de preview partenaires.
-2. Preparer le proxy Try it et les snapshots de telemetrie utilises dans le bundle d'invitation.
-3. Rafraichir l'artefact de preview verifie par checksum et les resultats de probes.
-4. Finaliser le roster des partenaires et les templates de demande avant l'envoi des invitations.
+1. Получите юридические одобрения и управление для условий партнерского предварительного просмотра.
+2. Подготовьте прокси-сервер. Попробуйте использовать снимки телеметрии в пакете приглашений.
+3. Проверьте артефакт предварительного просмотра по контрольной сумме и результатам проверки.
+4. Завершить составление списка партнеров и шаблонов требований перед отправкой приглашений.
 
-## Decoupage des taches
+## Декупаж ташей
 
-| ID | Tache | Responsable | Echeance | Statut | Notes |
+| удостоверение личности | Таче | Ответственный | Эчеанс | Статут | Заметки |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtenir l'approbation legale pour l'addendum des termes de preview | Docs/DevRel lead -> Legal | 2025-04-05 | Termine | Ticket legal `DOCS-SORA-Preview-W1-Legal` valide le 2025-04-05; PDF attache au tracker. |
-| W1-P2 | Capturer la fenetre de staging du proxy Try it (2025-04-10) et valider la sante du proxy | Docs/DevRel + Ops | 2025-04-06 | Termine | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` execute le 2025-04-06; transcription CLI + `.env.tryit-proxy.bak` archivees. |
-| W1-P3 | Construire l'artefact de preview (`preview-2025-04-12`), executer `scripts/preview_verify.sh` + `npm run probe:portal`, archiver descriptor/checksums | Portal TL | 2025-04-08 | Termine | Artefact + logs de verification stockes sous `artifacts/docs_preview/W1/preview-2025-04-12/`; sortie de probe attachee au tracker. |
-| W1-P4 | Revoir les formulaires d'intake partenaires (`DOCS-SORA-Preview-REQ-P01...P08`), confirmer contacts + NDAs | Governance liaison | 2025-04-07 | Termine | Les huit demandes approuvees (les deux dernieres le 2025-04-11); approbations liees dans le tracker. |
-| W1-P5 | Rediger le texte d'invitation (base sur `docs/examples/docs_preview_invite_template.md`), definir `<preview_tag>` et `<request_ticket>` pour chaque partenaire | Docs/DevRel lead | 2025-04-08 | Termine | Brouillon d'invitation envoye le 2025-04-12 15:00 UTC avec les liens d'artefact. |
+| П1-П1 | Получите юридическое одобрение для добавления к условиям предварительного просмотра | Руководитель отдела документации и разработки -> Юридические вопросы | 05.04.2025 | Термине | Юридический билет `DOCS-SORA-Preview-W1-Legal` действителен 5 апреля 2025 г.; PDF-атташе или трекер. |
+| П1-П2 | Захват промежуточного отверстия прокси-сервера. Попробуйте (10 апреля 2025 г.) и проверьте работоспособность прокси-сервера | Документы/DevRel + Ops | 06.04.2025 | Термине | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` выполнить файл 06.04.2025; транскрипция архивов CLI+`.env.tryit-proxy.bak`. |
+| П1-П3 | Создание артефакта предварительного просмотра (`preview-2025-04-12`), исполнитель `scripts/preview_verify.sh` + `npm run probe:portal`, дескриптор/контрольные суммы архиватора | Портал TL | 08.04.2025 | Термине | Артефакт + журналы проверки запасов су `artifacts/docs_preview/W1/preview-2025-04-12/`; Вылазка атташе по зондированию или слежению. |
+| W1-P4 | Revoir les Formulaires d'intake partenaires (`DOCS-SORA-Preview-REQ-P01...P08`), контакты для подтверждения + NDA | Связь с управлением | 07.04.2025 | Термине | Les huit требует одобрения (les deux dernieres le 11 апреля 2025 г.); апробации лежат в трекере. |
+| П1-П5 | Повторите текст приглашения (база на `docs/examples/docs_preview_invite_template.md`), определите `<preview_tag>` и `<request_ticket>` для участия | Руководитель отдела документации и разработки | 08.04.2025 | Термине | Приглашение посланника от 12 апреля 2025 г., 15:00 UTC с залогом артефактов. |
 
-## Checklist preflight
+## Контрольный список перед полетом
 
-> Astuce: lancez `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` pour executer automatiquement les etapes 1-5 (build, verification checksum, probe du portal, link checker, et mise a jour du proxy Try it). Le script enregistre un log JSON a joindre au tracker.
+> Astuce: lancez `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` для автоматического выполнения этапов 1–5 (сборка, проверка контрольной суммы, проверка портала, проверка ссылок и т. д., прокси-сервер. Попробуйте). Скрипт регистрирует журнал JSON в соединении с трекером.
 
-1. `npm run build` (avec `DOCS_RELEASE_TAG=preview-2025-04-12`) pour regenerer `build/checksums.sha256` et `build/release.json`.
-2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
-3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` et archiver `build/link-report.json` a cote du descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (ou fournir la cible appropriee via `--tryit-target`); committer le `.env.tryit-proxy` mis a jour et conserver la `.bak` pour rollback.
-6. Mettre a jour l'issue W1 avec les chemins de logs (checksum du descriptor, sortie probe, changement du proxy Try it et snapshots Grafana).
+1. `npm run build` (авеc `DOCS_RELEASE_TAG=preview-2025-04-12`) для регенератора `build/checksums.sha256` и `build/release.json`.
+2. И18НИ00000033Х.
+3. И18НИ00000034Х.
+4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` и архиватор `build/link-report.json` — код дескриптора.
+5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (или можно легко назначить через `--tryit-target`); коммиттер оставил `.env.tryit-proxy` в течение дня и сохранил `.bak` для отката.
+6. Подтвердите выпуск W1 с помощью журналов (контрольная сумма дескриптора, пробная проверка, изменение прокси-сервера. Попробуйте и снимки Grafana).
 
-## Checklist de preuve
+## Контрольный список предварительной проверки- [x] Юридическое одобрение, подписанное (PDF или залог билета), атташе `DOCS-SORA-Preview-W1`.
+- [x] Скриншоты Grafana для `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
+- [x] Дескриптор и журнал контрольной суммы `preview-2025-04-12` содержит `artifacts/docs_preview/W1/`.
+- [x] Таблица списка приглашений с актуальными `invite_sent_at` (смотрите журнал W1 трекера).
+- [x] Артефакты обратной связи, повторенные в [`preview-feedback/w1/log.md`](./log.md) с частичной партнерской линией (недавно 26 апреля 2025 г., с реестром/телеметрией/проблемами).
 
-- [x] Approbation legale signee (PDF ou lien du ticket) attachee a `DOCS-SORA-Preview-W1`.
-- [x] Screenshots Grafana pour `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] Descriptor et log de checksum `preview-2025-04-12` stockes sous `artifacts/docs_preview/W1/`.
-- [x] Tableau de roster d'invitations avec `invite_sent_at` renseignes (voir le log W1 du tracker).
-- [x] Artefacts de feedback repris dans [`preview-feedback/w1/log.md`](./log.md) avec une ligne par partenaire (mis a jour 2025-04-26 avec roster/telemetria/issues).
+Mettre a jour ce plan a mesure de l'avancement; трекер является ссылкой для проверки дорожной карты, которую можно проверить.
 
-Mettre a jour ce plan a mesure de l'avancement; le tracker s'y refere pour garder le roadmap auditable.
+## Поток обратной связи
 
-## Flux de feedback
-
-1. Pour chaque reviewer, dupliquer le template dans
+1. Налейте рецензента, дублируйте шаблон в нем.
    [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   remplir les metadonnees et stocker la copie complete sous
+   remplir les Metadonnees et Stocker La Copie Complete Sous
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Resumer invitations, checkpoints de telemetrie et issues ouvertes dans le log vivant
-   [`preview-feedback/w1/log.md`](./log.md) pour que les reviewers governance puissent rejouer la vague
-   sans quitter le depot.
-3. Quand les exports de knowledge-check ou de sondages arrivent, les joindre dans le chemin d'artefact note dans le log
-   et lier l'issue du tracker.
+2. Приглашения для возобновления работы, контрольные точки телеметрии и проблемы, возникающие в живом журнале
+   [`preview-feedback/w1/log.md`](./log.md) для того, чтобы рецензенты могли эффективно радоваться неопределенности
+   без выхода из депо.
+3. Когда экспортируются проверки знаний или прибывают зонды, соединение в записях об артефактах в журнале
+   и это проблема трекера.

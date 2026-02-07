@@ -9,76 +9,75 @@ source_last_modified: "2026-01-22T16:26:46.567961+00:00"
 translation_last_reviewed: 2026-02-07
 title: Repo Operations & Evidence Guide
 summary: Governance, lifecycle, and audit requirements for repo/reverse-repo flows (roadmap F1).
+translator: machine-google-reviewed
 ---
 
-# Repo Operations & Evidence Guide (Roadmap F1)
+# རི་པོ་བཀོལ་སྤྱོད་དང་སྒྲུབ་བྱེད་ལམ་སྟོན་ (ལམ་ལམ་F1)
 
-The repo program unlocks bilateral and tri-party financing with deterministic
-Norito instructions, CLI/SDK helpers, and ISO 20022 parity. This note captures
-the operational contract required to satisfy roadmap milestone **F1 — repo
-lifecycle documentation & tooling**. It complements the workflow-oriented
-[`repo_runbook.md`](./repo_runbook.md) by articulating:
+repo ལས་རིམ་འདི་གིས་ ཕྱོགས་གཉིས་ཀྱི་མ་དངུལ་དང་ ཚོགས་པ་གསུམ་གྱི་མ་དངུལ་ཚུ་ འགོ་འབྱེད་འབདཝ་ཨིན།
+Norito བཀོད་རྒྱ་དང་ CLI/SDK གྲོགས་རམ་པ་ དེ་ལས་ ISO 20022 parity ཚུ་ཨིན། དྲན་ཐོ་འདི་བཟུང་།
+ལམ་གྱི་ས་ཁྲ་ལམ་ཐིག་ **F1 — repo
+མི་ཚེའི་འཁོར་རིམ་ཡིག་ཆ་དང་ ལག་ཆས་**. འདི་གིས་ ལཱ་གི་རྒྱུན་རིམ་ལུ་ གཞི་བསྟུན་འབདཝ་ཨིན།
+[`repo_runbook.md`](./repo_runbook.md) བརྗོད་གཞི།
 
-- lifecycle surfaces across CLI/SDKs/runtime (`crates/iroha_cli/src/main.rs:3821`,
+- CLI/SDKs/runtime (`crates/iroha_cli/src/main.rs:3821`, བརྒྱུད་དེ་ ཚེ་སྲོག་འཁོར་རིམ་གྱི་ཁ་ཐོག་ཚུ།
   `python/iroha_python/iroha_python_rs/src/lib.rs:2216`,
   `crates/iroha_core/src/smartcontracts/isi/repo.rs:1`);
-- deterministic proof/evidence capture (`integration_tests/tests/repo.rs:1`);
-- tri-party custody & collateral substitution behaviour; and
-- governance expectations (dual-control, audit trails, rollback playbooks).
+- སེམས་ཐག་པའི་བདེན་དཔང་/སྒྲུབ་བྱེད་འཛིན་བཟུང་ (`integration_tests/tests/repo.rs:1`);
+- ཏམ་ཁུ་བདག་འཛིན་དང་ མཉམ་འབྲེལ་གྱི་ ཚབ་མའི་སྤྱོད་ལམ་དང་། དང༌
+- གཞུང་སྐྱོང་རེ་བ་ (གཉིས་ཚད་འཛིན་, རྩིས་ཞིབ་ལམ་ལུགས།
 
-## 1. Scope & Acceptance Criteria
+## 1. ཁྱབ་ཁོངས་དང་ངོས་ལེན་ཚད་གཞི།
 
-Roadmap item F1 remains gated on four themes; this document enumerates the
-required artefacts and links to the code/tests that already satisfy them:
+རོ་ཊི་མེཔ་ རྣམ་གཞག་ ཨེཕ་༡ འདི་ བརྗོད་དོན་བཞི་ལུ་ མཐུད་དེ་ཡོདཔ་ཨིན། ཡིག་ཆ་འདི་གིས་ གྲངས་རྩིས་འབདཝ་ཨིན།
+དགོས་མཁོ་ཡོད་པའི་ ཅ་རྙིང་དང་ ཧེ་མ་ལས་ ཡིད་ཚིམས་པའི་ གསང་ཡིག་/བརྟག་དཔྱད་ཚུ་ལུ་ འབྲེལ་མཐུད་ཚུ།
 
-| Requirement | Evidence |
-|-------------|----------|
-| Deterministic settlement proofs covering repo → reverse repo → substitution | `integration_tests/tests/repo.rs` captures end-to-end flows, duplicate-ID guards, margin cadence checks, and collateral substitution success/failure cases. The suite runs as part of `cargo test --workspace`. The deterministic lifecycle digest harness at `crates/iroha_core/src/smartcontracts/isi/repo.rs` (`repo_deterministic_lifecycle_proof_matches_fixture`) snapshots initiation → margin → substitution frames so auditors can diff the canonical payloads. |
-| Tri-party coverage | Runtime enforces custodian-aware flows: `RepoAgreement::custodian` + `RepoAccountRole::Custodian` events (`crates/iroha_data_model/src/repo.rs:74`, `crates/iroha_data_model/src/events/data/events.rs:742`). |
-| Collateral substitution tests | Reverse-leg invariants reject under-collateralised substitutions (`crates/iroha_core/src/smartcontracts/isi/repo.rs:417`) and integration tests assert the ledger clears correctly after a substitution roundtrip (`integration_tests/tests/repo.rs:261`). |
-| Margin-call cadence & participant enforcement | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` exercises `RepoMarginCallIsi`, proving cadence-aligned scheduling, rejection of premature calls, and participant-only authorisation. |
-| Governance-approved runbooks | This guide and `repo_runbook.md` provide CLI/SDK procedures, fraud/rollback steps, and evidence capture instructions for audits. |
+| དགོས་མཁོ། | སྒྲུབ་བྱེད་ |
+|----------------------------------------
+| repo → reverse repo → ཚབ་མ་ཡོད་པའི་ གཏན་འབེབས་གཞི་རྩའི་བདེན་དཔང་། | `integration_tests/tests/repo.rs` གིས་ མཐའ་མའི་ལས་མཇུག་ཚུན་ཚོད་ འཕྱོ་བ་དང་ གཉིས་ལྡན་-ཨའི་ཌི་སྲུང་སྐྱོབ་ མཐའ་མཚམས་ཀྱི་བརྟག་དཔྱད་ དེ་ལས་ བརྟན་བཞུགས་ཚབ་བཙུགས་ཀྱི་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་གནད་དོན་ཚུ་ བཟུང་དོ་ཡོདཔ་ཨིན། ཆ་ཤས་འདི་ `cargo test --workspace` གི་ཆ་ཤས་ཅིག་སྦེ་འགྱོཝ་ཨིན། འདི་ཡང་ བརྡ་བརྒྱུད་ཀྱི་ བརྡ་རྟགས་ཚུ་ འགོ་བཙུགས་ཏེ་ བརྡ་བརྒྱུད་ཀྱི་ གཞི་ཁྲམ་ཚུ་ འགོ་བཙུགས་མི་འདི་གིས་ ཁྲིམས་ལུགས་ཀྱི་ གླ་ཆ་ཚུ་ བཏོན་ཚུགསཔ་ཨིན་མས། |
+| ཊི་རི་ཚོགས་པའི་ཁྱབ་ཁོངས། | གཡོག་བཀོལ་བའི་དུས་ཚོད་བཀག་དམ་འབད་དོ་ བདག་འཛིན་འཐབ་ཡོདཔ། `RepoAgreement::custodian` + `RepoAccountRole::Custodian` བྱུང་ལས་ (`crates/iroha_data_model/src/repo.rs:74`, Norito). |
+| བརྟན་བཞུགས་ཚབ་བཙུགས་ཀྱི་བརྟག་དཔྱད། | འགྱུར་ལྡོག་མེད་པའི་འགྱུར་བ་འདི་གིས་ འབྲེལ་མཐུན་གྱི་ ཚབ་མ་ཚུ་ ངོས་ལེན་མ་འབད་བར་ (`crates/iroha_core/src/smartcontracts/isi/repo.rs:417`) གཅིག་སྒྲིལ་གྱི་བརྟག་དཔྱད་འདི་གིས་ ཚབ་བཙུགས་པའི་ཤུལ་ལས་ (`integration_tests/tests/repo.rs:261`) |
+| མར་གིན་ཁ་པར་གྱི་ གདམ་ཁའི་ དང་ བཅའ་མར་གཏོགས་མི་ བསྟར་སྤྱོད། | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` ལག་ལེན་འཐབ་ཐངས་ `RepoMarginCallIsi`, དེ་ འདྲ་མཉམ་གྱི་དུས་ཚོད་བཀོད་ནི་དང་ དུས་ཚོད་མ་འགྱོ་བའི་ དུས་ཚོད་ཁར་ འབོད་བརྡ་བཀག་ཆ་འབད་ནི་ དེ་ལས་ བཅའ་མར་གཏོགས་མི་ཚུ་གིས་ རྐྱངམ་གཅིག་གི་དབང་ཚད་ཚུ་ བདེན་ཁུངས་བཟང་ནི། |
+| གཞུང་སྐྱོང་གིས་ ཆ་འཇོག་འབད་མི་ རན་དེབ་ཚུ་ | ལམ་སྟོན་འདི་ དང་ `repo_runbook.md` གིས་ CLI/SDK བྱ་རིམ་དང་ གཡོ་སྒྱུ་/བསྐོར་རྒྱབ་ཀྱི་རིམ་པ་ དེ་ལས་ རྩིས་ཞིབ་ཀྱི་བཀོད་རྒྱ་ཚུ་ སྒྲུབ་བྱེད་བཏོན་ཡོདཔ་ཨིན། |
 
-## 2. Lifecycle Surfaces
+## 2. འཚོ་འཁོར་གྱི་ཕྱི་ལམ།
 
-### 2.1 CLI & Norito builders
+### 2.1 CLI དང་ Norito བཟོ་སྐྲུན་པ།
 
-- `iroha app repo initiate|unwind|margin|margin-call` wrap `RepoIsi`,
-  `ReverseRepoIsi`, and `RepoMarginCallIsi`
-  (`crates/iroha_cli/src/main.rs:3821`). Each subcommand supports `--input` /
-  `--output` so desks can stage instruction payloads for dual approval before
-  submission. Custodian routing is expressed via `--custodian`.
-- `repo query list|get` uses `FindRepoAgreements` to snapshot agreements and can
-  be redirected into JSON artefacts for evidence bundles.
-- The CLI smoke tests under `crates/iroha_cli/tests/cli_smoke.rs:2637` ensure
-  the emit-to-file path stays stable for auditors.
+- `iroha app repo initiate|unwind|margin|margin-call` གཡོ་སྒྱུ་ `RepoIsi`,
+  Norito, དང་ `RepoMarginCallIsi`
+  (Norito). ཡན་ལག་བརྡ་བཀོད་རེ་རེ་གིས་ `--input` རྒྱབ་སྐྱོར་འབདཝ་ཨིན།
+  `--output` དེ་འབདཝ་ལས་ འདྲེན་བྱེད་ཚུ་གིས་ ཆ་འཇོག་གཉིས་ལྡན་གྱི་དོན་ལུ་ སློབ་སྟོན་འབད་ཚུགས།
+  ཕམ་ཁ་ལེན་པ།, ཞུ་འབུལ། ཟ་ཁང་གི་འགྲུལ་ལམ་འདི་ `--custodian` བརྒྱུད་དེ་བཏོནམ་ཨིན།
+- `repo query list|get` གིས་ `FindRepoAgreements` འདི་ ཆིངས་ཡིག་དང་ ཀེན་ཚུ་ པར་ལེན་འབད་ནི་ལུ་ ལག་ལེན་འཐབ་ཨིན།
+  སྒྲུབ་བྱེད་ཀྱི་ཆ་ཤས་ཚུ་གི་དོན་ལུ་ JSON གི་ཅ་ཆས་ཚུ་ནང་ ལོག་སྟེ་བཀོད་དགོ།
+- `crates/iroha_cli/tests/cli_smoke.rs:2637` གི་འོག་ལུ་ CLI གི་ཐ་མག་བརྟག་དཔྱད་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+  རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ emit-to-file འགྲུལ་ལམ་འདི་ བརྟན་ཏོག་ཏོ་སྦེ་སྡོདཔ་ཨིན།
 
-### 2.2 SDKs & automation hooks
+### 2.2 SDKs & རང་འགུལ།- པའི་ཐོན་བཱའིན་ཌིང་ཚུ་གིས་ `RepoAgreementRecord`, `RepoCashLeg`, གསལ་སྟོན་འབདཝ་ཨིན།
+  Norito, དང་སྟབས་བདེ་བའི་བཟོ་བཀོད།
+  (`python/iroha_python/iroha_python_rs/src/lib.rs:2216`) དེ་འབདཝ་ལས་ རང་བཞིན་གྱིས་འབད་ཚུགས།
+  ཚོང་འབྲེལ་ཚུ་བསྡུ་སྒྲིག་འབད་དེ་ ས་གནས་ནང་ `next_margin_check_after` བརྟག་ཞིབ་འབད།
+- JS/Swift གྲོགས་རམ་པ་ཚུ་གིས་ བརྒྱུད་དེ་ Norito བཀོད་སྒྲིག་ཚུ་ ལོག་ལག་ལེན་འཐབ།
+  `javascript/iroha_js/src/instructionBuilders.js` དང་།
+  `IrohaSwift/Sources/IrohaSwift/ConfidentialEncryptedPayload.swift` བརྗེད་ཐོ་དོན་ལུ་
+  འཛིན་སྐྱོང་འཐབ་ནི།; ཨེསི་ཌི་ཀེ་ཚུ་གིས་ རི་པོ་གཞུང་གི་ མཛུབ་མོ་ཚུ་ ཐགཔ་བཏགས་པའི་སྐབས་ ཡིག་ཆ་འདི་ལུ་ གཞི་བསྟུན་འབད་དགོ།
 
-- Python bindings expose `RepoAgreementRecord`, `RepoCashLeg`,
-  `RepoCollateralLeg`, and convenience builders
-  (`python/iroha_python/iroha_python_rs/src/lib.rs:2216`) so automation can
-  assemble transactions and evaluate `next_margin_check_after` locally.
-- JS/Swift helpers reuse the same Norito layouts via
-  `javascript/iroha_js/src/instructionBuilders.js` and
-  `IrohaSwift/Sources/IrohaSwift/ConfidentialEncryptedPayload.swift` for memo
-  handling; SDKs should refer to this doc when threading repo governance knobs.
+### 2.3 ལེ་ཇར་གྱི་བྱུང་རིམ་དང་བརྡ་འཕྲིན་
 
-### 2.3 Ledger events & telemetry
+མི་ཚེ་འཁོར་རིམ་གྱི་བྱ་བ་རེ་རེ་གིས་ `AccountEvent::Repo(...)` དྲན་ཐོ་ཚུ་ཡོདཔ་ཨིན།
+`RepoAccountEvent::{Initiated,Settled,MarginCalled}` ལུ་ཁྱབ་ཁོངས།
+བཅའ་མར་གཏོགས་མི་འགན་ཁུར་ (`crates/iroha_data_model/src/events/data/events.rs:742`). ཕར༌འཕུལ
+ཁྱོད་ཀྱི་ SIEM/log བསྡོམས་རྩིས་ནང་ལུ་ བྱུང་ལས་དེ་ཚུ་ ཊམ་པར་-མངོན་གསལ་ཅན་གྱི་རྩིས་ཞིབ་དྲན་ཐོ་ཅིག་ཐོབ་ནིའི་དོན་ལུ་
+ཌེཀསི་བྱ་བ་དང་ མཐའ་མཚམས་འབོད་བརྡ་ དེ་ལས་ བདག་འཛིན་བརྡ་དོན་ཚུ་གི་དོན་ལུ་ཨིན།
 
-Every lifecycle action emits `AccountEvent::Repo(...)` records containing
-`RepoAccountEvent::{Initiated,Settled,MarginCalled}` payloads scoped to the
-participant role (`crates/iroha_data_model/src/events/data/events.rs:742`). Push
-those events into your SIEM/log aggregator to obtain a tamper-evident audit log
-for desk actions, margin calls, and custodian notifications.
+### ༢.༤ རིམ་སྒྲིག་དར་ཁྱབ་དང་བདེན་དཔང་།
 
-### 2.4 Configuration propagation & verification
-
-Nodes ingest repo governance knobs from the `[settlement.repo]` stanza in
-`iroha_config` (`crates/iroha_config/src/parameters/user.rs:4071`). Treat that
-snippet as part of the governance evidence contract—stage it in version control
-alongside the repo packet and hash it before pushing the change through your
-automation or ConfigMap. A minimal profile looks like:
+ནའུཌ་ ནོ་ཌིས་ རི་པོ་ གཞུང་སྐྱོང་ མཛུབ་མོ་ ནང་ `[settlement.repo]` གི་ བརྡ་རྟགས་ལས་ 2 2 2 2.
+`iroha_config` (`crates/iroha_config/src/parameters/user.rs:4071`). དེ་ བརྟེན།
+གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཀྱི་གན་རྒྱ་གི་ཆ་ཤས་ཅིག་སྦེ་ ཐོན་རིམ་ཚད་འཛིན་གྱི་གནས་རིམ་ཅིག་ཨིན།
+འདོན་སྤེལ།: ༢༠༡༠/༠༧/༠༣ རིག་པ།(༠) འདི་ཡང་ གཟའ་ཉི་མའི་ཉིན།
+རང་འགུལ་ ཡང་ན་ རིམ་སྒྲིག་སབ་ཁྲ་བཟོ་ནི། ཉུང་མཐའ་གསལ་སྡུད་ཅིག་འདི་བཟུམ་ཅིག་མཐོངམ་ཨིན།
 
 ```toml
 [settlement.repo]
@@ -90,100 +89,98 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
 "bond#wonderland" = ["note#wonderland", "bill#wonderland"]
 ```
 
-Operational checklist:
+བཀོལ་སྤྱོད་ཞིབ་དཔྱད་ཐོ་ཡིག་:
 
-1. Commit the snippet above (or your production variant) into the config repo
-   that feeds `irohad` and record its SHA-256 inside the governance packet so
-   reviewers can diff the bytes you plan to deploy.
-2. Roll the change across the fleet (systemd unit, Kubernetes ConfigMap, etc.)
-   and restart each node. Immediately after rollout, capture the Torii
-   configuration snapshot for provenance:
+༡ གོང་འཁོད་ཀྱི་ ཆ་ཚན་འདི་ (ཡང་ན་ ཁྱོད་རའི་ཐོན་སྐྱེད་ཀྱི་དབྱེ་བ་) རིམ་སྒྲིག་རེ་པོ་ནང་ལུ་ བཀོད།
+   དེ་ `irohad` དང་ དེའི་ SHA-256 འདི་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ནང་ ཐོ་བཀོད་འབདཝ་ཨིན།
+   བསྐྱར་ཞིབ་པ་ཚུ་གིས་ ཁྱོད་ཀྱིས་ བཀྲམ་སྤེལ་འབད་ནི་གི་འཆར་གཞི་ཡོད་མི་ བཱའིཊི་ཚུ་ དབྱེ་བ་ཕྱེ་ཚུགས།
+༢ བསྒྱུར་བཅོས་འདི་ གྲུ་གཟིངས་བརྒྱུད་དེ་ སྐོར་ཐེངས་ (ལམ་ལུགས་ ཀུ་བྷར་ནེཊི་ རིམ་སྒྲིག་སབ་ཁྲ་ ལ་སོགས་པ་ཚུ་ཨིན།)
+   དང་ མཛུབ་གནོན་རེ་རེ་སླར་ལོག་འབད། དེ་འཕྲོ་ལས་ འགོ་བཙུགས་པའི་ཤུལ་ལས་ Torii འདི་ བཟུང་དགོ།
+   རིམ་སྒྲིག་པར་བཏབ་ནི་ འབྱུང་ཁུངས་ཀྱི་དོན་ལུ་:
 
    ```bash
    curl -sS "${TORII_URL}/v1/configuration" \
      -H "Authorization: Bearer ${TOKEN}" | jq .
    ```
 
-   `ToriiClient.get_configuration()` is available in the Python SDK for the same
-   purpose when automation needs typed evidence.【python/iroha_python/src/iroha_python/client.py:5791】
-3. Prove that the runtime now enforces the requested cadence/haircut by querying
-   `FindRepoAgreements` (or `iroha app repo margin --agreement-id ...`) and
-   inspecting the embedded `RepoGovernance` values. Store the JSON responses
-   under `artifacts/finance/repo/<agreement>/agreements_after.json`; those values
-   are derived from `[settlement.repo]`, so they act as a secondary witness when
-   Torii’s `/v1/configuration` snapshot is insufficient.
-4. Keep both artefacts—the TOML snippet and the Torii/CLI snapshots—in the
-   evidence bundle before filing a governance request. Auditors must be able to
-   replay the snippet, verify its hash, and correlate it with the runtime view.
+   `ToriiClient.get_configuration()` འདི་ པའི་ཐཱོན་ཨེསི་ཌི་ཀེ་ནང་ ཅོག་འཐདཔ་གི་དོན་ལུ་ འཐོབ་ཚུགས།
+   དམིགས་པ་རང་བཞིན་གྱིས་ཡིག་དཔར་དགོས་པའི་སྒྲུབ་བྱེད་.【པྱོན་/ཨི་རོ་ཧ་པི་ཐོན་/སི་ཨར་སི/ཨི་རོ་ཧ་པི་ཐོན་/ཀླུན་/ཀླུན་.py:5791】
+༣ ད་ལྟོ་ རན་ཊའིམ་གྱིས་ འདྲི་དཔྱད་འབད་དེ་ ཞུ་བ་འབད་ཡོད་པའི་ གདངས་/ཧེར་ཀཊི་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིནམ་བདེན་དཔས།
+   `FindRepoAgreements` (ཡང་ན་ `iroha app repo margin --agreement-id ...`) དང་།
+   བཙུགས་ཡོད་པའི་ `RepoGovernance` གནས་གོང་ཚུ་ཞིབ་དཔྱད་འབད་ནི། ཇེ་ཨེསི་ཨོ་ཨེན་གྱི་ལན་ཚུ་གསོག་འཇོག་འབད།
+   `artifacts/finance/repo/<agreement>/agreements_after.json` གི་འོག་ལུ་; གནས་གོང་དེ་དག་
+   `[settlement.repo]` ལས་བྱུང་ཡོདཔ་ལས་ དེ་ཚུ་གིས་ གཞི་རིམ་གྱི་དཔང་པོ་སྦེ་ ལཱ་འབདཝ་ཨིན།
+   Torii’s `/v1/configuration` པར་ལེན་འདི་ ལངམ་སྦེ་མེདཔ་ཨིན།
+༤ ཅ་རྙིང་གཉིས་ཆ་རང་བཞག་དགོ།
+   གཞུང་སྐྱོང་ཞུ་བ་ཅིག་མ་བཙུགས་པའི་ཧེ་མ་ སྒྲུབ་བྱེད་བསྡོམས། རྩིས་ཞིབ་པ་ཚུ་གིས་ འབད་ཚུགས་དགོ།
+   ཆ་ཚན་འདི་བསྐྱར་རྩེད་འབད་ཞིནམ་ལས་ དེ་གི་ཧེཤ་བདེན་དཔྱད་འབད་ཞིནམ་ལས་ རན་ཊའིམ་མཐོང་སྣང་དང་གཅིག་ཁར་ འབྲེལ་མཐུད་འབད།
 
-This workflow ensures repo desks never rely on ad-hoc environment variables, the
-configuration path stays deterministic, and every governance ticket carries the
-same set of `iroha_config` proofs expected in roadmap F1.
+ལཱ་གི་རྒྱུན་རིམ་འདི་གིས་ རི་པོ་ཌེཀསི་ཚུ་ ཨེ་ཌི་ཧོཀ་མཐའ་འཁོར་འགྱུར་ཅན་ལུ་ ནམ་ཡང་ བརྟེན་ཏེ་ ངེས་གཏན་བཟོཝ་ཨིན་,
+རིམ་སྒྲིག་འགྲུལ་ལམ་འདི་ གཏན་འབེབས་སྦེ་སྡོད་ཡོདཔ་དང་ གཞུང་སྐྱོང་གི་ཤོག་འཛིན་རེ་རེ་གིས་ འབག་འོང་།
+ལམ་སྟོན་པ་ F1 ནང་རེ་བ་ཡོད་པའི་ `iroha_config` གི་བདེན་དཔང་འདྲ་མཉམ།
 
-### 2.5 Deterministic proof harness
+### 2.5 ངེས་པའི་བདེན་དཔང་ཧུམ་ཆས།
 
-The unit test `repo_deterministic_lifecycle_proof_matches_fixture` (see
-`crates/iroha_core/src/smartcontracts/isi/repo.rs`) serializes each stage of the
-repo lifecycle into a Norito JSON frame, compares it to the canonical fixture at
-`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.json`, and hashes the
-bundle (fixture digest tracked at
-`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`). Run it locally via:
+ཡུ་ནིཊ་བརྟག་དཔྱད་ `repo_deterministic_lifecycle_proof_matches_fixture` (see)
+`crates/iroha_core/src/smartcontracts/isi/repo.rs`) གི་གནས་རིམ་རེ་རེ་བཞིན་རིམ་སྒྲིག་འབདཝ་ཨིན།
+repo ཚེ་སྲོག་འཁོར་རིམ་འདི་ Norito JSON གཞི་ཁྲམ་ནང་ལུ་ 18NT00000003X གཞི་ཁྲམ་ནང་ འདི་ 1 ལུ་ ཀེན་ནོ་ནིག་གཏན་འཇགས་ལུ་ ག་བསྡུར་འབདཝ་ཨིན།
+Torii, དང་ ཧ་ཤེད།
+bundle (fixture digest ལུ་བརྟག་ཞིབ་འབད་ཡོདཔ།
+`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`). ས་གནས་ནང་བརྒྱུད་དེ་ གཡོག་བཀོལ།
 
 ```bash
 cargo test -p iroha_core \
   -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
-```
-
-This test now runs as part of the default `cargo test -p iroha_core` suite, so CI
-guards the snapshot automatically. Whenever repo semantics or fixtures change,
-refresh both the JSON and digest with:
+```ད་ལྟོ་བརྟག་དཔྱད་འདི་ སྔོན་སྒྲིག་ `cargo test -p iroha_core` གི་ཆ་ཤེས་ཅིག་སྦེ་ གཡོག་བཀོལཝ་ཨིན།
+རང་བཞིན་གྱིས་པར་ལེན་འདི་སྲུང་སྐྱོབ་འབདཝ་ཨིན། རིམ་བཞིན་ repo semantics ཡང་ན་ བདེ་སྒྲིག་བསྒྱུར་བཅོས་བྱུང་བའི་སྐབས།
+JSON དང་ ཟས་བཅུད་གཉིས་ཆ་ར་ བསྐྱར་གསོ་འབད།
 
 ```bash
 scripts/regen_repo_proof_fixture.sh
 ```
 
-The helper uses the pinned `rust-toolchain.toml` channel, rewrites the fixtures
-under `crates/iroha_core/tests/fixtures/`, and reruns the deterministic harness
-so the checked-in snapshot/digest stay in sync with the runtime behaviour
-auditors will replay.
+གྲོགས་རམ་པ་འདི་གིས་ པིན་འབད་ཡོད་པའི་ `rust-toolchain.toml` རྒྱུན་ལམ་འདི་ལག་ལེན་འཐབ་ཨིན་ དེ་ལས་ བརྟན་བརྟན་ཚུ་ ལོག་བྲིས།
+འོག་ལུ་ `crates/iroha_core/tests/fixtures/`, དང་ ཐག་གཅོད་ཀྱི་ ཧར་ནེསི་འདི་ ལོག་གཡོག་བཀོལ།
+དེ་འབདཝ་ལས་ བརྟག་ཞིབ་འབད་ཡོད་པའི་པར་བཏབ་ནི་/བདུདམོ་འདི་ རན་ཊའིམ་སྤྱོད་ལམ་དང་གཅིག་ཁར་ མཉམ་འབྱུང་སྦེ་སྡོད།
+རྩིས་ཞིབ་པ་ཚུ་ ལོག་རྩེད་འོང་།
 
-### 2.4 Torii API surfaces
+### 2.4 Torii ཨེ་པི་ཨའི་ ངོས་འཛིན།
 
-- `GET /v1/repo/agreements` returns the active agreements with optional pagination, filtering
-  (`filter={...}`), sorting, and address-formatting parameters. Use this for quick audits or
-  dashboards when the raw JSON payloads are sufficient.
-- `POST /v1/repo/agreements/query` accepts the structured query envelope (pagination, sort,
-  `FilterExpr`, `fetch_size`) so downstream services can page through the ledger deterministically.
-- The JavaScript SDK now exposes `listRepoAgreements`, `queryRepoAgreements`, and the iterator
-  helpers so browser/Node.js tooling receives the same typed DTOs as Rust/Python.
+- `GET /v1/repo/agreements` གདམ་ཁའི་ཤོག་ལེབ་དང་གཅིག་ཁར་ ཤུགས་ལྡན་ཆིངས་ཡིག་ཚུ་སླར་ལོག་འབདཝ་ཨིན།
+  (`filter={...}`) དབྱེ་སེལ་དང་ཁ་བྱང་རྩ་སྒྲིག་འབད་ནིའི་ཚད་གཞི། འདི་མགྱོགས་དྲགས་སྦེ་རྩིས་ཞིབ་ཀྱི་དོན་ལུ་ལག་ལེན་འཐབ།
+  dashboards ཚུ་ JSON གི་དངུལ་ཕོགས་ཚུ་ལངམ་སྦེ་ཡོད་པའི་སྐབས་ལུ་ཨིན།
+- `POST /v1/repo/agreements/query` གིས་ གཞི་བཀོད་འབད་ཡོད་པའི་འདྲི་དཔྱད་ཡིག་ཤུབས་ (pagination, དབྱེ་སེལ་འབད་ དབྱེ་སེལ་འབད།
+  `FilterExpr`, `fetch_size`) དེ་འབདཝ་ལས་ མར་འབབ་ཀྱི་ཞབས་ཏོག་ཚུ་ ལེཌ་ཇར་གྱི་ཐོག་ལས་ ཤོག་ལེབ་བཟོ་ཚུགས།
+- ཇ་བ་ཨིསི་ཀིརིཔཊི་ཨེསི་ཌི་ཀེ་གིས་ ད་ལྟོ་ `listRepoAgreements` དང་ `queryRepoAgreements`, དེ་ལས་ བསྐྱར་ལོག་འབད་མི་ཚུ་ཨིན།
+  གྲོགས་རམ་པ་ཚུ་ དེ་འབདཝ་ལས་ བརྡ་འཚོལ་/Node.js ལག་ཆས་འདི་གིས་ Rust/Python དང་འདྲ་བའི་ཡིག་དཔར་ཅན་གྱི་ DTO ཚུ་ཐོབ་ཨིན།
 
-### 2.4 Configuration defaults
+### 2.4 རིམ་སྒྲིག་སྔོན་སྒྲིག་ཚུ།
 
-Nodes read `[settlement.repo]` into
-`iroha_config::parameters::actual::Repo` during start-up; any repo instruction
-that leaves a parameter at zero is normalised against those defaults before it
-is recorded on-chain.【crates/iroha_core/src/smartcontracts/isi/repo.rs:40】 This
-lets governance raise (or lower) baseline policy without touching every SDK
-call-site, provided the policy change is fully documented.
+ནོ་ཌིསི་ ལུ་ `[settlement.repo]` ལྷག།
+འགོ་བཙུགས་པའི་སྐབས་ Norito དང་། གང་རུང་རེ་པོ་བསླབ་སྟོན།
+དེ་གིས་ ཀླད་ཀོར་ལུ་ ཚད་བཟུང་ཅིག་ དེ་གི་ཧེ་མ་ སྔོན་སྒྲིག་དེ་ཚུ་ལུ་ སྤྱིར་བཏང་སྦེ་བཞགཔ་ཨིན།
+is regare on-chain.【ཀ་རེ་ཊི་/ཨི་རོ་ཧ་_ཀོར་/ཨེསི་ཨར་སི/སི་མཱརཊ་གན་ཡིག་/isi/repo.s:40】 འདི་
+གཞུང་སྐྱོང་ (ཡང་ན་ དམའ་བ) གཞི་རྟེན་སྲིད་བྱུས།
+tak-site, སྲིད་བྱུས་བསྒྱུར་བཅོས་འདི་ ཆ་ཚང་སྦེ་ ཡིག་ཐོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
 
-- `default_haircut_bps` – fallback haircut when `RepoGovernance::haircut_bps()`
-  equals zero. The runtime clamps it to the hard 10 000 bps ceiling to keep
-  configs sane.【crates/iroha_core/src/smartcontracts/isi/repo.rs:44】
-- `margin_frequency_secs` – cadence for `RepoMarginCallIsi`. Zeroed requests
-  inherit this value, so shortening the cadence forces desks to margin more
-  frequently by default.【crates/iroha_core/src/smartcontracts/isi/repo.rs:49】
-- `eligible_collateral` – optional allow-list of `AssetDefinitionId`s. When the
-  list is non-empty `RepoIsi` rejects any pledge outside the set, preventing
-  accidental onboarding of unvetted bonds.【crates/iroha_core/src/smartcontracts/isi/repo.rs:57】
-- `collateral_substitution_matrix` – map of original collateral →
-  permitted substitutes. `ReverseRepoIsi` only accepts a substitution when the
-  matrix contains the recorded definition as a key and the replacement in its
-  value array; otherwise the unwind fails, proving that governance approved the
-  ladder.【crates/iroha_core/src/smartcontracts/isi/repo.rs:74】
+- `default_haircut_bps` – `RepoGovernance::haircut_bps()` སྐབས་སུ་ མེ་ཏོག་གི་སྐྲ་གཅོད།
+  ཀླད་ཀོར་མཉམ་པ། རན་ཊའིམ་འདི་ 10000bps གི་ཐོག་ཁར་བཞག་ནིའི་དོན་ལུ་ ཧརཌི་འབདཝ་ཨིན།
+  configs sane.【ཀ་རེཊས/ཨི་རོ་ཧ་_ཀོར།/src/smartclants/isi/repo.s:44】
+- `margin_frequency_secs` – `RepoMarginCallIsi` གི་དོན་ལུ་ ཚད་གཞི། པི་རོ་ཨེཌི་གི་ཞུ་བ་ཚུ་ཚུ།
+  གནས་གོང་འདི་ ཤུལ་འཛིན་འབད་ནི་ཨིནམ་ལས་ ལྡོག་ཕྱོགས་ཀྱི་ ཤུགས་ཚད་ཚུ་ མཐོ་ཚད་ལུ་ མར་ཕབ་འབདཝ་ཨིན།
+  མང་ཆེ་བ་སྔོན་སྒྲིག་གིས་.【ཀརེ་ཊི་/ཨི་རོ་ཧ་_ཀོར་/ཨེསི་ཨར་སི/རིག་པ་ཅན་གྱི་གན་རྒྱ་/isi/repo.rs:49】 བར།
+- `eligible_collateral` – གདམ་ཁའི་ཆོག་ཐམ་ཐོ་ཡིག་ `AssetDefinitionId`s. སྐབས།
+  ཐོ་ཡིག་འདི་ སྟོངམ་མེན་པ་ `RepoIsi` གིས་ ཆ་ཚན་གྱི་ཕྱི་ཁར་ ཁས་བླངས་གང་རུང་ཅིག་ ངོས་ལེན་འབདཝ་ཨིནམ་དང་ སྔོན་འགོག་འབདཝ་ཨིན།
+  བརྡབ་ལྷུང་མེད་པའི་བུན་གཡར་གྱི་རྐྱེན་པ།【crates/iroha_core/src/smart གན་རྒྱ་/isi/repo.s:57】
+- `collateral_substitution_matrix` – བརྟན་བཞུགས་ངོ་མ་གི་སབ་ཁྲ་ →
+  ཆོག་མཆན་ཚབ་ ་ ིས། `ReverseRepoIsi` གིས་ ཚབ་མ་ཅིག་ ཆ་འཇོག་འབདཝ་ཨིན།
+  matrix ནང་ སྒྲ་བཟུང་འབད་ཡོད་པའི་ངེས་ཚིག་འདི་ ལྡེ་མིག་སྦེ་ཡོདཔ་ད་ དེ་ནང་ལུ་ ཚབ་མ་སྦེ་ཡོདཔ་ཨིན།
+  གནས་གོང་ཨེ་རེ་; དེ་མིན་ན་ གཞུང་སྐྱོང་གིས་ ཆ་འཇོག་འབད་མི་དེ་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན།
+  ལྡེབ།【ཀརེ་ཊི་/ཨི་རོ་ཧ་_ཀོར།/src/smart གན་ཡིག་/isi/repo.s:74】།
 
-These knobs live under `[settlement.repo]` in the node configuration and are
-parsed via `iroha_config::parameters::user::Repo`, so they should be captured in
-every governance evidence bundle.【crates/iroha_config/src/parameters/user.rs:3956】
+མཐུད་མཚམས་རིམ་སྒྲིག་ནང་ `[settlement.repo]` གི་འོག་ལུ་ མཐུད་མཚམས་འདི་ཚུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+`iroha_config::parameters::user::Repo` བརྒྱུད་དེ་ དབྱེ་དཔྱད་འབད་ཡོདཔ་ལས་ དེ་ཚུ་ནང་ བཟུང་དགོཔ་ཨིན།
+གཞུང་སྐྱོང་རེ་རེ་བཞིན་གྱི་སྒྲུབ་བྱེད་བསྡམས་པ།【ཀྲ་རེཊསི།/ཨི་རོ་ཧ་_ཀོན་སི།/src/parameters/user.rs:3956】
 
 ```toml
 [settlement.repo]
@@ -195,36 +192,34 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
 "bond#wonderland" = ["note#wonderland", "bill#wonderland"]
 ```
 
-**Change-management checklist**
-
-1. Stage the proposed TOML snippet (including substitution matrix deltas), hash
-   it with SHA-256, and attach both the snippet and hash to the governance
-   ticket so reviewers can reproduce the bytes verbatim.
-2. Reference the snippet inside the proposal/referendum (for example via the
-   `--notes` field on the governance CLI) and collect the required approvals
-   for F1. Keep the signed approval packet with the snippet attached.
-3. Roll the change across the fleet: update `[settlement.repo]`, restart each
-   node, then capture a `GET /v1/configuration` snapshot (or
-   `ToriiClient.getConfiguration`) proving the applied values per peer.
-4. Re-run `integration_tests/tests/repo.rs` plus
-   `repo_deterministic_lifecycle_proof_matches_fixture` and store the logs next
-   to the config diff so auditors can see that the new defaults preserve
+**འཛིན་སྐྱོང་-འཛིན་སྐྱོང་ཞིབ་དཔྱད་ཐོ་ཡིག་**1. གྲོས་འཆར་ཕུལ་བའི་TOML snippet (ཚབ་བཙུགས་ནིའི་མེ་ཊིགསི་ཌེལ་ཊ་ཚུ་རྩིས་ཏེ་) ཧེཤ་།
+   དེ་ SHA-256 དང་ གཞུང་སྐྱོང་ལུ་ སྦྱར་རྫས་དང་ ཧ་ཤི་གཉིས་ཆ་ར་ མཉམ་སྦྲགས་འབད་དགོ།
+   དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ བཱའིཊི་ཚུ་ ཚིག་ཕྲེང་འདི་ བསྐྱར་བཟོ་འབད་ཚུགས།
+2. གྲོས་འཆར་/རྒྱབ་རྟེན་གྱི་ནང་དུ་ པར་ལེན་གཞི་བསྟུན་འབད་ནི།(དཔེར་ན་ ༡ བརྒྱུད་དེ་
+   `--notes` གཞུང་སྐྱོང་ CLI ཐོག་ནས་ དགོས་མཁོའི་ཆ་འཇོག་བསྡུ་ལེན་བྱེད་པ།
+   F1 གི་དོན་ལུ་ཨིན། མིང་རྟགས་བཀོད་པའི་ཆ་འཇོག་ཐུམ་སྒྲིལ་འདི་ ཤོག་ལེབ་མཉམ་སྦྲགས་འབད་དེ་བཞག།
+3. གྲུ་གཟིངས་བརྒྱུད་དེ་བསྒྱུར་བཅོས་འདི་བསྐོར་ཏེ་: དུས་མཐུན་ `[settlement.repo]` རེ་རེ་བཞིན་ལོག་འགོ་བཙུགས།
+   node དེ་ལས་ `GET /v1/configuration`shost ཅིག་བཟུང་ (ཡང་ན་ ཡང་ན་)
+   `ToriiClient.getConfiguration`) མཉམ་རོགས་རེ་ལུ་ འཇུག་སྤྱོད་འབད་ཡོད་པའི་གནས་གོང་ཚུ་ བདེན་ཁུངས་བཀལ།
+4. བསྐྱར་དུ་`integration_tests/tests/repo.rs` དང་།
+   `repo_deterministic_lifecycle_proof_matches_fixture` དང་ དྲན་ཐོ་ཚུ་ ཤུལ་ལས་ གསོག་འཇོག་འབད།
+   རྩིས་ཞིབ་པ་ཚུ་གིས་ སྔོན་སྒྲིག་གསརཔ་ཚུ་གིས་ ཉམས་སྲུང་འབད་ཚུགསཔ་སྦེ་ རིམ་སྒྲིག་འབད་ཐངས་ལུ་
    determinism.
 
-Without a matrix entry the runtime rejects substitutions that change the asset
-definition, even if the general `eligible_collateral` list permits it; commit
-config snapshots alongside repo evidence so auditors can reproduce the exact
-policy enforced when a repo was booked.
+མེ་ཊིགསི་ཐོ་བཀོད་མེད་པར་ རན་ཊའིམ་གྱིས་ རྒྱུ་དངོས་བསྒྱུར་བཅོས་འབད་མི་ ཚབ་མ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+ངེས་ཚིག་འདི་ སྤྱིར་བཏང་ `eligible_collateral` ཐོ་ཡིག་གིས་ གནང་བ་བྱིན་དོ་ཡོདཔ་ཨིན། ངན་ལཱ་འབད་ནི་
+རྩིས་ཞིབ་པ་ཚུ་གིས་ གཏན་གཏན་སྦེ་ བསྐྱར་བཟོ་འབད་ཚུགས།
+repo བཀོད་སྒྲིག་འབད་བའི་སྐབས་ སྲིད་བྱུས་བསྟར་སྤྱོད་འབད་ཡོདཔ།
 
-### 2.5 Configuration evidence & drift detection
+### 2.5 རིམ་སྒྲིག་སྒྲུབ་བྱེད་དང་ ཌིཕཊ་བརྟག་དཔྱད།
 
-The Norito/`iroha_config` plumbing now exposes the resolved repo policy under
-`iroha_config::parameters::actual::Repo`, so governance packets must prove the
-applied values per peer—not just the proposed TOML. Capture the resolved
-configuration and its digest after every rollout:
+ད་ལྟ་ Norito/`iroha_config` ད་ལྟ་ཐག་གཅོད་བྱས་པའི་ repo སྲིད་བྱུས་འདི་ 1 11.
+`iroha_config::parameters::actual::Repo`, དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ཚུ་གིས་ བདེན་ཁུངས་བཀལ་དགོ།
+བཀོལ་སྤྱོད་འབད་མི་གནས་གོང་ཚུ་ མཉམ་རོགས་—གྲོས་འཆར་གྱི་ TOML རྐྱངམ་ཅིག་མེན། བཅོ་ཁ་རྐྱབ་ཡོད་མི་བཞེངས།
+རིམ་སྒྲིག་དང་ དེ་གི་ འཇུབ་བཤད་རེ་རེ་གི་ཤུལ་ལས་ འཇུ་ནི།
 
-1. Fetch the configuration from each peer (`GET /v1/configuration` or
-   `ToriiClient.getConfiguration`) and isolate the repo stanza:
+1. པི་ཡར་རེ་རེ་ལས་ རིམ་སྒྲིག་འདི་ལེན་ (`GET /v1/configuration` ཡང་ན།
+   `ToriiClient.getConfiguration`) དང་ repo stanza:
 
    ```bash
    curl -s http://<torii-host>/v1/configuration \
@@ -232,115 +227,111 @@ configuration and its digest after every rollout:
      > artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
 
-2. Hash the canonical JSON and record it in the evidence manifest. When the
-   fleet is healthy the hash should match across peers because `actual`
-   combines defaults with the staged `[settlement.repo]` snippet:
+༢ ཁྲིམས་ལུགས་ཀྱི་JSON འདི་ Hash དང་ སྒྲུབ་བྱེད་མངོན་གསལ་ནང་ ཐོ་བཀོད་འབད། སྐབས།
+   feleet འདི་ གསོ་བའི་འཕྲོད་བསྟེན་ལུ་ ཕན་ཐོགས་ཡོདཔ་ད་ དེ་ཡང་ མཉམ་རོགས་ཀྱིས་ མཉམ་རོགས་ཀྱིས་ མཐུན་སྒྲིག་འབད་དགོཔ་ཨིན་ ག་ཅི་འབད་ཟེར་བ་ཅིན་ `actual` ཨིན།
+   སྔོན་སྒྲིག་ཚུ་ གོ་རིམ་ `[settlement.repo]` གི་ པར་ཆས་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་འབདཝ་ཨིན།
 
    ```bash
    shasum -a 256 artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
 
-3. Attach the JSON + hash to the governance packet and mirror the entry in the
-   manifest uploaded to the governance DAG. If any peer reports a divergent
-   digest, halt the rollout and reconcile the config/state drift before
-   proceeding.
+༣ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་དང་ ཐོ་བཀོད་ནང་ JSON + hash འདི་ མཉམ་སྦྲགས་འབད།
+   གཞུང་སྐྱོང་ DAG ལུ་ གསལ་སྟོན་འབད་ཡོདཔ། མཉམ་རོགས་གང་རུང་གིས་ ཁྱད་པར་སྙན་ཞུ་འབད་བ་ཅིན།
+   ཌའི་ཇེསཊ་ བསྐོར་འཁོར་འདི་བཀག་ཞིནམ་ལས་ རིམ་སྒྲིག་/གནས་སྟངས་ཀྱི་ ཌིརཕཊ་འདི་གི་ཧེ་མ་ མཐུན་སྒྲིག་འབད།
+   གོ་རིམ་ .
 
-### 2.6 Governance approvals & evidence pack
+### 2.6 གཞུང་སྐྱོང་གི་ཆ་འཇོག་དང་སྒྲུབ་བྱེད་ཆ་རྐྱེན།
 
-Roadmap F1 closes only when repo desks feed a deterministic packet into the
-governance DAG, so every change (new haircut, custodian policy, or collateral
-matrix) must ship the same artefacts before a vote is scheduled.【docs/source/governance_playbook.md:1】
+རོ་ཌི་མེཔ་ཨེཕ་༡ རི་པོ་ཌི་ཀསི་གིས་ གཏན་འབེབས་སྦུང་ཚན་ཅིག་ ༡ ༡ ༡ ༡ ༡ ༡ ༡ ༡ ༡ ༡ ༡ ༡ ༡ ལུ་བྱིན་པའི་སྐབས་ རི་པོ་ཌི་སིཀ་ཁ་བསྡམས།
+གཞུང་སྐྱོང་ DAG དེ་ལྟར་འགྱུར་བ་ཚང་མ་ (སྐྲ་བཏོན, བདག་འཛིན་སྲིད་བྱུས་གསརཔ་, ཡང་ན་ བརྟན་བཞུགས་གསརཔ་,
+matrix) ཚོགས་རྒྱན་ལས་རིམ་མ་བཀོད་པའི་ཧེ་མར་ ཅ་ཆས་དེ་བཟུམ་ཚུ་ བཏང་དགོ།
 
-**Intake packet**
+**སྦུང་ཚན་** ལེན་དགོ།1. **ཊེག་ཀིང་ཊེམ་པེལེཊི་** –འདྲ་བཤུས།
+   `docs/examples/finance/repo_governance_packet_template.md` ཁྱོད་ཀྱི་སྒྲུབ་བྱེད་ནང་།
+   སྣོད་ཐོ་ (དཔེར་ན་ སྣོད་ཐོ།
+   `artifacts/finance/repo/<agreement-id>/packet.md`) དེ་ལས་ མེ་ཊ་ཌེ་ཊ་འདི་བཀང་དགོ།
+   ཁྱོད་ཀྱིས་ ཧ་ཤིང་ཅ་ཆས་ཚུ་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ སྡེབ་ཚན་འབད། ཊེམ་པེལེཊི་འདི་གིས་ གཞུང་སྐྱོང་འདི་བཞགཔ་ཨིན།
+   ཚོགས་འདུའི་ལམ་ལུགས་ཚུ་ཐོ་བཀོད་འབད་དེ་ SHA-256 བཞུ་བཅུག་སྟེ་ གྲོས་ཆོད་བཏོན་ནི།
+   བསྐྱར་ཞིབ་འབད་མི་གིས་ ས་གནས་གཅིག་ནང་ངོས་ལེན་འབདཝ་ཨིན།
+2. **བཀོད་རྒྱ་སྤྲོད་ལེན་ཚུ་** – གོ་རིམ་འགོ་བཙུགས་ནི་དང་ རླུང་འཚུབ་ དེ་ལས་ མཐའ་མཚམས་འབོད་བརྡ་ཚུ་ཨིན།
+   བཀོད་རྒྱ་ `iroha app repo ... --output` དེ་འདྲ་ཚད་འཛིན་ཆ་འཇོག་བྱེད་པའི་བསྐྱར་ཞིབ།
+   བཱའིཊི་ འདྲ་མཚུངས་ཀྱི་ འབབ་ཚད། ཡིག་སྣོད་རེ་རེ་རེ་རེ་ ཧེ་ཤི་འབད་ཞིནམ་ལས་ འོག་ལུ་གསོག་འཇོག་འབད།
+   `artifacts/finance/repo/<agreement-id>/` འདྲེན་བྱེད་ཀྱི་སྒྲུབ་བྱེད་བསྡོམ་གྱི་ཉེ་འདབས་ལུ་ཡོདཔ་ཨིན།
+   འདིའི་ནང་དུ་གཞན་དུ་གནས་སྟངས།【ཀྲེ་ཊིས་/ཨི་རོ་ཧ_ཀླི་/src/main.s:3821】
+3. **རིམ་སྒྲིག་ཁྱད་པར་** – `[settlement.repo]` TOML snippet ཏག་ཏག་ཏག་ཏག་འདི་ཚུད་ཡོད།
+   (སྔོན་སྒྲིག་ཚུ་ ཚབ་བཙུགས་ནིའི་ མཐོ་ཚད་) དང་ དེ་གི་ SHA-256 ཚུ་ཨིན། འདི་གིས་ ག་འདི་ བདེན་ཁུངས་བཀལཝ་ཨིན།
+   `iroha_config` མཛུབ་མོ་འདི་ ཚོགས་རྒྱན་གྱི་ ཆ་འཇོག་དང་ མེ་ལོང་ཚུ་ ཚར་གཅིག་ ཤུགས་ལྡན་སྦེ་ འགྱོ་འོང་།
+   འཛུལ་ཞུགས་དུས་ཚོད་ལུ་ རི་པོ་བཀོད་རྒྱ་ཚུ་ སྤྱིར་བཏང་སྦེ་བཟོ་མི་ རན་ཊའིམ་ས་སྒོ་ཚུ།
+4. **Determistic tests** – གསར་ཤོས་འདི་མཉམ་སྦྲགས།
+   `integration_tests/tests/repo.rs` དྲན་ཐོ་དང་ཨའུཊི་པུཊི་འདི་ལས་
+   `repo_deterministic_lifecycle_proof_matches_fixture` དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་པ་ཚུ་གིས་ བལྟ།
+   【གཅིག་བསྡོམས་_བརྟག་དཔྱད་/བརྟག་དཔྱད་/བརྟག་དཔྱད་/repo.rs:】 ཨི་རོ་ཧ་_ཀོར་/སི་ཨར་སི་/ཨེསི་མཱརཊ་ གན་ཡིག་/རེ་པོ་སི/རི་པོ་རས:༡༤༥༠;
+༥. **ལས་རིམ་/བརྒྱུད་འཕྲིན་པར་ཆས་** – འཕྲལ་གྱི་`AccountEvent::Repo(*)` ཕྱིར་འདྲེན་འབད།
+   འདྲེན་བྱེད་ཚུ་གི་དོན་ལུ་ ཁྱབ་ཁོངས།
+   ཉེན་ཁའི་དབྱེ་ཞིབ་འབད་ནི། (དཔེར་ན་ མཐའ་མཚམས་ཀྱི་དབང་བསྒྱུར་)། འདི་གིས་ རྩིས་ཞིབ་པ་ཚུ་ལུ་ དེ་སྦེ་རང་བྱིནམ་ཨིན།
+   tamper མངོན་གསལ་ཅན་གྱི་དྲན་ཐོ་ ཁོང་གིས་ ཤུལ་ལས་ Torii ལས་ བསྐྱར་བཟོ་འབད་འོང་།
 
-1. **Tracking template** – copy
-   `docs/examples/finance/repo_governance_packet_template.md` into your evidence
-   directory (for example
-   `artifacts/finance/repo/<agreement-id>/packet.md`) and fill the metadata
-   block before you start hashing artefacts. The template keeps the governance
-   council’s cadence deterministic by listing file paths, SHA-256 digests, and
-   reviewer acknowledgements in one place.
-2. **Instruction payloads** – stage the initiation, unwind, and margin-call
-   instructions with `iroha app repo ... --output` so dual-control approvers review
-   byte-identical payloads. Hash each file and store it under
-   `artifacts/finance/repo/<agreement-id>/` next to the desk’s evidence bundle
-   referenced elsewhere in this note.【crates/iroha_cli/src/main.rs:3821】
-3. **Configuration diff** – include the exact `[settlement.repo]` TOML snippet
-   (defaults plus substitution matrix) and its SHA-256. This proves which
-   `iroha_config` knobs will be active once the vote passes and mirrors the
-   runtime fields that normalise repo instructions at admission time.【crates/iroha_config/src/parameters/user.rs:3956】
-4. **Deterministic tests** – attach the latest
-   `integration_tests/tests/repo.rs` log and the output from
-   `repo_deterministic_lifecycle_proof_matches_fixture` so reviewers see the
-   lifecycle proof hash that corresponds to the staged instructions.【integration_tests/tests/repo.rs:1】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1450】
-5. **Event/telemetry snapshot** – export the recent `AccountEvent::Repo(*)`
-   stream for the desks in scope plus any dashboards/metrics the council needs
-   to judge risk (for example, margin drift). This gives auditors the same
-   tamper-evident log they would reconstruct from Torii later.【crates/iroha_data_model/src/events/data/events.rs:742】
+**ཆ་འཇོག་དང་ནང་བསྐྱོད་**
 
-**Approval & logging**
+- གཞུང་སྐྱོང་གི་ཤོག་འཛིན་ཡང་ན་ འོས་འདེམས་ནང་ལུ་ ཅ་རྙིང་ཚུ་ གཞི་བསྟུན་འབད་ནི།
+  ཚོགས་སྡེ་གིས་ ཚད་ལྡན་གྱི་མཛད་སྒོ་འདི་ བརྩི་སྲུང་འབད་ཚུགས།
+  གཞུང་སྐྱོང་རྩེད་དེབ་ནང་ལུ་ ad-hoc ལམ་ཚུ་ བདའ་མ་ཟུན་པར་ བཀོད་ཡོདཔ་ཨིན།
+- ཚད་འཛིན་གཉིས་ལྡན་མིང་རྟགས་བཀོད་མི་གཉིས་ གནས་རིམ་བཀོད་ཡོད་པའི་བཀོད་རྒྱ་ཡིག་སྣོད་ཚུ་བསྐྱར་ཞིབ་འབད་མི་ མཐོ་ཚད།
+  ཁོང་གི་ངོས་ལེན་ཚུ་ ཧ་ཤེ་ཚུ་གི་སྦོ་ལོགས་ཁར་ གསོག་འཇོག་འབད། འདི་ རིམ་ཐེངས་ཀྱི་ བདེན་དཔང་འདི་ཨིན།
+  the repo desks
+  བཅའ་མར་གཏོགས་མི་རྐྱངམ་ཅིག་གིས་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+- ཚོགས་སྡེ་གིས་ གཞུང་སྐྱོང་ཆ་འཇོག་དྲན་ཐོ་ (GAR) གསར་བཏོན་འབད་བའི་སྐབས།
+  སྒྲུབ་བྱེད་སྣོད་ཐོ་ནང་ན་ མཚན་རྟགས་བཀོད་ཡོདཔ་ལས་ མ་འོངས་པའི་ཚབ་ཚུ་ཨིན་ན།
+  སྐྲ་གཅོད་པའི་དུས་མཐུན་ཚུ་གིས་ ཐག་གཅོད་ཐུམ་སྒྲིལ་འདི་ ལོག་སྤྲོད་ནིའི་ཚབ་ལུ་ བཀོད་ཚུགས།
+  རིགས་དབྱེ།
 
-- Reference the artefact hashes inside the governance ticket or referendum and
-  link to the staged packet so the council can follow the standard ceremony
-  outlined in the governance playbook without chasing ad-hoc paths.【docs/source/governance_playbook.md:8】
-- Capture which dual-control signers reviewed the staged instruction files and
-  store their acknowledgements next to the hashes; this is the on-chain proof
-  that repo desks satisfied the “two-person rule” even though the runtime also
-  enforces participant-only execution.
-- When the council publishes the Governance Approval Record (GAR), mirror the
-  signed minutes inside the evidence directory so future substitutions or
-  haircut updates can cite the exact decision packet instead of restating the
-  rationale.
+**post-ཆ་འཇོག་འབད་ཐངས་ཚུ་**།1. ཆ་འཇོག་འབད་ཡོད་མི་ `[settlement.repo]` རིམ་སྒྲིག་འདི་འཇུག་སྤྱོད་འབད་ཞིནམ་ལས་ མཐུད་མཚམས་རེ་རེ་བཞིན་ལོག་སྟེ་འགོ་བཙུགས།
+   ཁྱོད་ཀྱི་རང་བཞིན་བརྒྱུད་དེ་)། དེ་འཕྲལ་ལས་ `GET /v1/configuration` དང་ཡིག་མཛོད་ལུ་འབོད་བཀུག་འབད།
+   འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༠ རིག་པ།(༡) འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ཀྱིས་ འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ལུ་ བརྡ་དོན་འཕྲུལ་རིག་དང་འབྲེལ་བའི་ ལས་རིམ་ཚུ་ འགོ་འདྲེན་འཐབ་སྟེ་ཡོདཔ་ཨིན།
+   འགྱུར་བ།【ཀརེ་ཊི།/ཨི་རོ་ཧ་ཊོ་རི།/src/libs:3225】
+༢ གཏན་འབེབས་རི་པོ་བརྟག་དཔྱད་ཚུ་ལོག་སྟེ་གཡོག་བཀོལ་ཞིནམ་ལས་ དྲན་ཐོ་གསརཔ་དང་ བཟོ་བསྐྲུན་ཚུ་ མཉམ་སྦྲགས་འབད།
+   མེ་ཊ་ཌེ་ཊ་ (git away, ལག་ཆས་གློག་) དེ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ གཞིས་ཆགས་འདི་ ལོག་བཟོ་ཚུགས།
+   འགོ་བཙུགས་པའི་ཤུལ་ལས་བདེན་དཔང་།
+༣ གཞུང་སྐྱོང་རྗེས་འདེད་འདི་ སྒྲུབ་བྱེད་གཏན་མཛོད་ཀྱི་ལམ་དང་ ཧ་ཤེ་སི་ དང་།
+   བལྟ་རྟོག་པ་འབྲེལ་བ་འཐབ་སྟེ་ ཤུལ་ལས་ repo ཡིག་ཆ་ཚུ་གིས་ དེ་གི་ཚབ་ལུ་ བྱ་རིམ་གཅིགཔོ་འདི་ ཤུལ་འཛིན་འབད་ཚུགས།
+   ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ ལོག་བཏོན་དོ།
 
-**Post-approval rollouts**
+**གཞུང་སྐྱོང་ DAG དཔར་བསྐྲུན་ (དགོས་མཁོ་)**
 
-1. Apply the approved `[settlement.repo]` config and restart each node (or roll
-   it via your automation). Immediately call `GET /v1/configuration` and archive
-   the response per node so the governance bundle shows which peers accepted the
-   change.【crates/iroha_torii/src/lib.rs:3225】
-2. Re-run the deterministic repo tests and attach the fresh logs plus build
-   metadata (git commit, toolchain) so auditors can reproduce the settlement
-   proof after the rollout.
-3. Update the governance tracker with the evidence archive path, hashes, and
-   observer contact so later repo desks can inherit the same process instead of
-   re-deriving the checklist.
-
-**Governance DAG publication (required)**
-
-1. Tar the evidence directory (config snippet, instruction payloads, proof logs,
-   GAR/minutes) and hand it to the governance DAG pipeline as a
-   `GovernancePayloadKind::PolicyUpdate` payload with annotations for
-   `agreement_id`, `iso_week`, and the proposed haircut/margin values; the
-   pipeline spec and CLI surfaces live in
+༡ སྒྲུབ་བྱེད་སྣོད་ཐོ་ (རིམ་སྒྲིག་འབད་ནི། བཀོད་རྒྱའི་གླ་ཆ་ བདེན་དཔང་དྲན་ཐོ་, ཚུ་ རིམ་སྒྲིག་འབད།
+   GAR/minutes) དང་ གཞུང་སྐྱོང་ DAG ཆུ་མཛོད་ལུ་ སྤྲོད་དགོ།
+   `GovernancePayloadKind::PolicyUpdate` གི་དོན་ལུ་ མཆན་འགྲེལ་དང་བཅས་པའི་ པེ་ལོསི།
+   `agreement_id`, `iso_week`, དང་གྲོས་འཆར་གྱི་སྐྲ་གཅོད་/མཐའ་མཚམས་གནས་གོང་ཚུ། ཚིག༌ཕྲད
+   ནང་དུ་ཆུ་ཚད་དང་CLI ཁ་ཐོག་འཚོ་སྡོད་ཡོད།
    `docs/source/sorafs_governance_dag_plan.md`.
-2. After the publisher updates the IPNS head, record the block CID and head CID
-   in the governance tracker and in the GAR so anyone can fetch the immutable
-   packet later. `sorafs governance dag head` and `sorafs governance dag list`
-   let you confirm the node was pinned before the vote opens.
-3. Store the CAR file or block payload next to the repo evidence archive so
-   auditors can reconcile the on-chain governance decision with the exact
-   off-chain packet that was approved.
+2. དཔར་བསྐྲུན་པ་གིས་ IPNS མགོ་ཡིག་དུས་མཐུན་བཟོ་བའི་ཤུལ་ལས་ སྡེབ་ཚན་སི་ཨའི་ཌི་དང་ སི་ཨའི་ཌི་འདི་ཐོ་བཀོད་འབད།
+   གཞུང་སྐྱོང་རྗེས་འདེད་དང་ GAR ནང་དུ་མི་སུ་ཞིག་གིས་མི་འགྱུར་བར་ལེན་ཐུབ།
+   ཤུལ་ལས་ སྦུང་ཚན་། `sorafs governance dag head` དང་ `sorafs governance dag list`
+   ཚོགས་རྒྱན་ཁ་ཕྱེ་མ་ཚར་བའི་ཧེ་མ་ ཁྱོད་ཀྱིས་ མཐུད་མཚམས་འདི་ བཀལ་ཡོདཔ་སྦེ་ ངེས་གཏན་བཟོ་བཅུག།
+༣ དེ་ལས་ རི་པོ་སྒྲུབ་བྱེད་ཡིག་མཛོད་ཀྱི་ཉེ་འདབས་ལུ་ CAR ཡིག་སྣོད་ཡང་ན་ བཀག་ཆ་སྤྲོད་ལེན་ཚུ་ གསོག་འཇོག་འབད།
+   རྩིས་ཞིབ་པ་ཚུ་གིས་ རིམ་མཐུན་གཞུང་གི་གྲོས་ཐག་འདི་ ཏན་ཏན་དང་གཅིག་ཁར་ མཐུན་སྒྲིག་འབད་ཚུགས།
+   ཆ་འཇོག་འབད་ཡོད་པའི་ རིམ་སྒྲིག་ཐུམ་སྒྲིལ་གྱི་ཨོཕ་-ཨོཕ་ སྦུང་ཚན་།
 
-### 2.7 Lifecycle snapshot refresh
+### 2.7 སྲོག་འཁོར་གྱི་པར་བསྐྲུན།
 
-Whenever repo semantics change (rates, settlement maths, custody logic, or
-default config), refresh the deterministic lifecycle snapshot so governance can
-cite the new digest without reverse engineering the proof harness.
+རིམ་བཞིན་ repo semantics འགྱུར་བ། (ཚད་གཞི་ གཞིས་ཆགས་ཨང་། བདག་འཛིན་གྱི་ཚད་མ་ ཡང་ན་ ཚད་མ་ཡང་ན་ ཡང་ན།
+dequefig)), གིས་ གཏན་འབེབས་ཚེ་བའི་འཁོར་རིམ་གྱི་ བརྡ་རྟགས་འདི་ གསར་བསྐྲུན་འབདཝ་ཨིན།
+བཞུ་བཅོས་གསརཔ་འདི་ རྒྱབ་འགལ་བཟོ་རིག་མེད་པར་ བདེན་ཁུངས་བཀལ་ནིའི་ བརྡ་རྟགས་འདི་ བཀོདཔ་ཨིན།
 
-1. Refresh the fixtures under the pinned toolchain:
+༡ ལག་ཆས་རྒྱུན་རིམ་འོག་ལུ་ བརྟན་བཞུགས་ཚུ་ གསར་བསྐྲུན་འབད།
 
    ```bash
    scripts/regen_repo_proof_fixture.sh --toolchain <toolchain> \
      --bundle-dir artifacts/finance/repo/<agreement>
    ```
 
-   The helper stages outputs in a temp directory, updates the tracked fixtures
+   གྲོགས་རམ་གྱི་གནས་རིམ་འདི་གིས་ ཊེམ་ཊི་སྣོད་ཐོ་ཅིག་ནང་ ཐོན་འབྲས་ཚུ་ བརྟག་ཞིབ་འབད་ཡོད་པའི་སྒྲིག་སྟངས་ཚུ་དུས་མཐུན་བཟོཝ་ཨིན།
    at `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.{json,digest}`,
-   reruns the proof test for verification, and (when `--bundle-dir` is set)
-   drops `repo_proof_snapshot.json` and `repo_proof_digest.txt` into the bundle
-   directory for auditors.
-2. To export artefacts without touching the tracked fixtures (e.g., dry-run
-   evidence), set the env helpers directly:
+   བདེན་དཔྱད་ཀྱི་བདེན་ཁུངས་བརྟག་དཔྱད་འདི་ལོག་འབདཝ་ཨིན་ དེ་ལས་ (`--bundle-dir` གཞི་སྒྲིག་འབད་བའི་སྐབས་)
+   `repo_proof_snapshot.json` དང་ `repo_proof_digest.txt` འདི་ བཱན་ཌལ་ནང་ལུ་བཀོག་བཞགཔ་ཨིན།
+   རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ སྣོད་ཐོ།
+༢ བརྟག་ཞིབ་འབད་ཡོད་པའི་སྒྲིག་བཀོད་ཚུ་ལུ་མ་གཡེང་བར་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ཕྱིར་ཚོང་འཐབ་ནི། (དཔེར་ན་ སྐམ་གཡོག་བཀོལ་ནི།
+   སྒྲུབ་བྱེད་ env གྲོགས་རམ་པ་ཐད་ཀར་གཞི་སྒྲིག་འབད།
 
    ```bash
    REPO_PROOF_SNAPSHOT_OUT=artifacts/finance/repo/<agreement>/repo_proof_snapshot.json \
@@ -349,36 +340,34 @@ cite the new digest without reverse engineering the proof harness.
      -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
    ```
 
-   `REPO_PROOF_SNAPSHOT_OUT` receives the prettified Norito JSON from the proof
-   harness while `REPO_PROOF_DIGEST_OUT` stores the uppercase hex digest (with a
-   trailing newline for convenience). The helper refuses to overwrite files when
-   the parent directory does not exist, so build the `artifacts/...` tree first.
-3. Attach both exported files to the agreement bundle (see §3) and regenerate
-   the manifest via `scripts/repo_evidence_manifest.py` so the governance packet
-   references the refreshed proof artefacts explicitly. The in-repo fixtures
-   remain the source of truth for CI.
+   `REPO_PROOF_SNAPSHOT_OUT` གིས་ བདེན་ཁུངས་ལས་ Norito JSON འདི་ཐོབ་ཨིན།
+   harness དང་ `REPO_PROOF_DIGEST_OUT` གིས་ མཐོ་ཚད་ཧེགསི་ བཞུ་བཅུག་མི་ (with
+   སྟབས་བདེ་བའི་དོན་ལུ་ ཐིག་གསརཔ་ ཕྱི་འགྱུར་འབད་ནི།) གྲོགས་རམ་པ་གིས་ ཡིག་སྣོད་ཚུ་ ག་དེམ་ཅིག་སྦེ་ ཚབ་སྲུང་འབད་ནི་ལུ་ ངོས་ལེན་མི་འབད།
+   ཕ་མའི་སྣོད་ཐོ་འདི་མེདཔ་ལས་ དང་པ་ར་ `artifacts/...` ཤིང་འདི་བཟོ་བསྐྲུན་འབད།
+༣ ཆིངས་ཡིག་བང་རིམ་ལུ་ཕྱིར་འདྲེན་འབད་ཡོད་པའི་ཡིག་སྣོད་གཉིས་ཆ་ར་ ( §༣) དང་ བསྐྱར་བཟོ་འབད་ནི།
+   གསལ་སྟོན་འདི་ `scripts/repo_evidence_manifest.py` དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་འདི་ཨིན།
+   གསར་བསྐྲུན་འབད་ཡོད་པའི་བདེན་ཁུངས་ཅན་གྱི་ཅ་མཛོད་ཚུ་ གསལ་ཏོག་ཏོ་སྦེ་ གཞི་བསྟུན་འབདཝ་ཨིན། ནང་གི་རི་པོ་སྒྲིག་ཆས།
+   CI གི་དོན་ལུ་བདེན་པ་གི་འབྱུང་ཁུངས་ལྷག་ལུས་ཡོདཔ།
 
-### 2.8 Interest accrual & maturity governance
+### 2.8 སྐྱེད་དང་རྒས་ཚད་གཞུང་སྐྱོང་།**གཏན་འབེབས་ཀྱི་སྐྱེད་ཀྱི་ཨང་རྩིས་.** `RepoIsi` དང་ `ReverseRepoIsi` དངུལ་འཛིན་ཐོབ་ཡོད།
+ACT/360 གྲོགས་རམ་འབད་མི་ལས་ རླུང་འཚུབ་ཀྱི་དུས་ཚོད་ལུ་ཡོདཔ་ཨིན།
+`compute_accrued_interest()`【ཚོད་བཀོད/ཨི་རོ་ཧ་_ཀོར།/src/smart གན་ཡིག་/isi/repo.s:100】།
+དང་ `expected_cash_settlement()` ནང་ན་ཡོད་པའི་སྲུང་སྐྱོབ།
+དེ་ཡང་ *གཙོ་བོ་ +སྤྲོ་བ་* 【crates/iroha_core/src/smartclants/isi/repo.rs:132】 ལས་ཉུང་བ།
+གྲོགས་རམ་པ་གིས་ `rate_bps` འདི་ བཅུ་ཚག་བཞི་ལུ་ སྤྱིར་བཏང་བཟོཝ་ཨིན་ དེ་ལས་ དེ་ 111 གིས་ བསྒྱུར་འགྱོཝ་ཨིན།
+`elapsed_ms / (360 * 24h)` བཅུ་ཚག་ས་གནས་༡༨ ལག་ལེན་འཐབ་སྟེ་ མཐའ་མཇུག་ལུ་ སྐོར་ཐེངས་
+དངུལ་གྱི་རྐངམ་གི་ `NumericSpec` གིས་གསལ་བསྒྲགས་འབད་ཡོདཔ་ཨིན། གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་བཞག་ནིའི་དོན་ལུ།
+བསྐྱར་བཟོ་འབད་ཚུགསཔ་, གྲོགས་རམ་པ་ལུ་ལྟོ་བྱིན་མི་གནས་གོང་བཞི་བཟུང་།
 
-**Deterministic interest math.** `RepoIsi` and `ReverseRepoIsi` derive the cash
-owed at unwind time from the ACT/360 helper
-`compute_accrued_interest()`【crates/iroha_core/src/smartcontracts/isi/repo.rs:100】
-and the guard inside `expected_cash_settlement()` that rejects repayment legs
-which return less than *principal + interest*.【crates/iroha_core/src/smartcontracts/isi/repo.rs:132】
-The helper normalises `rate_bps` into a four-decimal fraction, multiplies it by
-`elapsed_ms / (360 * 24h)` using 18 decimal places, and finally rounds to the
-scale declared by the cash leg’s `NumericSpec`. To keep the governance packet
-reproducible, capture the four values that feed the helper:
-
-1. `cash_leg.quantity` (principal),
+1. `cash_leg.quantity` (གཙོ་བོ།)
 2. `rate_bps`,
-3. `initiated_timestamp_ms`, and
-4. the unwind timestamp you intend to use (for planned GL entries this is
-   usually `maturity_timestamp_ms`, but emergency unwinds record the actual
+3. `initiated_timestamp_ms`, དང་།
+༤ ཁྱོད་ཀྱིས་ལག་ལེན་འཐབ་ནི་གི་དམིགས་ཡུལ་མེད་པའི་དུས་ཚོད་མཚོན་རྟགས་འདི་ (འཆར་གཞི་ཇི་ཨེལ་ཐོ་བཀོད་ཚུ་གི་དོན་ལུ་ འདི་ཨིན།
+   སྤྱིར་བཏང་ལུ་ `maturity_timestamp_ms`, འོན་ཀྱང་།
    `ReverseRepoIsi::settlement_timestamp_ms`).
 
-Store the tuple alongside the staged unwind instruction and attach a short proof
-snippet such as:
+ཊུ་པལ་འདི་ གནས་རིམ་ཅན་གྱི་ ཕྱེ་བཀོད་ཀྱི་ མཉམ་དུ་ གསོག་འཇོག་འབད་དེ་ བདེན་ཁུངས་ཐུང་ཀུ་ཅིག་ མཉམ་སྦྲགས་འབད།
+ཐུ་ནིཔ་ཏེ།
 
 ```python
 from decimal import Decimal
@@ -391,158 +380,152 @@ interest = principal * (rate_bps / Decimal(10_000)) * (elapsed_ms / Decimal(ACT_
 expected_cash = principal + interest.quantize(Decimal("0.01"))
 ```
 
-The rounded `expected_cash` must match the `quantity` encoded in the reverse
-repo instruction. Keep the script output (or calculator worksheet) in
-`artifacts/finance/repo/<agreement>/interest.json` so auditors can recompute the
-figure without interpreting your trading spreadsheet. The integration suite
-already enforces the same invariant
-(`repo_roundtrip_transfers_balances_and_clears_agreement`), but ops evidence
-should cite the exact values that will be unwound.【integration_tests/tests/repo.rs:1】
+སྒོར་རིམ་གྱི་ `expected_cash` འདི་ ཕྱི་འགྱུར་ནང་ ཨིན་ཀོ་ཌི་འབད་ཡོད་པའི་ `quantity` དང་མཐུན་དགོ།
+repo བསླབ་བྱ། ཡིག་ཚུགས་ཨའུཊི་པུཊི་(ཡང་ན་རྩིས་འཕྲུལ་ལཱ་ཤོག་)ནང་བཞག།
+`artifacts/finance/repo/<agreement>/interest.json` རྩིས་ཞིབ་པ་ཚུ་གིས་ ལོག་སྟེ་རྩིས་སྟོན་ཚུགས།
+ཁྱོད་རའི་ཚོང་འབྲེལ་གྱི་ཤོག་ཁྲམ་འདི་ དོན་འགྲེལ་མ་འབད་བར་ པར་རིས། མཉམ་བསྡོམ་ཚང་མ།
+འདྲ་མཚུངས་མི་འདྲ་བ་དེ་འདྲ་བཀོད།
+(`repo_roundtrip_transfers_balances_and_clears_agreement`) ཡིན་ནའང་ Ops སྒྲུབ་བྱེད་
+བེ་ལུ་མ་བཏོན་པའི་ གནས་གོང་ཚུ་ ངེས་བདེན་སྦེ་ བཀོད་དགོ།
 
-**Margin & accrual cadence.** Every agreement exposes the cadence helpers
-`RepoAgreement::next_margin_check_after()` and the cached
-`last_margin_check_timestamp_ms`, enabling desks to prove that margin sweeps
-were scheduled according to policy even before they submit a `RepoMarginCallIsi`
-transaction.【crates/iroha_data_model/src/repo.rs:113】【crates/iroha_core/src/smartcontracts/isi/repo.rs:557】
-Each margin call must include three artefacts in the evidence bundle:
+**མཐོ་ཚད་དང་ བསྡུ་སྒྲིག་ཚད་གཞི་** གན་ཡིག་རེ་རེ་གིས་ ཚད་གཞིའི་གྲོགས་རམ་པ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+`RepoAgreement::next_margin_check_after()` དང་འདྲ་མཛོད་འདི།
+`last_margin_check_timestamp_ms`, མཐའ་མཚམས་འདི་ ཕྱགས་བདར་བརྐྱབ་ཚུགས་པའི་ འདྲེན་བྱེད་ཚུ་ ལྕོགས་ཅན་བཟོཝ་ཨིན།
+འདི་ཡང་ སྲིད་བྱུས་དང་འཁྲིལ་ཏེ་ སྲིད་བྱུས་དང་འཁྲིལ་ཏེ་ `RepoMarginCallIsi` མ་བཙུགས་པའི་ཧེ་མ་ལས་ འགོ་འདྲེན་འཐབ་ཡོདཔ་ཨིན།
+ཚོང་འབྲེལ།【ཀར/ཨི་རོ་ཧ་_གནས་སྡུད་_མོ་ཌེལ/སི་ཨར་སི/རེཔོ.སི:༡༡༣】ཨི་རོ་ཧ་_ཀོར་/སི་ཨར་སི/སི་མརཊ་ཁ་འབག་/རེ་པོ་.༥༥༧】
+མཐའ་མཚམས་འབོད་བརྡ་རེ་རེ་ནང་ སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ནང་ ཅ་ཆས་གསུམ་ཚུད་དགོཔ་ཨིན།
 
-1. `repo margin-call --agreement <id>` JSON output (or the equivalent SDK
-   payload), which records the agreement id, the block timestamp used for the
-   check, and the authority that triggered it.【crates/iroha_cli/src/main.rs:3821】
-2. A snapshot of the agreement (`repo query get --agreement-id <id>`) taken
-   immediately before the call so reviewers can confirm the cadence was due
-   (compare `current_timestamp_ms` with `next_margin_check_after()`).
-3. The `AccountEvent::Repo::MarginCalled` SSE/NDJSON feed emitted to each role
-   (initiator, counterparty, and optionally custodian) because the runtime
-   duplicates the event for every participant.【crates/iroha_data_model/src/events/data/events.rs:742】
+1. `repo margin-call --agreement <id>` ཇེ་ཨེསི་ཨོ་ཨའུཊི་ཨའུཊི་པུཊི་ (ཡང་ན་ འདྲ་མཉམ་ཨེསི་ཌི་ཀེ་
+   གན་ཡིག་ཨའི་ཌི་ གིས་ བཀག་ཆ་འབད་བའི་དུས་ཚོད་ཀྱི་རྟགས་བཀོད་འདི་ ག་དེ་འབད་ཐོ་བཀོད་འབདཝ་ཨིན།
+   བརྟག་དཔྱད་, དང་དེ་བྱུང་བའི་དབང་ཆ།【crates/iroha_cli/src/main.s:3821】
+2. གན་ཡིག་གི་པར་བཤུས་ (`repo query get --agreement-id <id>`) .
+   ཁ་པར་མ་གཏང་པའི་ཧེ་མ་ དེ་འཕྲོ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ གདངས་གདངས་འདི་ དུས་ཚོད་ཁར་ ཡོདཔ་ངེས་གཏན་བཟོ་ཚུགས།
+   (`current_timestamp_ms` དང་མཉམ་དུ་ `next_margin_check_after()`).
+3. `AccountEvent::Repo::MarginCalled` SSE/NDJSON ལས་འགན་རེ་རེ་ལུ་བཏོན་ཡོདཔ།
+   (འགོ་བཙུགས་མི་ དང་ ཕྱོགས་ཕྱོགས་ དེ་ལས་ གདམ་ཁ་ཅན་སྦེ་ བདག་འཛིན་འཐབ་མི) ག་ཅི་འབད་ཟེར་བ་ཅིན་ རན་ཊའིམ་འདི་ཨིན།
+   བཅའ་མར་གཏོགས་མི་རེ་རེ་ལུ་བྱུང་ལས་འདྲ་བཤུས་རྐྱབ།【ཀརེ་ཊི།/iroha_data_model/src/events/data/events.s.742】
 
-CI already exercises these rules via
-`repo_margin_call_enforces_cadence_and_participant_rules`, which rejects calls
-that arrive early or from unauthorised accounts.【integration_tests/tests/repo.rs:395】
-Repeating that provenance in the evidence archive is what closes the roadmap F1
-documentation gap: governance reviewers can see the same timestamps that the
-runtime relied on, together with the deterministic proof hash captured in §2.7
-and the manifest discussed in §3.2.
+CI ཧེ་མ་ལས་རང་ ལམ་ལུགས་འདི་ཚུ་ བརྒྱུད་དེ་ ལག་ལེན་འཐབ་ཨིན།
+`repo_margin_call_enforces_cadence_and_participant_rules`, དེ་གིས་ ཁ་པར་མ་བཀལ།
+དེ་སྔོན་མ་ཡང་ན་ ཆ་འཇོག་མེད་པའི་རྩིས་ཁྲ་ལས་ 【གཅིག་བསྡོམས་_བརྟག་དཔྱད་/བརྟག་དཔྱད་/repo.s:395】།
+སྒྲུབ་བྱེད་གཏན་མཛོད་ནང་ འབྱུང་ཁུངས་འདི་ བསྐྱར་ལོག་འབད་མི་འདི་ ལམ་སྟོན་གྱི་ ས་ཁྲ་ F1 འདི་ སྒོ་བསྡམ་མི་འདི་ཨིན།
+ཡིག་ཆ་གི་བར་སྟོང་: གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ དུས་ཚོད་ཀྱི་རྟགས་མཚན་ཚུ་ མཐོང་ཚུགས།
+runtime འདི་ §2.7 ནང་བཟུང་ཡོད་པའི་ གཏན་འབེབས་བདེན་པའི་ ཧེཤ་ དང་ཅིག་ཁར་ བརྟེན་ཡོདཔ་ཨིན།
+དང་ §3.2 ནང་གྲོས་བསྡུར་བྱས་པའི་མངོན་རྟགས་ནི།
 
-### 2.8 Tri-party custody approvals & monitoring
+### ༢.༨ ཏང་གི་དོ་དམ་ཆ་འཇོག་དང་ལྟ་རྟོག།ལམ་སྟོན་ **F1**
+བདག་འཛིན་པ་ལས་ ཕྱོགས་གཅིག་ལས་ཨིན། རན་ཊའིམ་གྱིས་ བདག་འཛིན་འགྲུལ་ལམ་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+`RepoAgreement::custodian` ལུ་གནས་ཏེ་ འགྲུལ་ལམ་འདི་གིས་ རྒྱུ་དངོས་ཚུ་ ༡༠ ལུ་བཙུགས་ཡོདཔ་ཨིན།
+འགོ་འབྱེད་ཀྱི་སྐབས་ལུ་ བདག་འཛིན་འཐབ་མི་གི་རྩིས་ཁྲ་དང་ ཕྱིར་བཏོན་འབད་ནི་ཚུ་ཨིན།
+`RepoAccountRole::Custodian` མི་ཚེ་འཁོར་རིམ་རེ་རེ་གི་དོན་ལུ་ བྱུང་རིམ་ཚུ་ རྩིས་ཞིབ་པ་ཚུ་གིས་ མཐོང་ཚུགསཔ་ཨིན།
+【ཚོད་བཅོས།/ཨི་རོ་ཧ_གནས་སྡུད་_མོ་ཌེལ/སེརསི/རི་པོ.རས:༧༤】 ཨི་རོ་ཧ_ཀོར་/སི་ཨར་སི/སི་མཱར་ཊི་ གན་ཡིག་/སི/སི/རི་པོ་.༢༥༢【བརྟག་དཔྱད་/བརྟག་དཔྱད་/བརྟག་དཔྱད་/རེ་པོ་.951】
+གོང་དུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ཕྱོགས་གཉིས་ཀྱི་སྒྲུབ་བྱེད་ཚུ་གི་ཁ་སྐོང་ལུ་ ཚོགས་པ་གསུམ་གྱི་རི་པོ་རེ་རེ་གིས་ དགོས།
+གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་འདི་ མཇུག་མ་བསྡུ་བའི་ཧེ་མ་ འོག་ལུ་ཡོད་པའི་ ཅ་ཆས་ཚུ་ བཟུང་དགོ།
 
-Roadmap **F1** also calls out tri-party repos where collateral is parked with a
-custodian rather than the counterparty. The runtime enforces the custodian path
-by persisting `RepoAgreement::custodian`, routing pledged assets into the
-custodian’s account during initiation, and emitting
-`RepoAccountRole::Custodian` events for every lifecycle step so auditors can see
-who held collateral at each timestamp.【crates/iroha_data_model/src/repo.rs:74】【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【integration_tests/tests/repo.rs:951】
-In addition to the bilateral evidence listed above, every tri-party repo must
-capture the artefacts below before the governance packet is considered complete.
+**ཁ་སྐོང་བླངས་དགོས་མཁོ།**
 
-**Additional intake requirements**
-
-1. **Custodian acknowledgement.** Desks must store a signed acknowledgement from
-   each custodian confirming the repo identifier, custody window, routing
-   account, and settlement SLAs. Attach the signed document
+༡. **སྲོལ་སྒྲིག་པ་ངོས་ལེན་ཡོདཔ།** ཌེཀསི་གིས་ མཚན་རྟགས་བཀོད་པའི་ངོས་ལེན་ཅིག་ ལས་ གསོག་འཇོག་འབད་དགོ།
+   བདག་འཛིན་རེ་རེ་བཞིན་ རེ་པོ་ངོས་འཛིན་ བདག་གཉེར་སྒོ་སྒྲིག་ འགྲུལ་ལམ་ཚུ་ ངེས་གཏན་བཟོ་ནི།
+   རྩིས་ཁྲ་, དང་ གཞིས་ཆགས་ SLAs. མཚན་རྟགས་བཀོད་པའི་ཡིག་ཆ་མཉམ་སྦྲགས་འབད།
    (`artifacts/finance/repo/<agreement>/custodian_ack_<custodian>.md`)
-   and reference it in the governance packet so reviewers can see that the
-   third party agreed to the same bytes the initiator/counterparty approved.
-2. **Custody ledger snapshot.** Initiation moves collateral into the custodian
-   account and unwind returns it to the initiator; capture the relevant
-   `FindAssets` output for the custodian before and after each leg so auditors
-   can confirm the balances match the staged instructions.【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1641】
-3. **Event receipts.** Mirror the `RepoAccountEvent` stream for all roles and
-   store the custodian payload alongside the initiator/counterparty records.
-   The runtime emits separate events for each role in
-   `RepoAccountRole::{Initiator,Counterparty,Custodian}`, so attaching the raw
-   SSE feed proves that all three parties saw the same timestamps and
-   settlement amounts.【crates/iroha_data_model/src/events/data/events.rs:742】【integration_tests/tests/repo.rs:1508】
-4. **Custodian readiness checklist.** When the repo references operational
-   shims (for example, escrow reconciliations or standing instructions), record
-   the automation contact and the command used to rehearse the workflow (such
-   as `iroha app repo initiate --custodian ... --dry-run`) so reviewers can reach
-   the custodian operators during drills.
+   དང་དེ་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ནང་ གཞི་བསྟུན་འབད་ཞིནམ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ འདི་མཐོང་ཚུགས།
+   མི་ངོ་གསུམ་པ་འགོ་བཙུགས་མི་འདི་གིས་ འགོ་བཙུགས་མི་/རྒྱབ་ཕྱོགས་ཚོགས་པ་གིས་ ཆ་འཇོག་འབད་མི་ བཱའིཊ་གཅིགཔོ་འདི་ལུ་ ཆ་འཇོག་འབད་ཡོདཔ་ཨིན།
+2. **སྲོལ་སྒྲིག་ལག་དེབ་པར་ལེན་པ།** འགོ་འབྱེད་ཀྱིས་ བདག་འཛིན་ནང་ བརྟན་བཞུགས་འབདཝ་ཨིན།
+   རྩིས་ཁྲ་དང་ ཕྱིར་ལོག་གིས་ འགོ་བཙུགས་མི་ལུ་སླར་ལོག་འབདཝ་ཨིན། འབྲེལ་ཡོད་འདི་བཟུང་།
+   `FindAssets` བདག་འཛིན་གྱི་དོན་ལུ་ རྐངམ་རེ་རེ་གི་ཧེ་མ་དང་ ཤུལ་ལས་ རྩིས་ཞིབ་པ་ཚུ་ དེ་སྦེ་ཨིན།
+   【crates/iroha_core/src/smart གན་རྒྱ་/sii/repo.rs:252】 【ctrats/iroha_core/smartcontclant/isi/repo.rs:1641】 1641】།
+3. **བྱུང་ལས་ཐོབ་ཐང་།** འགན་ཁུར་ཆ་མཉམ་གྱི་དོན་ལུ་ `RepoAccountEvent` རྒྱུན་ལམ་དང་ དང་།
+   འགོ་བཙུགས་མི་/གཞི་རྩའི་དྲན་ཐོ་ཚུ་དང་གཅིག་ཁར་ བདག་འཛིན་པ་ པེ་ལོཌ་འདི་ གསོག་འཇོག་འབད།
+   རན་ཊའིམ་གྱིས་ ༢༠ ནང་ འགན་ཁུར་རེ་རེ་གི་དོན་ལུ་ བྱུང་ལས་སོ་སོ་ཚུ་ བཏོནམ་ཨིན།
+   `RepoAccountRole::{Initiator,Counterparty,Custodian}`, དེ་བས་ སྔོ་ལྗང་མཉམ་སྦྲགས་འབད་ནི།
+   ཨེས་ཨེས་ཨི་ ཕིཌ་གིས་ ཕྱོགས་གསུམ་ཆ་ར་གིས་ དུས་ཚོད་གཅིག་མཚུངས་སྦེ་ མཐོང་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བསྐྱལ་ཡོདཔ་ཨིན།
+   གཞིས་ཆགས་དངུལ་འབོར།【ཧ་_གནས་སྡུད་_ མོ་ཌེལ/བྱུང་ལས། གནས་སྡུད་/གནས་སྡུད་/བྱུང་འབྲེལ།:742】བསྡོམས་_བརྟག་དཔྱད་/བརྟག་དཔྱད།/repo.s:1508】
+4. **སྲོལ་རྒྱུན་གྱི་གྲ་སྒྲིག་ཞིབ་དཔྱད་ཐོ་ཡིག་།** རི་པོ་གིས་ བཀོལ་སྤྱོད་ཀྱི་གཞི་བསྟུན་འབད་བའི་སྐབས།
+   ཤིམ་ (དཔེར་ན་ བཀག་འཛིན་དང་ ཡང་ན་ ལོང་བའི་བཀོད་རྒྱ་) ) དྲན་ཐོ་།
+   རང་བཞིན་འབྲེལ་བ་འཐབ་ས་དང་ ལཱ་གི་རྒྱུན་རིམ་བསྐྱར་སྦྱོང་འབད་ནི་ལུ་ལག་ལེན་འཐབ་མི་བརྡ་བཀོད། (དཔེར་ན་
+   as `iroha app repo initiate --custodian ... --dry-run`) དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ལྷོད་ཚུགས།
+   དམག་སྦྱོང་འབད་བའི་སྐབས་ བདག་འཛིན་འཐབ་མི་ཚུ་ཨིན།
 
-| Evidence | Command / Path | Purpose |
-|----------|----------------|---------|
-| Custodian acknowledgement (`custodian_ack_<custodian>.md`) | Link to the signed note referenced in `docs/examples/finance/repo_governance_packet_template.md` (use `docs/examples/finance/repo_custodian_ack_template.md` as the seed). | Shows the third party accepted the repo id, custody SLA, and settlement channel before assets move. |
-| Custody asset snapshot | `iroha json --query FindAssets '{ "id": "...#<custodian>" }' > artifacts/.../assets/custodian_<ts>.json` | Proves collateral left/returned exactly as `RepoIsi` encoded it. |
-| Custodian `RepoAccountEvent` feed | `torii-events --account <custodian> --event-type repo > artifacts/.../events/custodian.ndjson` | Captures the `RepoAccountRole::Custodian` payloads the runtime emitted for initiation, margin calls, and unwind. |
-| Custody drill log | `artifacts/.../governance/drills/<timestamp>-custodian.log` | Documents dry runs where the custodian exercised their rollback or settlement scripts. |
+| སྒྲུབ་བྱེད་ | བརྡ་བཀོད་ / འགྲུལ་ལམ། | དམིགས་ཡུལ། |
+|--------------------------------------------------------------------------- |
+| བདག་དབང་གི་ངོས་ལེན་ (`custodian_ack_<custodian>.md`) | `docs/examples/finance/repo_governance_packet_template.md` ནང་ གཞི་བསྟུན་འབད་ཡོད་པའི་ མིང་རྟགས་བཀོད་ཡོད་པའི་དྲན་ཐོ་ལུ་ ( `docs/examples/finance/repo_custodian_ack_template.md` འདི་ སོན་སྦེ་ལག་ལེན་འཐབ།) | མི་གཞན་གྱིས་ རྒྱུ་དངོས་ཚུ་མ་འགྱོ་བའི་ཧེ་མ་ repoid དང་ བདག་འཛིན་ SLA དེ་ལས་ གཞིས་ཆགས་ཀྱི་ རྒྱུན་ལམ་ཚུ་ ངོས་ལེན་འབད་ཡོདཔ་ཨིན། |
+| བདག་འཛིན་རྒྱུ་དངོས་པར་ལེན་ | `iroha json --query FindAssets '{ "id": "...#<custodian>" }' > artifacts/.../assets/custodian_<ts>.json` | གཡོན་ཕྱོགས་/ལོག་འོང་བའི་ བརྟན་བཞུགས་འདི་ `RepoIsi` གིས་ བཀོད་སྒྲིག་འབད་ཡོདཔ་ཨིན། |
+| བདག་འཛིན་`RepoAccountEvent` ཕིཌ་ | `torii-events --account <custodian> --event-type repo > artifacts/.../events/custodian.ndjson` | འགོ་འབྱེད་དང་ མཐའ་མཚམས་འབོད་བརྡ་ དེ་ལས་ བཏོན་གཏང་ནིའི་དོན་ལུ་ བཏོན་མི་ རན་དུས་ཚོད་འདི་ `RepoAccountRole::Custodian` འབབ་ཁུངས་འདི་ བཟུང་ཡོདཔ་ཨིན། |
+| བདག་འཛིན་སྦྱོང་བརྡར་གྱི་རིཀ་ | `artifacts/.../governance/drills/<timestamp>-custodian.log` | ཡིག་ཆ་ཚུ་ བདག་འཛིན་འཐབ་མི་གིས་ ལོག་སྟེ་ཡང་ན་ གཞིས་ཆགས་ཡིག་གཟུགས་ཚུ་ ལག་ལེན་འཐབ་སའི་ སྐམ་རྒྱུག་འབདཝ་ཨིན། |གི་དོན་ལུ་ ཧ་ཤིང་ལཱ་གི་རྒྱུན་རིམ་གཅིག་པ་ལོག་ལག་ལེན་འཐབ་དོ། (`scripts/repo_evidence_manifest.py`) གི་དོན་ལུ་
+བདག་འཛིན་དང་ རྒྱུ་དངོས་པར་ལེན་ དེ་ལས་ བྱུང་རིམ་གྱི་ ལྟོ་ཚུ་ ཚོགས་པ་གསུམ་སྦེ་ བཞགཔ་ཨིན།
+སྦུང་ཚན་ཚུ་ བསྐྱར་བཟོ་འབད་བཏུབ། ཀི་དེབ་ཅིག་ནང་ བདག་འཛིན་པ་ལེ་ཤ་གིས་ བཅའ་མར་གཏོགས་པའི་སྐབས་ གསར་བསྐྲུན་འབད།
+བདག་དབང་ཅན་གྱི་སྣོད་ཐོ་ཚུ་ བདག་འཛིན་རེ་ལུ་ ཡིག་སྣོད་ཚུ་ གསལ་སྟོན་ཚུ་ 1014-18 ཨིན་པས།
+ཚོགས་པ་རེ་རེ། གཞུང་སྐྱོང་གི་ཤོག་འཛིན་འདི་ གསལ་སྟོན་གྱི་ ཧེཤ་རེ་རེ་བཞིན་དུ་ གཞི་བསྟུན་འབད་དགོཔ་ཨིན།
+མཐུན་སྒྲིག་ངོས་ལེན་ཡིག་སྣོད་. ཁྱབ་པའི་མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ།
+`repo_initiation_with_custodian_routes_collateral` དང་།
+`reverse_repo_with_custodian_emits_events_for_all_parties` ཧེ་མ་ལས་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+runtime སྤྱོད་ལམ་—ཁོང་ཚོའི་དངོས་པོའི་དངོས་པོ་འདི་སྒྲུབ་བྱེད་ཀྱི་བསྡུ་སྒྲིག་ནང་ལུ་ག་ཅི་ཨིན་ན།
+ལམ་སྟོན་པ་ **F1** གྲུ་གཟིངས་ ཇི་ཨེ་-གྲ་སྒྲིག་ཡིག་ཆ། 【གཅིག་བསྡོམས་_བརྟག་དཔྱད་/བརྟག་དཔྱད་/བརྟག་དཔྱད་/repo.rs:951】tests/tests/tests/te.s:1508】།
 
-Reusing the same hashing workflow (`scripts/repo_evidence_manifest.py`) for the
-custodian acknowledgement, asset snapshots, and event feeds keeps tri-party
-packets reproducible. When multiple custodians participate in a book, create
-subdirectories per custodian so the manifest highlights which files belong to
-each party; the governance ticket should reference each manifest hash and the
-matching acknowledgement file. The integration tests that cover
-`repo_initiation_with_custodian_routes_collateral` and
-`reverse_repo_with_custodian_emits_events_for_all_parties` already enforce the
-runtime behaviour—mirroring their artefacts inside the evidence bundle is what
-lets roadmap **F1** ship GA-ready documentation for the tri-party scenario.【integration_tests/tests/repo.rs:951】【integration_tests/tests/repo.rs:1508】
+### 2.9 ཆ་འཇོག་རྗེས་མའི་སྒྲིག་སྟངས་པར་བརྙན།
 
-### 2.9 Post-approval configuration snapshots
+གཞུང་སྐྱོང་གིས་ བསྒྱུར་བཅོས་འབད་ཞིནམ་ལས་ `[settlement.repo]` གི་ས་ཆའི་ས་ཆ་ཚུ་ ༢༠༡༢ ལུ་ ཆ་འཇོག་འབདཝ་ཨིན།
+ཀླད་ཀོར་ མཉམ་རོགས་ག་ར་ལས་ བདེན་བཤད་འབད་ཡོད་པའི་རིམ་སྒྲིག་པར་ཅིག་བཏབ་ཨིན།
+རྩིས་ཞིབ་པ་ཚུ་གིས་ ཆ་འཇོག་གྲུབ་པའི་གནས་གོང་ཚུ་ ཐད་རི་བ་རི་ཨིན་པའི་ བདེན་ཁུངས་བཀལ་ཚུགས། Torii གསལ་སྟོན་བྱེད།
+འདི་གི་དོན་ལུ་ `/v1/configuration` ལམ་དང་ SDKs ཆ་མཉམ་གྱིས་ གྲོགས་རམ་པ་ དཔེར་ན་ དེ་བཟུམ་མའི་ གྲོགས་རམ་འབདཝ་ཨིན།
+`ToriiClient.getConfiguration`, དེ་འབདཝ་ལས་ པར་ལེན་རྒྱུན་རིམ་འདི་ ཌེཀསི་ཡིག་ཚུགས་ཚུ་གི་དོན་ལུ་ ལཱ་འབདཝ་ཨིན།
+CI ཡང་ན་ ལག་ཐོག་བཀོལ་སྤྱོད་འབདཝ་ཨིན།【ཀརེ་ཊིས་/ཨི་རོ་ཧ་_ཊོ་རི/ལིབ་/ལིབ་.s:3225】 ཨི་རོ་ཧ་_ཇས/སི་ཨར་སི/ཊོ་རི་སི་ལིནཊ། 2115】】 ཨི་རོ་ཧ་སུའིཕཊི་/ཨི་རོ་ཧ་སིའིཕཊི་/ཊོ་རིའེཕ/ཊོ་རིའེཊ:481111111112
 
-Once governance approves a change and the `[settlement.repo]` stanza lands on
-the cluster, capture an authenticated configuration snapshot from every peer so
-auditors can prove the approved values are live. Torii exposes the
-`/v1/configuration` route for this purpose and all SDKs surface helpers such as
-`ToriiClient.getConfiguration`, so the capture workflow works for desk scripts,
-CI, or manual operator runs.【crates/iroha_torii/src/lib.rs:3225】【javascript/iroha_js/src/toriiClient.js:2115】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:4681】
-
-1. Call `GET /v1/configuration` (or the SDK helper) per peer immediately after
-   the roll-out. Persist the full JSON under
-   `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` and record
-   the block height/cluster timestamp in `config/config_snapshot_index.md`.
+༡ དེ་འཕྲལ་ལས་ མཉམ་རོགས་རེ་ལུ་ `GET /v1/configuration` ལུ་ཁ་པར་གཏོང་།
+   the བསྐོར་བཤུབ། འོག་ལུ་ JSON ཆ་ཚང་སྦེ་ ཕྱག་ལཱ་འབད།
+   `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` དང་སྒྲ་གྲུབ།
+   `config/config_snapshot_index.md` ནང་ཡོད་པའི་སྡེབ་ཚན་མཐོ་ཚད་/ཀླད་ཀོར་གྱི་དུས་ཚོད་མཚོན་རྟགས་འདི།
    ```bash
    mkdir -p artifacts/finance/repo/<slug>/config/peers
    curl -fsSL https://peer01.example/v1/configuration \
      | jq '.' \
      > artifacts/finance/repo/<slug>/config/peers/peer01.json
    ```
-2. Hash every snapshot (`sha256sum config/peers/*.json`) and log the digest next
-   to the peer id in the governance packet template. This proves which peers
-   ingested the policy and which commit/toolchain produced the snapshot.
-3. Compare the `.settlement.repo` block in each snapshot with the staged
-   `[settlement.repo]` TOML snippet; record any drift and rerun
-   `repo query get --agreement-id <id> --pretty` so the evidence bundle shows
-   both the runtime configuration and the normalised `RepoGovernance` values
-   stored with the agreement.【crates/iroha_cli/src/main.rs:3821】
-4. Attach the snapshot files and summary index to the evidence manifest (see
-   §3.2) so the governance record links the approved change to the actual peer
-   configuration bytes. The governance template was updated to include this
-   table, so every future repo packet carries the same proof.
+2. པར་ཆས་རེ་རེ་བཞིན་ (`sha256sum config/peers/*.json`) དང་ བཞུ་བཅོས་རྗེས་མའི་ནང་བསྐྱོད་འབད།
+   གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་གྱི་ ཊེམ་པེལེཊ་ནང་ པི་ཡར་ཨའི་ཌི་ལུ། འདི་གིས་ མཉམ་རོགས་ ག་འདི་ བདེན་ཁུངས་བཏོནམ་ཨིན།
+   སྲིད་བྱུས་དང་ ཁས་བླངས་/ལག་ཆ་གིས་ པར་ལེན་འདི་ བཏོན་ཡོདཔ་ཨིན།
+3. གོ་རིམ་ཅན་གྱི་པར་བཏབ་རེ་རེ་ནང་ `.settlement.repo` སྡེབ་ཚན་འདི་ག་བསྡུར་འབད།
+   `[settlement.repo]` ཊོ་ཨེམ་ཨེལ་ སི་ནིཔ་ཊི།; ཆུ་རུད་གང་རུང་ཐོ་བཀོད་འབད་དེ་ ལོག་གཡོག་བཀོལ།
+   `repo query get --agreement-id <id> --pretty` དེ་འབདཝ་ལས་ སྒྲུབ་བྱེད་ཀྱི་སྡེ་ཚན་འདི་སྟོནམ་ཨིན།
+   རན་དུས་ཚོད་རིམ་སྒྲིག་དང་ སྤྱིར་བཏང་བཟོ་ཡོད་པའི་ `RepoGovernance` གནས་གོང་གཉིས་ཆ་རང་།
+   【crates/iroha_cli/src/main.s:3821】
+༤ པར་ལེན་ཡིག་སྣོད་དང་ བཅུད་བསྡུས་ཟུར་ཐོ་ཚུ་ སྒྲུབ་བྱེད་གསལ་སྟོན་ལུ་མཉམ་སྦྲགས་འབད།
+   §3.2) དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་ཐོ་བཀོད་འདི་གིས་ ཆ་འཇོག་གྲུབ་པའི་བསྒྱུར་བཅོས་འདི་ མཉམ་རོགས་ངོ་མ་ལུ་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
+   རིམ་སྒྲིག་བཱའིཊི། གཞུང་སྐྱོང་ཊེམ་པེལེཊི་འདི་ དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན།
+   ཐིག་ཁྲམ་འདི་ མ་འོངས་པའི་ repo སྦུང་ཚད་ག་ར་གིས་ བདེན་ཁུངས་གཅིག་སྦེ་ འབག་འོང་།
 
-Capturing these snapshots closes the `iroha_config` documentation gap called out
-in the roadmap: reviewers can now diff the staged TOML against the bytes every
-peer reports, and auditors can re-run the comparison whenever a repo change is
-under investigation.
+པར་ལེན་འདི་ཚུ་ བསྡུ་ལེན་འབད་མི་འདི་གིས་ `iroha_config` ཡིག་ཆ་གི་བར་སྟོང་འདི་ ཕྱིར་འཐེན་འབདཝ་ཨིན།
+སབ་ཁྲ་ནང་ བསྐྱར་ཞིབ་པ་ཚུ་གིས་ ད་ལྟོ་ བཱའིཊ་ཚུ་ལུ་ ངོ་རྒོལ་འབད་ཚུགས།
+མཉམ་རོགས་ཀྱི་སྙན་ཞུ་དང་ རྩིས་ཞིབ་པ་ཚུ་གིས་ རི་པོ་བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ ག་བསྡུར་འབད་ནི་འདི་ ལོག་གཡོག་བཀོལ་ཚུགས།
+ཞིབ་དཔྱད་འབད་བའི་བསྒང་།
 
-## 3. Deterministic Evidence Workflow
-
-1. **Record the instruction provenance**
-   - Generate the repo/unwind payload via `iroha app repo ... --output`.
-   - Store the `InstructionBox` JSON under
+## 3. ངེས་པའི་སྒྲུབ་བྱེད་ཀྱི་ལས་རིམ།༡ ** བཀོད་རྒྱ་གི་བདེན་ཁུངས་འདི་ཐོ་བཀོད་འབད།**
+   - `iroha app repo ... --output` བརྒྱུད་དེ་ རེ་པོ་/unwnd པེ་ལོཌི་འདི་ བཟོ་བསྐྲུན་འབད།
+   - འོག་ལུ་ `InstructionBox` JSON གསོག་འཇོག་འབད།
      `artifacts/finance/repo/<agreement-id>/initiation.json`.
-2. **Capture ledger state**
-   - Run `iroha app repo query list --pretty > artifacts/.../agreements.json` before
-     and after settlement to prove balances cleared.
-   - Optionally query `FindAssets` via `iroha json` or SDK helpers to archive
-     the asset balances touched in the repo leg.
-3. **Persist event streams**
-   - Subscribe to `AccountEvent::Repo` over Torii SSE or Pull and attach the
-     emitted JSON to the evidence directory. This satisfies the tamper-evident
-     logging clause because the events are signed by the peers that observed
-     each change.
-4. **Run deterministic tests**
-   - CI already runs `integration_tests/tests/repo.rs`; for manual sign-off,
-     execute `cargo test -p integration_tests repo::` and archive the log plus
-     `target/debug/deps/repo-*` JUnit output.
-5. **Serialize governance & config**
-   - Check in (or attach) the `[settlement.repo]` config used for the period,
-     including haircut/eligible lists. This allows audit replays to match the
-     runtime-normalised governance recorded in `RepoAgreement`.
+2. **ལེད་ཇར་སི་ཊེན་**།
+   - `iroha app repo query list --pretty > artifacts/.../agreements.json` ཧེ་མ་གཡོག་བཀོལ།
+     དང་ གཞིས་ཆགས་ཀྱི་ཤུལ་ལས་ འདྲ་མཉམ་ཚུ་ བསལ་ཚར་ནུག།
+   - གདམ་ཁ་ཅན་གྱི་འདྲི་དཔྱད་ `FindAssets` བརྒྱུད་དེ་ `iroha json` ཡང་ན་ SDK གྲོགས་རམ་པ་ཚུ་ གཏན་མཛོད་འབད་ནི།
+     རི་པོ་རྐངམ་ནང་ རྒྱུ་དངོས་ལྷག་ལུས་ཚུ་ བཀལ་ཡོདཔ་ཨིན།
+༣ **བྱུང་ལས་རྒྱུན་ལམ་ཚུ་ ཆ་རྐྱེན་ཚུ་**
+   - `AccountEvent::Repo` ལུ་ Torii SSE ཡང་ན་ འཐེན་ཞིནམ་ལས་ དེ་ མཉམ་སྦྲགས་འབད།
+     ཇེ་ཨེསི་ཨོ་ཨེན་ སྒྲུབ་བྱེད་སྣོད་ཐོ། འདི་གིས་ ཊམ་པར་-སྒྲུབ་བྱེད་འདི་ བསྒྲུབ་ཚུགསཔ་ཨིན།
+     བལྟ་རྟོག་འབད་མི་ མཉམ་རོགས་ཚུ་གིས་ བྱུང་ལས་ཚུ་ མཚན་རྟགས་བཀོད་ཡོདཔ་ལས་ ནང་བསྐྱོད་ཚིག་ཕྲད་འདི་ བལྟ་རྟོག་འབད་མི་ ཚིག་ཕྲད་འདི་ཨིན།
+     འགྱུར་རེ།
+4. **རཱན་ གཏན་འབེབས་བརྟག་དཔྱད་**
+   - CI གིས་ཧེ་མ་ལས་ `integration_tests/tests/repo.rs` གཡོག་བཀོལཝ་ཨིན། ལག་ཐོག་མིང་རྟགས་བཀོད་པའི་དོན་ལུ།
+     ལག་ལེན་འཐབ་ཐངས་ `cargo test -p integration_tests repo::` དང་ ཡིག་མཛོད་ཀྱི་ plu plus
+     `target/debug/deps/repo-*` ཇུ་ནིཊི་ཨའུཊི་པུཊི་།
+༥ **རིམ་སྒྲིག་གཞུང་སྐྱོང་དང་ རིམ་སྒྲིག་**
+   - དུས་ཡུན་དོན་ལུ་ལག་ལེན་འཐབ་ཡོད་པའི་ `[settlement.repo]` རིམ་སྒྲིག་འདི་ ནང་(ཡང་ན་ མཉམ་སྦྲགས་) ཞིབ་དཔྱད་འབད།
+     སྐྲ་གཅོད་/འོས་འབབ་ཐོ་ཡིག་ཚུ་ཚུདཔ་ཨིན། འདི་གིས་ རྩིས་ཞིབ་སླར་ལོག་ཚུ་ མཐུན་སྒྲིག་འབད་ནི་ལུ་ འབད་བཅུགཔ་ཨིན།
+     curtime-normalised གཞུང་སྐྱོང་འདི་ `RepoAgreement` ནང་ཐོ་བཀོད་འབད་ཡོདཔ།
 
-### 3.1 Evidence bundle layout
+### 3.1 སྒྲུབ་བྱེད་ཀྱི་བརྩམས་སྒྲུང་།
 
-Store every artefact called out in this section beneath a single agreement
-directory so governance can archive or hash one tree. The recommended layout is:
+ཆིངས་ཡིག་གཅིག་གི་འོག་ལུ་ དབྱེ་ཁག་འདི་ནང་ བཀོད་མི་ ཅ་རྙིང་ཚུ་ག་ར་ གསོག་འཇོག་འབད།
+སྣོད་ཐོ། དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་གིས་ གཏན་མཛོད་ཡང་ན་ ཤིང་གཅིག་ ཧེ་ཤི་འབད་ཚུགས། གྲོས་འཆར་བཀོད་ཡོད་པའི་སྒྲིག་བཀོད་ནི།
 
 ```
 artifacts/finance/repo/<agreement-id>/
@@ -565,27 +548,27 @@ artifacts/finance/repo/<agreement-id>/
     └── repo_lifecycle.log
 ```
 
-- `agreements_before/after.json` capture `repo query list` output so auditors can
-  prove the ledger cleared the agreement.
-- `initiation.json`, `unwind.json`, and `margin/*.json` are the exact Norito
-  payloads staged with `iroha app repo ... --output`.
-- `events/repo-events.ndjson` replays the `AccountEvent::Repo(*)` stream while
-  `tests/repo_lifecycle.log` preserves the `cargo test` evidence.
-- `repo_proof_snapshot.json` and `repo_proof_digest.txt` come from the snapshot
-  refresh procedure in §2.7 and let reviewers recompute the lifecycle hash
-  without re-running the harness.
-- `config/settlement_repo.toml` contains the `[settlement.repo]` snippet
-  (haircuts, substitution matrix) that was active when the repo executed.
-- `config/peers/*.json` captures `/v1/configuration` snapshots for each peer,
-  closing the loop between the staged TOML and the runtime values peers report
-  over Torii.
+- `agreements_before/after.json` འཛིན་བཟུང་ `repo query list` འདི་ དེ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་གིས་ འབད་ཚུགས།
+  གན་ཡིག་འདི་ ལག་དེབ་འདི་ བསལ་ཡོདཔ་ཨིན།
+- `initiation.json`, `unwind.json`, དང་ `margin/*.json` ནི་ `margin/*.json` ཡིན།
+  `iroha app repo ... --output` དང་བཅས་པའི་ པེ་ལོཌ་ཚུ།
+- `events/repo-events.ndjson` གིས་ `AccountEvent::Repo(*)` རྒྱུན་ལམ་འདི་ བསྐྱར་བཟོ་འབདཝ་ཨིན།
+  `tests/repo_lifecycle.log` གིས་ `cargo test` སྒྲུབ་བྱེད་ཚུ་ ཉམས་སྲུང་འབདཝ་ཨིན།
+- `repo_proof_snapshot.json` དང་ `repo_proof_digest.txt` ལས་འབྱུང་བ།
+  §2.7 ནང་ གསརཔ་གི་བྱ་རིམ་དང་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ མི་ཚེ་འཁོར་རིམ་གྱི་ ཧ་ཤི་འདི་ ལོག་རྩིས་སྟོན་འབདཝ་ཨིན།
+  མེད་པར་ལོག་པ་བརྒྱུགས་པ་དང་།
+- `config/settlement_repo.toml` ནང་ `[settlement.repo]` གི་པར་ཆས་ཡོད།
+  (haircuts, ཚབ་མའི་མེ་ཊིགསི་) དེ་ཡང་ རི་པོ་གིས་ ལག་ལེན་འཐབ་པའི་སྐབས་ ཤུགས་ལྡན་སྦེ་ཡོདཔ་ཨིན།
+- `config/peers/*.json` མཉམ་རོགས་རེ་ལུ་ `/v1/configuration` པར་ལེན་ཚུ།
+  གནས་རིམ་ཅན་གྱི་ TOML དང་ རན་ཊའིམ་གནས་གོང་ཚུ་གི་བར་ན་ བསྐྱར་ལོག་འདི་ཁ་བསྡམ་དོ་ཡོདཔ།
+  ལས་ Torii.
 
-### 3.2 Hash manifest generation
+### 3.2 ཧ་ཤ ས་རབས་མངོན་མཐོ།
 
-Attach a deterministic manifest to every bundle so reviewers can verify hashes
-without unpacking the archive. The helper at `scripts/repo_evidence_manifest.py`
-walks the agreement directory, records `size`, `sha256`, `blake2b`, and the last
-modified timestamp for each file, and writes a JSON summary:
+བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཧ་ཤེ་ཚུ་བདེན་དཔྱད་འབད་ཚུགས།
+གཏན་མཛོད་འདི་ མ་ཕྱེ་བར་ཡོདཔ། རོགས་རམ་པ་ `scripts/repo_evidence_manifest.py` ནང་།
+གན་ཡིག་སྣོད་ཐོ་ `size`, `sha256`, `blake2b`, དང་ མཇུག་བསྡུ།
+ཡིག་སྣོད་རེ་རེ་གི་དོན་ལུ་ བསྒྱུར་བཅོས་འབད་ཡོད་པའི་དུས་ཚོད་ཀྱི་རྟགས་བཀོད་དང་ ཇེ་ཨེསི་ཨོ་ཨེན་བཅུད་དོན་ཅིག་བྲིས།
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -595,15 +578,13 @@ python3 scripts/repo_evidence_manifest.py \
   --exclude 'scratch/*'
 ```
 
-The generator sorts paths lexicographically, skips the output file when it lives
-inside the same directory, and emits totals that governance can copy directly
-into the change ticket. When `--output` is omitted the manifest prints to
-stdout, which is convenient for quick diffs during desk reviews.
-Use `--exclude <glob>` to omit scratch material (for example, `--exclude 'scratch/*' --exclude '*.tmp'`)
-without moving files out of the bundle; the glob pattern always applies to the
-path relative to `--root`.
-
-Example manifest (truncated for brevity):
+གློག་ཤུགས་འཕྲུལ་ཆས་ཀྱིས་ ཚིག་མཛོད་འདི་ དབྱེ་སེལ་འབད་དེ་ ཐོན་འབྲས་ཡིག་སྣོད་འདི་ སྡོད་པའི་སྐབས་ལུ་ གོམ་འགྱོཝ་ཨིན།
+སྣོད་ཐོ་གཅིག་ནང་དང་ གཞུང་སྐྱོང་གིས་ ཐད་ཀར་དུ་འདྲ་བཤུས་རྐྱབ་ཚུགས་པའི་ བསྡོམས་འབོར་ཚུ་ བཏོནམ་ཨིན།
+འགྱུར་བའི་ཤོག་བྱང་ནང་ལུ། `--output` གིས་ གསལ་རྟགས་ཀྱི་དཔར་བསྐྲུན་ཚུ་ ༡༧ ལུ་བཞག་པའི་སྐབས་ལུ།
+stdout འདི་ ཡིག་ཆའི་བསྐྱར་ཞིབ་འབད་བའི་སྐབས་ མགྱོགས་དྲགས་སྦེ་ ཁྱབ་སྤེལ་འབད་ནི་ལུ་ སྟབས་བདེ་ཏོག་ཏོ་ཨིན།
+བཤུད་སྒྲིལ་རྒྱུ་ཆ་བཏོན་གཏང་ནི་ལུ་ `--exclude <glob>` ལག་ལེན་འཐབ། (དཔེར་ན་ `--exclude 'scratch/*' --exclude '*.tmp'`)
+ཡིག་སྣོད་ཚུ་ བཱན་ཌལ་ལས་ ཕྱིར་འཐེན་མེད་པར་; འཛམ་གླིང་དཔེ་རིས་འདི་ཨ་རྟག་རང་ འཇུག་སྤྱོད་འབདཝ་ཨིན།
+ལམ་འདི་ `--root` དང་འབྲེལ་བ།དཔེ་མཚོན་གསལ་སྟོན་ (མདོར་བསྡུས་པའི་དོན་ལུ་ བཏོག་བཏོགཔ་):
 
 ```json
 {
@@ -631,42 +612,42 @@ Example manifest (truncated for brevity):
 }
 ```
 
-Include the manifest next to the evidence bundle and reference its SHA-256 hash
-in the governance proposal so desks, operators, and auditors share the same
-ground truth.
+གསལ་སྟོན་འདི་ སྒྲུབ་བྱེད་བསྡོམ་གྱི་ཤུལ་ལས་ བཙུགས་ཞིནམ་ལས་ དེ་གི་ SHA-256 ཧེཤ་ལུ་ གཞི་བསྟུན་འབད།
+གཞུང་སྐྱོང་གྲོས་འཆར་ནང་ ཡིག་ཚང་དང་ བཀོལ་སྤྱོད་པ་ དེ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ གཅིག་མཚུངས་སྦེ་ བགོ་བཤའ་རྐྱབ་ཨིན།
+ས་གཞིའི་བདེན་པ།
 
-### 3.3 Governance change log & rollback drills
+### 3.3 གཞུང་སྐྱོང་འགྱུར་བའི་དྲན་ཐོ་དང་ཕྱིར་ལོག་སྦྱོང་བརྡར།
 
-The finance council expects every repo request, haircut tweak, or substitution
-matrix change to arrive with a reproducible governance packet that can be linked
-directly from the referendum minutes.【docs/source/governance_playbook.md:1】
+དངུལ་འབྲེལ་ཚོགས་སྡེ་གིས་ རི་པོ་གི་ཞུ་བ་དང་ སྐྲ་གཅོད་ནི་གི་བསྒྱུར་བཅོས་ ཡང་ན་ ཚབ་བཙུགས་ནི་གི་རེ་བ་བསྐྱེདཔ་ཨིན།
+མེ་ཊིགསི་བསྒྱུར་བཅོས་འདི་ འབྲེལ་མཐུད་འབད་ཚུགས་པའི་ བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ གཞུང་སྐྱོང་སྦུང་ཚན་ཅིག་དང་གཅིག་ཁར་ ལྷོད་ཚུགས།
+ཐད་ཀར་འོས་འཐག 【 ཌོཀ་/འབྱུང་ཁུངས་/གཞུང་སྐྱོང་_རྩེད་དེབ་.md:】 】།
 
-1. **Build the governance packet**
-   - Copy the evidence bundle for the agreement into
+༡ **གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་** བཟོ་བསྐྲུན་འབད།
+   - གན་ཡིག་འདི་གི་ སྒྲུབ་བྱེད་ཀྱི་ བསྡུ་སྒྲིག་འདི་ སྤྱི་ལོ་ ༢༠༡༨ ལུ་ འདྲ་བཤུས་རྐྱབ།
      `artifacts/finance/repo/<agreement-id>/governance/`.
-   - Add `gar.json` (council approval record), `referendum.md` (who approved
-     and which hashes they reviewed), and `rollback_playbook.md`
-     summarising the reversal procedure from `repo_runbook.md`
-     §§4–5.【docs/source/finance/repo_runbook.md:1】
-   - Capture the deterministic manifest hash from §3.2 in
-     `hashes.txt` so reviewers can confirm the payloads they see in Torii match
-     the staged bytes.
-2. **Reference the packet in the referendum**
-   - When running `iroha app governance referendum submit` (or the equivalent SDK
-     helper) include the manifest hash from `hashes.txt` in the `--notes`
-     payload so the GAR points back to the immutable packet.
-   - File the same hash inside the governance tracker or ticketing system so
-     audit traces do not rely on screenshotting dashboards.
-3. **Document drills and rollbacks**
-   - After the referendum passes, update `ops/drill-log.md` with the repo
-     agreement id, deployed config hash, GAR id, and operator contact so the
-     quarterly drill record includes finance actions.【ops/drill-log.md:1】
-   - If a rollback drill executes, attach the signed
-     `rollback_playbook.md` and the CLI output from `iroha app repo unwind` under
-     `governance/drills/<timestamp>.log` and inform the council using the same
-     steps described in the governance playbook.
+   - `gar.json` (གྲོས་ཚོགས་ཀྱི་ཆ་འཇོག་དྲན་ཐོ་), `referendum.md` (ཆ་འཇོག་གྲུབ་མི།
+     དང་ གང་གིས་བསྐྱར་ཞིབ་འབད་ཡི་ག་) དང་ `rollback_playbook.md`
+     `repo_runbook.md` ལས་ ཕྱིར་ལོག་བྱ་རིམ་འདི་ བཅུད་བསྡུ་ནི།
+     §§4–5.【docs/ཐོན་ཁུངས་/མ་དངུལ་/རེག་པ_རྔོན་བུ།md:1】།
+   - §3.2 ནང་ §3.2 ལས་ གཏན་འབེབས་ཀྱི་ གསལ་སྟོན་གྱི་ གསལ་སྟོན་འདི་ བཟུང་།
+     `hashes.txt` དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ Torii མཐུན་སྒྲིག་ནང་ མཐོང་མི་ payloads ཚུ་ ངེས་གཏན་བཟོ་ཚུགས།
+     གོ་རིམ་ཅན་གྱི་བཱའིཊི།
+2.* འོས་འདེམས་ནང་ལུ་ སྦུང་ཚན་འདི་ གཞི་བསྟུན་འབད།**
+   - `iroha app governance referendum submit` གཡོག་བཀོལ་བའི་སྐབས།
+     གྲོགས་རམ་པ་) `hashes.txt` ལས་ `--notes` ལས་ གསལ་སྟོན་གྱི་ཧེ་ཤི་ཚུ་ཚུདཔ་ཨིན།
+     གླ་ཆ་འདི་ ཇི་ཨར་ གིས་ བསྒྱུར་བཅོས་མ་འབད་བའི་ སྦུང་ཚན་ལུ་ ལོག་སྟོནམ་ཨིན།
+   - དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་རྗེས་འདེད་འབད་མི་ ཡང་ན་ ཤོག་འཛིན་ལམ་ལུགས་ནང་ ཧེཤ་གཅིགཔོ་འདི་ ཡིག་སྣོད་ནང་བཙུགས་དགོ།
+     རྩིས་ཞིབ་ཀྱི་འཚོལ་ཞིབ་ཚུ་གིས་ གསལ་གཞི་པར་བཏབ་ནིའི་ ཌེཤ་བོརཌི་ཚུ་ལུ་ བརྟེན་མི་བཏུབ།
+3. **ཡིག་ཆའི་སྦྱོང་བརྡར་དང་ཕྱིར་ལོག་**
+   - འོས་སྦྱོར་འབད་ཚར་བའི་ཤུལ་ལས་ རི་པོ་དང་གཅིག་ཁར་ `ops/drill-log.md` དུས་མཐུན་བཟོ་ནི།
+     གན་ཡིག་ཨའི་ཌི་ བཀྲམ་སྤེལ་འབད་ཡོད་པའི་རིམ་སྒྲིག་ཧེཤ་ ཇི་ཨར་ཨའི་ཌི་ དེ་ལས་ བཀོལ་སྤྱོད་པའི་འབྲེལ་བ་འདི་ དེ་འབདཝ་ལས་
+     ཟླ་བཞི་པའི་སྦྱོང་བརྡར་ཐོ་བཀོད་ནང་ དངུལ་རྩིས་བྱ་བ་ཚུ་ཚུདཔ་ཨིན།
+   - བསྐོར་རྒྱབ་ཀྱི་སྦྱོང་བརྡར་ལག་ལེན་འཐབ་པ་ཅིན་ མཚན་རྟགས་བཀོད།
+     `rollback_playbook.md` དང་ གཤམ་གྱི་`iroha app repo unwind` ལས་ CLI ཐོན་འབྲས།
+     `governance/drills/<timestamp>.log` དང་ ཚོགས་སྡེ་ལུ་ དེ་དང་འདྲ་བའི་བརྡ་སྤྲོད།
+     གཞུང་སྐྱོང་རྩེད་དེབ་ནང་གསལ་བཀོད་འབད་ཡོད་པའི་གོམ་པ།
 
-Example layout:
+དཔེ་བཀོད་བཀོད་པ།
 
 ```
 artifacts/finance/repo/<agreement-id>/governance/
@@ -678,46 +659,42 @@ artifacts/finance/repo/<agreement-id>/governance/
     └── 2026-05-12T09-00Z.log
 ```
 
-Keeping the GAR, referendum, and drill artefacts alongside the lifecycle
-evidence guarantees that every repo change satisfies the roadmap F1 governance
-bar without requiring bespoke ticket spelunking later on.
+GAR དང་ འོས་འདེམས་ དེ་ལས་ མི་ཚེའི་འཁོར་རིམ་གྱི་ མཉམ་དུ་ ཅ་ཆས་ཚུ་ བཞག་ནི།
+repoའགྱུར་བའི་རེ་པོ་གིས་ ལམ་སྟོན་ F1 གཞུང་སྐྱོང་ལུ་ བསམ་པ་རྫོགས་པའི་ ངེས་གཏན་བཟོཝ་ཨིན།
+bar མེད་པར་ ཤུལ་ལས་ ཤོག་འཛིན་གྱི་ བརྡ་རྟགས་བཀོད་དགོཔ་མེད།
 
-### 3.4 Lifecycle governance checklist
+### ༣་༤ ཚེ་འཁོར་གཞུང་སྐྱོང་དཔྱད་གཞི།
 
-Roadmap **F1** calls out governance coverage for initiation, accrual/margin, and
-tri-party unwinds. The table below consolidates the approvals, deterministic
-artefacts, and test references per lifecycle step so finance desks can cite a
-single checklist when assembling a packet.
-
-| Lifecycle step | Required approvals & tickets | Deterministic artefacts & commands | Linked regression coverage |
+ལམ་སྟོན་པ་ **F1** འགོ་འབྱེད་ཀྱི་དོན་ལུ་ གཞུང་སྐྱོང་ཁྱབ་ཁོངས་ འབོད་བཀུག་འབདཝ་ཨིན།
+tri-party Unds. འོག་གི་ཐིག་ཁྲམ་འདི་གིས་ གནང་བ་ཚུ་ མཉམ་བསྡོམས་འབདཝ་ཨིན།
+དངོས་པོ་དང་ མི་ཚེའི་འཁོར་རིམ་གྱི་རིམ་པ་རེ་རེ་བཞིན་གྱི་ གཞི་བསྟུན་ཚུ་ དངུལ་འབྲེལ་གྱི་ཡིག་ཆ་ཚུ་གིས་ བཤད་ཚུགས།
+ཐུམ་སྒྲིལ་ཅིག་བསྡུ་སྒྲིག་འབད་བའི་སྐབས་ ཞིབ་དཔྱད་ཐོ་ཡིག་རྐྱང་པ།| མི་ཚེ་འཁོར་བའི་གོམ་པ། | དགོས་མཁོའི་ཆ་འཇོག་དང་ཤོག་འཛིན་ཚུ། | གཏན་འབེབས་བཟོ་ནིའི་ ཅ་རྙིང་ཚུ་ & བརྡ་བཀོད་ཚུ་ | འབྲེལ་མཐུད་ཅན་གྱི་འགྱུར་ལྡོག་ཁྱབ་ཁོངས། |
 |----------------|------------------------------|------------------------------------|----------------------------|
-| **Initiation (bilateral or tri-party)** | Dual-control sign-off recorded via `docs/examples/finance/repo_governance_packet_template.md`, governance ticket with the `[settlement.repo]` diff and GAR ID, custodian acknowledgement when `--custodian` is set. | Stage the instruction via<br>`iroha --config client.toml --output repo initiate ...`.<br>Emit the lifecycle proof snapshot (`REPO_PROOF_*` env vars) plus the bundle manifest from `scripts/repo_evidence_manifest.py`.<br>Attach the latest `FindRepoAgreements` JSON and `[settlement.repo]` snippet (haircut, eligible list, substitution matrix). | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` (bilateral) and `integration_tests/tests/repo.rs::repo_roundtrip_with_custodian_routes_collateral` (tri-party) prove the runtime matches the staged payloads. |
-| **Margin call accrual cadence** | Desk lead + risk manager approve the cadence window documented in the governance packet; ticket references the scheduled `RepoMarginCallIsi`. | Capture `iroha app repo margin --agreement-id` output before calling `iroha app repo margin-call`, hash the resulting JSON, and archive the `RepoAccountEvent::MarginCalled` SSE payload in the evidence bundle.<br>Store the CLI log next to the deterministic proof hash. | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` guarantees the runtime rejects premature calls and non-participant submissions. |
-| **Collateral substitution & maturity unwind** | Governance change record cites the required `collateral_substitution_matrix` entries and haircut policy; council minutes list the substitution pair SHA-256 hash. | Stage the unwind leg with `iroha app repo unwind --output ... --settlement-timestamp-ms <planned>` so both the ACT/360 calculation (§2.8) and substitution payload are reproducible.<br>Include the `[settlement.repo]` TOML snippet, substitution manifest, and the resulting `RepoAccountEvent::Settled` payload in the artefact bundle. | The substitution round-trip inside `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` exercises insufficient-versus-approved substitution flows while keeping the agreement id constant. |
-| **Emergency unwind / rollback drill** | Incident commander + finance council approve the rollback as described in `docs/source/finance/repo_runbook.md` (sections 4–5) and capture the entry in `ops/drill-log.md`. | Execute `iroha app repo unwind` using the staged rollback payload, append CLI logs + GAR reference to `governance/drills/<timestamp>.log`, and rerun both `repo_deterministic_lifecycle_proof_matches_fixture` and the `scripts/repo_evidence_manifest.py` helper to prove determinism before/after the drill. | The happy-path unwind is covered by `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement`; following the drill steps keeps the governance artefacts aligned with the runtime guarantees exercised by that test. |
+| **འགོ་བཙུགས་ (ཕྱོགས་གཉིས་ཡང་ན་ཚོགས་པ་གསུམ་)** | `docs/examples/finance/repo_governance_packet_template.md` དང་ `[settlement.repo]` diff དང་ GAR ID དང་ `--custodian` ཚུ་གི་ཐོག་ལས་ གཞུང་སྐྱོང་ཤོག་བྱང་ཚུ་བརྒྱུད་དེ་ ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན། | བཀོད་རྒྱ་འདི་`iroha --config client.toml --output repo initiate ...`.མི་ཚེ་འཁོར་ལོའི་བདེན་ཁུངས་པར་ལེན་ (`REPO_PROOF_*` env vars) དང་ `scripts/repo_evidence_manifest.py`.གསར་ཤོས་ `FindRepoAgreements` JSON དང་ དང་ གསར་ཤོས་ལས་ བཱན་ཌལ་མངོན་གསལ་ཚུ་ བཏོན་གཏང་། `[settlement.repo]` བརྡ་རྟགས་ (haircut, འོས་འབབ་ཅན་གྱི་ཐོ་ཡིག, ཚབ་མའི་མེ་ཊིགསི་)། | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` (ཕྱོགས་གཉིས་ཀྱི་) དང་ `integration_tests/tests/repo.rs::repo_roundtrip_with_custodian_routes_collateral` (tri-party) གིས་ གནས་རིམ་ཅན་གྱི་སྤྲོད་ལེན་ཚུ་དང་མཐུན་སྒྲིག་ཡོདཔ་སྦེ་བདེན་ཁུངས་བཀལཝ་ཨིན། |
+| **མར་ཇིན་ཁ་པར་བསྡུ་སྒྲིག་གི་ གདམ་ཁ།** | ཌེཀསི་ ལིཌ་ + ཉེན་ཁ་འཛིན་སྐྱོང་པ་གིས་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ནང་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ གདངས་ སྒོ་སྒྲིག་འདི་ ཆ་འཇོག་འབད་ཡོདཔ། ཤོག་འཛིན་གྱིས་ དུས་ཚོད་བཀོད་ཡོད་པའི་ `RepoMarginCallIsi` ལུ་གཞི་བསྟུན་འབདཝ་ཨིན། | `iroha app repo margin --agreement-id` ཐོན་འབྲས་འདི་ `iroha app repo margin-call` དང་ གྲུབ་འབྲས་ JSON དེ་ལས་ སྒྲུབ་བྱེད་bundle ནང་ལུ་ `RepoAccountEvent::MarginCalled` SSE པེ་ལོཌི་འདི་ གཏན་མཛོད་འབད་དགོ། | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` གིས་ རན་ཊའིམ་གྱིས་ དུས་ཚོད་མ་རན་པའི་ འབོད་བརྡ་ཚུ་དང་ བཅའ་མར་གཏོགས་མི་མེན་པའི་ ཞུ་ཡིག་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན། |
+| **མཐུན་སྒྲིལ་དང་ རྒས་ཤོས་ཀྱི་ འབྲེལ་འཐུད་** | གཞུང་སྐྱོང་བསྒྱུར་བཅོས་ཀྱི་ཐོ་བཀོད་ནང་ དགོས་མཁོའི་ `collateral_substitution_matrix` ཐོ་བཀོད་དང་ སྐྲའི་སྲིད་བྱུས། ཚོགས་སྡེ་གི་སྐར་མ་གིས་ ཚབ་བཙུགས་ཆ་ SHA-256 ཧ་ཤི་འདི་ཐོ་བཀོད་འབད། | གཡོན་ཕྱོགས་ཀྱི་རྐངམ་འདི་ `iroha app repo unwind --output ... --settlement-timestamp-ms <planned>` དང་ཅིག་ཁར་ ACT/360 རྩིས་སྟོན་ (§2.8) དང་ ཚབ་བཙུགས་ཚུགསཔ་ཨིན། `[settlement.repo]` TOML snippet དང་ ཚབ་བཙུགས་ཚུགས་པའི་ གསལ་སྟོན་དང་ གྲུབ་འབྲས་ `RepoAccountEvent::Settled` རྩིས་སྟོན་ནང་ ཚུད་དེ་ཡོདཔ་ཨིན། | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` ནང་ལུ་ ཚབ་བཙུགས་ནི་གི་འགྲུལ་བསྐྱོད་འདི་ ལངམ་སྦེ་ཆ་འཇོག་འབད་མི་ ཚབ་བཙུགས་ཏེ་ གན་ཡིག་འདི་ རྟག་བརྟན་སྦེ་བཞག་པའི་སྐབས་ལུ་ ལངམ་སྦེ་མེདཔ་ཨིན། |
+| **ཛ་དྲག་གི་བརྡུང་སྒྲིག / ལོག་བསྐོར་གྱི་སྦྱོང་བརྡར་** | བྱུང་རྐྱེན་གྱི་དམག་དཔོན་ + དངུལ་འབྲེལ་ཚོགས་སྡེ་གིས་ `docs/source/finance/repo_runbook.md` (དོན་ཚན་ ༤-༥) ནང་གསལ་བཀོད་འབད་ཡོད་མི་དང་འཁྲིལ་ ལོག་སྤྲོད་ལེན་འབད་དེ་ འཛུལ་ཞུགས་འདི་ `ops/drill-log.md` ནང་ལུ་ བཟུང་ཡོདཔ་ཨིན། | གནས་རིམ་བཀོད་ཡོད་པའི་ཕྱིར་ལོག་པེ་ལོསི་ལག་ལེན་འཐབ་སྟེ་ `iroha app repo unwind` ལག་ལེན་འཐབ། CLI logs + GAR `governance/drills/<timestamp>.log` ལུ་ GAR གཞི་བསྟུན་འབད་ཞིནམ་ལས་ `repo_deterministic_lifecycle_proof_matches_fixture` དང་ `repo_deterministic_lifecycle_proof_matches_fixture` དང་ `scripts/repo_evidence_manifest.py` གཉིས་ཆ་རའི་གྲོགས་རམ་འདི་ དྲིལ་རིམ་གྱི་ཧེ་མ་/ཤུལ་ལས་/ཤུལ་ལས་/ཤུལ་ལས་/ཤུལ་ལས་ གཏན་འབེབས་བཟོ་ནིའི་གྲོགས་རམ་འབདཝ་ཨིན། | དགའ་སྤྲོའི་ལམ་འདི་ `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` གིས་ཁྱབ་སྟེ་ཡོདཔ་ཨིན། དམག་སྦྱོང་འབད་བའི་ཤུལ་ལས་ གཞུང་སྐྱོང་ཅ་ཆས་ཚུ་ བརྟག་དཔྱད་འདི་གིས་ ལག་ལེན་འཐབ་མི་ རཱན་ཊའིཊ་གི་ ངེས་གཏན་དང་འཁྲིལ་ཏེ་ བཞགཔ་ཨིན། |
 
-**Desk timeline.**
+**Desk གི་དུས་ཚོད།**།1. ནང་འདྲེན་ཊེམ་པེལེཊི་འདྲ་བཤུས་རྐྱབས། མེ་ཊ་ཌེ་ཊ་ སྡེབ་ཚན་ (ཆིངས་ཡིག་ཨའི་ཌི་, ཇི་ཨར་ ཤོག་བྱང་།
+   བདག་འཛིན་ རིམ་སྒྲིག་ཧེཤ་) དང་ སྒྲུབ་བྱེད་སྣོད་ཐོ་གསར་བསྐྲུན་འབད།
+2. (`initiate`, `margin-call`, `unwind`, ཚབ་བཙུགས་) ནང་།
+   `--output` ཐབས་ལམ་དང་ ཧེཤ་ དེ་ལས་ ཧེཤ་རེ་རེ་གི་སྦོ་ལོགས་ཁར་ ཆ་འཇོག་ཚུ་ དྲན་ཐོ་བཀོད།
+༣ མི་ཚེའི་འཁོར་རིམ་གྱི་བདེན་ཁུངས་པར་ལེན་དང་ འཁྲབ་སྟོན་གྱི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ མངོན་གསལ་འབད་དགོ།
+   གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ བཞུ་བཅོས་འདི་ Repo གི་སྒྲིག་བཀོད་གཅིག་དང་གཅིག་ཁར་ ལོག་རྩིས་རྐྱབ་ཚུགས།
+4. མེ་ལོང་ `RepoAccountEvent::*` གིས་ གནོད་སྐྱོན་ཕོག་ཡོད་པའི་རྩིས་ཐོ་དང་ བཀོ་ནི།
+   ཕྱིར་གཏོང་ NDJSON ནང་ `artifacts/finance/repo/<agreement-id>/events.ndjson` ནང་།
+   སྦུང་ཚན་འདི་མ་བཙུགས་པའི་ཧེ་མ།
+༥ ཚོགས་རྒྱན་འདི་ མཇུག་བསྡུ་ཞིནམ་ལས་ ཇི་ཨེ་ཨར་ངོས་འཛིན་འབད་མི་དང་གཅིག་ཁར་ `hashes.txt` དུས་མཐུན་བཟོ་ནི།
+   རིམ་སྒྲིག་ཧེཤ་དང་ ཚོགས་སྡེ་གིས་ བསྐོར་ཐེངས་འདི་ འཚོལ་ཞིབ་འབད་ཚུགས།
+   མེད་པར་ ས་གནས་ཀྱི་ཡིག་ཆ་ཚུ་ ལོག་གཡོག་བཀོལ་ནི།
 
-1. Copy the intake template, fill the metadata block (agreement id, GAR ticket,
-   custodian, configuration hash), and create the evidence directory.
-2. Stage every instruction (`initiate`, `margin-call`, `unwind`, substitution) in
-   `--output` mode, hash the JSON, and log the approvals beside each hash.
-3. Emit the lifecycle proof snapshot and manifest immediately after staging so
-   governance reviewers can recompute the digest with the same repo fixtures.
-4. Mirror `RepoAccountEvent::*` SSE payloads for the affected accounts and drop
-   the exported NDJSON in `artifacts/finance/repo/<agreement-id>/events.ndjson`
-   before filing the packet.
-5. Once the vote passes, update `hashes.txt` with the GAR identifier,
-   configuration hash, and manifest checksum so the council can trace the rollout
-   without re-running local scripts.
+### ༣.༥ གཞུང་སྐྱོང་སྦུང་ཚད་མགྱོགས་པ།
 
-### 3.5 Governance packet quickstart
+རོ་ཌི་མེཔ་ཨེཕ་༡ བསྐྱར་ཞིབ་པ་ཚུ་གིས་ ཁོང་གིས་ གཞི་བསྟུན་འབད་ཚུགས་པའི་ བརྟག་ཞིབ་ཐོ་ཡིག་ཆུང་ཀུ་ཅིག་ ཞུ་ཡི།
+སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ཅིག་བསྡུ་སྒྲིག་འབད་དོ། རེ་པོ་ཞུ་བ་གང་ཚེ་འོག་གི་རིམ་པ་ལུ་བརྩི་འཇོག་འབད།
+ཡང་ན་ སྲིད་བྱུས་བསྒྱུར་བཅོས་འདི་ གཞུང་སྐྱོང་ནང་ འགྱོཝ་ཨིན།
 
-Roadmap F1 reviewers asked for a concise checklist they can reference while
-assembling an evidence bundle. Follow the sequence below whenever a repo request
-or policy change is heading to governance:
-
-1. **Export the lifecycle proof artefacts.**
+1. **མི་ཚེ་འཁོར་རིམ་བདེན་དཔང་ཚུ་ཕྱིར་འདྲེན་འབད།**
    ```bash
    mkdir -p artifacts/finance/repo/<slug>
    REPO_PROOF_SNAPSHOT_OUT=artifacts/finance/repo/<slug>/repo_proof_snapshot.json \
@@ -725,155 +702,156 @@ or policy change is heading to governance:
    cargo test -p iroha_core \
      -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
    ```
-   The exported JSON + digest mirror the checked-in fixtures under
-   `crates/iroha_core/tests/fixtures/`, so reviewers can recompute the lifecycle
-   frame without re-running the entire suite (see §2.7). You can also call
+   ཕྱིར་འདྲེན་འབད་མི་ JSON + བཞུ་བཅོས་འདི་གིས་ འོག་ལུ་ཡོད་པའི་ ཞིབ་དཔྱད་འབད་ཡོད་པའི་ནང་བརྟན་ཚུ་ མེ་ལོང་ འོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
+   `crates/iroha_core/tests/fixtures/`, དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ མི་ཚེ་འཁོར་རིམ་འདི་ ལོག་རྩིས་སྟོན་ཚུགས།
+   གཞི་ཁྲམ་འདི་ ཆ་ཚང་སྦེ་ ལོག་མ་བརྒྱུདཔ་ (§2.7 ལུ་བལྟ།) ཁྱོད་ཀྱིས་ཡང་ཁ་པར་གཏང་ཚུགས།
    `scripts/regen_repo_proof_fixture.sh --bundle-dir artifacts/finance/repo/<slug>`
-   to refresh and copy the same files in one step.
-2. **Stage and hash every instruction.** Generate initiation/margin/unwind
-   payloads with `iroha app repo ... --output`. Capture the SHA-256 for each file
-   (store under `hashes/`) so `docs/examples/finance/repo_governance_packet_template.md`
-   can reference the same bytes the desks reviewed.
-3. **Save ledger/config snapshots.** Export `repo query list` output before/after
-   settlement, dump the `[settlement.repo]` TOML block that will be applied, and
-   mirror the relevant `AccountEvent::Repo(*)` SSE feed into
-   `artifacts/finance/repo/<slug>/events/repo-events.ndjson`. After the GAR
-   passes, capture `/v1/configuration` snapshots per peer (§2.9) and store them
-   under `config/peers/` so the governance packet proves the rollout succeeded.
-4. **Generate the evidence manifest.**
+   ཡིག་སྣོད་གཅིག་མཚུངས་ཚུ་ གོམ་པ་གཅིག་ནང་ གསརཔ་བཟོ་ནི་དང་ འདྲ་བཤུས་རྐྱབ་ནི་ལུ་ཨིན།
+2. **གནས་རིམ་དང་ ཧེ་ཤི་ བཀོད་སྒྲིག་རེ་རེ་བཞིན་ འགོ་བཙུགས།
+   `iroha app repo ... --output` དང་བཅས་པ་ ཡིག་སྣོད་རེ་རེའི་དོན་ལུ་ ཨེསི་ཨེཆ་ཨེ་-༢༥༦ བརྩེགས་འབད།
+   (`hashes/` འོག་ལུ་གསོག་འཇོག་འབད་ནི།) དེ་ལས་ `docs/examples/finance/repo_governance_packet_template.md`
+   བསྐྱར་ཞིབ་འབད་ཡོད་པའི་ ཌིཀསི་ཚུ་ གཅིག་མཚུངས་སྦེ་གཞི་བསྟུན་འབད་ཚུགས།
+3. **ལེད་ཇར་/རིམ་སྒྲིག་པར་ལེན་ཚུ་སྲུང་བཞག་འབད།
+   གཞིས་ཆགས་, `[settlement.repo]` ལག་ལེན་འཐབ་ནི་ཨིན་མི་ TOML སྡེབ་ཚན་འདི་ བཀོ་བཞག་དགོ།
+   འབྲེལ་ཡོད་ `AccountEvent::Repo(*)` ཨེསི་ཨེསི་ཨི་ཕིཌི་ནང་ལུ་ མེ་ལོང་ནང་།
+   `artifacts/finance/repo/<slug>/events/repo-events.ndjson`. གྷ་ཨར་གྱི་ཤུལ་ལུ།
+   partes, `/v1/configuration` པར་ལེན་པ་ (§2.9) དང་དེ་དག་གསོག་འཇོག་བྱས།
+   འོག་ལུ་ `config/peers/` གིས་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་འདི་གིས་ མཇུག་བསྡུ་འདི་ མཐར་འཁྱོལ་བྱུང་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བསྐྱལཝ་ཨིན།
+4. **སྒྲུབ་བྱེད་གསལ་སྟོན་བྱེད་པ།**
    ```bash
    python3 scripts/repo_evidence_manifest.py \
      --root artifacts/finance/repo/<slug> \
      --agreement-id <repo-id> \
      --output artifacts/finance/repo/<slug>/manifest.json
    ```
-   Include the manifest hash inside the governance ticket or GAR minutes so
-   auditors can diff the packet without downloading the raw bundle (see §3.2).
-5. **Assemble the packet.** Copy the template from
-   `docs/examples/finance/repo_governance_packet_template.md`, fill the metadata,
-   attach the proof snapshot/digest, manifest, config hash, SSE export, and test
-   logs, then cite the manifest SHA-256 inside the referendum `--notes` field.
-   Store the completed Markdown next to the artefacts so rollbacks inherit the
-   exact evidence you shipped for approval.
+   གཞུང་སྐྱོང་གི་ཤོག་འཛིན་ནང་ ཡང་ན་ GAR གི་སྐར་མ་ཚུ་ ནང་ན་གསལ་སྟོན་འབད་ནི།
+   རྩིས་ཞིབ་པ་ཚུ་གིས་ བཱན་ཌལ་མ་ཕབ་པར་ སྦུང་ཚན་འདི་ དབྱེ་བ་ཕྱེ་ཚུགས།(§༣.༢ བལྟ།)
+5. **སྦུང་ཚན་འདི་བསྡུ་སྒྲིག་འབད་ནི།** ཊེམ་པེལེཊི་འདྲ་བཤུས་རྐྱབས།
+   `docs/examples/finance/repo_governance_packet_template.md`, མེ་ཊ་ཌེ་ཊ་ དེ་ བཀང་དགོ།
+   བདེན་དཔང་པར་ལེན་/བདུད། གསལ་སྟོན་ རིམ་སྒྲིག་ཧེཤ་ ཨེསི་ཨེསི་ཨི་ཕྱིར་འདྲེན་དང་བརྟག་དཔྱད་ཚུ་མཉམ་སྦྲགས་འབད།
+   logs དེ་ལས་ འོས་འདེམས་ `--notes` ས་ཁོངས་ནང་ SHA-256 གསལ་སྟོན་འབད།
+   མཇུག་བསྡུ་ཚར་མི་འདི་ ཅ་རྙིང་ཚུ་གི་སྦོ་ལོགས་ཁར་ གསོག་འཇོག་འབད་ཞིནམ་ལས་ ལོག་བསྐོར་རྐྱབ་མི་འདི་གིས་ ཤུལ་འཛིན་འབདཝ་ཨིན།
+   ཁྱོད་ཀྱིས་ ཆ་འཇོག་འབད་ནི་གི་དོན་ལུ་ བཏང་ཡོད་པའི་ སྒྲུབ་བྱེད་ངེས་བདེན་ཨིན།
 
-Running the steps above immediately after staging a repo request means the
-governance packet is ready as soon as the council convenes, avoiding last-minute
-scrambles to recreate hashes or event streams.
+གོང་འཁོད་ཀྱི་གོ་རིམ་ཚུ་ རེཔ་པོ་ཞུ་བ་འབད་བའི་ཤུལ་ལས་ གཡོག་བཀོལ་ནི་ཟེར་མི་འདི་ཨིན།
+གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་འདི་ ཚོགས་སྡེ་གིས་ འཚོགས་ཚརཝ་ཅིག་ གྲ་སྒྲིག་ཡོདཔ་ལས་ དུས་ཡུན་མཇུག་འདི་ འཛེམ་དགོཔ་ཨིན།
+ཧེསི་ཡང་ན་ བྱུང་ལས་རྒྱུན་ཚུ་ ལོག་གསར་བསྐྲུན་འབད་ནི་ལུ་ བརྡབ་འགྱོཝ་ཨིན།
 
-## 4. Tri-Party Custody & Collateral Substitution
-
-- **Custodians:** Passing `--custodian <account>` routes collateral to the
-  custodian vault; runtime enforces account existence and emits role-tagged
-  events so custodians can reconcile (`RepoAccountRole::Custodian`). The state
-  machine rejects agreements whose custodian matches either party.
-- **Collateral substitution:** The unwind leg may deliver a different collateral
-  quantity/series during substitution so long as it is **not less** than the
-  pledged amount *and* the substitution matrix allows the pair; `ReverseRepoIsi`
-  enforces both conditions
-  (`crates/iroha_core/src/smartcontracts/isi/repo.rs:414`–`437`). The integration
-  test suite exercises both the rejection path and a successful substitution
-  roundtrip (`integration_tests/tests/repo.rs:261`–`359`), while the repo unit
-  tests cover the new matrix policy.
-- **ISO 20022 mapping:** When building ISO envelopes or reconciling external
-  systems, reuse the field mapping documented in
+## 4. ཊི་རི་པན་ཊི་བདག་གཉེར་དང་ མཐའ་ཟུར་གྱི་ཚབ་མ་།- **སྲོལ་རྒྱུན་:** `--custodian <account>` འགྲུལ་ལམ་ཚུ་ བརྒྱུད་དེ་འགྱོ་དོ།
+  བདག་འཛིན་གྱི་ཟླ་གམ། རན་ཊའིམ་གིས་ རྩིས་ཐོ་འདི་ གནས་ཏེ་ཡོདཔ་ལས་ འགན་ཁུར་གྱི་རྟགས་བཀོད་འབདཝ་ཨིན།
+  བྱུང་རིམ་ཚུ་ དེ་འབདཝ་ལས་ བདག་འཛིན་འཐབ་མི་ཚུ་གིས་ མཐུན་སྒྲིག་འབད་ཚུགས། (`RepoAccountRole::Custodian`) མངའ་སྡེ་འདི།
+  འཕྲུལ་ཆས་ཀྱིས་ བདག་འཛིན་འཐབ་མི་གིས་ ཚོགས་པ་གཉིས་ཆ་ར་དང་ མཐུན་སྒྲིག་འབད་མི་ གན་ཡིག་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+- **མཉམ་བསྡོམ་གྱི་ཚབ་བཙུགས་:** རླུང་འཚུབ་ཀྱི་རྐང་པ་དེ་གིས་ བརྟན་བཞུགས་སོ་སོ་ཅིག་འབད་ཆོག།
+  ཚབ་བཙུགས་སྐབས་ འབོར་ཚད་/རིམ་པ་དེ་ **ཉུང་མ་** ལས་ དེ་ལས་ ཚད་ལྡན་སྦེ་ཡོདཔ་ཨིན།
+  ཁས་བླངས་འབད་ཡོད་པའི་དངུལ་བསྡོམས་ *དང་* ཚབ་བཙུགས་ནིའི་མེ་ཊིགསི་གིས་ ཆ་གཅིག་འབད་བཅུགཔ་ཨིན། `ReverseRepoIsi`
+  གནས་སྟངས་གཉིས་ཆ་རང་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  (`crates/iroha_core/src/smartcontracts/isi/repo.rs:414`–`437`). མཉམ་བསྡོམས།
+  test suite སྦྱོང་བརྡར། བཀག་ཆ་ལམ་དང་ མཐར་འཁྱོལ་ཅན་གྱི་ཚབ་བཙུགས་ནི་གཉིས་ཆ་ར་ཨིན།
+  rountrip (`integration_tests/tests/repo.rs:261`–`359`) དང་ repo Unt
+  བརྟག་དཔྱད་ཚུ་གིས་ མེ་ཊིགསི་སྲིད་བྱུས་གསརཔ་འདི་ ཁྱབ་ཚུགས།
+- **ISO 20022 སབ་ཁྲ་:** ཨའི་ཨེསི་ཨོ་ཡིག་ཤུབས་ཚུ་བཟོ་བསྐྲུན་འབད་བའི་སྐབས་ ཡང་ན་ ཕྱིའི་མཐུན་སྒྲིག་འབད་བའི་སྐབས།
+  sostys, ནང་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ ས་ཁྲ་སབ་ཁྲ་འདི་ ལོག་ལག་ལེན་འཐབ།
   `docs/source/finance/settlement_iso_mapping.md` (`colr.007`, `sese.023`,
-  `sese.025`) so the Norito payload and ISO confirmations stay in sync.
+  `sese.025`) དེ་འབདཝ་ལས་ Norito དང་ ISO བདེན་དཔྱད་ཚུ་ མཉམ་མཐུན་སྦེ་རང་ སྡོད་དོ་ཡོདཔ་ཨིན།
 
-## 5. Operational Checklists
+## 5. བཀོལ་སྤྱོད་དཔྱད་ཐོ་ཚུ།
 
-### Daily pre-open
+### ཉིན་བསྟར་ཁ་ཕྱེ།
 
-1. Export the outstanding agreement set via `iroha app repo query list`.
-2. Compare against treasury inventory and ensure eligible collateral config
-   matches the planned book.
-3. Stage upcoming repos/unwinds with `--output` and collect dual approvals.
+༡ `iroha app repo query list` བརྒྱུད་དེ་ ཁྱད་འཕགས་ཆིངས་ཡིག་ཕྱིར་འདོན་འབད།
+༢ དངུལ་ཁང་གི་ཐོ་གཞུང་དང་ག་བསྡུར་འབད་དེ་ འོས་འབབ་ཅན་གྱི་ བརྟན་བཞུགས་རིམ་སྒྲིག་འབད་དགོ།
+   འཆར་གཞི་བརྩམ་ཡོད་པའི་ཀི་དེབ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+༣ འོང་ནི་ཨིན་མི་ repos/unwinds `--output` དང་ ཆ་འཇོག་གཉིས་ལྡན་བསྡུ་ལེན་འབད་ནི།
 
-### Intraday monitoring
+### ནང་འཁོད་ལྟ་རྟོག།
 
-1. Subscribe to `AccountEvent::Repo` for initiator/counterparty/custodian
-   accounts; alert when unexpected initiations occur.
-2. Use `iroha app repo margin --agreement-id ID` (or
-   `RepoAgreementRecord::next_margin_check_after`) hourly to detect cadence
-   drift; trigger `repo margin-call` when `is_due = true`.
-3. Log all margin calls with operator initials and attach the CLI JSON output to
-   the evidence directory.
+1. འགོ་བཙུགས་མི་/གྱངས་ཁ་ཆ་སྙོམས་/བདག་གཉེར་པ་གི་དོན་ལུ་ `AccountEvent::Repo` ལུ་མིང་རྟགས་བཀོད།
+   རྩིས་ཁྲ་ཚུ་; རེ་བ་མེད་པའི་འགོ་བཙུགས་པའི་སྐབས་ ཉེན་བརྡ་།
+2. `iroha app repo margin --agreement-id ID` ལག་ལེན་འཐབ།
+   `RepoAgreementRecord::next_margin_check_after`) ཆུ་ཚོད་རེར་ཆུ་ཚོད་རེར་ཤེས་རྟོགས་བྱེད་དགོས།
+   འདྲེན་བྱེད་; `is_due = true` སྐབས་ `repo margin-call` འབྱིན།
+3. བཀོལ་སྤྱོད་པ་ཚུ་དང་གཅིག་ཁར་ མཐའ་མཚམས་འབོད་བརྡ་ཚུ་ཆ་མཉམ་ནང་བསྐྱོད་འབད་ཞིནམ་ལས་ སི་ཨེལ་ཨའི་ཇེ་ཨེསི་ཨོ་ཨའུཊི་པུཊི་འདི་ ༡ ལུ་མཉམ་སྦྲགས་འབད།
+   སྒྲུབ་བྱེད་ཀྱི་སྣོད་ཐོ།
 
-### End-of-day + post-settlement
+### མཇུག་མཐའ + གཞིས་ཆགས་ཀྱི་རྗེས་སུ།
 
-1. Re-run `repo query list` and confirm unwound agreements have been removed.
-2. Archive the `RepoAccountEvent::Settled` payloads and cross-check cash/collateral
-   balances via `FindAssets`.
-3. File a drill entry in `ops/drill-log.md` when repo drills or incident tests
-   run; reuse `scripts/telemetry/log_sorafs_drill.sh` conventions for timestamps.
+༡ ལོག་སྟེ་ `repo query list` དང་ རྨ་སྐྱོན་མེད་པའི་ཆིངས་ཡིག་ཚུ་ བཏོན་བཏང་ཡོདཔ་ངེས་གཏན་བཟོ།
+2. `RepoAccountEvent::Settled` དངུལ་སྤྲོད་དང་ བརྒལ་བའི་དངུལ་ཕོགས་/ བརྡ་རྟགས་བརྟག་དཔྱད་འབད།
+   `FindAssets` བརྒྱུད་དེ་ ལྷག་ལུས་ཚུ།
+3. repo reprels ཡང་ན་ བྱུང་རྐྱེན་བརྟག་དཔྱད་ཚུ་འབད་བའི་སྐབས་ `ops/drill-log.md` ནང་ དམག་སྦྱོང་ཐོ་བཀོད་ཅིག་ཡིག་སྣོད་འབད།
+   རྒྱུག༌ནི; དུས་ཚོད་མཚོན་རྟགས་ཚུ་གི་དོན་ལུ་ `scripts/telemetry/log_sorafs_drill.sh` ཆིངས་ཡིག་ཚུ་བསྐྱར་བཟོ་འབད།
 
-## 6. Fraud & Rollback Procedures
+## 6. གཡོ་སྒྱུ་དང་རོལ་བོག་བྱ་རིམ།
 
-- **Dual control:** Always generate instructions with `--output` and store the
-  JSON for co-signing. Reject single-party submissions at the process level
-  even though the runtime enforces initiator authority.
-- **Tamper-evident logging:** Mirror the `RepoAccountEvent` stream into your
-  SIEM so any forged instruction would be detectable (missing peer signatures).
-- **Rollback:** If a repo must be unwound prematurely, submit `repo unwind`
-  with the same agreement id and attach the `--notes` field in your incident
-  tracker referencing the GAR-approved rollback playbook.
-- **Fraud escalation:** If unauthorised repos appear, export the offending
-  `RepoAccountEvent` payloads, freeze the accounts via governance policy, and
-  notify the council per the repo governance SOP.
+- **ཚད་འཛིན་གཉིས་ལྡན་:** ཨ་རྟག་ར་ `--output` དང་གཅིག་ཁར་བཀོད་རྒྱ་ཚུ་བཟོ་བཏོན་འབད་ཞིནམ་ལས་ 1 གསོག་འཇོག་འབད།
+  JSON མཉམ་འབྲེལ་མིང་རྟགས་བཀོད་པའི་དོན་ལུ་ཨིན། ལས་སྦྱོར་གནས་རིམ་ལུ་ ཕྱོགས་གཅིག་ལས་ ཕྱོགས་གཅིག་པའི་ཞུ་ཡིག་ཚུ་ ངོས་ལེན་མ་འབད།
+  རན་ཊའིམ་གྱིས་ འགོ་བཙུགས་མི་དབང་ཚད་ཚུ་ ཤུགས་བཏོནམ་ཨིན་རུང་།
+- **ཊམ་པར་-མངོན་གསལ་ཅན་གྱི་དྲན་ཐོ་:** ཁྱོད་ཀྱི་ནང་ལུ་ `RepoAccountEvent` རྒྱུན་ལམ་འདི་ཨིན།
+  SIEM དེ་འབདཝ་ལས་ རྫུས་མའི་བཀོད་རྒྱ་ག་ཅི་རང་འབད་རུང་ ཤེས་རྟོགས་འབད་ཚུགསཔ་ཨིན་ (མཉམ་རོགས་མཚན་རྟགས་ཚུ་ བརླག་སྟོར་ཞུགས་ནི།)
+- **Rollback:** གལ་སྲིད་ རི་པོ་ཅིག་ དུས་ཚོད་ཁར་ རྨ་སྐྱོན་མེད་པར་ འགྱོ་དགོ་པ་ཅིན་ `repo unwind` བཙུགས་དགོ།
+  ཆིངས་ཡིག་གཅིག་པ་དང་བཅས་པ་དང་ཁྱོད་ཀྱི་བྱུང་རྐྱེན་ནང་ `--notes` ས་སྒོ་འདི་མཉམ་སྦྲགས་འབད།
+  ཊེག་ཊར་ ཇི་ཨར་ ཆ་འཇོག་འབད་ཡོད་པའི་ རོལ་རྩེད་དེབ་འདི་ གཞི་བསྟུན་འབད་དོ།
+- **རའུ་ཌི་ཡར་འཕར་:** གནང་བ་མེད་པའི་ རི་པོ་ཚུ་འབྱུང་པ་ཅིན་ ཉེས་ཅན་འདི་ཕྱིར་འདྲེན་འབད།
+  `RepoAccountEvent` གཞུང་སྐྱོང་སྲིད་བྱུས་བརྒྱུད་དེ་ རྩིས་ཁྲ་ཚུ་ གྱང་ཤུགས་ཅན་བཟོ་ནི།
+  རི་པོ་ གཞུང་སྐྱོང་ ཨེསི་ཨོ་པི་རེ་ལུ་ ཚོགས་སྡེ་ལུ་ བརྡ་དོན་སྤྲོད།
 
-## 7. Reporting & Follow-Up
+## 7. སྙན་ཞུ་དང་རྗེས་སུ་འབྲང་།
 
-### 7.1 Treasury reconciliation & ledger evidence
+### 7.1 དངུལ་ཁང་གི་མཐུན་སྒྲིག་དང་ རྩིས་ཁྲ་གི་སྒྲུབ་བྱེད།ལམ་སྟོན་ **F1** དང་ འཛམ་གླིང་གཞིས་ཆགས་སྲུང་སྐྱོབ།
+བསྐྱར་ཞིབ་ཀྱི་ བང་མཛོད་བདེན་ཁུངས་ཚུ་ བཙུགས་ནིའི་དོན་ལུ་ རི་པོ་བསྐྱར་ཞིབ་དགོཔ་ཨིན། ཅིག་བཟོ་ནི།
+གཤམ་གྱི་ཞིབ་དཔྱད་ཐོ་ཡིག་ལུ་གཞི་བཞག་སྟེ་ ཀི་དེབ་རེ་ལུ་ ཟླཝ་གསུམ་གྱི་ནང་འཁོད་ལུ་ མཇུག་བསྡུ་ཡོདཔ་ཨིན།
 
-Roadmap **F1** and the global settlement guardrail (roadmap.md#L1975-L1978)
-require every repo review to include deterministic treasury proofs. Produce a
-quarterly bundle per book by following the checklist below.
+1. **པར་ལེན་ཚད་སྙོམས་ཚུ་** ནུས་ཤུགས་དེ་ལུ་ `FindAssets` འདྲི་དཔྱད་ལག་ལེན་འཐབ།
+   `iroha ledger asset list` (```bash
+   python3 scripts/repo_evidence_manifest.py \
+     --root artifacts/finance/repo/<slug> \
+     --agreement-id <repo-id> \
+     --output artifacts/finance/repo/<slug>/manifest.json
+   ```) ཡང་ན་
+   `iroha_python` གྲོགས་རམ་འབད་མི་གིས་ `ih58...` གི་དོན་ལུ་ XOR ལྷག་ལུས་ཚུ་ ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+   `ih58...`, དང་ བསྐྱར་ཞིབ་ནང་འབྲེལ་གཏོགས་ཡོད་པའི་ ཌིཀསི་རྩིས་ཐོ་རེ་རེ་བཞིན་ཨིན། བསགས་བཞག་ནི
+   འོག་ལུ་ JSON the གཤམ་ལུ།
+   `artifacts/finance/repo/<period>/treasury_assets.json` དང་ git འདི་ཐོ་བཀོད་འབད།
+   མཉམ་དུ་ `README.md` ནང་ ལག་ཆ་ ཆེན།
+2. **Cross-ཞིབ་དཔྱད་འབད་ཡོད་པའི་ ལག་དེབ་དམིགས་ཚད་ཚུ།** ལོག་སྟེ་གཡོག་བཀོལ།
+   `sorafs reserve ledger --quote <...> --json-out ...` དང་ ཐོན་འབྲས་འདི་སྤྱིར་བཏང་བཟོ།
+   བརྒྱུད་དེ་ `scripts/telemetry/reserve_ledger_digest.py`. བདུད ་ དང་ བ ་ བ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་ ་བཞག།
+   རྩིས་ཞིབ་པ་ཚུ་གིས་ XOR བསྡོམས་རྩིས་འདི་ Repo ལུ་འགོག་ཐབས་འབད་ཚུགས།
+   CLI བསྐྱར་རྩེད་མ་འབད་བར་ ledger པར་བརྙན།
+3. **མཐུན་སྒྲིག་དྲན་ཐོ་འདི་དཔར་བསྐྲུན་འབད།
+   `artifacts/finance/repo/<period>/treasury_reconciliation.md`: གཞི་བསྟུན་འབད་དེ་:
+   རྒྱུ་དངོས་པར་ལེན་འདི་ ཧེ་ཤི་དང་ ལེཌ་ཇར་ བཞུ་བཅོས་ཧ་ཤི་ དེ་ལས་ ཆིངས་ཡིག་ཚུ་ ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+   དངུལ་འབྲེལ་གཞུང་སྐྱོང་རྗེས་འདེད་ལས་ དྲན་ཐོ་འདི་ འབྲེལ་མཐུད་འབད།
+   repo གསར་བཏོན་འབད་བའི་ཧེ་མ་ དངུལ་ཁང་གི་ཁྱབ་བསྒྲགས།
 
-1. **Snapshot balances.** Use the `FindAssets` query that powers
-   `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) or the
-   `iroha_python` helper to export XOR balances for `ih58...`,
-   `ih58...`, and every desk account involved in the review. Store
-   the JSON under
-   `artifacts/finance/repo/<period>/treasury_assets.json` and record the git
-   commit/toolchain in the accompanying `README.md`.
-2. **Cross-check ledger projections.** Re-run
-   `sorafs reserve ledger --quote <...> --json-out ...` and normalise the output
-   via `scripts/telemetry/reserve_ledger_digest.py`. Place the digest next to
-   the asset snapshot so auditors can diff the XOR totals against the repo
-   ledger projection without replaying the CLI.
-3. **Publish the reconciliation note.** Summarise deltas in
-   `artifacts/finance/repo/<period>/treasury_reconciliation.md` by referencing:
-   the asset snapshot hash, the ledger digest hash, and the agreements covered.
-   Link the note from the finance governance tracker so reviewers can confirm
-   treasury coverage before approving the repo release.
+### 7.2 དྲིལ་དང་བསྐྱར་སྦྱོང་བསྐྱར་སྦྱོང་གི་སྒྲུབ་བྱེད།
 
-### 7.2 Drill & rollback rehearsal evidence
+ངོས་ལེན་གྱི་ཚད་གཞི་འདི་གིས་ གོ་རིམ་བཞིན་དུ་ ལོག་སྤྲོད་ནི་དང་ བྱུང་རྐྱེན་གྱི་ དམག་སྦྱོང་ཚུ་ཡང་ འབད་དགོཔ་སྦེ་ཨིན་མས། གེ་ར
+དམག་སྦྱོང་ཡང་ན་ ཟང་ཟིང་སྦྱང་བརྩོན་འདི་ གཤམ་གསལ་གྱི་ ཅ་ཆས་ཚུ་ བསྡུ་ལེན་འབད་དགོ།
 
-The acceptance criteria also demand staged rollbacks and incident drills. Every
-drill or chaos rehearsal must collect the following artefacts:
+1. `repo_runbook.md` དོན་ཚན་༤–༥ བྱུང་རིམ་དམག་དཔོན་གྱིས་མཚན་རྟགས་བཀོད་ཡོད།
+   མ་དངུལ་ཚོགས་པ།.
+2. བསྐྱར་སྦྱོང་གི་དོན་ལུ་ CLI/SDK དྲན་ཐོ་ (`repo initiate|margin-call|unwind`) དང་།
+   བསྐྱར་བཟོའི་མི་ཚེ་འཁོར་རིམ་གྱི་བདེན་དཔང་དང་སྒྲུབ་བྱེད་ཀྱི་གསལ་སྟོན་ (§§2.7–3.2) གསོག་འཇོག་བྱས།
+   འོག་ལུ་ `artifacts/finance/repo/drills/<timestamp>/`.
+༣ བཙུགས་ཡོད་པའི་བརྡ་རྟགས་ཚུ་སྟོན་མི་ དྲན་ཤེས་ཡང་ན་ ཤོག་ལེབ་ཀྱི་ཡིག་ཆ་ཚུ་ དང་།
+   ངོས་ལེན་ལམ་ལུགས། ཡིག་བསྒྱུར་འདི་ དམག་སྦྱོང་འབད་སའི་ ཅ་ཆས་ཚུ་གི་བོ་ལོག་ཁར་ དང་།
+   གཅིག་ལག་ལེན་འཐབ་པའི་སྐབས་ དྲན་ཤེས་ཅན་གྱི་ཁུ་སིམ་ ID འདི་ཚུདཔ་ཨིན།
+4. GAR id གཞི་བསྟུན་འབད་མི་ `ops/drill-log.md` འཛུལ་ཞུགས་ཅིག་དང་ གསལ་སྟོན་ཧེཤ་ དེ་ལས་ དམག་སྦྱོང་འབདཝ་ཨིན།
+   བཱན་ཌལ་འགྲུལ་ལམ་འདི་གིས་ མ་འོངས་པའི་རྩིས་ཞིབ་ཚུ་གིས་ ཁ་སླབ་དྲན་ཐོ་ཚུ་ མ་བཏོན་པར་ བསྐྱར་སྦྱོང་འབད་ཚུགས།
 
-1. `repo_runbook.md` Sections 4–5 checklist signed by the incident commander and
-   finance council.
-2. CLI/SDK logs for the rehearsal (`repo initiate|margin-call|unwind`) plus the
-   refreshed lifecycle proof snapshot and evidence manifest (§§2.7–3.2) stored
-   under `artifacts/finance/repo/drills/<timestamp>/`.
-3. Alertmanager or pager transcripts showing the injected signals and the
-   acknowledgement trail. Drop the transcript next to the drill artefacts and
-   include the Alertmanager silence ID when one was used.
-4. An `ops/drill-log.md` entry referencing the GAR id, manifest hash, and drill
-   bundle path so future audits can trace rehearsals without scraping chat logs.
+### 7.3 གཞུང་སྐྱོང་རྗེས་འདེད་དང་ doc གཙང་སྦྲ།
 
-### 7.3 Governance tracker & doc hygiene
+- ཡིག་ཆ་འདི་ `repo_runbook.md`, དང་ དངུལ་འབྲེལ་གཞུང་སྐྱོང་རྗེས་འདེད་ནང་ ༢༠༡༢ ལུ་བཞག་དགོ།
+  སི་ཨེལ་ཨའི་/ཨེསི་ཌི་ཀེ་ ཡང་ན་ རན་དུས་ཚོད་སྤྱོད་ལམ་བསྒྱུར་བཅོས་འགྱོ་བའི་སྐབས་ ལྡེ་མིག་བརྩེས། བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ རེ་བ་བསྐྱེདཔ་ཨིན།
+  གཏན་གཏན་སྦེ་སྡོད་ནིའི་དོན་ལུ་ ངོས་ལེན་ཐིག་ཁྲམ་།
+- སྒྲུབ་བྱེད་ཆ་ཚང་ (`agreements.json`, སྟེགས་རིས་བཀོད་རྒྱ་, SSE མཉམ་སྦྲགས་འབད།
+  ཡིག་ཆ་ རིམ་སྒྲིག་པར་ཆས་ མཐུན་སྒྲིག་ དམག་སྦྱོང་དང་ བརྟག་དཔྱད།
+  logs) ལོ་གསུམ་གྱི་བསྐྱར་ཞིབ་རེ་རེ་གི་དོན་ལུ་ འཚོལ་ཞིབ་པ་ལུ།
+- གཞི་བསྟུན་ `docs/source/finance/settlement_iso_mapping.md` མཉམ་འབྲེལ་འབད་བའི་སྐབས་
+  ཨའི་ཨེསི་ཨོ་ཟམ་བཀོལ་སྤྱོད་པ་ཚུ་དང་གཅིག་ཁར་ དེ་འབདཝ་ལས་ ཕར་ཚུར་མཐུན་སྒྲིག་འདི་ ཕྲང་སྒྲིག་སྦེ་ལུསཔ་ཨིན།
 
-- Keep this document, `repo_runbook.md`, and the finance governance tracker in
-  lockstep whenever CLI/SDK or runtime behaviour changes; reviewers expect the
-  acceptance table to stay accurate.
-- Attach the full evidence bundle (`agreements.json`, staged instructions, SSE
-  transcripts, config snapshot, reconciliations, drill artefacts, and test
-  logs) to the tracker for every quarterly review.
-- Reference `docs/source/finance/settlement_iso_mapping.md` when coordinating
-  with ISO bridge operators so cross-system reconciliation remains aligned.
-
-By following this guide, operators satisfy the roadmap F1 acceptance bar:
-deterministic proofs are captured, tri-party and substitution flows are
-documented, and governance procedures (dual-control + incident logging) are
-codified in-tree.
+ལམ་སྟོན་འདི་ལུ་གཞི་བཞག་སྟེ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ལམ་སྟོན་ F1 ངོས་ལེན་ཕྲ་རིང་འདི་ བསྒྲུབ་ཚུགསཔ་ཨིན།
+ཐག་གཅོད་བདེན་དཔང་ཚུ་ བཟུང་ཡོདཔ་ད་ ཚོགས་པ་གསུམ་དང་ ཚབ་བཙུགས་པའི་རྒྱུན་འབབ་ཚུ་ ༡.
+ཡིག་ཐོག་ལུ་བཀོད་ཡོད་མི་དང་ གཞུང་སྐྱོང་བྱ་རིམ་ (གཉིས་ལྡན་ + བྱུང་རྐྱེན་དྲན་ཐོ་) ཚུ་ཨིན།
+སྒྲིག་གཞི་བཟོ་ཡོདཔ།

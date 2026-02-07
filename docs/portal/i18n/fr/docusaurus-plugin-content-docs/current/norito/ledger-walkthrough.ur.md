@@ -4,39 +4,39 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: لیجر واک تھرو
-description: `iroha` CLI کے ساتھ deterministic register -> mint -> transfer فلو دوبارہ بنائیں اور نتیجے میں لیجر اسٹیٹ کی تصدیق کریں۔
-slug: /norito/ledger-walkthrough
+titre : لیجر واک تھرو
+description : `iroha` CLI est un registre déterministe -> menthe -> transfert. کریں۔
+slug : /norito/ledger-walkthrough
 ---
 
-یہ walkthrough [Norito quickstart](./quickstart.md) کی تکمیل کرتا ہے اور دکھاتا ہے کہ `iroha` CLI کے ساتھ لیجر اسٹیٹ کو کیسے بدلیں اور چیک کریں۔ آپ ایک نئی asset definition رجسٹر کریں گے، ڈیفالٹ آپریٹر اکاؤنٹ میں units mint کریں گے، بیلنس کا کچھ حصہ دوسرے اکاؤنٹ کو ٹرانسفر کریں گے، اور نتیجے میں آنے والی transactions اور holdings کی تصدیق کریں گے۔ ہر قدم Rust/Python/JavaScript SDK quickstarts میں کورڈ فلو کی عکاسی کرتا ہے تاکہ آپ CLI اور SDK کے درمیان parity کی تصدیق کر سکیں۔
+Voici la procédure pas à pas [démarrage rapide Norito] (./quickstart.md) pour télécharger la CLI `iroha`. لیجر اسٹیٹ کو کیسے بدلیں اور چیک کریں۔ آپ ایک نئی Asset Definition رجسٹر کریں گے، ڈیفالٹ آپریٹر اکاؤنٹ میں unités menthe کریں گے، بیلنس کا Les transactions et les participations sont liées aux transactions et aux avoirs. کریں گے۔ Voici les démarrages rapides du SDK Rust/Python/JavaScript et la parité entre la CLI et le SDK کر سکیں۔
 
 ## پیشگی تقاضے
 
-- [quickstart](./quickstart.md) فالو کریں تاکہ سنگل-پیئر نیٹ ورک کو
-  `docker compose -f defaults/docker-compose.single.yml up --build` کے ذریعے بوٹ کیا جا سکے۔
-- یقینی بنائیں کہ `iroha` (CLI) build یا download ہے اور آپ `defaults/client.toml` سے peer تک پہنچ سکتے ہیں۔
-- اختیاری مددگار: `jq` (JSON responses کی formatting) اور POSIX shell تاکہ نیچے دیے گئے environment-variable snippets استعمال ہو سکیں۔
+- [démarrage rapide](./quickstart.md) فالو کریں تاکہ سنگل-پیئر نیٹ ورک کو
+  `docker compose -f defaults/docker-compose.single.yml up --build` est en cours de réalisation
+- Téléchargez `iroha` (CLI) build et téléchargez et téléchargez `defaults/client.toml` pour les pairs.
+- Nom du produit : `jq` (réponses JSON et formatage) et le shell POSIX contient des extraits de variables d'environnement et des extraits de variables d'environnement.
 
-اس گائیڈ میں `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو ان account IDs سے بدلیں جو آپ استعمال کرنا چاہتے ہیں۔ defaults bundle پہلے ہی demo keys سے اخذ کیے گئے دو accounts شامل کرتا ہے:
+Il s'agit d'un `$ADMIN_ACCOUNT` et d'un `$RECEIVER_ACCOUNT` pour les identifiants de compte et les identifiants de compte. ensemble de valeurs par défaut avec 3 clés de démonstration et 3 comptes pour les comptes :
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-پہلے چند accounts لسٹ کر کے ویلیوز کی تصدیق کریں:
+پہلے چند comptes لسٹ کر کے ویلیوز کی تصدیق کریں:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. genesis اسٹیٹ کا معائنہ
-
-CLI جس لیجر کو ٹارگٹ کر رہا ہے اسے ایکسپلور کریں:
+## 1. Genèse اسٹیٹ کا معائنہLa CLI est la suivante:
 
 ```sh
 # genesis میں رجسٹرڈ domains
@@ -51,22 +51,22 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-یہ کمانڈز Norito-backed responses پر انحصار کرتی ہیں، لہذا filtering اور pagination deterministic ہیں اور وہی ہیں جو SDKs حاصل کرتے ہیں۔
+Il existe des réponses basées sur Norito et des kits de filtrage et de pagination déterministes et des SDK. حاصل کرتے ہیں۔
 
-## 2. asset definition رجسٹر کریں
+## 2. définition des actifs رجسٹر کریں
 
-`wonderland` ڈومین کے اندر `coffee` نام کا ایک نیا، لامحدود mintable asset بنائیں:
+`wonderland` est un actif monnayable `coffee`:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-CLI submitted transaction hash (مثلاً `0x5f…`) پرنٹ کرتا ہے۔ اسے محفوظ کریں تاکہ بعد میں status کو query کیا جا سکے۔
+Hachage de transaction soumis par CLI (مثلاً `0x5f…`) Vous avez besoin d'un statut et d'une requête pour obtenir un statut
 
-## 3. آپریٹر اکاؤنٹ میں units mint کریں
+## 3. آپریٹر اکاؤنٹ میں unités menthe کریں
 
-asset quantities `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` میں `coffee#wonderland` کی 250 units mint کریں:
+quantités d'actifs `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` pour `coffee#wonderland` pour 250 unités menthe:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -74,13 +74,13 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-CLI output سے transaction hash (`$MINT_HASH`) محفوظ کریں۔ بیلنس دوبارہ چیک کرنے کے لئے چلائیں:
+Sortie CLI et hachage de transaction (`$MINT_HASH`) بیلنس دوبارہ چیک کرنے کے لئے چلائیں:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-یا صرف نئے asset کو ٹارگٹ کرنے کے لئے:
+L'actif de votre actif est le suivant :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -90,7 +90,7 @@ iroha --config defaults/client.toml asset list filter \
 
 ## 4. بیلنس کا کچھ حصہ دوسرے اکاؤنٹ کو ٹرانسفر کریں
 
-آپریٹر اکاؤنٹ سے `$RECEIVER_ACCOUNT` کو 50 units منتقل کریں:
+Il s'agit d'un produit `$RECEIVER_ACCOUNT` pour 50 unités:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -99,7 +99,7 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-transaction hash کو `$TRANSFER_HASH` کے طور پر محفوظ کریں۔ دونوں اکاؤنٹس پر holdings query کریں تاکہ نئی balances کی تصدیق ہو:
+hachage de transaction comme `$TRANSFER_HASH` dans le fichier de hachage Il s'agit d'une requête sur les avoirs et les soldes des comptes :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -111,26 +111,24 @@ iroha --config defaults/client.toml asset list filter \
 
 ## 5. لیجر ایویڈنس کی تصدیق
 
-محفوظ hashes استعمال کریں تاکہ دونوں transactions کے commit ہونے کی تصدیق ہو:
+Les hachages sont utilisés pour les transactions et les commits et les transactions :
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-آپ حالیہ blocks بھی stream کر سکتے ہیں تاکہ دیکھا جا سکے کہ transfer کس block میں شامل ہوا:
+Il y a des blocs pour le flux et un bloc de transfert pour le bloc de transfert :
 
 ```sh
 # جدید ترین block سے stream کریں اور ~5 seconds بعد رک جائیں
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
-```
+```Il s'agit de charges utiles Norito et de SDK. Il s'agit d'un processus de démarrage rapide (démarrages rapides du SDK en cours) et des hachages et des soldes pour aligner Les valeurs par défaut sont les mêmes que les valeurs par défaut et les valeurs par défaut.
 
-اوپر کی ہر کمانڈ وہی Norito payloads استعمال کرتی ہے جو SDKs استعمال کرتے ہیں۔ اگر آپ اس فلو کو کوڈ کے ذریعے دہرائیں (نیچے SDK quickstarts دیکھیں)، تو hashes اور balances اس وقت تک align رہیں گے جب تک آپ اسی نیٹ ورک اور defaults کو ٹارگٹ کرتے ہیں۔
+## Parité SDK
 
-## SDK parity لنکس
+- [Démarrage rapide du SDK Rust] (../sdks/rust) — Instructions pour Rust pour les transactions soumises et sondage d'état pour les transactions.
+- [Démarrage rapide du SDK Python] (../sdks/python) — Assistants JSON pris en charge par Norito pour les opérations de registre/mint.
+- [Démarrage rapide du SDK JavaScript] (../sdks/javascript) — Requêtes Torii, aides à la gouvernance, et wrappers de requêtes typés et wrappers de requêtes typés.
 
-- [Rust SDK quickstart](../sdks/rust) — Rust سے instructions رجسٹر کرنا، transactions submit کرنا، اور status poll کرنا دکھاتا ہے۔
-- [Python SDK quickstart](../sdks/python) — Norito-backed JSON helpers کے ساتھ وہی register/mint operations دکھاتا ہے۔
-- [JavaScript SDK quickstart](../sdks/javascript) — Torii requests، governance helpers، اور typed query wrappers کو کور کرتا ہے۔
-
-پہلے CLI walkthrough چلائیں، پھر اپنے پسندیدہ SDK کے ساتھ وہی منظرنامہ دہرائیں تاکہ دونوں سطحیں transaction hashes، balances، اور query outputs پر متفق ہوں۔
+Procédure pas à pas de la CLI pour le SDK et le kit de développement logiciel. hachages de transaction, soldes et résultats de requêtes

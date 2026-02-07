@@ -7,152 +7,153 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e0cdd8242b45628e688d94ebec08e2d9900787ec93a81417e6683d399d43be2d
 source_last_modified: "2026-01-22T14:35:36.781385+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Node ↔ Client Protocol
+# I18NT000000005X Төйөн ↔ Клиент протоколы
 
-This guide summarises the canonical protocol definition in
-[`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
-Use the upstream spec for byte-level Norito layouts and changelogs; the portal
-copy keeps the operational highlights close to the rest of the SoraFS runbooks.
+Был ҡулланма 2019 йылда канон протокол билдәләмәһен дөйөмләштерә.
+[`docs/source/sorafs_node_client_protocol.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
+Ҡулланыу өсөн өҫкө ағым спецификацияһы өсөн байт кимәлендә I18NT00000000000Х макеттары һәм үҙгәрештәр журналдары; портал
+күсермәһе оператив өҫтөнлөктәрҙе һаҡлай, ҡалған I18NT0000000006X runbooks.
 
-## Provider Adverts & Validation
+## Провайдер реклама & Валидация
 
-SoraFS providers gossip `ProviderAdvertV1` payloads (see
-`crates/sorafs_manifest::provider_advert`) signed by the governed operator.
-The adverts pin discovery metadata and the guardrails the multi-source
-orchestrator enforces at runtime.
+I18NT000000007X провайдерҙары ғәйбәт I18NI000000017X файҙалы йөктәр (ҡара
+`crates/sorafs_manifest::provider_advert`) идара итеүсе оператор ҡул ҡуйған.
+Рекламалар булавка асыш метамағлүмәттәр һәм ҡоршауҙар күп сығанаҡлы
+оркестрсы йөрөү ваҡытында үтәй.
 
-- **Lifetime** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Providers
-  should refresh every 12 hours.
-- **Capability TLVs** — the TLV list advertises transport features (Torii,
-  QUIC+Noise, SoraNet relays, vendor extensions). Unknown codes may be skipped
-  when `allow_unknown_capabilities = true`, following GREASE guidance.
-- **QoS hints** — `availability` tier (Hot/Warm/Cold), maximum retrieval
-  latency, concurrency limit, and optional stream budget. QoS must align with
-  observed telemetry and is audited by admission.
-- **Endpoints & rendezvous topics** — concrete service URLs with TLS/ALPN
-  metadata plus the discovery topics clients should subscribe to when building
-  guard sets.
-- **Path diversity policy** — `min_guard_weight`, AS/pool fan-out caps, and
-  `provider_failure_threshold` make deterministic multi-peer fetches possible.
-- **Profile identifiers** — providers must expose the canonical handle (e.g.
-  `sorafs.sf1@1.0.0`); optional `profile_aliases` help older clients migrate.
+- **Ғүмерле** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Провайдерҙар
+  12 сәғәт һайын яңыртырға тейеш.
+- **Бәйләнештә TLVs** — TLV исемлеге транспорт функцияларын рекламалай (I18NT000000011X,
+  QUIC+тауыш, SoraNet реле, һатыусы оҙайтыуҙар). Билдәһеҙ кодтар үткәрелергә мөмкин
+  ҡасан `allow_unknown_capabilities = true`, ҘУР етәкселектән һуң.
+- **QoS кәңәштәр** — I18NI000000021X ярус (Эҫе/йылы/Һалҡын), максималь эҙләү
+  латентлыҡ, конкурентлыҡ сиге, һәм өҫтәмә ағым бюджеты. QoS менән тура килергә тейеш
+  күҙәтелгән телеметрия һәм ҡабул итеү юлы менән аудитлана.
+- **Аҙаҡҡы нөктәләр & осрашыу темалары** — бетон хеҙмәтләндереүҙе URL-адрестар менән TLS/ALPN
+  метамағлүмәттәр плюс асыш темалары клиенттар төҙөргә тейеш, ҡасан төҙөү
+  һаҡсы ҡуя.
+- **Пат төрлөлөгө сәйәсәте** — I18NI000000022X, AS/бассейн фан-аут ҡапҡастары, һәм
+  `provider_failure_threshold` детерминистик күп тиңдәшле феттарҙы мөмкин итә.
+- **Профиль идентификаторҙары** — провайдерҙар канон тотҡаһын фашларға тейеш (мәҫ.
+  `sorafs.sf1@1.0.0`); опциональ `profile_aliases` ярҙам оло клиенттар күсеп.
 
-Validation rules reject zero stake, empty capability/endpoints/topic lists,
-misordered lifetimes, or missing QoS targets. Admission envelopes compare the
-advert and proposal bodies (`compare_core_fields`) before gossiping updates.
+Валидация ҡағиҙәләре нуль ставкаһын кире ҡаға, буш мөмкинлектәр/осонда нөктәләр/тема исемлектәре,
+тәртипһеҙ ғүмерҙәр, йәки юҡ QoS маҡсаттары. Ҡабул итеү конверттар сағыштырырға
+реклама һәм тәҡдим органдары (I18NI000000026X) ғәйбәт яңыртыуҙар алдынан.
 
-### Range Fetch Extensions
+### Диапазон Фетч оҙайтыуҙары
 
-Range-capable providers include the following metadata:
+Диапазонға һәләтле провайдерҙар түбәндәге метамағлүмәттәрҙе үҙ эсенә ала:
 
-| Field | Purpose |
-|-------|---------|
-| `CapabilityType::ChunkRangeFetch` | Declares `max_chunk_span`, `min_granularity`, and alignment/proof flags. |
-| `StreamBudgetV1` | Optional concurrency/throughput envelope (`max_in_flight`, `max_bytes_per_sec`, optional `burst`). Requires a range capability. |
-| `TransportHintV1` | Ordered transport preferences (e.g., `torii_http_range`, `quic_stream`, `soranet_relay`). Priorities are `0–15` and duplicates are rejected. |
+| Ялан | Маҡсат |
+|------|---------|
+| `CapabilityType::ChunkRangeFetch` | Деклары `max_chunk_span`, `min_granularity`, һәм тура килтереп/иҫбатлау флагтары. |
+| I18NI000000030X | Опциональ конкурентлыҡ/пропускной конверт (`max_in_flight`, `max_bytes_per_sec`, өҫтәмә I18NI000000033X). Диапазон мөмкинлектәрен талап итә. |
+| `TransportHintV1` | Заказ транспорт өҫтөнлөктәре (мәҫәлән, I18NI000000035X, `quic_stream`, I18NI000000037X). Өҫтөнлөктәре `0–15` һәм дубликаттар кире ҡағыла. |
 
-Tooling support:
+Ҡораллы ярҙам:
 
-- Provider advert pipelines must validate range capability, stream budget, and
-  transport hints before emitting deterministic payloads for audits.
-- `cargo xtask sorafs-admission-fixtures` bundles canonical multi-source
-  adverts alongside downgrade fixtures under
+- Провайдер реклама торбалары диапазоны мөмкинлектәрен раҫларға тейеш, ағым бюджеты, һәм
+  транспорт һиҙелә, аудит өсөн детерминистик файҙалы йөктәр сығарыр алдынан.
+- I18NI0000000039X өйөмдәр канонлы күп сығанаҡлы
+  реклама менән бер рәттән аҫҡы ҡоролмалары менән бергә
   `fixtures/sorafs_manifest/provider_admission/`.
-- Range-capable adverts that omit `stream_budget` or `transport_hints` are
-  rejected by the CLI/SDK loaders before scheduling, keeping the multi-source
-  harness aligned with Torii admission expectations.
+- I18NI0000000041X йәки I18NI000000042X үткәрмәгән диапазонға һәләтле рекламалар 1000-гә тиклем.
+  CLI/SDK тейәүселәр тарафынан кире ҡағыла, график алдынан, күп сығанаҡ һаҡлау
+  жгут Torii ҡабул итеү өмөттәре менән тура килә.
 
-## Gateway Range Endpoints
+## Ҡапҡа диапазоны остары
 
-Gateways accept deterministic HTTP requests that mirror the advert metadata.
+Ҡапҡалар ҡабул итә детерминистик HTTP һорай, улар көҙгө реклама метамағлүмәттәр.
 
 ### `GET /v1/sorafs/storage/car/{manifest_id}`
 
-| Requirement | Details |
-|-------------|---------|
-| **Headers** | `Range` (single window aligned to chunk offsets), `dag-scope: block`, `X-SoraFS-Chunker`, optional `X-SoraFS-Nonce`, and mandatory base64 `X-SoraFS-Stream-Token`. |
-| **Responses** | `206` with `Content-Type: application/vnd.ipld.car`, `Content-Range` describing the served window, `X-Sora-Chunk-Range` metadata, and echoed chunker/token headers. |
-| **Failure modes** | `416` for misaligned ranges, `401` for missing/invalid tokens, `429` when stream/byte budgets are exceeded. |
+| Талап | Ентекле |
+|------------|----------|
+| **Баштар** | I18NI000000044X (бер тәҙрә тура килтерелгән өлөшө офсет), I18NI000000045X, I18NI000000046X, факультатив I18NI000000047X, һәм мотлаҡ base64 I18NI000000000048X. |
+| **Яуаптар** | I18NI000000049X менән `Content-Type: application/vnd.ipld.car`, `Content-Range` менән хеҙмәтләндереүҙең тәҙрәһен һүрәтләү, I18NI000000052X метамағлүмәттәр, һәм яңғыраны chunkкер/жетон башлыҡтары. |
+| **Уңышһыҙлыҡ режимдары** | `416` диапазондары өсөн дөрөҫ булмаған тура килмәгән, `401` өсөн юғалған/дөрөҫ булмаған токендар, I18NI000000055X ҡасан ағым/байт бюджеттары артып китә. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### I18NI000000056X
 
-Single-chunk fetch with the same headers plus the deterministic chunk digest.
-Useful for retries or forensic downloads when CAR slices are unnecessary.
+Яңғыҙ өлөшө менән шул уҡ башлыҡтары плюс детерминистик өлөшлө дигест.
+Файҙалы өсөн ретия йәки суд-медицина скачивание ҡасан CAR киҫәктәре кәрәкмәй.
 
-## Multi-Source Orchestrator Workflow
+## Күп сығанаҡлы оркестр эш ағымы
 
-When SF-6 multi-source fetch is enabled (Rust CLI via `sorafs_fetch`,
-SDKs via `sorafs_orchestrator`):
+Ҡасан SF-6 күп сығанаҡлы фетч эшләй (Раст CLI аша I18NI000000057X,
+SDKs аша I18NI0000000058X):
 
-1. **Collect inputs** — decode the manifest chunk plan, pull the latest adverts,
-   and optionally pass a telemetry snapshot (`--telemetry-json` or
+1. **Икенеүҙәр йыйыу** — асыҡланған өлөш планын decode, һуңғы рекламаларҙы тартып,
+   һәм теләк буйынса телеметрия снимок үтә (I18NI000000059X йәки
    `TelemetrySnapshot`).
-2. **Build a scoreboard** — `Orchestrator::build_scoreboard` evaluates
-   eligibility and records rejection reasons; `sorafs_fetch --scoreboard-out`
-   persists the JSON.
-3. **Schedule chunks** — `fetch_with_scoreboard` (or `--plan`) enforces range
-   constraints, stream budgets, retry/peer caps (`--retry-budget`,
-   `--max-peers`), and emits a manifest-scoped stream token for each request.
-4. **Verify receipts** — outputs include `chunk_receipts` and
-   `provider_reports`; CLI summaries persist `provider_reports`,
-   `chunk_receipts`, and `ineligible_providers` for evidence bundles.
+2. **Болт таҡтаһы төҙөү** — I18NI000000061X баһалай
+   хоҡуҡ һәм яҙмалар кире ҡағыу сәбәптәре; I18NI000000062X
+   JSON-ды һаҡлана.
+3. **Практура өлөштәре** — I18NI000000063X (йәки I18NI000000064X) үтәү диапазоны
+   сикләүҙәр, ағым бюджеттары, ҡабаттан ҡарау/тиңдәш ҡапҡастары (`--retry-budget`,
+   `--max-peers`), һәм һәр үтенес өсөн асыҡтан-асыҡ-сроклы ағым токен сығара.
+4. **Квитанцияларҙы тикшерергә** — сығыштар I18NI000000067X һәм
+   `provider_reports` X; CLI резюмелары һаҡлана I18NI000000069X,
+   `chunk_receipts`, һәм `ineligible_providers` өсөн дәлилдәр өйөмдәре.
 
-Common errors raised to operators/SDKs:
+Операторҙар/СДК-ларға күтәрелгән дөйөм хаталар:
 
-| Error | Description |
-|-------|-------------|
-| `no providers were supplied` | No eligible entries after filtering. |
-| `no compatible providers available for chunk {index}` | Range or budget mismatch for a specific chunk. |
-| `retry budget exhausted after {attempts}` | Increase `--retry-budget` or evict failing peers. |
-| `no healthy providers remaining` | All providers disabled after repeated failures. |
-| `streaming observer failed` | Downstream CAR writer aborted. |
-| `orchestrator invariant violated` | Capture manifest, scoreboard, telemetry snapshot, and CLI JSON for triage. |
+| Хата | Тасуирлама |
+|------|--------------|
+| `no providers were supplied` | Фильтрлауҙан һуң хоҡуҡлы яҙмалар юҡ. |
+| I18NI0000073X | Диапазон йәки бюджет тап килмәү өсөн аныҡ өлөшө. |
+| `retry budget exhausted after {attempts}` | `--retry-budget` йәки тиҫтерҙәрен ҡыуып сығарыуҙы арттырыу. |
+| `no healthy providers remaining` | Бөтә провайдерҙар ҙа ҡабат-ҡабат уңышһыҙлыҡтарҙан һуң өҙөлгән. |
+| `streaming observer failed` | Аҫҡа ағым CAR яҙыусыһы туҡтатылған. |
+| `orchestrator invariant violated` | Ҡаплау манифест, табло, телеметрия снимок, һәм CLI JSON өсөн триаж. |
 
-## Telemetry & Evidence
+## Телеметрия һәм дәлилдәр
 
-- Metrics emitted by the orchestrator:  
-  `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
+- Оркестратор тарафынан сығарылған метрика:  
+  I18NI000000079X, I18NI000000080X,
   `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (tagged by manifest/region/provider). Set `telemetry_region` in config or via
-  CLI flags so dashboards partition by fleet.
-- CLI/SDK fetch summaries include persisted scoreboard JSON, chunk receipts,
-  and provider reports which must ship in rollout bundles for SF-6/SF-7 gates.
-- Gateway handlers expose `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
-  so SRE dashboards can correlate orchestrator decisions with server behaviour.
+  (билдәләнгән асыҡ/төбәк/провайдер). I18NI000000083X комплекты конфиг йәки аша
+  CLI флагтары шулай приборҙар таҡталары бүленеш флот.
+- CLI/SDK фетч резюмелары үҙ эсенә JSON, өлөш квитанциялары, JSON һаҡланған табло инә,
+  һәм провайдер отчеттары, улар SF-6/SF-7 ҡапҡалары өсөн ролл-аут өйөмдәрендә ташырға тейеш.
+- Ҡапҡасы обработчиктар `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
+  тимәк, SRE приборҙар таҡталары оркестр буйынса ҡарарҙарҙы сервер тәртибе менән корреляциялай ала.
 
-## CLI & REST Helpers
+## CLI & REST Ярҙамсылар
 
-- `iroha app sorafs pin list|show`, `alias list`, and `replication list` wrap the
-  pin-registry REST endpoints and print raw Norito JSON with attestation blocks
-  for audit evidence.
-- `iroha app sorafs storage pin` and `torii /v1/sorafs/pin/register` accept Norito
-  or JSON manifests plus optional alias proofs and successors; malformed proofs
-  raise `400`, stale proofs surface `503` with `Warning: 110`, and
-  hard-expired proofs return `412`.
-- `iroha app sorafs repair list` mirrors repair queue filters, while
-  `repair claim|complete|fail|escalate` submit signed worker actions or slash
-  proposals to Torii. Slash proposals may include a governance approval summary
-  (approve/reject/abstain vote counts plus approved_at/finalized_at
-  timestamps); when present it must satisfy quorum and dispute/appeal windows,
-  otherwise the proposal stays in dispute until votes resolve at the deadline.
-- Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
-- Repair status responses include an `events` array containing base64 Norito
-  `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
-  is capped to the most recent transitions.
-- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
-  retention reports from the local manifest store for audit evidence.
-- REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) include attestation structures so clients can
-  verify data against the latest block headers before taking action.
+- `iroha app sorafs pin list|show`, `alias list`, һәм I18NI000000087X уратып.
+  булавка-реестр REST ос нөктәләре һәм сеймал I18NT0000000000001X JSON менән аттестация блоктары
+  аудит дәлилдәре өсөн.
+- I18NI000000088X һәм I18NI000000089X X ҡабул итеү I18NT000000002X
+  йәки JSON күрһәтә плюс факультатив псевдоним дәлилдәр һәм вариҫтар; дөрөҫ формалашҡан дәлилдәр
+  `400`, иҫке иҫбатлауҙар өҫтөндә I18NI0000000091X менән I18NI0000000000000000000092
+  ҡаты тамамланған дәлилдәр ҡайтарыу I18NI000000093X.
+- I18NI000000094X көҙгөләрен ремонтлау сират фильтрҙары, шул уҡ ваҡытта
+  I18NI0000000955X ҡултамғалы эшсе ғәмәлдәрен тапшырыу йәки slash
+  тәҡдимдәре I18NT000000013X. Слэш тәҡдимдәре идара итеүҙе раҫлау резюмеһы инә ала
+  (раҫлау/кире ҡағыу/һуғыу тауыштары һаны плюс раҫланған_ат/финаллаштырылған_ат
+  ваҡыт маркалары); ҡасан унда ул ҡәнәғәтләндерергә тейеш кворум һәм бәхәс/апелляция тәҙрәләре,
+  юғиһә тәҡдим бәхәстә ҡала, тик тауыштар срокта хәл ителә.
+- Ремонт исемлектәре һәм эшселәр сиратын һайлау SLA срогы, уңышһыҙлыҡтар ауырлығы, һәм провайдер артта ҡалыу менән детерминистик тай-брейкерҙар (статуслы ваҡыт, асыҡ үҙләштереү, билет id).
+- Ремонт статусы яуаптары инә I18NI00000000966Х массив составында base64 I18NT0000000003X .
+  I18NI000000097X яҙмалары аудит юлдары өсөн осраҡ буйынса бойороҡ бирелгән; исемлек
+  иң һуңғы күсештәргә ҡапланған.
+- I18NI000000098X X X
+  урындағы манифест магазинынан һаҡлау отчеттары өсөн аудит дәлилдәре.
+- REST ос нөктәләре (SoraFSX, I18NI000000000X,
+  `/v1/sorafs/replication`) аттестация структураларын үҙ эсенә ала, шуға күрә клиенттар ала
+  ғәмәлгә ашырыу алдынан һуңғы блок башлыҡтарына ҡаршы мәғлүмәттәрҙе раҫлау.
 
-## References
+## Һылтанмалар
 
-- Canonical spec:
-  [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- Norito types: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
-- CLI helpers: `crates/iroha_cli/src/commands/sorafs.rs`,
+- Каноник спец.
+  [`docs/source/sorafs_node_client_protocol.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
+- I18NT000000004X типтары: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- CLI ярҙамсылары: `crates/iroha_cli/src/commands/sorafs.rs`,
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- Orchestrator crate: `crates/sorafs_orchestrator`
-- Dashboard pack: `dashboards/grafana/sorafs_fetch_observability.json`
+- Оркестратор йәшник: `crates/sorafs_orchestrator`
+- Приборҙар таҡтаһы пакеты: `dashboards/grafana/sorafs_fetch_observability.json`

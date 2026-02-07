@@ -10,13 +10,14 @@ translation_last_reviewed: 2026-02-07
 id: nexus-quickstarts
 title: Nexus SDK quickstarts
 description: Minimal steps for Rust/JS/Swift/Android/CLI SDKs to connect to Sora Nexus.
+translator: machine-google-reviewed
 ---
 
-The full quickstart lives at `docs/source/nexus_sdk_quickstarts.md`. This portal
-summary highlights the shared prerequisites and per-SDK commands so developers
-can verify their setup quickly.
+ሙሉ ፈጣን ጅምር በ `docs/source/nexus_sdk_quickstarts.md` ይኖራል። ይህ ፖርታል
+ማጠቃለያ የጋራ ቅድመ-ሁኔታዎችን እና በየኤስዲኬ ገንቢዎችን ያደምቃል
+አወቃቀራቸውን በፍጥነት ማረጋገጥ ይችላል።
 
-## Shared setup
+## የተጋራ ማዋቀር
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -25,11 +26,11 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Download the Nexus config bundle, install each SDK’s dependencies, and ensure
-TLS certificates match the release profile (see
+የNexus ውቅር ቅርቅቡን ያውርዱ፣ እያንዳንዱን የኤስዲኬ ጥገኛ ይጫኑ እና ያረጋግጡ
+የቲኤልኤስ የምስክር ወረቀቶች ከመልቀቂያው መገለጫ ጋር ይዛመዳሉ (ይመልከቱ
 `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## ዝገት።
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -38,7 +39,7 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-Refs: `docs/source/sdk/rust.md`
+ማጣቀሻዎች: `docs/source/sdk/rust.md`
 
 ## JavaScript / TypeScript
 
@@ -46,18 +47,18 @@ Refs: `docs/source/sdk/rust.md`
 npm run demo:nexus
 ```
 
-The script instantiates `ToriiClient` with the env vars above and prints the
-latest block.
+ስክሪፕቱ `ToriiClient` ከላይ ካለው env vars ጋር ያፋጥናል እና ያትማል።
+የቅርብ ጊዜ እገዳ.
 
-## Swift
+## ፈጣን
 
 ```bash
 make swift-nexus-demo
 ```
 
-Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
+`FindNetworkStatus` ለማምጣት `Torii.Client` ከ `IrohaSwift` ይጠቀማል።
 
-## Android
+## አንድሮይድ
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -65,7 +66,7 @@ Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Runs the managed-device test hitting the Nexus staging endpoint.
+የሚተዳደረውን መሳሪያ ሙከራ የI18NT0000001X የዝግጅት መጨረሻ ነጥብን በመምታት ያካሂዳል።
 
 ## CLI
 
@@ -76,13 +77,13 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Troubleshooting
+## መላ መፈለግ
 
-- TLS failures → confirm the CA bundle from the Nexus release tarball.
-- `ERR_UNKNOWN_LANE` → pass `--lane-id`/`--dataspace-id` once multi-lane routing
-  is enforced.
-- `ERR_SETTLEMENT_PAUSED` → check [Nexus operations](../nexus/nexus-operations) for the
-  incident process; governance may have paused the lane.
+- TLS አለመሳካቶች → የCA ጥቅልን ከI18NT0000002X ልቀት ታርቦል ያረጋግጡ።
+- `ERR_UNKNOWN_LANE` → ማለፍ `--lane-id`/I18NI0000021X አንዴ ባለ ብዙ መስመር ማዘዋወር
+  ተፈጻሚ ነው።
+- `ERR_SETTLEMENT_PAUSED` → ያረጋግጡ [Nexus ክወናዎች](../nexus/nexus-operations)
+  የአደጋ ሂደት; አስተዳደር መስመሩን ባለበት አቁሞ ሊሆን ይችላል።
 
-For deeper context and SDK-specific explanations see
+ጠለቅ ያለ አውድ እና ኤስዲኬ-ተኮር ማብራሪያዎችን ይመልከቱ
 `docs/source/nexus_sdk_quickstarts.md`.

@@ -4,43 +4,43 @@ direction: rtl
 source: docs/portal/docs/norito/ledger-walkthrough.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Parcours du registre
-description: Reproduisez un flux deterministe register -> mint -> transfer avec le CLI `iroha` et verifiez l'etat du ledger resultant.
-slug: /norito/ledger-walkthrough
+العنوان: Parcours du registre
+الوصف: إعادة إنتاج سجل محدد التدفق -> النعناع -> النقل باستخدام CLI `iroha` والتحقق من حالة دفتر الأستاذ الناتج.
+سبيكة: /norito/ledger-walkthrough
 ---
 
-Ce parcours complete le [quickstart Norito](./quickstart.md) en montrant comment modifier et inspecter l'etat du ledger avec le CLI `iroha`. Vous enregistrerez une nouvelle definition d'actif, minterez des unites sur le compte operateur par defaut, transfererez une partie du solde vers un autre compte et verifierez les transactions et avoirs resultants. Chaque etape reflete les flux couverts par les quickstarts SDK Rust/Python/JavaScript afin de confirmer la parite entre le CLI et le comportement des SDK.
+تكتمل هذه الخطوات بـ [quickstart Norito](./quickstart.md) ويتم تعديل التعليق والتحقق من حالة دفتر الأستاذ مع CLI `iroha`. Vous enregistrez une nouvelle Definition of Actif, Minterez des Units sur le compteoperator par default, Transferer une Partie du Solde to an autre compte and verifierez les Transactions and avoirs result. كل مرة تعكس التدفق الذي يغطي Quickstarts SDK Rust/Python/JavaScript لتأكيد التكافؤ بين CLI وسلوك SDK.
 
-## Prerequis
+## المتطلبات الأساسية
 
-- Suivez le [quickstart](./quickstart.md) pour demarrer le reseau mono-pair via
+- قم بمتابعة [بدء التشغيل السريع](./quickstart.md) لبدء إعادة الاتصال الأحادي عبر
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Assurez-vous que `iroha` (le CLI) est construit ou telecharge et que vous pouvez
-  joindre le peer avec `defaults/client.toml`.
-- Outils optionnels : `jq` (formatage des reponses JSON) et un shell POSIX pour les
-  snippets de variables d'environnement ci-dessous.
+- تأكد من أن `iroha` (le CLI) تم إنشاؤه أو تنزيله وأنه يمكنك
+  انضم إلى النظير مع `defaults/client.toml`.
+- خيارات الأدوات: `jq` (تنسيق ردود JSON) وقشرة POSIX للملفات
+  مقتطفات من متغيرات البيئة ci-dessous.
 
-Tout au long du guide, remplacez `$ADMIN_ACCOUNT` et `$RECEIVER_ACCOUNT` par les
-IDs de compte que vous comptez utiliser. Le bundle par defaut inclut deja deux comptes
-issus des cles de demo :
+كل هذا دليل طويل، استبدل `$ADMIN_ACCOUNT` و`$RECEIVER_ACCOUNT` بالاسم
+معرفات الحساب التي تحسب استخدامها. تتضمن الحزمة الافتراضية حسابين
+إصدار العناصر التجريبية :
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirmez les valeurs en listant les premiers comptes :
+قم بتأكيد القيم في قائمة الحسابات الأولى:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
-```
+```## 1. مفتش نشأة الدولة
 
-## 1. Inspecter l'etat genesis
-
-Commencez par explorer le ledger cible par le CLI :
+ابدأ باستخدام مستكشف دفتر الأستاذ cible بواسطة CLI:
 
 ```sh
 # Domains enregistres en genesis
@@ -55,12 +55,12 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-Ces commandes reposent sur des reponses Norito, donc le filtrage et la pagination sont
- deterministes et correspondent a ce que recoivent les SDK.
+يتم إرسال الأوامر إلى الردود Norito، دون التصفية والصفحة
+ المحددات والمراسلات التي تتلقاها SDK.
 
-## 2. Enregistrer une definition d'actif
+## 2. قم بتسجيل تعريف النشاط
 
-Creez un nouvel actif infiniment mintable appele `coffee` dans le domaine
+قم بإنشاء استدعاء نشط جديد لا نهائي لـ `coffee` في المجال
 `wonderland` :
 
 ```sh
@@ -68,13 +68,13 @@ iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-Le CLI affiche le hash de transaction soumis (par exemple, `0x5f...`). Conservez-le
-pour consulter le statut plus tard.
+يعرض CLI تجزئة المعاملة الواردة (على سبيل المثال، `0x5f...`). كونسيرفيز لو
+صب المستشار لو ستاتوت بلس تارد.
 
-## 3. Minter des unites sur le compte operateur
+## 3.Minter des Units sur le compteoperator
 
-Les quantites d'actifs vivent sous la paire `(asset definition, account)`. Mintez 250
-unites de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
+الكميات النشطة تعيش داخل الزوج `(asset definition, account)`. مينتز 250
+يوحد `coffee#wonderland` في `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -82,8 +82,8 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Encore une fois, recuperez le hash de transaction (`$MINT_HASH`) depuis la sortie du CLI. Pour
-verifier le solde, executez :
+مرة أخرى، يمكنك استرداد تجزئة المعاملة (`$MINT_HASH`) من خلال واجهة CLI. صب
+التحقق من اللحام، تنفيذ :
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
@@ -97,9 +97,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transferer une partie du solde vers un autre compte
+## 4. نقل جزء من اللحام إلى حساب آخر
 
-Deplacez 50 unites du compte operateur vers `$RECEIVER_ACCOUNT` :
+قم بإزاحة 50 وحدة من مشغل الحساب إلى `$RECEIVER_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -108,8 +108,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Sauvegardez le hash de transaction comme `$TRANSFER_HASH`. Interrogez les avoirs des deux comptes
-pour verifier les nouveaux soldes :
+قم بحفظ تجزئة المعاملة مثل `$TRANSFER_HASH`. Interrogez les avoirs des deux comptes
+من أجل التحقق من المبيعات الجديدة :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -119,35 +119,33 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verifier les preuves du ledger
+## 5. التحقق من إجراءات دفتر الأستاذ
 
-Utilisez les hashes sauvegardes pour confirmer que les deux transactions ont ete committees :
+استخدم التجزئات الاحتياطية لتأكيد أن المعاملات الثنائية موجودة أمامك:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
-```
-
-Vous pouvez aussi streamer les blocs recents pour voir quel bloc a inclus le transfert :
+```يمكنك أيضًا بث الكتل الأخيرة لرؤية أي كتلة تتضمن النقل:
 
 ```sh
 # Stream depuis le dernier bloc et arretez apres ~5 secondes
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Toutes les commandes ci-dessus utilisent les memes payloads Norito que les SDK. Si vous
-reproduisez ce flux via du code (voir les quickstarts SDK ci-dessous), les hashes et
-soldes seront alignes tant que vous ciblez le meme reseau et les memes defaults.
+جميع الأوامر ci-dessus تستخدم حمولات الميمات Norito من SDK. نعم
+إعادة إنتاج التدفق عبر كود du (البحث عن Quickstarts SDK ci-dessous)، والتجزئات وغيرها
+ستعمل Soldes على محاذاة كما تريد شبكة الميمات والميمات الافتراضية.
 
-## Liens de parite SDK
+## امتيازات التكافؤ SDK
 
-- [Rust SDK quickstart](../sdks/rust) - montre l'enregistrement d'instructions,
-  la soumission de transactions et le polling de statut depuis Rust.
-- [Python SDK quickstart](../sdks/python) - montre les memes operations register/mint
-  avec des helpers JSON adosses a Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) - couvre les requetes Torii,
-  les helpers de gouvernance et les wrappers de requetes typees.
+- [Rust SDK Quickstart](../sdks/rust) - قم بتسجيل التعليمات،
+  تسليم المعاملات واستطلاع الوضع من الصدأ.
+- [Python SDK Quickstart](../sdks/python) - تسجيل عمليات تسجيل الميمات/النعناع
+  avec des helpers JSON يعلن عن Norito.
+- [JavaScript SDK Quickstart](../sdks/javascript) - تغطية الطلبات Torii،
+  مساعدو الإدارة ومغلفات الطلبات من النوع.
 
-Executez d'abord le walkthrough CLI, puis repetez le scenario avec votre SDK
-prefere pour vous assurer que les deux surfaces s'accordent sur les hashes de
-transactions, les soldes et les resultats de requetes.
+قم بتنفيذ الإرشادات التفصيلية لـ CLI، ثم قم بتكرار السيناريو مع SDK الخاص بك
+تفضل للتأكد من أن الأسطح الثنائية تتوافق مع تجزئات
+المعاملات والمبيعات ونتائج الطلبات.

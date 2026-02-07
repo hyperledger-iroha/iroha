@@ -11,113 +11,114 @@ id: address-display-guidelines
 title: Sora Address Display Guidelines
 sidebar_label: Address display
 description: UX and CLI requirements for IH58 vs compressed (`sora`) Sora address presentation (ADDR-6).
+translator: machine-google-reviewed
 ---
 
-import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
+ExplorerAddressCard ከ'@site/src/components/ExplorerAddressCard' አስመጣ፤
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
-as the canonical portal copy. The source file sticks around for translation PRs.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+ይህ ገጽ `docs/source/sns/address_display_guidelines.md`ን ያንጸባርቃል እና አሁን ያገለግላል
+እንደ ቀኖናዊ ፖርታል ቅጂ. የምንጭ ፋይሉ ለትርጉም PRs ዙሪያ ተጣብቋል።
+::
 
-Wallets, explorers, and SDK samples must treat account addresses as immutable
-payloads. The Android retail wallet sample in
-`examples/android/retail-wallet` now demonstrates the required UX pattern:
+የኪስ ቦርሳዎች፣ አሳሾች እና የኤስዲኬ ናሙናዎች የመለያ አድራሻዎችን የማይለዋወጥ አድርገው መያዝ አለባቸው
+ሸክሞች. የአንድሮይድ የችርቻሮ ቦርሳ ናሙና በ ውስጥ
+`examples/android/retail-wallet` አሁን የሚፈለገውን UX ጥለት ያሳያል፡-
 
-- **Dual copy targets.** Ship two explicit copy buttons—IH58 (preferred) and the
-  compressed Sora-only form (`sora…`, second-best). IH58 is always safe to share externally
-  and powers the QR payload. The compressed variant must include an inline
-  warning because it only works inside Sora-aware apps. The Android retail
-  wallet sample wires both Material buttons and their tooltips in
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and
-  the iOS SwiftUI demo mirrors the same UX via `AddressPreviewCard` inside
+- ** ባለሁለት ቅጂ ኢላማዎች።** ሁለት ግልጽ የቅጂ አዝራሮችን ይላኩ-IH58 (ተመራጭ) እና
+  የታመቀ የሶራ-ብቻ ቅጽ (`sora…`፣ ሁለተኛ-ምርጥ)። IH58 ከውጪ ለመጋራት ሁልጊዜ ደህንነቱ የተጠበቀ ነው።
+  እና የQR ጭነትን ያበረታታል። የታመቀው ተለዋጭ የውስጥ መስመር ማካተት አለበት።
+  ማስጠንቀቂያ በSora-aware መተግበሪያዎች ውስጥ ብቻ ስለሚሰራ። የአንድሮይድ ችርቻሮ
+  የኪስ ቦርሳ ናሙና ሽቦዎች ሁለቱም የቁሳቁስ ቁልፎች እና የመሳሪያ ፍንጮቻቸው
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`፣ እና
+  የ iOS SwiftUI ማሳያ በ `AddressPreviewCard` በኩል ተመሳሳይ UX ያንጸባርቃል
   `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, selectable text.** Render both strings with a monospace font and
-  `textIsSelectable="true"` so users can inspect values without invoking an IME.
-  Avoid editable fields: IMEs can rewrite kana or inject zero-width code points.
-- **Implicit default domain hints.** When the selector points at the implicit
-  `default` domain, surface a caption reminding operators no suffix is required.
-  Explorers should also highlight the canonical domain label when the selector
-  encodes a digest.
-- **IH58 QR payloads.** QR codes must encode the IH58 string. If QR generation
-  fails, display an explicit error instead of a blank image.
-- **Clipboard messaging.** After copying the compressed form, emit a toast or
-  snackbar reminding users that it is Sora-only and prone to IME mangling.
+- ** ሞኖስፔስ፣ ሊመረጥ የሚችል ጽሑፍ።** ሁለቱንም ሕብረቁምፊዎች በሞኖስፔስ ቅርጸ-ቁምፊ እና
+  `textIsSelectable="true"` ተጠቃሚዎች IME ሳይጠሩ እሴቶችን መፈተሽ ይችላሉ።
+  አርትዖት ሊደረጉ የሚችሉ መስኮችን ያስወግዱ፡ አይ ኤም ኢዎች ቃናን እንደገና መፃፍ ወይም የዜሮ ስፋት ኮድ ነጥቦችን ማስገባት ይችላሉ።
+- ** ስውር ነባሪ የጎራ ፍንጮች።** መራጩ በተዘዋዋሪ ሲጠቁም።
+  `default` ጎራ፣ ኦፕሬተሮችን የሚያስታውስ የመግለጫ ጽሁፍ ላይ ምንም ቅጥያ አያስፈልግም።
+  አሳሾች ደግሞ መራጩ ጊዜ ቀኖናዊ ጎራ መለያ ማጉላት አለባቸው
+  መፈጨትን ያስቀምጣል።
+- **IH58 QR ጭነት።** QR ኮዶች የIH58 ሕብረቁምፊ መመስጠር አለባቸው። QR ትውልድ ከሆነ
+  አልተሳካም፣ ከባዶ ምስል ይልቅ ግልጽ የሆነ ስህተት አሳይ።
+- ** የክሊፕቦርድ መልእክት።** የታመቀውን ቅጽ ከገለበጡ በኋላ ቶስት ይልቀቁ ወይም
+  የሶራ-ብቻ እና ለአይኤምኢ ማንግሊንግ የተጋለጠ መሆኑን ለተጠቃሚዎች የሚያስታውስ መክሰስ ባር።
 
-Following these guardrails prevents Unicode/IME corruption and satisfies the
-ADDR-6 roadmap acceptance criteria for wallet/explorer UX.
+እነዚህን የጥበቃ መንገዶች መከተል የዩኒኮድ/IME ሙስናን ይከላከላል እና ያረካል
+ADDR-6 የመንገድ ካርታ ተቀባይነት መስፈርት ለኪስ ቦርሳ/አሳሽ UX።
 
-## Screenshot fixtures
+## ቅጽበታዊ ገጽ እይታዎች
 
-Use the following fixtures during localization reviews to ensure button labels,
-tooltips, and warnings stay aligned across platforms:
+የአዝራር መለያዎችን ለማረጋገጥ በትርጉም ግምገማ ወቅት የሚከተሉትን መገልገያዎች ተጠቀም።
+የመሳሪያ ምክሮች እና ማስጠንቀቂያዎች በመድረኮች ላይ ይቆያሉ፡
 
-- Android reference: `/img/sns/address_copy_android.svg`
+- አንድሮይድ ማጣቀሻ: `/img/sns/address_copy_android.svg`
 
-  ![Android dual copy reference](/img/sns/address_copy_android.svg)
+  ![አንድሮይድ ባለሁለት ቅጂ ማጣቀሻ](/img/sns/address_copy_android.svg)
 
-- iOS reference: `/img/sns/address_copy_ios.svg`
+- የ iOS ማጣቀሻ: `/img/sns/address_copy_ios.svg`
 
-  ![iOS dual copy reference](/img/sns/address_copy_ios.svg)
+  ![iOS ባለሁለት ቅጂ ማጣቀሻ](/img/sns/address_copy_ios.svg)
 
-## SDK helpers
+## የኤስዲኬ ረዳቶች
 
-Each SDK exposes a convenience helper that returns the IH58 (preferred) and compressed (`sora`, second-best)
-forms alongside the warning string so UI layers can stay consistent:
+እያንዳንዱ ኤስዲኬ IH58 (ተመራጭ) እና የታመቀ (`sora`፣ ሁለተኛ-ምርጥ) የሚመልስ ምቹ ረዳትን ያጋልጣል።
+የUI ንብርብሮች ወጥነት እንዲኖራቸው ከማስጠንቀቂያ ህብረቁምፊው ጋር ይመሰርታሉ፡
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` returns the compressed warning
-  string and appends it to `warnings` whenever callers provide a `sora…`
-  literal, so explorers/wallet dashboards can surface the Sora-only notice
-  during paste/validation flows instead of only when they generate the
-  compressed form themselves.
+ጃቫ ስክሪፕት መርማሪ፡- `inspectAccountId(...)` የታመቀውን ማስጠንቀቂያ ይመልሳል
+  ደዋዮች `sora…` ባቀረቡ ቁጥር ሕብረቁምፊ እና ከ`warnings` ጋር ያያይዙታል።
+  በጥሬው፣ ስለዚህ አሳሾች/የኪስ ቦርሳ ዳሽቦርዶች የሶራ-ብቻ ማሳሰቢያውን ሊያሳዩ ይችላሉ።
+  በሚፈጥሩት ጊዜ ብቻ ሳይሆን በመለጠፍ/በማረጋገጫ ፍሰቶች ወቅት
+  የታመቀ ቅጽ እራሳቸው.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- ስዊፍት: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-Use these helpers instead of reimplementing the encode logic in UI layers.
-The JavaScript helper also exposes a `selector` payload on `domainSummary`
-(`tag`, `digest_hex`, `registry_id`, `label`) so UIs can indicate whether a
-selector is Local-12 or registry-backed without re-parsing the raw payload.
+የኢኮድ አመክንዮ በUI ንብርብሮች ውስጥ እንደገና ከመተግበር ይልቅ እነዚህን ረዳቶች ይጠቀሙ።
+የጃቫ ስክሪፕት ረዳት በ`selector` ክፍያ በI18NI0000038X ላይ ያጋልጣል
+(`tag`፣ `digest_hex`፣ `registry_id`፣ `label`) UIs
+መምረጡ በሎካል-12 ወይም በመመዝገቢያ የተደገፈ ጥሬ ጭነት እንደገና ሳይተነተን።
 
-## Explorer instrumentation demo
+## Explorer instrumentation ማሳያ
 
 <ExplorerAddressCard />
 
-Explorers should mirror the wallet telemetry and accessibility work:
+አሳሾች የኪስ ቦርሳ ቴሌሜትሪ እና የተደራሽነት ስራን ማንጸባረቅ አለባቸው፡
 
-- Apply `data-copy-mode="ih58|compressed|qr"` to copy buttons so front-ends can emit usage counters
-  alongside the Torii-side `torii_address_format_total` metric. The demo component above dispatches
-  an `iroha:address-copy` event with `{mode,timestamp}`—wire this into your analytics/telemetry
-  pipeline (e.g., push to Segment or a NORITO-backed collector) so dashboards can correlate server
-  address-format usage with client copy behaviour. Also mirror the Torii domain counters
-  (`torii_address_domain_total{domain_kind}`) in the same feed so Local-12 retirement reviews can
-  export a 30-day `domain_kind="local12"` zero-usage proof directly from the `address_ingest`
-  Grafana board.
-- Pair every control with distinct `aria-label`/`aria-describedby` hints that explain whether a
-  literal is safe to share (`IH58`) or Sora-only (compressed `sora`). Include the implicit-domain caption in
-  the description so assistive technology surfaces the same context shown visually.
-- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
-  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
+- አዝራሮችን ለመቅዳት `data-copy-mode="ih58|compressed|qr"` ያመልክቱ የፊት-ጫፎቹ የአጠቃቀም ቆጣሪዎችን ያመነጫሉ
+  ከ Torii-side I18NI0000044X መለኪያ ጋር። ከላይ ያለው የማሳያ ክፍል ይልካል።
+  አንድ የ`iroha:address-copy` ክስተት ከ`{mode,timestamp}` ጋር—ይህንን ወደ የእርስዎ ትንታኔ/ቴሌሜትሪ ያገናኙት።
+  የቧንቧ መስመር (ለምሳሌ፡ ወደ ክፍል ወይም በNORITO የሚደገፍ ሰብሳቢ) ስለዚህ ዳሽቦርዶች አገልጋይን ማዛመድ እንዲችሉ
+  የአድራሻ-ቅርጸት አጠቃቀም ከደንበኛ ቅጂ ባህሪ ጋር። እንዲሁም የTorii የጎራ ቆጣሪዎችን ያንጸባርቁ
+  (`torii_address_domain_total{domain_kind}`) በተመሳሳይ ምግብ ውስጥ የአካባቢ-12 የጡረታ ግምገማዎች እንዲችሉ
+  የ30 ቀን I18NI0000048X የዜሮ አጠቃቀም ማረጋገጫ በቀጥታ ከ`address_ingest` ወደ ውጪ ላክ
+  Grafana ሰሌዳ.
+- እያንዳንዱን መቆጣጠሪያ ከተለየ I18NI0000050X/`aria-describedby` ፍንጮች ጋር ያጣምሩ
+  በቀጥታ ለማጋራት ደህንነቱ የተጠበቀ ነው (`IH58`) ወይም Sora-only (የተጨመቀ `sora`)። ስውር-ጎራ መግለጫ ጽሑፍን ያካትቱ
+  መግለጫው አጋዥ ቴክኖሎጂ በምስላዊ የሚታየውን ተመሳሳይ አውድ ያሳያል።
+- የቀጥታ ክልልን ያጋልጡ (ለምሳሌ፡ `<output aria-live="polite">…</output>`) የቅጂ ውጤቶችን እና
+  ማስጠንቀቂያዎች፣ የVoiceOver/TalkBack ባህሪን አሁን ከስዊፍት/አንድሮይድ ናሙናዎች ጋር በማዛመድ።
 
-This instrumentation satisfies ADDR-6b by proving operators can observe both Torii ingestion and
-client-side copy modes before Local selectors are disabled.
+ይህ መሳሪያ ADDR-6bን ያሟላል ኦፕሬተሮች ሁለቱንም Torii መግባታቸውን እና ማየት እንደሚችሉ በማረጋገጥ
+የአካባቢ መራጮች ከመጥፋታቸው በፊት የደንበኛ-ጎን ቅጂ ሁነታዎች።
 
-## Local → Global migration toolkit
+## የአካባቢ → የአለምአቀፍ ፍልሰት መሳሪያ ስብስብ
 
-Use the [Local → Global toolkit](local-to-global-toolkit.md) to automate
-JSON audit report and the converted preferred IH58 / second-best compressed (`sora`) list that operators attach
-to readiness tickets, while the accompanying runbook links the Grafana
-dashboards and Alertmanager rules that gate the strict-mode cutover.
+ራስ-ሰር ለማድረግ [Local → Global Toolkit](local-to-global-toolkit.md) ይጠቀሙ
+የJSON ኦዲት ሪፖርት እና የተለወጠው ተመራጭ IH58/ሁለተኛ-ምርጥ የታመቀ (`sora`) ኦፕሬተሮች የሚያያይዙት ዝርዝር
+ወደ ዝግጁነት ትኬቶች፣ ተጓዳኝ ራንቡክ I18NT0000001X ሲያገናኝ
+ጥብቅ ሁነታ መቁረጥን የሚከፍቱ ዳሽቦርዶች እና Alertmanager ህጎች።
 
-## Binary layout quick reference (ADDR-1a)
+## የሁለትዮሽ አቀማመጥ ፈጣን ማጣቀሻ (ADDR-1a)
 
-When SDKs surface advanced address tooling (inspectors, validation hints,
-manifest builders), point developers at the canonical wire format captured in
-`docs/account_structure.md`. The layout is always
-`header · selector · controller`, where the header bits are:
+ኤስዲኬዎች የላቀ የአድራሻ መሣሪያን ሲያዩ (ተቆጣጣሪዎች፣ የማረጋገጫ ፍንጮች፣
+አንጸባራቂ ግንበኞች)፣ በተያዘው ቀኖናዊ የሽቦ ቅርጸት ላይ ገንቢዎችን ጠቁም።
+`docs/account_structure.md`. አቀማመጡ ሁልጊዜ ነው
+`header · selector · controller`፣ የራስጌ ቢትስ ያሉበት፡-
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -126,14 +127,14 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-- `addr_version = 0` (bits 7‑5) today; non-zero values are reserved and must
-  raise `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class` distinguishes single (`0`) vs multisig (`1`) controllers.
-- `norm_version = 1` encodes the Norm v1 selector rules. Future norms will reuse
-  the same 2-bit field.
-- `ext_flag` is always `0`—set bits indicate unsupported payload extensions.
+- `addr_version = 0` (bits7-5) ዛሬ; ዜሮ ያልሆኑ እሴቶች የተጠበቁ እና አለባቸው
+  `AccountAddressError::InvalidHeaderVersion` ከፍ ያድርጉ።
+- `addr_class` ነጠላ (I18NI0000061X) vs multisig (`1`) መቆጣጠሪያዎችን ይለያል።
+- `norm_version = 1` የ Normv1 መምረጫ ደንቦችን ይደብቃል። የወደፊት ደንቦች እንደገና ጥቅም ላይ ይውላሉ
+  ተመሳሳይ ባለ 2-ቢት መስክ.
+- `ext_flag` ሁልጊዜም I18NI0000065X ነው—የተቀመጡ ቢትስ የማይደገፉ የክፍያ ማራዘሚያዎችን ያመለክታሉ።
 
-The selector immediately follows the header:
+መራጩ ወዲያውኑ ራስጌውን ይከተላል፡-
 
 ```
 ┌──────────┬──────────────────────────────────────────────┐
@@ -141,35 +142,35 @@ The selector immediately follows the header:
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-UI and SDK surfaces should be ready to display the selector kind:
+የዩአይ እና ኤስዲኬ ወለሎች የመምረጡን አይነት ለማሳየት ዝግጁ መሆን አለባቸው፡-
 
-- `0x00` = implicit default domain (no payload).
-- `0x01` = local digest (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = global registry entry (big-endian `registry_id:u32`).
+- `0x00` = ስውር ነባሪ ጎራ (ክፍያ የለም)።
+- `0x01` = የአካባቢ መፍጨት (12-ባይት `blake2s_mac("SORA-LOCAL-K:v1", label)`).
+- `0x02` = ዓለም አቀፍ የመዝገብ መግቢያ (ትልቅ-ኤንዲያን `registry_id:u32`)።
 
-Canonical hex examples that wallet tooling can link or embed in docs/tests:
+የኪስ ቦርሳ መጠቀሚያ በሰነዶች/ሙከራዎች ውስጥ ሊያገናኝ ወይም ሊካተት የሚችል ቀኖናዊ ሄክስ ምሳሌዎች፡-
 
-| Selector kind | Canonical hex |
-|---------------|---------------|
-| Implicit default | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Global registry (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
+| መራጭ አይነት | ቀኖናዊ ሄክስ |
+|------------|-----------|
+| ስውር ነባሪ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| የአካባቢ መፍጨት (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
+| ዓለም አቀፍ መዝገብ ቤት (I18NI0000074X) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
-Refer to `docs/source/references/address_norm_v1.md` for the full selector/state
-table and `docs/account_structure.md` for the complete byte diagram.
+ለሙሉ መራጭ/ግዛት `docs/source/references/address_norm_v1.md` ይመልከቱ
+ሠንጠረዥ እና `docs/account_structure.md` ለተሟላ ባይት ንድፍ።
 
-## Enforcing canonical forms
+## ቀኖናዊ ቅርጾችን ማስፈጸም
 
-strings must follow the CLI workflow documented under ADDR-5:
+ሕብረቁምፊዎች በ ADDR-5 የተመዘገበውን የCLI የስራ ፍሰት መከተል አለባቸው፡
 
-1. `iroha tools address inspect` now emits a structured JSON summary with IH58,
-   compressed, and canonical hex payloads. The summary also includes a `domain`
-   object with `kind`/`warning` fields and echoes any provided domain via the
-   `input_domain` field. When `kind` is `local12`, the CLI prints a warning to
-   stderr and the JSON summary echoes the same guidance so CI pipelines and SDKs
-   can surface it. Pass `--append-domain` whenever you want the converted
-   encoding replayed as `<ih58>@<domain>`.
-2. SDKs can surface the same warning/summary via the JavaScript helper:
+1. `iroha tools address inspect` አሁን የተዋቀረ JSON ማጠቃለያን ከ IH58 ጋር አውጥቷል፣
+   የታመቀ፣ እና ቀኖናዊ የሄክስ ጭነቶች። ማጠቃለያው `domain`ንም ያካትታል
+   ከ `kind`/`warning` መስኮች ያለው ነገር እና ማንኛውንም የቀረበውን ጎራ በ
+   `input_domain` መስክ. `kind` `local12` ሲሆን CLI ማስጠንቀቂያ ያትማል ለ
+   stderr እና JSON ማጠቃለያ የCI ቧንቧዎች እና ኤስዲኬዎች ተመሳሳይ መመሪያ ያስተጋባል
+   ሊገለጽ ይችላል. የተቀየረውን በፈለጉት ጊዜ `--append-domain` ይለፉ
+   ኢንኮዲንግ እንደ `<ih58>@<domain>` እንደገና ተጫውቷል።
+2. ኤስዲኬዎች በጃቫስክሪፕት ረዳት በኩል ተመሳሳይ ማስጠንቀቂያ/ማጠቃለያ ሊያወጡ ይችላሉ፡-
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -180,69 +181,67 @@ strings must follow the CLI workflow documented under ADDR-5:
    }
    console.log(summary.ih58.value, summary.compressed);
    ```
-  The helper preserves the IH58 prefix detected from the literal unless you
-  explicitly provide `networkPrefix`, so summaries for non-default networks do
-  not silently re-render with the default prefix.
+  እርስዎ ካልሆነ በስተቀር ረዳቱ ከትክክለኛው የተገኘውን የIH58 ቅድመ ቅጥያ ይጠብቃል።
+  በግልጽ I18NI0000087X ያቅርቡ፣ ስለዚህ ነባሪ ላልሆኑ አውታረ መረቦች ማጠቃለያዎች ይሰጣሉ።
+  በጸጥታ እንደገና በነባሪ ቅድመ ቅጥያ አያቅርቡ።
 
-3. Convert the canonical payload by reusing the `ih58.value` or `compressed`
-   fields from the summary (or request another encoding via `--format`). These
-   strings are already safe to share externally.
-4. Update manifests, registries, and customer-facing documents with the
-   canonical form and notify counterparties that Local selectors will be
-   rejected once the cutover completes.
-5. For bulk data sets, run
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
-   reads newline-separated literals (comments starting with `#` are ignored, and
-   `--input -` or no flag uses STDIN), emits a JSON report with
-   canonical/preferred IH58/second-best compressed (`sora`) summaries for every entry, and counts both parse
-   dumps that contain junk rows, and gate automation with `--fail-on-warning`
-   once operators are ready to block Local selectors in CI.
-6. When you need a newline-to-newline rewrite, use
-  For Local-selector remediation spreadsheets, use
-  to export a `input,status,format,…` CSV that highlights canonical encodings, warnings, and parse failures in one pass.
-   The helper skips non-Local rows by default, converts every remaining entry
-   into the requested encoding (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the
-   original domain when `--append-domain` is set. Pair it with `--allow-errors`
-   to keep scanning even when a dump contains malformed literals.
-7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts
-   the Local selectors from `fixtures/account/address_vectors.json`, converts
-   them via `iroha tools address normalize`, and replays
-   `iroha tools address audit --fail-on-warning` to prove releases no longer emit
-   Local digests.
+3. `ih58.value` ወይም `compressed` እንደገና በመጠቀም ቀኖናዊውን ክፍያ ይለውጡ።
+   መስኮች ከማጠቃለያው (ወይም በ `--format` በኩል ሌላ ኢንኮዲንግ ይጠይቁ)። እነዚህ
+   ሕብረቁምፊዎች አስቀድመው በውጭ ለመጋራት ደህና ናቸው።
+4. መግለጫዎችን፣ መዝገቦችን እና ደንበኛን የሚመለከቱ ሰነዶችን በ
+   ቀኖናዊ ቅፅ እና የአካባቢ መራጮች እንደሚሆኑ ተጓዳኝዎችን ያሳውቁ
+   ማቋረጡ እንደተጠናቀቀ ውድቅ ተደርጓል።
+5. ለጅምላ የውሂብ ስብስቦች, አሂድ
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. ትዕዛዙ
+   በአዲስ መስመር የተከፋፈሉ ቀጥተኛ ቃላትን ያነባል (ከ`#` የሚጀምሩ አስተያየቶች ችላ ተብለዋል እና
+   `--input -` ወይም ምንም ባንዲራ STDIN አይጠቀምም) የJSON ዘገባ ከ ጋር ያቀርባል
+   ቀኖናዊ/ተመራጭ IH58/ሁለተኛ-ምርጥ የታመቀ (`sora`) ማጠቃለያ ለእያንዳንዱ ግቤት፣ እና ሁለቱንም ትንተና ይቆጥራል።
+   ቆሻሻ ረድፎችን እና የበር አውቶማቲክን ከI18NI0000095X ጋር ያካተቱ ቆሻሻዎች
+   አንዴ ኦፕሬተሮች በCI ውስጥ የአካባቢ መራጮችን ለማገድ ዝግጁ ከሆኑ።
+6. ከአዲስ መስመር ወደ አዲስ መስመር እንደገና መፃፍ ሲፈልጉ ይጠቀሙ
+  ለአካባቢ-መራጮች ማሻሻያ የተመን ሉሆች ይጠቀሙ
+  ቀኖናዊ ኢንኮዲንግ፣ ማስጠንቀቂያዎች እና ድክመቶችን በአንድ ማለፊያ የሚያጎላ `input,status,format,…` CSV ወደ ውጭ ለመላክ።
+   ረዳቱ አካባቢያዊ ያልሆኑ ረድፎችን በነባሪ ይዘላል፣ የቀረውን ግቤት ሁሉ ይለውጣል
+   ወደ ተጠየቀው ኢንኮዲንግ (IH58 ተመራጭ/የተጨመቀ (`sora`) ሁለተኛ-ምርጥ/ሄክስ/JSON)፣ እና ያስቀምጣል።
+   `--append-domain` ሲዋቀር ኦሪጅናል ጎራ። ከ `--allow-errors` ጋር ያጣምሩት።
+   የቆሻሻ መጣያ የተበላሹ ፊደሎችን ቢይዝም መቃኘትን ለመቀጠል።
+7. CI/lint አውቶሜሽን `ci/check_address_normalize.sh`ን ማስኬድ ይችላል፣ ይህም የሚያወጣው
+   ከ `fixtures/account/address_vectors.json` ውስጥ ያሉ የአካባቢያዊ መምረጫዎች, ይቀየራሉ
+   እነሱን በ `iroha tools address normalize` ፣ እና ድጋሚ ማጫወት
+   `iroha tools address audit --fail-on-warning` ልቀቶች ከአሁን በኋላ እንደማይለቀቁ ለማረጋገጥ
+   የአካባቢ መሟጠጥ.`torii_address_local8_total{endpoint}` ሲደመር
+`torii_address_collision_total{endpoint,kind="local12_digest"}`፣
+`torii_address_collision_domain_total{endpoint,domain}` እና የ
+Grafana ቦርድ `dashboards/grafana/address_ingest.json` ማስፈጸሚያውን ያቀርባል
+ምልክት፡ አንዴ የምርት ዳሽቦርዶች ዜሮ ህጋዊ የአካባቢ ማስረከቦችን ያሳያሉ
+ዜሮ የአካባቢ-12 ግጭቶች ለ30 ተከታታይ ቀናት፣ Torii Local-8ን ይገለብጣል።
+በዋና ኔት ላይ ወደ ከባድ-ውድቀት በር ይሂዱ፣ አንዴ አለምአቀፍ ጎራዎች ካሉ በኋላ Local-12
+ተዛማጅ የመመዝገቢያ ግቤቶች. የ CLI ውፅዓት ከዋኝ ፊት ለፊት ያለውን ማስታወቂያ አስቡበት
+ለዚህ በረዶ-ተመሳሳይ የማስጠንቀቂያ ሕብረቁምፊ በኤስዲኬ የመሳሪያ ምክሮች እና ጥቅም ላይ ይውላል
+አውቶሜሽን ከመንገድ ካርታው መውጫ መስፈርት ጋር ያለውን እኩልነት ለመጠበቅ። Torii አሁን ነባሪ ሆኗል።
+ድግግሞሾችን ሲመረምሩ. `torii_address_domain_total{domain_kind}` ማንጸባረቅዎን ይቀጥሉ
+ወደ Grafana (`dashboards/grafana/address_ingest.json`) ስለዚህ ADDR-7 ማስረጃ ጥቅል
+`domain_kind="local12"` ለሚፈለገው የ30 ቀን መስኮት በዜሮ መቆየቱን ማረጋገጥ ይችላል
+(`dashboards/alerts/address_ingest_rules.yml`) ሶስት የጥበቃ መንገዶችን ይጨምራል።
 
-`torii_address_local8_total{endpoint}` plus
-`torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, and the
-Grafana board `dashboards/grafana/address_ingest.json` provide the enforcement
-signal: once production dashboards show zero legitimate Local submissions and
-zero Local-12 collisions for 30 consecutive days, Torii will flip the Local-8
-gate to hard-fail on mainnet, followed by Local-12 once global domains have
-matching registry entries. Consider the CLI output the operator-facing notice
-for this freeze—the same warning string is used across SDK tooltips and
-automation to keep parity with the roadmap exit criteria. Torii now defaults to
-when diagnosing regressions. Keep mirroring `torii_address_domain_total{domain_kind}`
-into Grafana (`dashboards/grafana/address_ingest.json`) so the ADDR-7 evidence pack
-can prove `domain_kind="local12"` stayed at zero for the required 30-day window before
-(`dashboards/alerts/address_ingest_rules.yml`) adds three guardrails:
+- አንድ አውድ አዲስ የአካባቢ-8 ሪፖርት ባደረገ ቁጥር `AddressLocal8Resurgence` ገጾች
+  መጨመር. የጥብቅ ሁነታ ልቀቶችን አቁም፣ የሚያስከፋውን የኤስዲኬ ገጽ በ ውስጥ ያግኙ
+  ምልክቱ ወደ ዜሮ እስኪመለስ ድረስ - ከዚያም ነባሪውን ወደነበረበት ይመልሱ (`true`).
+- `AddressLocal12Collision` ሁለት Local-12 መለያዎች ወደ ተመሳሳይ ሃሽ ሲያደርጉ ያቃጥላል
+  መፈጨት ። አንጸባራቂ ማስተዋወቂያዎችን ባለበት አቁም፣ ኦዲት ለማድረግ የአካባቢ → አለምአቀፍ መሣሪያ ስብስብን ያስኪዱ
+  የምግብ መፍጫውን ካርታ እንደገና ከመውጣቱ በፊት ከ Nexus አስተዳደር ጋር ያስተባበሩ.
+  የመመዝገቢያ መግቢያ ወይም የታችኛው ተፋሰስ ልቀቶችን እንደገና ማንቃት።
+- `AddressInvalidRatioSlo` የበረራ-ሰፊው ልክ ያልሆነ ምጥጥን ሲያስጠነቅቅ (ሳይጨምር)
+  የአካባቢ-8/ጥብቅ ሁነታ ውድቅ የተደረገ) ከ 0.1% SLO ለአስር ደቂቃዎች ይበልጣል። ተጠቀም
+  `torii_address_invalid_total` ተጠያቂውን አውድ/ምክንያት እና
+  ጥብቅ ሁነታን እንደገና ከማንቃትዎ በፊት ከባለቤቱ የኤስዲኬ ቡድን ጋር ማስተባበር።
 
-- `AddressLocal8Resurgence` pages whenever a context reports a fresh Local-8
-  increment. Halt strict-mode rollouts, locate the offending SDK surface in the
-  until the signal returns to zero—then restore the default (`true`).
-- `AddressLocal12Collision` fires when two Local-12 labels hash to the same
-  digest. Pause manifest promotions, run the Local → Global toolkit to audit
-  the digest mapping, and coordinate with Nexus governance before reissuing the
-  registry entry or re-enabling downstream rollouts.
-- `AddressInvalidRatioSlo` warns when the fleet-wide invalid ratio (excluding
-  Local-8/strict-mode rejections) exceeds the 0.1 % SLO for ten minutes. Use
-  `torii_address_invalid_total` to pinpoint the responsible context/reason and
-  coordinate with the owning SDK team before re-enabling strict mode.
+### የልቀት ማስታወሻ ቅንጣቢ (የኪስ ቦርሳ እና አሳሽ)
 
-### Release note snippet (wallet & explorer)
+በሚላክበት ጊዜ የሚከተለውን ጥይት በኪስ ቦርሳ/አሳሽ ውስጥ ያካትቱ
+መቁረጫው:
 
-Include the following bullet in the wallet/explorer release notes when shipping
-the cutover:
-
-> **Addresses:** Added the `iroha tools address normalize --only-local --append-domain`
-> helper and wired it into CI (`ci/check_address_normalize.sh`) so wallet/explorer
-> before Local-8/Local-12 are blocked on mainnet. Update any custom exports to
-> run the command and attach the normalized list to the release evidence bundle.
+> ** አድራሻዎች:** `iroha tools address normalize --only-local --append-domain` ታክሏል።
+> ረዳት እና ወደ CI (`ci/check_address_normalize.sh`) በሽቦ ሰራው
+> Local-8/Local-12 በሜይንኔት ከመታገዱ በፊት። ወደ ውጭ የሚላኩ ማናቸውንም ያዘምኑ
+> ትዕዛዙን ያሂዱ እና የተለመደውን ዝርዝር ከመልቀቂያ ማስረጃ ጥቅል ጋር ያያይዙ።

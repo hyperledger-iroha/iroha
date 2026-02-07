@@ -4,82 +4,82 @@ direction: rtl
 source: docs/portal/docs/sorafs/signing-ceremony.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: signing-ceremony
-title: Remplacement de la ceremony de signature
-description: Comment le Parlement Sora approuve et distribue les fixtures du chunker SoraFS (SF-1b).
-sidebar_label: Ceremonie de signature
+מזהה: טקס חתימה
+כותרת: Replacement de la ceremony de signature
+תיאור: הערה Le Parlement Sora approuve and distribue les fixtures du chunker SoraFS (SF-1b).
+sidebar_label: טקס חתימה
 ---
 
-> Roadmap : **SF-1b — approbations des fixtures du Parlement Sora.**
-> Le workflow du Parlement remplace l'ancienne « ceremonie de signature du conseil » hors ligne.
+> מפת דרכים : **SF-1b — אישורים למשחקי פרלמנט סורה.**
+> Le workflow du Parlement remplace l'ancienne «טקס החתימה du conseil» hors ligne.
 
-Le rituel manuel de signature des fixtures du chunker SoraFS est retire. Toutes les
-approbations passent desormais par le **Parlement Sora**, la DAO basee sur le tirage
+Le rituel manuel de signature des fixtures du chunker SoraFS יצא לפנסיה. Toutes les
+הסכמות passat desormais par le **Parlement Sora**, la DAO basee sur le tirage
 au sort qui gouverne Nexus. Les membres du Parlement bloquent du XOR pour obtenir la
-citoyennete, tournent entre panels et votent on-chain pour approuver, rejeter ou
+citoyennete, טורננט פאנלים והצבעות בשרשרת לאשר, לדחות או
 revenir sur des releases de fixtures. Ce guide explique le processus et le tooling
-pour les developers.
+למפתחים.
 
 ## Vue d'ensemble du Parlement
 
-- **Citoyennete** — Les operateurs immobilisent le XOR requis pour s'inscrire comme
-  citoyens et devenir eligibles au tirage au sort.
-- **Panels** — Les responsabilites sont reparties entre des panels rotatifs
-  (Infrastructure, Moderation, Tresorerie, ...). Le Panel Infrastructure detient
+- **Citoyennete** - Les operateurs immobilisent le XOR requis pour s'inscriptre comme
+  זכאים citoyens et devenir au tirage au sort.
+- **פאנלים** - האחריות של מרכז הפנלים
+  (תשתיות, מתינות, טרזוררי, ...). מעצר תשתיות Le Panel
   les approbations de fixtures SoraFS.
-- **Tirage au sort et rotation** — Les sieges de panel sont reattribues selon la
+- **Tirage au sort et rotation** - Les sieges de panel sont reattribues selon la
   cadence specifiee dans la constitution du Parlement afin qu'aucun groupe ne
-  monopolise les approbations.
+  לעשות מונופול על ההסכמות.
 
-## Flux d'approbation des fixtures
+## Flux d'appropation des fixtures
 
-1. **Soumission de proposition**
+1. **מסירת הצעה**
    - Le Tooling WG televerse le bundle candidat `manifest_blake3.json` et le diff
-     de fixture dans le registre on-chain via `sorafs.fixtureProposal`.
+     de fixture dans le registre על השרשרת דרך `sorafs.fixtureProposal`.
    - La proposition enregistre le digest BLAKE3, la version semantique et les notes
-     de changement.
-2. **Revue et vote**
-   - Le Panel Infrastructure recoit l'affectation via la file de taches du Parlement.
+     דה שינוי.
+2. **Revue and vote**
+   - Le Panel Infrastructure recoit l'affection via la file de taches du Parlement.
    - Les membres inspectent les artefacts CI, executent des tests de parite et
      emettent des votes ponderes on-chain.
-3. **Finalisation**
+3. **סיום**
    - Une fois le quorum atteint, le runtime emet un evenement d'approbation incluant
      le digest canonique du manifest et l'engagement Merkle du payload de fixture.
    - L'evenement est duplique dans le registry SoraFS afin que les clients puissent
-     recuperer le dernier manifest approuve par le Parlement.
-4. **Distribution**
+     Recuperer le dernier manifest approuve par le Parlement.
+4. **הפצה**
    - Les helpers CLI (`cargo xtask sorafs-fetch-fixture`) recuperent le manifest
-     approuve via Nexus RPC. Les constantes JSON/TS/Go du depot restent synchronisees
+     לאשר באמצעות Nexus RPC. Les constantes JSON/TS/Go du depot restent Synces
      en relancant `export_vectors` et en validant le digest par rapport a l'enregistrement
-     on-chain.
+     על השרשרת.
 
-## Workflow developpeur
+## פיתוח זרימת עבודה
 
-- Regenerer les fixtures avec :
+- מתקנים מחודשים עם:
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
 - Utiliser le helper de fetch du Parlement pour telecharger l'enveloppe approuvee,
-  verifier les signatures et rafraichir les fixtures locales. Pointer `--signatures`
-  vers l'enveloppe publiee par le Parlement ; le helper resout le manifest associe,
-  recalcule le digest BLAKE3 et impose le profil canonique `sorafs.sf1@1.0.0`.
+  Verifier les חתימות ו rafraichir les fixtures locales. Pointer `--signatures`
+  vers l'enveloppe publiee par le Parlement; le helper resout le manifest associe,
+  חשב מחדש את לעכל BLAKE3 והטל את הפרופיל הקנוני `sorafs.sf1@1.0.0`.
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
   --signatures https://nexus.example/api/sorafs/manifest_signatures.json \
   --out fixtures/sorafs_chunker
-```
+```Passer `--manifest` זה המניפסט עם כתובת URL אחת. Les enveloppes non
+signees sont refuses sauf si `--allow-unsigned` est active pour des smoke runs locaux.
 
-Passer `--manifest` si le manifest se trouve a une autre URL. Les enveloppes non
-signees sont refusees sauf si `--allow-unsigned` est active pour des smoke runs locaux.
-
-- Pour valider un manifest via un gateway de staging, cibler Torii plutot que des
-  payloads locaux :
+- שפך את המניפסט התוקף דרך un gateway de staging, cibler Torii plutot que des
+  מטענים locaux:
 
 ```bash
 sorafs-fetch \
@@ -91,30 +91,30 @@ sorafs-fetch \
 ```
 
 - Le CI local n'exige plus un roster `signer.json`.
-  `ci/check_sorafs_fixtures.sh` compare l'etat du repo avec le dernier engagement
-  on-chain et echoue lorsqu'ils divergent.
+  `ci/check_sorafs_fixtures.sh` השווה את L'etat du repo avec le dernier engagement
+  על השרשרת et echoue lorsqu'ils משתנים.
 
-## Notes de gouvernance
+## הערות ניהול
 
-- La constitution du Parlement gouverne le quorum, la rotation et l'escalade ;
-  aucune configuration au niveau du crate n'est necessaire.
-- Les rollbacks d'urgence sont geres via le panel de moderation du Parlement. Le
-  Panel Infrastructure depose une proposition de revert qui reference le digest
-  precedent du manifest, et la release est remplacee une fois approuvee.
+- La constitution du Parlement gouverne le quorum, la rotation et l'escalade;
+  תצורת aucune au niveau du carte n'est necessaire.
+- Les rollbacks d'urgence sont geres via le panel de moderation du Parlement. לה
+  תשתיות פאנל הוציאו הצעה אחת לחזרה qui reference le digest
+  תקדים du manifest, et la release est remplacee une fois approuvee.
 - Les approbations historiques restent disponibles dans le registry SoraFS pour
   un replay forensique.
 
-## FAQ
+## שאלות נפוצות
 
 - **Ou est passe `signer.json` ?**  
-  Il a ete supprime. Toute attribution de signature vit on-chain ; `manifest_signatures.json`
-  dans le depot n'est qu'un fixture developpeur qui doit correspondre au dernier
-  evenement d'approbation.
+  Il a ete supprime. Toute attribution de signature vit on-chain; `manifest_signatures.json`
+  Dans le depot n'est qu'un מתקן developpeur qui doit correspondre au dernier
+  אירוע ד'הסכמה.
 
 - **Faut-il encore des signatures Ed25519 locales ?**  
-  Non. Les approbations du Parlement sont stockees comme artefacts on-chain. Les fixtures
-  locales existent pour la reproductibilite mais sont validees contre le digest du Parlement.
+  לא. Les approbations du Parlement sont stockees comme חפצים ברשת. מתקנים לס
+  מקומות קיימים pour la reproductibilite mais sont validees contre le digest du Parlement.
 
-- **Comment les equipes surveillent-elles les approbations ?**  
-  Abonnez-vous a l'evenement `ParliamentFixtureApproved` ou interrogez le registry via
-  Nexus RPC pour obtenir le digest actuel du manifest et la liste des membres du panel.
+- ** תגובה les equipes surveillent-elles les approbations ?**  
+  Abonnez-vous a l'evenement `ParliamentFixtureApproved` או לחקור את הרישום באמצעות
+  Nexus RPC pour obtenir le digest actuel du manifest et la list des membres du panel.

@@ -7,133 +7,129 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d1f1005d6a273ab732a7c7a7adca349c17569fe2e2755b8daccf2186724044f8
 source_last_modified: "2026-01-22T16:26:46.568382+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Settlement ↔ ISO 20022 Field Mapping
+## Hesablaşma ↔ ISO 20022 Sahə Xəritəçəkmə
 
-This note captures the canonical mapping between Iroha settlement instructions
-(`DvpIsi`, `PvpIsi`, repo collateral flows) and the ISO 20022 messages exercised
-by the bridge. It reflects the message scaffolding implemented in
-`crates/ivm/src/iso20022.rs` and serves as a reference when producing or
-validating Norito payloads.
+Bu qeyd Iroha hesablaşma təlimatları arasında kanonik xəritəni əks etdirir
+(`DvpIsi`, `PvpIsi`, repo girov axınları) və həyata keçirilən ISO 20022 mesajları
+körpünün yanında. Bu tətbiq olunan mesaj iskelesini əks etdirir
+`crates/ivm/src/iso20022.rs` və istehsal edərkən istinad kimi xidmət edir və ya
+Norito faydalı yüklərin doğrulanması.
 
-### Reference Data Policy (Identifiers and Validation)
+### İstinad Məlumat Siyasəti (İdentifikatorlar və Doğrulama)
 
-This policy packages the identifier preferences, validation rules, and reference-data
-obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting messages.
+Bu siyasət identifikator seçimlərini, doğrulama qaydalarını və istinad məlumatlarını paketləşdirir
+Norito ↔ ISO 20022 körpüsünün mesajları yaymazdan əvvəl yerinə yetirməli olduğu öhdəliklər.
 
-**Anchor points inside the ISO message:**
-- **Instrument identifiers** → `delivery_leg.asset_definition_id` ↔ `SctiesLeg/FinInstrmId`
-  (or the equivalent instrument field).
-- **Parties / agents** → `DlvrgSttlmPties/Pty` and `RcvgSttlmPties/Pty` for `sese.*`,
-  or the agent structures in `pacs.009`.
-- **Accounts** → `…/Acct` elements for safekeeping/cash accounts; mirror the on-ledger
-  `AccountId` in `SupplementaryData`.
-- **Proprietary identifiers** → `…/OthrId` with `Tp/Prtry` and mirrored in
-  `SupplementaryData`. Never replace regulated identifiers with proprietary ones.
+**ISO mesajı daxilində lövbər nöqtələri:**
+- **Alət identifikatorları** → `delivery_leg.asset_definition_id` ↔ `SctiesLeg/FinInstrmId`
+  (və ya ekvivalent alət sahəsi).
+- **Tərəflər / agentlər** → `DlvrgSttlmPties/Pty` və `sese.*` üçün `RcvgSttlmPties/Pty`,
+  və ya `pacs.009`-də agent strukturları.
+- **Hesablar** → Saxlama/pul hesabları üçün `…/Acct` elementləri; kitabçanı əks etdirin
+  `AccountId`, `SupplementaryData`.
+- **Mülkiyyət identifikatorları** → `Tp/Prtry` ilə `…/OthrId` və əks olunur
+  `SupplementaryData`. Tənzimlənən identifikatorları heç vaxt özəl olanlarla əvəz etməyin.
 
-#### Identifier preference by message family
+#### Mesaj ailəsi üzrə identifikator üstünlükləri
 
-##### `sese.023` / `.024` / `.025` (securities settlement)
+##### `sese.023` / `.024` / `.025` (qiymətli kağızlar üzrə hesablaşma)
 
-- **Instrument (`FinInstrmId`)**
-  - Preferred: **ISIN** under `…/ISIN`. It is the canonical identifier for CSDs / T2S.[^anna]
-  - Fallbacks:
-    - **CUSIP** or other NSIN under `…/OthrId/Id` with `Tp/Cd` set from the ISO external
-      code list (e.g., `CUSP`); include the issuer in `Issr` when mandated.[^iso_mdr]
-    - **Norito asset ID** as proprietary: `…/OthrId/Id`, `Tp/Prtry="NORITO_ASSET_ID"`, and
-      record the same value in `SupplementaryData`.
-  - Optional descriptors: **CFI** (`ClssfctnTp`) and **FISN** where supported to ease
-    reconciliation.[^iso_cfi][^iso_fisn]
-- **Parties (`DlvrgSttlmPties`, `RcvgSttlmPties`)**
-  - Preferred: **BIC** (`AnyBIC/BICFI`, ISO 9362).[^swift_bic]
-  - Fallback: **LEI** where the version of the message exposes a dedicated LEI field; if
-    absent, carry proprietary IDs with clear `Prtry` labels and include BIC in metadata.[^iso_cr]
-- **Place of settlement / venue** → **MIC** for the venue and **BIC** for the CSD.[^iso_mic]
+- **Alət (`FinInstrmId`)**
+  - Üstünlük verilir: `…/ISIN` altında **ISIN**. Bu, CSD / T2S üçün kanonik identifikatordur.[^anna]
+  - Geri dönmələr:
+    - **CUSIP** və ya xarici ISO-dan təyin edilmiş `Tp/Cd` ilə `…/OthrId/Id` altında digər NSIN
+      kod siyahısı (məsələn, `CUSP`); mandat verildikdə emitenti `Issr` sırasına daxil edin.[^iso_mdr]
+    - **Norito aktiv ID** mülkiyyətçi kimi: `…/OthrId/Id`, `Tp/Prtry="NORITO_ASSET_ID"` və
+      eyni dəyəri `SupplementaryData`-də qeyd edin.
+  - Əlavə deskriptorlar: **CFI** (`ClssfctnTp`) və **FISN** asanlaşdırmaq üçün dəstəklənir
+    barışıq.[^iso_cfi][^iso_fisn]
+- **Tərəflər (`DlvrgSttlmPties`, `RcvgSttlmPties`)**
+  - Üstünlük verilir: **BIC** (`AnyBIC/BICFI`, ISO 9362).[^swift_bic]
+  - Fallback: **LEI** burada mesajın versiyası xüsusi LEI sahəsini ifşa edir; əgər
+    yoxdur, aydın `Prtry` etiketləri olan mülkiyyət identifikatorları daşıyın və metadata BIC daxil edin.[^iso_cr]
+- **Məskunlaşma yeri / məkan** → məkan üçün **MIC** və CSD üçün **BIC**.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` and `colr.007` (collateral management)
+##### `colr.010` / `.011` / `.012` və `colr.007` (girovun idarə edilməsi)
 
-- Follow the same instrument rules as `sese.*` (ISIN preferred).
-- Parties use **BIC** by default; **LEI** is acceptable where the schema exposes it.[^swift_bic]
-- Cash amounts must use **ISO 4217** currency codes with correct minor units.[^iso_4217]
+- `sese.*` (ISIN-ə üstünlük verilir) ilə eyni alət qaydalarına əməl edin.
+- Tərəflər defolt olaraq **BIC**-dən istifadə edirlər; **LEI**, sxemin ifşa etdiyi yerdə məqbuldur.[^swift_bic]
+- Nağd pul məbləğləri düzgün kiçik vahidlərlə **ISO 4217** valyuta kodlarından istifadə etməlidir.[^iso_4217]
 
-##### `pacs.009` / `camt.054` (PvP funding and statements)
+##### `pacs.009` / `camt.054` (PvP maliyyələşdirmə və bəyanatlar)- **Agentlər (`InstgAgt`, `InstdAgt`, borclu/kreditor agentləri)** → **BIC** isteğe bağlı
+  İcazə verilən yerlərdə LEI.[^swift_bic]
+- **Hesablar**
+  - Banklararası: **BIC** və daxili hesab arayışları ilə müəyyən edin.
+  - Müştəri ilə bağlı bəyanatlar (`camt.054`): mövcud olduqda **IBAN** daxil edin və təsdiqləyin
+    (uzunluq, ölkə qaydaları, mod-97 yoxlama cəmi).[^swift_iban]
+- **Valyuta** → **ISO 4217** 3 hərfli kod, kiçik vahidlərin yuvarlaqlaşdırılmasına riayət edin.[^iso_4217]
+- **Torii qəbulu** → `POST /v1/iso20022/pacs009` vasitəsilə PvP maliyyələşdirmə ayaqlarını təqdim edin; körpü
+  `Purp=SECU` tələb edir və indi istinad məlumatları konfiqurasiya edildikdə BIC piyada keçidlərini tətbiq edir.
 
-- **Agents (`InstgAgt`, `InstdAgt`, debtor/creditor agents)** → **BIC** with optional
-  LEI where allowed.[^swift_bic]
-- **Accounts**
-  - Interbank: identify by **BIC** and internal account references.
-  - Customer-facing statements (`camt.054`): include **IBAN** when present and validate it
-    (length, country rules, mod-97 checksum).[^swift_iban]
-- **Currency** → **ISO 4217** 3-letter code, respect minor-unit rounding.[^iso_4217]
-- **Torii ingestion** → Submit PvP funding legs via `POST /v1/iso20022/pacs009`; the bridge
-  requires `Purp=SECU` and now enforces BIC crosswalks when reference data is configured.
+#### Qiymətləndirmə qaydaları (emissiyadan əvvəl tətbiq olunur)
 
-#### Validation rules (apply before emission)
-
-| Identifier | Validation rule | Notes |
+| İdentifikator | Doğrulama qaydası | Qeydlər |
 |------------|-----------------|-------|
-| **ISIN** | Regex `^[A-Z]{2}[A-Z0-9]{9}[0-9]$` and Luhn (mod-10) check digit per ISO 6166 Annex C | Reject before bridge emission; prefer upstream enrichment.[^anna_luhn] |
-| **CUSIP** | Regex `^[A-Z0-9]{9}$` and modulus-10 with 2 weighting (characters map to digits) | Only when ISIN is unavailable; map via ANNA/CUSIP crosswalk once sourced.[^cusip] |
-| **LEI** | Regex `^[A-Z0-9]{18}[0-9]{2}$` and mod-97 check digit (ISO 17442) | Validate against GLEIF daily delta files before acceptance.[^gleif] |
-| **BIC** | Regex `^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$` | Optional branch code (last three chars). Confirm active status in RA files.[^swift_bic] |
-| **MIC** | Maintain from ISO 10383 RA file; ensure venues are active (no `!` termination flag) | Flag decommissioned MICs before emission.[^iso_mic] |
-| **IBAN** | Country-specific length, uppercase alphanumeric, mod-97 = 1 | Use registry maintained by SWIFT; reject structurally invalid IBANs.[^swift_iban] |
-| **Proprietary account/party IDs** | `Max35Text` (UTF-8, ≤35 characters) with trimmed whitespace | Applies to `GenericAccountIdentification1.Id` and `PartyIdentification135.Othr/Id` fields. Reject entries exceeding 35 characters so bridge payloads conform to ISO schemas. |
-| **Proxy account identifiers** | Non-empty `Max2048Text` under `…/Prxy/Id` with optional type codes in `…/Prxy/Tp/{Cd,Prtry}` | Stored alongside the primary IBAN; validation still requires IBANs while accepting proxy handles (with optional type codes) to mirror PvP rails. |
-| **CFI** | Six-character code, uppercase letters using ISO 10962 taxonomy | Optional enrichment; ensure characters match instrument class.[^iso_cfi] |
-| **FISN** | Up to 35 characters, uppercase alphanumeric plus limited punctuation | Optional; truncate/normalise per ISO 18774 guidance.[^iso_fisn] |
-| **Currency** | ISO 4217 3-letter code, scale determined by minor units | Amounts must round to permitted decimals; enforce on Norito side.[^iso_4217] |
+| **ISIN** | Regex `^[A-Z]{2}[A-Z0-9]{9}[0-9]$` və Luhn (mod-10) yoxlama rəqəmi ISO 6166 Əlavə C | Körpü emissiyasından əvvəl rədd edin; yuxarı zənginləşdirməyə üstünlük verir.[^anna_luhn] |
+| **CUSIP** | Regex `^[A-Z0-9]{9}$` və modul-10 2 çəki ilə (simvolların rəqəmlərə xəritəsi) | Yalnız ISIN mövcud olmadıqda; bir dəfə ANNA/CUSIP piyada keçidi vasitəsilə xəritə.[^cusip] |
+| **LEI** | Regex `^[A-Z0-9]{18}[0-9]{2}$` və mod-97 yoxlama rəqəmi (ISO 17442) | Qəbul etməzdən əvvəl GLEIF gündəlik delta faylları ilə təsdiqləyin.[^gleif] |
+| **BIC** | Regex `^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$` | Könüllü filial kodu (son üç simvol). RA fayllarında aktiv statusu təsdiq edin.[^swift_bic] |
+| **MIC** | ISO 10383 RA faylından qoruyun; yerlərin aktiv olmasını təmin edin (`!` dayandırma bayrağı yoxdur) | Emissiyadan əvvəl istismardan çıxarılan MİK-ləri qeyd edin.[^iso_mic] |
+| **IBAN** | Ölkəyə məxsus uzunluq, böyük hərf-rəqəm, mod-97 = 1 | SWIFT tərəfindən aparılan reyestrdən istifadə edin; struktur etibarsız IBAN-ları rədd edin.[^swift_iban] |
+| **Mülkiyyət hesabı/partiya identifikatorları** | `Max35Text` (UTF-8, ≤35 simvol) kəsilmiş boşluq ilə | `GenericAccountIdentification1.Id` və `PartyIdentification135.Othr/Id` sahələrinə aiddir. 35 simvoldan çox olan girişləri rədd edin ki, körpü yükləri ISO sxemlərinə uyğun olsun. |
+| **Proksi hesab identifikatorları** | Qeyri-boş `Max2048Text` `…/Prxy/Id` altında isteğe bağlı tip kodları ilə `…/Prxy/Tp/{Cd,Prtry}` | Əsas IBAN ilə yanaşı saxlanılır; doğrulama hələ də PvP relslərini əks etdirmək üçün proksi tutacaqları (isteğe bağlı tip kodları ilə) qəbul edərkən IBAN tələb edir. |
+| **CFI** | ISO 10962 taksonomiyasından istifadə edərək altı simvollu kod, böyük hərflər | Könüllü zənginləşdirmə; simvolların alət sinfinə uyğun olduğundan əmin olun.[^iso_cfi] |
+| **FISN** | 35 simvola qədər, böyük hərf-rəqəm və məhdud durğu işarələri | Könüllü; ISO 18774 təlimatına uyğun olaraq kəsin/normallaşdırın.[^iso_fisn] |
+| **Valyuta** | ISO 4217 3 hərfli kod, kiçik vahidlərlə müəyyən edilən miqyas | Məbləğlər icazə verilən onluqlara yuvarlaqlaşdırılmalıdır; Norito tərəfində tətbiq edin.[^iso_4217] |
 
-#### Crosswalk and data maintenance obligations
+#### Piyada keçidi və məlumatların saxlanması öhdəlikləri- **ISIN ↔ Norito aktiv ID** və **CUSIP ↔ ISIN** piyada keçidlərini qoruyun. Hər gecə yeniləyin
+  ANNA/DSB lentləri və versiya CI tərəfindən istifadə edilən snapşotlara nəzarət edir.[^anna_crosswalk]
+- GLEIF ictimai əlaqələr fayllarından **BIC ↔ LEI** xəritələrini yeniləyin ki, körpü
+  tələb olunduqda hər ikisini buraxın.[^bic_lei]
+- Körpü metadatasının yanında **MIC təriflərini** saxlayın ki, məkanın yoxlanılması mümkün olsun
+  RA faylları günün ortasında dəyişdikdə belə deterministikdir.[^iso_mic]
+- Audit üçün körpü metadatasında verilənlərin mənşəyini (vaxt damğası + mənbə) qeyd edin. Davam et
+  buraxılmış təlimatlarla yanaşı snapshot identifikatoru.
+- Hər bir yüklənmiş verilənlər toplusunun surətini saxlamaq üçün `iso_bridge.reference_data.cache_dir`-i konfiqurasiya edin
+  mənşəli metadata ilə yanaşı (versiya, mənbə, vaxt damgası, yoxlama məbləği). Bu, auditorlara imkan verir
+  və operatorlar hətta yuxarı axın görüntüləri fırlanandan sonra da tarixi lentləri fərqləndirir.
+- ISO piyada keçidi şəkilləri `iroha_core::iso_bridge::reference_data` tərəfindən qəbul edilir.
+  `iso_bridge.reference_data` konfiqurasiya bloku (yollar + yeniləmə intervalı). Ölçerlər
+  `iso_reference_status`, `iso_reference_age_seconds`, `iso_reference_records` və
+  `iso_reference_refresh_interval_secs` xəbərdarlıq üçün iş vaxtının sağlamlığını ifşa edir. Torii
+  körpü konfiqurasiya edilmiş agent BIC-ləri olmayan `pacs.008` təqdimatlarını rədd edir
+  piyada keçidi, qarşı tərəf olduqda deterministik `InvalidIdentifier` xətaları
+  naməlum.【crates/iroha_torii/src/iso20022_bridge.rs#L1078】
+- IBAN və ISO 4217 bağlamaları eyni səviyyədə tətbiq edilir: pacs.008/pacs.009 indi axır
+  Borclu/kreditor IBAN-larında konfiqurasiya edilmiş ləqəblər olmadıqda və ya zaman `InvalidIdentifier` səhvləri buraxın
+  `currency_assets`-də hesablaşma valyutası yoxdur, bu da düzgün olmayan körpünün qarşısını alır
+  kitabçaya çatmaq üçün təlimatlar. IBAN-ın doğrulanması da ölkəyə xasdır
+  ISO 7064 mod‑97 keçidindən əvvəl uzunluqlar və rəqəmsal yoxlama rəqəmləri struktur cəhətdən etibarsızdır
+  dəyərlər erkən rədd edilir.【crates/iroha_torii/src/iso20022_bridge.rs#L775】【crates/iroha_torii/src/iso20022_bridge.rs#L827】【crates/ivm/src/iso20012.
+- CLI məskunlaşma köməkçiləri eyni qoruyucu relsləri miras alırlar: keçid
+  DvP-yə sahib olmaq üçün `--iso-reference-crosswalk <path>` `--delivery-instrument-id` ilə birlikdə
+  `sese.023` XML snapşotunu buraxmazdan əvvəl alət identifikatorlarını doğrulayın.【crates/iroha_cli/src/main.rs#L3752】
+- `cargo xtask iso-bridge-lint` (və CI sarğı `ci/check_iso_reference_data.sh`) tüy
+  piyada keçidi şəkilləri və qurğular. Komanda `--isin`, `--bic-lei`, `--mic` və
+  `--fixtures` bayraqlayır və işə salındıqda `fixtures/iso_bridge/`-dəki nümunə məlumat dəstlərinə qayıdır
+  arqumentsiz.【xtask/src/main.rs#L146】【ci/check_iso_reference_data.sh#L1】
+- IVM köməkçisi indi real ISO 20022 XML zərflərini qəbul edir (head.001 + `DataPDU` + `Document`)
+  və `head.001` sxemi vasitəsilə Biznes Tətbiqi Başlığını təsdiq edir, beləliklə `BizMsgIdr`,
+  `MsgDefIdr`, `CreDt` və BIC/ClrSysMmbId agentləri deterministik şəkildə qorunur; XMLDSig/XAdES
+  bloklar qəsdən atlanır. Reqressiya testləri nümunələri və yeniləri istehlak edirXəritəçəkmələri qorumaq üçün başlıq zərfi qurğusu.【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:370
 
-- Maintain **ISIN ↔ Norito asset ID** and **CUSIP ↔ ISIN** crosswalks. Update nightly from
-  ANNA/DSB feeds and version control the snapshots used by CI.[^anna_crosswalk]
-- Refresh **BIC ↔ LEI** mappings from the GLEIF public relationship files so the bridge can
-  emit both when required.[^bic_lei]
-- Store **MIC definitions** alongside the bridge metadata so venue validation is
-  deterministic even when RA files change mid-day.[^iso_mic]
-- Record data provenance (timestamp + source) in bridge metadata for audit. Persist the
-  snapshot identifier alongside emitted instructions.
-- Configure `iso_bridge.reference_data.cache_dir` to persist a copy of each loaded dataset
-  alongside provenance metadata (version, source, timestamp, checksum). This allows auditors
-  and operators to diff historical feeds even after upstream snapshots rotate.
-- ISO crosswalk snapshots are ingested by `iroha_core::iso_bridge::reference_data` using
-  the `iso_bridge.reference_data` configuration block (paths + refresh interval). Gauges
-  `iso_reference_status`, `iso_reference_age_seconds`, `iso_reference_records`, and
-  `iso_reference_refresh_interval_secs` expose runtime health for alerting. The Torii
-  bridge rejects `pacs.008` submissions whose agent BICs are absent from the configured
-  crosswalk, surfacing deterministic `InvalidIdentifier` errors when a counterparty is
-  unknown.【crates/iroha_torii/src/iso20022_bridge.rs#L1078】
-- IBAN and ISO 4217 bindings are enforced at the same layer: pacs.008/pacs.009 flows now
-  emit `InvalidIdentifier` errors when debtor/creditor IBANs lack configured aliases or when
-  the settlement currency is missing from `currency_assets`, preventing malformed bridge
-  instructions from reaching the ledger. IBAN validation also applies country-specific
-  lengths and numeric check digits before the ISO 7064 mod‑97 pass so structurally invalid
-  values are rejected early.【crates/iroha_torii/src/iso20022_bridge.rs#L775】【crates/iroha_torii/src/iso20022_bridge.rs#L827】【crates/ivm/src/iso20022.rs#L1255】
-- The CLI settlement helpers inherit the same guard rails: pass
-  `--iso-reference-crosswalk <path>` alongside `--delivery-instrument-id` to have the DvP
-  preview validate instrument IDs before emitting the `sese.023` XML snapshot.【crates/iroha_cli/src/main.rs#L3752】
-- `cargo xtask iso-bridge-lint` (and the CI wrapper `ci/check_iso_reference_data.sh`) lint
-  crosswalk snapshots and fixtures. The command accepts `--isin`, `--bic-lei`, `--mic`, and
-  `--fixtures` flags and falls back to the sample datasets in `fixtures/iso_bridge/` when run
-  without arguments.【xtask/src/main.rs#L146】【ci/check_iso_reference_data.sh#L1】
-- The IVM helper now ingests real ISO 20022 XML envelopes (head.001 + `DataPDU` + `Document`)
-  and validates the Business Application Header via the `head.001` schema so `BizMsgIdr`,
-  `MsgDefIdr`, `CreDt`, and BIC/ClrSysMmbId agents are preserved deterministically; XMLDSig/XAdES
-  blocks remain intentionally skipped. Regression tests consume the samples and the new
-  header envelope fixture to guard the mappings.【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:3703】
+#### Tənzimləmə və bazar strukturu mülahizələri
 
-#### Regulatory and market-structure considerations
-
-- **T+1 settlement**: US/Canada equity markets moved to T+1 in 2024; adjust Norito
-  scheduling and SLA alerts accordingly.[^sec_t1][^csa_t1]
-- **CSDR penalties**: Settlement discipline rules enforce cash penalties; ensure Norito
-  metadata captures penalty references for reconciliation.[^csdr]
-- **Same-day settlement pilots**: India’s regulator is phasing in T0/T+0 settlement; keep
-  bridge calendars updated as pilots expand.[^india_t0]
-- **Collateral buy-ins / holds**: Monitor ESMA updates on buy-in timelines and optional holds
-  so conditional delivery (`HldInd`) aligns with the latest guidance.[^csdr]
+- **T+1 hesablaşma**: ABŞ/Kanada səhm bazarları 2024-cü ildə T+1 səviyyəsinə keçdi; Norito tənzimləyin
+  planlaşdırma və müvafiq olaraq SLA xəbərdarlıqları.[^sec_t1][^csa_t1]
+- **CSDR cərimələri**: Hesablaşma intizam qaydaları nağd pul cəzalarını tətbiq edir; Norito təmin edin
+  metadata uzlaşma üçün cəza arayışlarını çəkir.[^csdr]
+- **Eyni gün hesablaşma pilotları**: Hindistanın tənzimləyicisi T0/T+0 hesablaşmasında mərhələli olur; saxlamaq
+  pilotlar genişləndikcə körpü təqvimləri yeniləndi.[^india_t0]
+- **Girov alışları / saxlanmaları**: alış qrafikləri və isteğe bağlı saxlamalarda ESMA yeniləmələrini izləyin
+  şərti çatdırılma (`HldInd`) ən son rəhbərliyə uyğun gəlir.[^csdr]
 
 [^anna]: ANNA ISIN Guidelines, December 2023. https://anna-web.org/wp-content/uploads/2024/01/ISIN-Guidelines-Version-22-Dec-2023.pdf
 [^iso_mdr]: ISO 20022 external code list (CUSIP `CUSP`) and MDR Part 2. https://www.iso20022.org/milestone/22048/download
@@ -154,65 +150,61 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
 [^csdr]: ESMA CSDR settlement discipline / penalty mechanism updates. https://www.esma.europa.eu/sites/default/files/2024-11/ESMA74-2119945925-2059_Final_Report_on_Technical_Advice_on_CSDR_Penalty_Mechanism.pdf
 [^india_t0]: SEBI circular on same-day settlement pilot. https://www.reuters.com/sustainability/boards-policy-regulation/india-markets-regulator-extends-deadline-same-day-settlement-plan-brokers-2025-04-29/
 
-### Delivery-versus-Payment → `sese.023`
+### Çatdırılmaya qarşı Ödəniş → `sese.023`| DvP sahəsi | ISO 20022 yolu | Qeydlər |
+|------------------------------------------------------|---------------------------------------|-------|
+| `settlement_id` | `TxId` | Stabil həyat dövrü identifikatoru |
+| `delivery_leg.asset_definition_id` (təhlükəsizlik) | `SctiesLeg/FinInstrmId` | Kanonik identifikator (ISIN, CUSIP, …) |
+| `delivery_leg.quantity` | `SctiesLeg/Qty` | Ondalık sətir; fəxri aktivin dəqiqliyi |
+| `payment_leg.asset_definition_id` (valyuta) | `CashLeg/Ccy` | ISO valyuta kodu |
+| `payment_leg.quantity` | `CashLeg/Amt` | Ondalık sətir; Rəqəm spesifikasiyasına görə yuvarlaqlaşdırılmış |
+| `delivery_leg.from` (satıcı / çatdıran tərəf) | `DlvrgSttlmPties/Pty/Bic` | Çatdıran iştirakçının BIC kodu *(hesabın kanonik identifikatoru hazırda metadatada eksport edilib)* |
+| `delivery_leg.from` hesab identifikatoru | `DlvrgSttlmPties/Acct` | Sərbəst forma; Norito metadata dəqiq hesab ID daşıyır |
+| `delivery_leg.to` (alıcı / qəbul edən tərəf) | `RcvgSttlmPties/Pty/Bic` | Qəbul edən iştirakçının BIC |
+| `delivery_leg.to` hesab identifikatoru | `RcvgSttlmPties/Acct` | Sərbəst forma; hesab ID qəbul edən uyğun gəlir
+| `plan.order` | `Plan/ExecutionOrder` | Sayı: `DELIVERY_THEN_PAYMENT` və ya `PAYMENT_THEN_DELIVERY` |
+| `plan.atomicity` | `Plan/Atomicity` | Sayı: `ALL_OR_NOTHING`, `COMMIT_FIRST_LEG`, `COMMIT_SECOND_LEG` |
+| **Mesajın məqsədi** | `SttlmTpAndAddtlParams/SctiesMvmntTp` | `DELI` (çatdırmaq) və ya `RECE` (qəbul etmək); təqdim edən tərəfin hansı ayağı icra etdiyi güzgülər. |
+|                                                        | `SttlmTpAndAddtlParams/Pmt` | `APMT` (ödənişə qarşı) və ya `FREE` (ödənişsiz). |
+| `delivery_leg.metadata`, `payment_leg.metadata` | `SctiesLeg/Metadata`, `CashLeg/Metadata` | UTF‑8 kimi kodlaşdırılmış isteğe bağlı Norito JSON |
 
-| DvP field                                              | ISO 20022 path                          | Notes |
-|--------------------------------------------------------|----------------------------------------|-------|
-| `settlement_id`                                        | `TxId`                                 | Stable lifecycle identifier |
-| `delivery_leg.asset_definition_id` (security)          | `SctiesLeg/FinInstrmId`                | Canonical identifier (ISIN, CUSIP, …) |
-| `delivery_leg.quantity`                                | `SctiesLeg/Qty`                        | Decimal string; honours asset precision |
-| `payment_leg.asset_definition_id` (currency)           | `CashLeg/Ccy`                          | ISO currency code |
-| `payment_leg.quantity`                                 | `CashLeg/Amt`                          | Decimal string; rounded per Numeric spec |
-| `delivery_leg.from` (seller / delivering party)        | `DlvrgSttlmPties/Pty/Bic`              | BIC of delivering participant *(account canonical ID is currently exported in metadata)* |
-| `delivery_leg.from` account identifier                 | `DlvrgSttlmPties/Acct`                 | Free-form; Norito metadata carries exact account ID |
-| `delivery_leg.to` (buyer / receiving party)            | `RcvgSttlmPties/Pty/Bic`               | BIC of receiving participant |
-| `delivery_leg.to` account identifier                   | `RcvgSttlmPties/Acct`                  | Free-form; matches receiving account ID |
-| `plan.order`                                           | `Plan/ExecutionOrder`                  | Enum: `DELIVERY_THEN_PAYMENT` or `PAYMENT_THEN_DELIVERY` |
-| `plan.atomicity`                                       | `Plan/Atomicity`                       | Enum: `ALL_OR_NOTHING`, `COMMIT_FIRST_LEG`, `COMMIT_SECOND_LEG` |
-| **Message purpose**                                    | `SttlmTpAndAddtlParams/SctiesMvmntTp`  | `DELI` (deliver) or `RECE` (receive); mirrors which leg the submitting party executes. |
-|                                                        | `SttlmTpAndAddtlParams/Pmt`            | `APMT` (against payment) or `FREE` (free-of-payment). |
-| `delivery_leg.metadata`, `payment_leg.metadata`        | `SctiesLeg/Metadata`, `CashLeg/Metadata` | Optional Norito JSON encoded as UTF‑8 |
+> **Hesablaşma kvalifikatorları** – körpü hesablaşma vəziyyəti kodlarını (`SttlmTxCond`), qismən hesablaşma göstəricilərini (`PrtlSttlmInd`) və Norito metaməlumatından mövcud olduqda Norito-ə köçürməklə, körpü bazar təcrübəsini əks etdirir. İSO xarici kod siyahılarında dərc edilmiş siyahıları tətbiq edin ki, təyinat CSD dəyərləri tanısın.
 
-> **Settlement qualifiers** – the bridge mirrors market practice by copying settlement condition codes (`SttlmTxCond`), partial settlement indicators (`PrtlSttlmInd`), and other optional qualifiers from Norito metadata into `sese.023/025` when present. Enforce the enumerations published in the ISO external code lists so the destination CSD recognises the values.
+### Ödəniş-ödənişin maliyyələşdirilməsi → `pacs.009`
 
-### Payment-versus-Payment Funding → `pacs.009`
+PvP təlimatını maliyyələşdirən nağd pul vəsaitləri FI-to-FI krediti kimi verilir.
+köçürmələr. Körpü bu ödənişləri qeyd edir ki, aşağı axın sistemləri tanısın
+qiymətli kağızlar üzrə hesablaşmanı maliyyələşdirirlər.| PvP maliyyələşdirmə sahəsi | ISO 20022 yolu | Qeydlər |
+|------------------------------------------------|----------------------------------------------------|-------|
+| `primary_leg.quantity` / {məbləğ, valyuta} | `IntrBkSttlmAmt` + `IntrBkSttlmCcy` | Təşəbbüskardan debet edilmiş məbləğ/valyuta. |
+| Qarşı tərəf agent identifikatorları | `InstgAgt`, `InstdAgt` | Göndərən və qəbul edən agentlərin BIC/LEI. |
+| Qəsəbə məqsədi | `CdtTrfTxInf/PmtTpInf/CtgyPurp/Cd` | Qiymətli kağızlarla əlaqəli PvP maliyyələşdirilməsi üçün `SECU` olaraq təyin edin. |
+| Norito metadata (hesab idləri, FX datası) | `CdtTrfTxInf/SplmtryData` | Tam AccountId, FX zaman damgaları, icra planı göstərişləri daşıyır. |
+| Təlimat identifikatoru / həyat dövrü əlaqələndirilməsi | `CdtTrfTxInf/PmtId/InstrId`, `CdtTrfTxInf/RmtInf` | Norito `settlement_id` ilə uyğun gəlir, beləliklə, pul ayağı qiymətli kağızlar tərəfi ilə uzlaşır. |
 
-The cash-for-cash legs that fund a PvP instruction are issued as FI-to-FI credit
-transfers. The bridge annotates these payments so downstream systems recognise
-they finance a securities settlement.
+JavaScript SDK-nın ISO körpüsü standart olaraq bu tələbə uyğunlaşır
+`pacs.009` kateqoriya məqsədi `SECU`; zəng edənlər onu başqası ilə əvəz edə bilər
+qiymətli kağızlar olmayan kredit köçürmələri zamanı etibarlı ISO kodu, lakin etibarsızdır
+dəyərlər qabaqcadan rədd edilir.
 
-| PvP funding field                              | ISO 20022 path                                      | Notes |
-|------------------------------------------------|-----------------------------------------------------|-------|
-| `primary_leg.quantity` / {amount, currency}    | `IntrBkSttlmAmt` + `IntrBkSttlmCcy`                 | Amount/currency debited from the initiator. |
-| Counterparty agent identifiers                 | `InstgAgt`, `InstdAgt`                              | BIC/LEI of sending and receiving agents. |
-| Settlement purpose                             | `CdtTrfTxInf/PmtTpInf/CtgyPurp/Cd`                  | Set to `SECU` for securities-related PvP funding. |
-| Norito metadata (account ids, FX data)         | `CdtTrfTxInf/SplmtryData`                           | Carries full AccountId, FX timestamps, execution plan hints. |
-| Instruction identifier / lifecycle linking     | `CdtTrfTxInf/PmtId/InstrId`, `CdtTrfTxInf/RmtInf`   | Matches the Norito `settlement_id` so the cash leg reconciles with the securities side. |
+Bir infrastruktur açıq qiymətli kağızların təsdiqini tələb edirsə, körpü
+`sese.025` buraxmaqda davam edir, lakin bu təsdiq qiymətli kağızlar ayağını əks etdirir
+statusu (məsələn, `ConfSts = ACCP`) PvP “məqsədi” deyil.
 
-The JavaScript SDK’s ISO bridge aligns with this requirement by defaulting the
-`pacs.009` category purpose to `SECU`; callers may override it with another
-valid ISO code when emitting non-securities credit transfers, but invalid
-values are rejected up front.
+### Ödəniş-ödənişin təsdiqi → `sese.025`
 
-If an infrastructure requires an explicit securities confirmation, the bridge
-continues to emit `sese.025`, but that confirmation reflects the securities leg
-status (e.g., `ConfSts = ACCP`) rather than the PvP “purpose”.
+| PvP sahəsi | ISO 20022 yolu | Qeydlər |
+|-----------------------------------------|---------------------------|-------|
+| `settlement_id` | `TxId` | Stabil həyat dövrü identifikatoru |
+| `primary_leg.asset_definition_id` | `SttlmCcy` | Əsas mərhələ üçün valyuta kodu |
+| `primary_leg.quantity` | `SttlmAmt` | Təşəbbüskar tərəfindən çatdırılan məbləğ |
+| `counter_leg.asset_definition_id` | `AddtlInf` (JSON yükü) | Əks valyuta kodu əlavə məlumatda yerləşdirilmiş |
+| `counter_leg.quantity` | `SttlmQty` | Əks məbləğ |
+| `plan.order` | `Plan/ExecutionOrder` | DvP | ilə eyni nömrə təyin edildi
+| `plan.atomicity` | `Plan/Atomicity` | DvP | ilə eyni nömrə təyin edildi
+| `plan.atomicity` statusu (`ConfSts`) | `ConfSts` | Uyğunlaşdıqda `ACCP`; körpü rədd edildikdə uğursuzluq kodları verir |
+| Qarşı tərəf identifikatorları | `AddtlInf` JSON | Cari körpü tam AccountId/BIC dəstlərini metadata |
 
-### Payment-versus-Payment Confirmation → `sese.025`
-
-| PvP field                                     | ISO 20022 path            | Notes |
-|-----------------------------------------------|---------------------------|-------|
-| `settlement_id`                               | `TxId`                    | Stable lifecycle identifier |
-| `primary_leg.asset_definition_id`             | `SttlmCcy`                | Currency code for the primary leg |
-| `primary_leg.quantity`                        | `SttlmAmt`                | Amount delivered by initiator |
-| `counter_leg.asset_definition_id`             | `AddtlInf` (JSON payload) | Counter currency code embedded in supplemental info |
-| `counter_leg.quantity`                        | `SttlmQty`                | Counter amount |
-| `plan.order`                                  | `Plan/ExecutionOrder`     | Same enum set as DvP |
-| `plan.atomicity`                              | `Plan/Atomicity`          | Same enum set as DvP |
-| `plan.atomicity` status (`ConfSts`)           | `ConfSts`                 | `ACCP` when matched; bridge emits failure codes on rejection |
-| Counterparty identifiers                      | `AddtlInf` JSON           | Current bridge serialises full AccountId/BIC tuples in metadata |
-
-Example (CLI ISO preview with linkages, hold, and market MIC):
+Nümunə (əlaqələr, saxlama və bazar MIC ilə CLI ISO önizləməsi):
 
 ```sh
 iroha app settlement dvp \
@@ -235,164 +227,156 @@ iroha app settlement dvp \
   --iso-xml-out sese023_preview.xml
 ```
 
-### Repo Collateral Substitution → `colr.007`
+### Repo Girov Əvəzetmə → `colr.007`| Repo sahəsi / kontekst | ISO 20022 yolu | Qeydlər |
+|------------------------------------------------|----------------------------------|-------|
+| `agreement_id` (`RepoIsi` / `ReverseRepoIsi`) | `OblgtnId` | Repo müqaviləsi identifikatoru |
+| Girov əvəzedicisi Tx identifikatoru | `TxId` | Əvəzetmə başına yaradılan |
+| Orijinal girov miqdarı | `Substitution/OriginalAmt` | Əvəzetmədən əvvəl girov qoyulmuş matçlar |
+| Orijinal girov valyutası | `Substitution/OriginalCcy` | Valyuta kodu |
+| Əvəzedici təminat miqdarı | `Substitution/SubstituteAmt` | Əvəzetmə məbləği |
+| Əvəzedici girov valyutası | `Substitution/SubstituteCcy` | Valyuta kodu |
+| Qüvvəyə minmə tarixi (idarəetmə marjası cədvəli) | `Substitution/EffectiveDt` | ISO tarixi (YYYY-AA-GG) |
+| Saç kəsimi təsnifatı | `Substitution/Type` | Hal-hazırda `FULL` və ya `PARTIAL` idarəetmə siyasətinə əsaslanır |
+| İdarəetmə səbəbi / saç kəsmə qeydi | `Substitution/ReasonCd` | Könüllü, idarəetmə əsaslandırmasını daşıyır |
+| Saç düzümü ölçüsü | `Substitution/Haircut` | Rəqəm; dəyişdirmə zamanı tətbiq olunan saç düzümünü xəritələr |
+| Orijinal/əvəzedici alət ID-ləri | `Substitution/OriginalFinInstrmId`, `Substitution/SubstituteFinInstrmId` | Hər ayaq üçün isteğe bağlı ISIN/CUSIP |
 
-| Repo field / context                            | ISO 20022 path                     | Notes |
-|-------------------------------------------------|-----------------------------------|-------|
-| `agreement_id` (`RepoIsi` / `ReverseRepoIsi`)   | `OblgtnId`                        | Repo contract identifier |
-| Collateral substitution Tx identifier           | `TxId`                            | Generated per substitution |
-| Original collateral quantity                    | `Substitution/OriginalAmt`        | Matches pledged collateral before substitution |
-| Original collateral currency                    | `Substitution/OriginalCcy`        | Currency code |
-| Substitute collateral quantity                  | `Substitution/SubstituteAmt`      | Replacement amount |
-| Substitute collateral currency                  | `Substitution/SubstituteCcy`      | Currency code |
-| Effective date (governance margin schedule)     | `Substitution/EffectiveDt`        | ISO date (YYYY-MM-DD) |
-| Haircut classification                          | `Substitution/Type`               | Currently `FULL` or `PARTIAL` based on governance policy |
-| Governance reason / hair-cut note               | `Substitution/ReasonCd`           | Optional, carries governance rationale |
-| Haircut size                                    | `Substitution/Haircut`            | Numeric; maps the haircut applied during substitution |
-| Original/substitute instrument IDs              | `Substitution/OriginalFinInstrmId`, `Substitution/SubstituteFinInstrmId` | Optional ISIN/CUSIP for each leg |
+### Maliyyələşdirmə və Hesabatlar
 
-### Funding and Statements
+| Iroha kontekst | ISO 20022 mesajı | Xəritəçəkmə yeri |
+|---------------------------------|-------------------|------------------|
+| Repo pul ayaq alovlanma / açılmaq | `pacs.009` | DvP/PvP ayaqlarından `IntrBkSttlmAmt`, `IntrBkSttlmCcy`, `IntrBkSttlmDt`, `InstgAgt`, `InstdAgt` |
+| Hesablaşmadan sonrakı hesabatlar | `camt.054` | `Ntfctn/Ntry[*]` altında qeydə alınan ödəniş ayağı hərəkətləri; körpü `SplmtryData`-də kitab/hesab metadatasını yerləşdirir |
 
-| Iroha context                    | ISO 20022 message | Mapping location |
-|----------------------------------|-------------------|------------------|
-| Repo cash leg ignition / unwind  | `pacs.009`        | `IntrBkSttlmAmt`, `IntrBkSttlmCcy`, `IntrBkSttlmDt`, `InstgAgt`, `InstdAgt` populated from DvP/PvP legs |
-| Post-settlement statements       | `camt.054`        | Payment leg movements recorded under `Ntfctn/Ntry[*]`; bridge injects ledger/account metadata in `SplmtryData` |
+### İstifadə Qeydləri* Bütün məbləğlər Norito rəqəmli köməkçilərdən (`NumericSpec`) istifadə edilərək seriallaşdırılır.
+  aktiv tərifləri üzrə miqyas uyğunluğunu təmin etmək.
+* `TxId` dəyərləri `Max35Text` - UTF‑8 uzunluğu ≤35 simvoldan əvvəl tətbiq edin
+  ISO 20022 mesajlarına eksport edilir.
+* BIC-lər 8 və ya 11 böyük hərf-rəqəm simvolu olmalıdır (ISO9362); rədd etmək
+  Norito metadata, ödəniş və ya hesablaşmadan əvvəl bu yoxlamadan keçmir
+  təsdiqlər.
+* Hesab identifikatorları (AccountId / ChainId) əlavə olaraq ixrac edilir
+  metadata beləliklə qəbul edən iştirakçılar öz yerli kitab kitabları ilə barışa bilsinlər.
+* `SupplementaryData` kanonik JSON olmalıdır (UTF‑8, çeşidlənmiş açarlar, JSON-doğma
+  qaçır). SDK köməkçiləri bunu imzalar, telemetriya hashləri və ISO üçün tətbiq edir
+  faydalı yük arxivləri yenidən qurma zamanı deterministik olaraq qalır.
+* Valyuta məbləğləri ISO4217 fraksiya rəqəmlərinə uyğundur (məsələn, JPY-də 0 var
+  ondalık, USD-də 2 var); körpü müvafiq olaraq Norito ədədi dəqiqliyi sıxır.
+* CLI hesablaşma köməkçiləri (`iroha app settlement ... --atomicity ...`) indi yayırlar
+  Norito təlimatlarının icra planları 1:1 ilə `Plan/ExecutionOrder` və
+  `Plan/Atomicity` yuxarıda.
+* ISO köməkçisi (`ivm::iso20022`) yuxarıda sadalanan sahələri təsdiqləyir və rədd edir
+  DvP/PvP ayaqlarının Rəqəm xüsusiyyətlərini və ya qarşı tərəfin qarşılıqlılığını pozduğu mesajlar.
 
-### Usage Notes
+### SDK Builder Köməkçiləri
 
-* All amounts are serialised using the Norito numeric helpers (`NumericSpec`)
-  to ensure scale conformance across asset definitions.
-* `TxId` values are `Max35Text` — enforce UTF‑8 length ≤ 35 characters before
-  exporting to ISO 20022 messages.
-* BICs must be 8 or 11 uppercase alphanumeric characters (ISO 9362); reject
-  Norito metadata that fails this check before emitting payments or settlement
-  confirmations.
-* Account identifiers (AccountId / ChainId) are exported into supplementary
-  metadata so receiving participants can reconcile against their local ledgers.
-* `SupplementaryData` must be canonical JSON (UTF‑8, sorted keys, JSON-native
-  escaping). SDK helpers enforce this so signatures, telemetry hashes, and ISO
-  payload archives remain deterministic across rebuilds.
-* Currency amounts follow ISO 4217 fraction digits (for example JPY has 0
-  decimals, USD has 2); the bridge clamps Norito numeric precision accordingly.
-* The CLI settlement helpers (`iroha app settlement ... --atomicity ...`) now emit
-  Norito instructions whose execution plans map 1:1 to `Plan/ExecutionOrder` and
-  `Plan/Atomicity` above.
-* The ISO helper (`ivm::iso20022`) validates the fields listed above and rejects
-  messages where DvP/PvP legs violate Numeric specs or counterparty reciprocity.
-
-### SDK Builder Helpers
-
-- The JavaScript SDK now exposes `buildPacs008Message` /
-  `buildPacs009Message` (see `javascript/iroha_js/src/isoBridge.js`) so client
-  automation can convert structured settlement metadata (BIC/LEI, IBANs,
-  purpose codes, supplementary Norito fields) into deterministic pacs XML
-  without reimplementing the mapping rules from this guide.
-- Both helpers require an explicit `creationDateTime` (ISO‑8601 with timezone)
-  so operators must thread a deterministic timestamp from their workflow instead
-  of letting the SDK default to wall-clock time.
-- `recipes/iso_bridge_builder.mjs` demonstrates how to wire those helpers into
-  a CLI that merges environment variables or JSON config files, prints the
-  generated XML, and optionally submits it to Torii (`ISO_SUBMIT=1`), reusing
-  the same wait cadence as the ISO bridge recipe.
+- JavaScript SDK indi `buildPacs008Message` / ifşa edir
+  `buildPacs009Message` (bax `javascript/iroha_js/src/isoBridge.js`) belə ki, müştəri
+  avtomatlaşdırma strukturlaşdırılmış hesablaşma metadatasını çevirə bilər (BIC/LEI, IBAN,
+  məqsəd kodları, əlavə Norito sahələri) deterministik paketlərə XML
+  bu təlimatdakı xəritəçəkmə qaydalarını yenidən tətbiq etmədən.
+- Hər iki köməkçi açıq şəkildə `creationDateTime` tələb edir (saat qurşağı ilə ISO‑8601)
+  ona görə də operatorlar yerinə iş prosesindən deterministik vaxt damğası çəkməlidirlər
+  SDK-nın standart olaraq divar saatı vaxtına icazə verilməsi.
+- `recipes/iso_bridge_builder.mjs` bu köməkçilərin necə qoşulacağını nümayiş etdirir
+  mühit dəyişənlərini və ya JSON konfiqurasiya fayllarını birləşdirən CLI
+  XML yaradır və istəyə görə onu Torii (`ISO_SUBMIT=1`)-a təqdim edir, təkrar istifadə edir.
+  ISO körpü resepti ilə eyni gözləmə kadansı.
 
 
-### References
+### İstinadlar
 
-- LuxCSD / Clearstream ISO 20022 settlement examples showing `SttlmTpAndAddtlParams/SctiesMvmntTp` (`DELI`/`RECE`) and `Pmt` (`APMT`/`FREE`).<sup>[1](https://www.luxcsd.com/resource/blob/3434074/6f8add4708407a4701055be4dd04846b/c23005-eis-examples-cbf-data.pdf)</sup>
-- Clearstream DCP specifications covering settlement qualifiers (`SttlmTxCond`, `PrtlSttlmInd`).<sup>[2](https://www.clearstream.com/clearstream-en/res-library/market-coverage/instruction-specifications-swift-iso-20022-dcp-mode-ceu-spain-2357008)</sup>
-- SWIFT PMPG guidance recommending `pacs.009` with `CtgyPurp/Cd = SECU` for securities-related PvP funding.<sup>[3](https://www.swift.com/swift-resource/251897/download)</sup>
-- ISO 20022 message definition reports for identifier length constraints (BIC, Max35Text).<sup>[4](https://www.iso20022.org/sites/default/files/2020-12/ISO20022_MDRPart2_ChangeOrVerifyAccountIdentification_2020_2021_v1_ForSEGReview.pdf)</sup>
-- ANNA DSB guidance on ISIN format and checksum rules.<sup>[5](https://www.anna-dsb.com/isin/)</sup>
+- `SttlmTpAndAddtlParams/SctiesMvmntTp` (`DELI`/`RECE`) və `Pmt`-i göstərən LuxCSD / Clearstream ISO 20022 hesablaşma nümunələri (`APMT`/`FREE`).[1](https://www.luxcsd.com/resource/blob/3434074/6f8add4708407a4701055be4dd04846b/c23005-eis-examples-cbf-data.pdf)
+- Hesablaşma kvalifikatorlarını əhatə edən Clearstream DCP spesifikasiyası (`SttlmTxCond`, `PrtlSttlmInd`).[2](https://www.clearstream.com/clearstream-en/res-library/market-coverage/instruction-specifications-swift-iso-20022-dcp-mode-ceu-spain-2357008)
+- Qiymətli kağızlarla əlaqəli PvP maliyyələşdirilməsi üçün `CtgyPurp/Cd = SECU` ilə `pacs.009`-i tövsiyə edən SWIFT PMPG təlimatı.[3](https://www.swift.com/swift-resource/251897/download)
+- İdentifikator uzunluğu məhdudiyyətləri üçün ISO 20022 mesaj tərifi hesabatları (BIC, Max35Text).[4](https://www.iso20022.org/sites/default/files/2020-12/ISO20022_MDRPart2_ChangeOrVerifyAccountIdentification_2020_2021_v1_ForSEGReview.pdf)
+- ISIN formatı və yoxlama məbləği qaydaları üzrə ANNA DSB təlimatı.[5](https://www.anna-dsb.com/isin/)
 
-### Usage Tips
+### İstifadə Məsləhətləri- LLM-nin yoxlaya bilməsi üçün həmişə müvafiq Norito parçasını və ya CLI əmrini yapışdırın
+  dəqiq sahə adları və Rəqəm miqyası.
+- Kağız izi saxlamaq üçün sitatlar (`provide clause references`) tələb edin
+  uyğunluq və auditor yoxlaması.
+- `docs/source/finance/settlement_iso_mapping.md`-də cavab xülasəsini çəkin
+  (və ya əlaqəli əlavələr) beləliklə gələcək mühəndislərin sorğunu təkrarlamasına ehtiyac yoxdur.
 
-- Always paste the relevant Norito snippet or CLI command so LLM can inspect
-  exact field names and Numeric scales.
-- Request citations (`provide clause references`) to keep a paper trail for
-  compliance and auditor review.
-- Capture the answer summary in `docs/source/finance/settlement_iso_mapping.md`
-  (or linked appendices) so future engineers do not need to repeat the query.
+## Tədbir Sifariş Kitabları (ISO 20022 ↔ Norito Bridge)
 
-## Event Ordering Playbooks (ISO 20022 ↔ Norito Bridge)
+### Ssenari A — Girov Əvəzetmə (Repo / Girov)
 
-### Scenario A — Collateral Substitution (Repo / Pledge)
+**İştirakçılar:** girov verən/götürən (və/və ya agentlər), qoruyucu(lar), CSD/T2S  
+**Vaxt:** bazar kəsimləri və T2S gündüz/gecə dövrləri üzrə; iki ayağı orkestrləşdirin ki, onlar eyni məskunlaşma pəncərəsində tamamlansınlar.
 
-**Participants:** collateral giver/taker (and/or agents), custodian(s), CSD/T2S  
-**Timing:** per market cut-offs and T2S day/night cycles; orchestrate the two legs so they complete within the same settlement window.
+#### Mesaj xoreoqrafiyası
+1. `colr.010` Girov Əvəzetmə Sorğusu → girov verən/götürən və ya agent.  
+2. `colr.011` Girov Əvəzetmə Cavab → qəbul/rədd (istəyə bağlı imtina səbəbi).  
+3. `colr.012` Girov Əvəzetmə Təsdiqi → əvəzetmə razılaşmasını təsdiq edir.  
+4. `sese.023` təlimatları (iki ayaq):  
+   - Orijinal girovun qaytarılması (`SctiesMvmntTp=DELI`, `Pmt=FREE`, `SctiesTxTp=COLO`).  
+   - Əvəzedici girov təqdim edin (`SctiesMvmntTp=RECE`, `Pmt=FREE`, `SctiesTxTp=COLI`).  
+   Cütlüyünü birləşdirin (aşağıya baxın).  
+5. `sese.024` status məsləhətləri (qəbul edildi, uyğunlaşdırıldı, gözlənilən, uğursuz, rədd edildi).  
+6. Bir dəfə bronlaşdırılan `sese.025` təsdiqləri.  
+7. Könüllü nağd pul deltası (rüsumlar/saç kəsimi) → `pacs.009` `CtgyPurp/Cd = SECU` ilə FI-to-FI Kredit Transferi; status `pacs.002` vasitəsilə, `pacs.004` vasitəsilə qayıdır.
 
-#### Message choreography
-1. `colr.010` Collateral Substitution Request → collateral giver/taker or agent.  
-2. `colr.011` Collateral Substitution Response → accept/reject (optional rejection reason).  
-3. `colr.012` Collateral Substitution Confirmation → confirms substitution agreement.  
-4. `sese.023` instructions (two legs):  
-   - Return original collateral (`SctiesMvmntTp=DELI`, `Pmt=FREE`, `SctiesTxTp=COLO`).  
-   - Deliver substitute collateral (`SctiesMvmntTp=RECE`, `Pmt=FREE`, `SctiesTxTp=COLI`).  
-   Link the pair (see below).  
-5. `sese.024` status advices (accepted, matched, pending, failing, rejected).  
-6. `sese.025` confirmations once booked.  
-7. Optional cash delta (fees/haircut) → `pacs.009` FI-to-FI Credit Transfer with `CtgyPurp/Cd = SECU`; status via `pacs.002`, returns via `pacs.004`.
+#### Tələb olunan təsdiqlər / statuslar
+- Nəqliyyat səviyyəsi: şlüzlər `admi.007` yaya bilər və ya biznes emalından əvvəl rədd edə bilər.  
+- Hesablaşmanın həyat dövrü: `sese.024` (emal statusları + səbəb kodları), `sese.025` (son).  
+- Nağd pul tərəfi: `pacs.002` (`PDNG`, `ACSC`, `RJCT` və s.), `pacs.004` qaytarılması üçün.
 
-#### Required acknowledgements / statuses
-- Transport level: gateways may emit `admi.007` or rejects before business processing.  
-- Settlement lifecycle: `sese.024` (processing statuses + reason codes), `sese.025` (final).  
-- Cash side: `pacs.002` (`PDNG`, `ACSC`, `RJCT` etc.), `pacs.004` for returns.
+#### Şərtilik / sahələri açın
+- İki təlimatı zəncirləmək üçün `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`).  
+- `SttlmParams/HldInd` meyarlara cavab verənə qədər saxlamaq; `sese.030` (`sese.031` statusu) vasitəsilə buraxın.  
+- Qismən hesablaşmaya nəzarət etmək üçün `SttlmParams/PrtlSttlmInd` (`NPAR`, `PART`, `PARC`, `PARQ`).  
+- Bazara xas şərtlər üçün `SttlmParams/SttlmTxCond/Cd` (`NOMC` və s.).  
+- Dəstəkləndikdə Könüllü T2S Şərti Qiymətli Kağızların Çatdırılması (CoSD) qaydaları.
 
-#### Conditionality / unwind fields
-- `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`) to chain the two instructions.  
-- `SttlmParams/HldInd` to hold until criteria met; release via `sese.030` (`sese.031` status).  
-- `SttlmParams/PrtlSttlmInd` to control partial settlement (`NPAR`, `PART`, `PARC`, `PARQ`).  
-- `SttlmParams/SttlmTxCond/Cd` for market-specific conditions (`NOMC`, etc.).  
-- Optional T2S Conditional Securities Delivery (CoSD) rules when supported.
+#### İstinadlar
+- SWIFT girovun idarə edilməsi MDR (`colr.010/011/012`).  
+- Əlaqələndirmə və statuslar üçün CSD/T2S istifadə təlimatları (məsələn, DNB, ECB Insights).  
+- SMPG hesablaşma təcrübəsi, Clearstream DCP təlimatları, ASX ISO seminarları.
 
-#### References
-- SWIFT collateral management MDR (`colr.010/011/012`).  
-- CSD/T2S usage guides (e.g., DNB, ECB Insights) for linking and statuses.  
-- SMPG settlement practice, Clearstream DCP manuals, ASX ISO workshops.
+### Ssenari B — FX pəncərəsinin pozulması (PvP Maliyyələşdirmə Uğursuzluğu)
 
-### Scenario B — FX Window Breach (PvP Funding Failure)
+**İştirakçılar:** qarşı tərəflər və kassa agentləri, qiymətli kağızların mühafizəçisi, CSD/T2S  
+**Vaxt:** FX PvP pəncərələri (CLS/ikitərəfli) və CSD kəsmələri; nağd pulun təsdiqini gözləyən qiymətli kağızların ayaqlarını saxla.#### Mesaj xoreoqrafiyası
+1. `CtgyPurp/Cd = SECU` ilə valyuta başına `pacs.009` FI-dən FI Kredit Transferi; status `pacs.002` vasitəsilə; `camt.056`/`camt.029` vasitəsilə geri çağırmaq/ləğv etmək; artıq həll olunarsa, `pacs.004` qaytarın.  
+2. `sese.023` DvP təlimat(lar)ı `HldInd=true` ilə, beləliklə qiymətli kağızlar ayağı nağd pulun təsdiqini gözləyir.  
+3. Həyat dövrü `sese.024` bildirişləri (qəbul edilib/uyğunlaşdırılıb/gözlənilir).  
+4. Hər iki `pacs.009` ayağı pəncərənin müddəti bitməzdən əvvəl `ACSC`-ə çatarsa ​​→ `sese.030` → `sese.031` (mod statusu) → `sese.025` (təsdiq) ilə buraxın.  
+5. FX pəncərəsi pozulubsa → nağd pulu ləğv edin/geri çağırın (`camt.056/029` və ya `pacs.004`) və qiymətli kağızları ləğv edin (`sese.020` + `sese.027` və ya Norito qaydası təsdiqlənibsə).
 
-**Participants:** counterparties and cash agents, securities custodian, CSD/T2S  
-**Timing:** FX PvP windows (CLS/bilateral) and CSD cut-offs; keep securities legs on hold pending cash confirmation.
+#### Tələb olunan təsdiqlər / statuslar
+- Nağd pul: `pacs.002` (`PDNG`, `ACSC`, `RJCT`), `pacs.004` qaytarılması üçün.  
+- Qiymətli Kağızlar: `sese.024` (`NORE`, `ADEA`, `sese.025` kimi gözlənilən/uğursuz səbəblər.  
+- Nəqliyyat: `admi.007` / şlüz biznes emalından əvvəl rədd edir.
 
-#### Message choreography
-1. `pacs.009` FI-to-FI Credit Transfer per currency with `CtgyPurp/Cd = SECU`; status via `pacs.002`; recall/cancel via `camt.056`/`camt.029`; if already settled, `pacs.004` return.  
-2. `sese.023` DvP instruction(s) with `HldInd=true` so the securities leg waits for cash confirmation.  
-3. Lifecycle `sese.024` notices (accepted/matched/pending).  
-4. If both `pacs.009` legs reach `ACSC` before the window expires → release with `sese.030` → `sese.031` (mod status) → `sese.025` (confirmation).  
-5. If the FX window is breached → cancel/recall cash (`camt.056/029` or `pacs.004`) and cancel securities (`sese.020` + `sese.027`, or `sese.026` reversal if already confirmed per market rule).
+#### Şərtilik / sahələri açın
+- `SttlmParams/HldInd` + `sese.030` buraxılış/uğur/uğursuzluqda ləğv.  
+- `Lnkgs` qiymətli kağızlar üzrə təlimatları kassa ayağına bağlamaq üçün.  
+- Şərti çatdırılma istifadə edildikdə T2S CoSD qaydası.  
+- `PrtlSttlmInd` gözlənilməz hissələrin qarşısını almaq üçün.  
+- `pacs.009`, `CtgyPurp/Cd = SECU` qiymətli kağızlarla əlaqəli maliyyələşdirməni qeyd edir.
 
-#### Required acknowledgements / statuses
-- Cash: `pacs.002` (`PDNG`, `ACSC`, `RJCT`), `pacs.004` for returns.  
-- Securities: `sese.024` (pending/failing reasons like `NORE`, `ADEA`), `sese.025`.  
-- Transport: `admi.007` / gateway rejects before business processing.
+#### İstinadlar
+- Qiymətli kağızlar prosesində ödənişlər üçün PMPG / CBPR+ təlimatı.  
+- SMPG hesablaşma təcrübələri, əlaqələndirmə/tutma haqqında T2S anlayışları.  
+- Clearstream DCP təlimatları, texniki xidmət mesajları üçün ECMS sənədləri.
 
-#### Conditionality / unwind fields
-- `SttlmParams/HldInd` + `sese.030` release/cancel on success/failure.  
-- `Lnkgs` to tie securities instructions to the cash leg.  
-- T2S CoSD rule if using conditional delivery.  
-- `PrtlSttlmInd` to prevent unintended partials.  
-- On `pacs.009`, `CtgyPurp/Cd = SECU` flags securities-related funding.
+### pacs.004 Xəritəçəkmə qeydlərini qaytarın
 
-#### References
-- PMPG / CBPR+ guidance for payments in securities processes.  
-- SMPG settlement practices, T2S insights on linking/holds.  
-- Clearstream DCP manuals, ECMS documentation for maintenance messages.
+- geri qaytarma qurğuları indi normallaşdırır `ChrgBr` (`DEBT`/`CRED`/`SHAR`/`SLEV`) və özəl geri qaytarma səbəbləri istehlakçının təkrar ifşası kimi ifşa olunur Norito, XML zərfini yenidən təhlil etmədən atribut və operator kodları.
+- `DataPDU` zərflərindəki AppHdr imza blokları qəbul zamanı nəzərə alınmır; auditlər daxil edilmiş XMLDSIG sahələrinə deyil, kanal mənşəyinə əsaslanmalıdır.
 
-### pacs.004 return mapping notes
+### Körpü üçün əməliyyat yoxlama siyahısı
+- Yuxarıdakı xoreoqrafiyanı tətbiq edin (təminat: `colr.010/011/012 → sese.023/024/025`; FX pozuntusu: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  
+- `sese.024`/`sese.025` statuslarını və `pacs.002` nəticələrini qapı siqnalları kimi qəbul edin; `ACSC` buraxılışa səbəb olur, `RJCT` boşalmağa məcbur edir.  
+- `HldInd`, `Lnkgs`, `PrtlSttlmInd`, `SttlmTxCond` və əlavə CoSD qaydaları vasitəsilə şərti çatdırılmanı kodlayın.  
+- Tələb olunduqda xarici identifikatorları (məsələn, `pacs.009` üçün UETR) əlaqələndirmək üçün `SupplementaryData` istifadə edin.  
+- Bazar təqvimi/kəsikləri ilə gözləmə/açma vaxtı parametrlərini təyin edin; ləğvetmə müddətindən əvvəl `sese.030`/`camt.056` buraxın, lazım gəldikdə geri qaytarın.
 
-- return fixtures now normalise `ChrgBr` (`DEBT`/`CRED`/`SHAR`/`SLEV`) and proprietary return reasons exposed as `TxInf[*]/RtrdRsn/Prtry`, so bridge consumers can replay fee attribution and operator codes without re-parsing the XML envelope.
-- AppHdr signature blocks inside `DataPDU` envelopes remain ignored on ingest; audits should rely on channel provenance rather than embedded XMLDSIG fields.
+### Nümunə ISO 20022 Faydalı Yüklər (İzahlı)
 
-### Operational checklist for the bridge
-- Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  
-- Treat `sese.024`/`sese.025` statuses and `pacs.002` outcomes as gating signals; `ACSC` triggers release, `RJCT` forces unwind.  
-- Encode conditional delivery via `HldInd`, `Lnkgs`, `PrtlSttlmInd`, `SttlmTxCond`, and optional CoSD rules.  
-- Use `SupplementaryData` to correlate external IDs (e.g., UETR for the `pacs.009`) when required.  
-- Parameterise hold/unwind timing by market calendar/cut-offs; issue `sese.030`/`camt.056` before cancellation deadlines, fallback to returns when necessary.
-
-### Sample ISO 20022 Payloads (Annotated)
-
-#### Collateral substitution pair (`sese.023`) with instruction linkage
+#### Təlimat əlaqəsi ilə girov əvəzedici cüt (`sese.023`)
 
 ```xml
 <sese:Document xmlns:sese="urn:iso:std:iso:20022:tech:xsd:sese.023.001.11">
@@ -433,11 +417,9 @@ iroha app settlement dvp \
     </sese:SctiesMvmntDtls>
   </sese:SctiesSttlmTxInstr>
 </sese:Document>
-```
+```Əlaqədar təlimatı `SUBST-2025-04-001-B` (əvəzedici girovun FoP qəbulu) `SctiesMvmntTp=RECE`, `Pmt=FREE` və `SUBST-2025-04-001-A`-ə işarə edən `WITH` əlaqəsi ilə təqdim edin. Əvəzetmə təsdiqləndikdən sonra hər iki ayağı uyğun `sese.030` ilə buraxın.
 
-Submit the linked instruction `SUBST-2025-04-001-B` (FoP receive of substitute collateral) with `SctiesMvmntTp=RECE`, `Pmt=FREE`, and the `WITH` linkage pointing back to `SUBST-2025-04-001-A`. Release both legs with a matching `sese.030` once the substitution is approved.
-
-#### Securities leg on hold pending FX confirmation (`sese.023` + `sese.030`)
+#### Qiymətli kağızlar FX təsdiqini gözləyir (`sese.023` + `sese.030`)
 
 ```xml
 <sese:Document xmlns:sese="urn:iso:std:iso:20022:tech:xsd:sese.023.001.11">
@@ -466,7 +448,7 @@ Submit the linked instruction `SUBST-2025-04-001-B` (FoP receive of substitute c
 </sese:Document>
 ```
 
-Release once both `pacs.009` legs reach `ACSC`:
+Hər iki `pacs.009` ayağı `ACSC`-ə çatdıqdan sonra buraxın:
 
 ```xml
 <sese:Document xmlns:sese="urn:iso:std:iso:20022:tech:xsd:sese.030.001.04">
@@ -481,9 +463,9 @@ Release once both `pacs.009` legs reach `ACSC`:
 </sese:Document>
 ```
 
-`sese.031` confirms the hold release, followed by `sese.025` once the securities leg is booked.
+`sese.031` saxlama buraxılışını təsdiqləyir, qiymətli kağızlar bəndi sifariş edildikdən sonra `sese.025`.
 
-#### PvP funding leg (`pacs.009` with securities purpose)
+#### PvP maliyyələşdirmə ayağı (qiymətli kağızlar məqsədi ilə `pacs.009`)
 
 ```xml
 <pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.08">
@@ -526,4 +508,4 @@ Release once both `pacs.009` legs reach `ACSC`:
 </pacs:Document>
 ```
 
-`pacs.002` tracks the payment status (`ACSC` = confirmed, `RJCT` = reject). If the window is breached, recall via `camt.056`/`camt.029` or send `pacs.004` to return settled funds.
+`pacs.002` ödəniş statusunu izləyir (`ACSC` = təsdiq, `RJCT` = rədd). Pəncərə pozulubsa, `camt.056`/`camt.029` vasitəsilə geri çağırın və ya hesablanmış vəsaitləri qaytarmaq üçün `pacs.004` göndərin.

@@ -4,13 +4,15 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: NFT کو منٹ، منتقل اور برن کریں
-description: NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
-source: crates/ivm/docs/examples/12_nft_flow.ko
+babosa: /norito/ejemplos/nft-flow
+título: NFT کو منٹ، منتقل اور برن کریں
+descripción: NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
+fuente: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
@@ -23,9 +25,9 @@ NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا
 
 ## متعلقہ SDK گائیڈز
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [Inicio rápido del SDK de Rust](/sdks/rust)
+- [Inicio rápido del SDK de Python](/sdks/python)
+- [Inicio rápido del SDK de JavaScript](/sdks/javascript)
 
 [Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/nft-flow.ko)
 

@@ -4,57 +4,59 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-conformance.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
+идентификатор: соответствие чанкеру
 title: دليل مطابقة chunker في SoraFS
-sidebar_label: مطابقة chunker
-description: متطلبات وتدفقات عمل للحفاظ على ملف chunker الحتمي SF1 عبر fixtures و SDKs.
+Sidebar_label: чанкер
+описание: Создан для использования с чанкером для SF1, оснащенным приспособлениями и SDK.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/chunker_conformance.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
+:::примечание
+Был установлен `docs/source/sorafs/chunker_conformance.md`. Он был убит в 1980-х годах в Нью-Йорке.
 :::
 
-يوثق هذا الدليل المتطلبات التي يجب على كل تطبيق اتباعها للبقاء متوافقاً مع ملف chunker الحتمي في SoraFS (SF1).
-كما يوثق سير إعادة التوليد، وسياسة التوقيع، وخطوات التحقق كي يبقى مستهلكو fixtures عبر SDKs متزامنين.
+Он сказал, что в фильме "Улыбка" и "Тренер" в Лос-Анджелесе. Используется чанкером для SoraFS (SF1).
+Он Сон Сэнсэй в Нью-Йорке и в Нью-Йорке, а также в Нью-Йорке. Светильники عبر SDKs متزامنين.
 
 ## الملف المعتمد
 
-- مقبض الملف: `sorafs.sf1@1.0.0` (البديل القديم `sorafs.sf1@1.0.0`)
-- بذرة الإدخال (hex): `0000000000dec0ded`
-- الحجم المستهدف: 262144 bytes (256 KiB)
-- الحجم الأدنى: 65536 bytes (64 KiB)
-- الحجم الأقصى: 524288 bytes (512 KiB)
-- متعدد الحدود المتدحرج: `0x3DA3358B4DC173`
-- بذرة جدول gear: `sorafs-v1-gear`
-- قناع القطع: `0x0000FFFF`
+- Код: `sorafs.sf1@1.0.0` (независимо от `sorafs.sf1@1.0.0`)
+- بذرة الإدخال (шестнадцатеричный): `0000000000dec0ded`
+- Размер файла: 262144 байт (256 КиБ)
+- Размер файла: 65536 байт (64 КиБ)
+- Размер файла: 524288 байт (512 КиБ)
+- Имя пользователя: `0x3DA3358B4DC173`.
+- Дополнительная передача: `sorafs-v1-gear`.
+- Код запроса: `0x0000FFFF`
 
-التطبيق المرجعي: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-يجب أن ينتج أي تسريع SIMD نفس الحدود والـ digests.
+Сообщение: `sorafs_chunker::chunk_bytes_with_digests_profile`.
+Он был создан для SIMD и других дайджестов.
 
-## حزمة fixtures
+## حزمة светильники
 
 `cargo run --locked -p sorafs_chunker --bin export_vectors` يعيد توليد
-fixtures ويصدر الملفات التالية ضمن `fixtures/sorafs_chunker/`:
+Светильники в каталоге `fixtures/sorafs_chunker/`:
 
-- `sf1_profile_v1.{json,rs,ts,go}` — حدود chunk المعتمدة لمستهلكي Rust و TypeScript و Go.
-  يعلن كل ملف المقبض المعتمد كأول إدخال في `profile_aliases`، يتبعه أي بدائل قديمة (مثل
-  `sorafs.sf1@1.0.0` ثم `sorafs.sf1@1.0.0`). يتم فرض الترتيب بواسطة
-  `ensure_charter_compliance` ولا يجب تغييره.
-- `manifest_blake3.json` — manifest تم التحقق منه عبر BLAKE3 ويغطي كل ملفات fixtures.
-- `manifest_signatures.json` — توقيعات المجلس (Ed25519) على digest الخاص بالـ manifest.
-- `sf1_profile_v1_backpressure.json` والـ corpora الخام داخل `fuzz/` —
-  سيناريوهات بث حتمية تُستخدم في اختبارات back-pressure للـ chunker.
+- `sf1_profile_v1.{json,rs,ts,go}` — позволяет использовать чанк для работы с Rust, TypeScript и Go.
+  Он был создан в 2008 году в `profile_aliases`, в 1999 году. (مثل
+  `sorafs.sf1@1.0.0` или `sorafs.sf1@1.0.0`). В الترتيب بواسطة
+  `ensure_charter_compliance` в Уфе.
+- `manifest_blake3.json` — манифест تم التحقق منه عبر BLAKE3, посвященный приборам.
+- `manifest_signatures.json` — добавление (Ed25519) для дайджеста манифеста.
+- `sf1_profile_v1_backpressure.json` в корпусе `fuzz/` —
+  Сэнсэйд Трэйд-Ди-Си использует противодавление в чанкере.
 
 ### سياسة التوقيع
 
-يجب أن تشمل إعادة توليد fixtures توقيعاً صالحاً من المجلس. يرفض المولد
-الإخراج غير الموقّع ما لم يتم تمرير `--allow-unsigned` صراحة (مخصص
-للتجارب المحلية فقط). أظرف التوقيع append-only ويتم إزالة التكرارات حسب الموقّع.
+Футболист и Сан-Диего Сан-Франциско зафиксировали матчи с Торонто Сейном на турнире. يرفض المولد
+الإخراج غير الموقّع لم يتم تمرير `--allow-unsigned` صراحة (مخصص)
+للتجارب المحلية فقط). Вы можете использовать функцию «только для добавления» в режиме «только для добавления».
 
-لإضافة توقيع من المجلس:
+Ответ на вопрос:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -62,32 +64,32 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## التحقق
+## تحقق
 
-يعيد مساعد CI `ci/check_sorafs_fixtures.sh` تشغيل المولد مع
-`--locked`. إذا انحرفت fixtures أو غابت التواقيع، تفشل المهمة. استخدم
-هذا السكربت في workflows الليلية وقبل إرسال تغييرات fixtures.
+Дополнительный код CI `ci/check_sorafs_fixtures.sh`.
+`--locked`. Он провел матчи с Сан-Франциско и Сан-Франциско. استخدم
+Отслеживайте рабочие процессы и следите за светильниками.
 
-خطوات التحقق اليدوية:
+Ответ на вопрос:
 
-1. شغّل `cargo test -p sorafs_chunker`.
-2. نفّذ `ci/check_sorafs_fixtures.sh` محلياً.
-3. تأكد أن `git status -- fixtures/sorafs_chunker` نظيف.
+1. Код `cargo test -p sorafs_chunker`.
+2. Код `ci/check_sorafs_fixtures.sh`.
+3. Установите флажок `git status -- fixtures/sorafs_chunker`.
 
 ## دليل الترقية
 
-عند اقتراح ملف chunker جديد أو تحديث SF1:
+В ответ на Чанкера Дэвиса и SF1:
 
-انظر أيضاً: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) لمتطلبات
-البيانات الوصفية وقوالب المقترح وقوائم التحقق.
+Сообщение: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
+Он хочет, чтобы он был готов к работе.
 
-1. صِغ `ChunkProfileUpgradeProposalV1` (انظر RFC SF-1) بمعلمات جديدة.
-2. أعد توليد fixtures عبر `export_vectors` وسجل digest الجديد للـ manifest.
-3. وقّع الـ manifest بحصة المجلس المطلوبة. يجب إلحاق كل التواقيع بـ `manifest_signatures.json`.
-4. حدّث fixtures الخاصة بـ SDKs المتأثرة (Rust/Go/TS) وتأكد من التكافؤ عبر بيئات التشغيل.
+1. Установлен `ChunkProfileUpgradeProposalV1` (RFC SF-1).
+2. Установите светильники `export_vectors` и просмотрите дайджест манифеста.
+3. Продемонстрируйте исчезновение лишней воды. Он был установлен в بـ `manifest_signatures.json`.
+4. Добавлены исправления с использованием SDK (Rust/Go/TS) и встроенного программного обеспечения.
 5. أعد توليد corpora fuzz إذا تغيرت المعلمات.
-6. حدّث هذا الدليل بالمقبض الجديد للملف والبذور وdigest.
-7. قدّم التغيير مع الاختبارات المحدثة وتحديثات roadmap.
+6. حدّث هدليل بالمقبض الجديد للملف والبذور وdigest.
+7. Дорожная карта разработки и развития проекта.
 
-التغييرات التي تؤثر على حدود الـ chunk أو الـ digests دون اتباع هذه العملية
-غير صالحة ولا يجب دمجها.
+Вы можете получить кусок фрагмента и дайджесты, которые вы хотите получить.
+Он сказал, что у него есть возможность.

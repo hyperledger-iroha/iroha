@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e9bf7a41f46d220502776b77d0e2cf86ba19874da9ea373ea440706e531b661
 source_last_modified: "2025-12-29T18:16:35.078745+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-Subject: [SNS Training] <suffix> cohort briefing — <date>
+Mavzu: [SNS Training] <suffix> kohort brifing - <sana>
 
-Hi <name/team>,
+Salom <name/team>,
 
-You are scheduled for the upcoming Sora Name Service training covering the
-<suffix> suffix launch.
+Siz bo'lajak Sora Name Service treningiga rejalashtirilgansiz
+<suffix> qo'shimchasini ishga tushirish.
 
-**Details**
-- **Date / Time:** <weekday, UTC offset + link to calendar invite>
-- **Duration:** 2 hours (includes labs + annex capture)
-- **Format:** Live workshop + breakout rooms
-- **Language:** <language> (simultaneous interpretation available: <yes/no>)
+**Tafsilotlar**
+- **Sana/vaqt:** <hafta kuni, UTC ofset + kalendar taklifiga havola>
+- **Davomiyligi:** 2 soat (laboratoriyalar + ilovani suratga olish kiradi)
+- **Format:** Jonli ustaxona + mashg'ulot xonalari
+- **Til:** <til> (simxron tarjimasi mavjud: <ha/yo'q>)
 
-**Pre-work (30 minutes)**
-1. Read `docs/source/sns/onboarding_kit.md`.
-2. Skim the KPI walkthrough (`docs/portal/docs/sns/kpi-dashboard.md`).
-3. Install the tooling listed in `docs/source/sns/training_collateral.md#13-lab-prerequisites`.
+**Ishdan oldin (30 daqiqa)**
+1. `docs/source/sns/onboarding_kit.md` ni o'qing.
+2. KPI-ni ko'rib chiqing (`docs/portal/docs/sns/kpi-dashboard.md`).
+3. `docs/source/sns/training_collateral.md#13-lab-prerequisites` da sanab o'tilgan asboblarni o'rnating.
 
-**What to expect**
-- KPI dashboard orientation and registrar SLA review.
-- Manifest + resolver exercises with live validation.
-- Dispute drill covering guardian + council workflows.
-- KPI annex automation via `cargo xtask sns-annex`.
+**Nima kutish kerak**
+- KPI asboblar paneli yo'nalishi va registratorning SLA ko'rib chiqishi.
+- Jonli tekshirish bilan manifest + hal qiluvchi mashqlar.
+- Vasiy + kengash ish jarayonlarini qamrab oluvchi bahsli mashg'ulotlar.
+- `cargo xtask sns-annex` orqali KPI ilovasini avtomatlashtirish.
 
-Please confirm attendance by replying to this email or accepting the calendar
-invite. If you cannot attend, nominate a delegate and copy governance so we can
-keep the readiness log accurate.
+Iltimos, ushbu xatga javob berish yoki taqvimni qabul qilish orqali ishtirokingizni tasdiqlang
+taklif qiling. Agar qatnasha olmasangiz, delegat tayinlang va boshqaruvni nusxalashimiz mumkin
+tayyorlik jurnalini aniq saqlang.
 
-Thanks,  
+rahmat,  
 `sns-training@sora.org`

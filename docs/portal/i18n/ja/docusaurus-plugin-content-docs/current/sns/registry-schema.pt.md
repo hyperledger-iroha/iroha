@@ -4,64 +4,66 @@ direction: ltr
 source: docs/portal/docs/sns/registry-schema.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sns/registry_schema.md` e agora serve como a copia canonica do portal. O arquivo fonte permanece para atualizacoes de traducao.
+:::note フォンテ カノニカ
+Esta pagina espelha `docs/source/sns/registry_schema.md` e アゴラは、ポータルを共有して提供します。永久に取引を続けてください。
 :::
 
-# Esquema do registro do Sora Name Service (SN-2a)
+# Sora ネームサービス (SN-2a) を登録します。
 
-**Status:** Redigido 2026-03-24 -- submetido para revisao do programa SNS  
-**Link do roadmap:** SN-2a "Registry schema & storage layout"  
-**Escopo:** Definir as estruturas Norito canonicas, os estados de ciclo de vida e os eventos emitidos para o Sora Name Service (SNS) para que as implementacoes de registro e registrar fiquem deterministicas em contratos, SDKs e gateways.
+**ステータス:** Redigido 2026-03-24 -- SNS プログラムのサブメティド  
+**ロードマップへのリンク:** SN-2a「レジストリ スキーマとストレージ レイアウト」  
+**エスコポ:** 定義は、Norito canonicas、システム デ ビダ、OS イベント、エミッション パラオ、Sora ネーム サービス (SNS) の実装として、レジストリおよびレジストラの決定性、SDK、ゲートウェイとして定義されています。
 
-Este documento completa o entregavel de esquema para SN-2a ao especificar:
+SN-2a の詳細に関する文書の完全性:
 
-1. Identificadores e regras de hashing (`SuffixId`, `NameHash`, derivacao de seletores).
-2. Structs/enums Norito para registros de nomes, politicas de sufixos, tiers de preco, reparticoes de receita e eventos do registro.
-3. Layout de armazenamento e prefixes de indices para replay deterministico.
-4. Uma maquina de estados cobrindo registro, renovacao, grace/redemption, freezes e tombstones.
-5. Eventos canonicos consumidos pela automacao DNS/gateway.
+1. ハッシュの記録の識別 (`SuffixId`、`NameHash`、デリバチャオ デ セレトレ)。
+2. 構造体/列挙型 Norito は、名前、政治、政治、プレコ、受信、イベントの登録に使用されます。
+3. 決定的な再生時のインデックスのプレフィックスとプレフィックスのレイアウト。
+4. Uma maquina de estados cobrindo registro、renovacao、grace/redemption、frees e tombstone。
+5. イベント キャノニコス コンスミドス ペラ オートマカオ DNS/ゲートウェイ。
 
-## 1. Identificadores e hashing
+## 1. ID のハッシュ化
 
-| Identificador | Descricao | Derivacao |
-|------------|-------------|------------|
-| `SuffixId` (`u16`) | Identificador do registro para sufixos de nivel superior (`.sora`, `.nexus`, `.dao`). Alinhado com o catalogo de sufixos em [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Atribuido por voto de governanca; armazenado em `SuffixPolicyV1`. |
-| `SuffixSelector` | Forma canonica em string do sufixo (ASCII, lower-case). | Exemplo: `.sora` -> `sora`. |
-| `NameSelectorV1` | Seletor binario para o rotulo registrado. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. O rotulo e NFC + lower-case segundo Norm v1. |
-| `NameHash` (`[u8;32]`) | Chave primaria de busca usada por contratos, eventos e caches. | `blake3(NameSelectorV1_bytes)`. |
+|識別子 |説明 |デリバカオ |
+|-----------|---------------|-----------|
+| `SuffixId` (`u16`) |優れた接尾辞を登録する識別子 (`.sora`、`.nexus`、`.dao`)。 Alinhado 社のサフィックス カタログ [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md)。 |統治者による投票;アルマゼナド em `SuffixPolicyV1`。 |
+| `SuffixSelector` | canonica em string do sufixo (ASCII、小文字) を形式化します。 |例: `.sora` -> `sora`。 |
+| `NameSelectorV1` | Seletor binario para o rotulo registrado. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`。 NFC + 小文字のセグンド ノルム v1 を使用します。 |
+| `NameHash` (`[u8;32]`) |コントラトス、イベント、キャッシュなどの主要なコンテンツを保存します。 | `blake3(NameSelectorV1_bytes)`。 |
 
-Requisitos de determinismo:
+決定性の要件:
 
-- Os rotulos sao normalizados via Norm v1 (UTS-46 strict, STD3 ASCII, NFC). As strings de usuario DEVEM ser normalizadas antes do hash.
-- Rotulos reservados (de `SuffixPolicyV1.reserved_labels`) nunca entram no registro; overrides apenas de governanca emitem eventos `ReservedNameAssigned`.
+- Norm v1 (UTS-46 strict、STD3 ASCII、NFC) 経由で正常に動作します。文字列として DEVEM を正規化し、ハッシュを実行します。
+- Rotulos reservados (`SuffixPolicyV1.reserved_labels`) 登録なし。統治機構の発行イベントイベント `ReservedNameAssigned` をオーバーライドします。
 
-## 2. Estruturas Norito
+## 2. 発情期 Norito
 
-### 2.1 NameRecordV1
+### 2.1 名前レコード V1
 
-| Campo | Tipo | Notas |
-|-------|------|-------|
-| `suffix_id` | `u16` | Referencia `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | Bytes do seletor bruto para auditoria/debug. |
-| `name_hash` | `[u8; 32]` | Chave para mapas/eventos. |
-| `normalized_label` | `AsciiString` | Rotulo legivel por humanos (post Norm v1). |
-| `display_label` | `AsciiString` | Casing fornecido pelo steward; cosmetica opcional. |
-| `owner` | `AccountId` | Controla renovacoes/transferencias. |
-| `controllers` | `Vec<NameControllerV1>` | Referencias a enderecos de conta alvo, resolvers ou metadata de aplicacao. |
-| `status` | `NameStatus` | Indicador de ciclo de vida (ver Secao 4). |
-| `pricing_class` | `u8` | Indice nos tiers de preco do sufixo (standard, premium, reserved). |
-| `registered_at` | `Timestamp` | Timestamp de bloco da ativacao inicial. |
-| `expires_at` | `Timestamp` | Fim do termo pago. |
-| `grace_expires_at` | `Timestamp` | Fim da grace de auto-renovacao (default +30 dias). |
-| `redemption_expires_at` | `Timestamp` | Fim da janela de redemption (default +60 dias). |
-| `auction` | `Option<NameAuctionStateV1>` | Presente quando ha Dutch reopen ou leiloes premium ativos. |
-| `last_tx_hash` | `Hash` | Ponteiro determinista para a transacao que gerou esta versao. |
-| `metadata` | `Metadata` | Metadata arbitraria do registrar (text records, proofs). |
+|カンポ |ティポ |メモ |
+|------|------|------|
+| `suffix_id` | `u16` |参照番号 `SuffixPolicyV1`。 |
+| `selector` | `NameSelectorV1` |バイトは、オーディオ/デバッグ用のセレクター ブルートを実行します。 |
+| `name_hash` | `[u8; 32]` |パラマップ/イベントをチャベします。 |
+| `normalized_label` | `AsciiString` | Rotulo Legivel por humanos (ポスト Norm v1)。 |
+| `display_label` | `AsciiString` |フォルネシド・ペロ・スチュワードのケーシング。コスメティアオプション。 |
+| `owner` | `AccountId` | Controla renovacoes/transferencias。 |
+| `controllers` | `Vec<NameControllerV1>` |参照はすべての内容を参照し、リゾルバーまたはメタデータを適用します。 |
+| `status` | `NameStatus` | Indicador de ciclo de vida (ver Secao 4)。 |
+| `pricing_class` | `u8` |プレコの階層のインデックス (標準、プレミアム、予約済み)。 |
+| `registered_at` | `Timestamp` |初期のブロコのタイムスタンプ。 |
+| `expires_at` | `Timestamp` |フィム・ド・テルモ・パゴ。 |
+| `grace_expires_at` | `Timestamp` |自動改修を行います (デフォルトは +30 ディアス)。 |
+| `redemption_expires_at` | `Timestamp` |償還のフィム・ダ・ジャネラ（デフォルトは+60ディアス）。 |
+| `auction` | `Option<NameAuctionStateV1>` | Presente quando ha オランダは、プレミアム アクティビティを再開します。 |
+| `last_tx_hash` | `Hash` |ポンテイロは、取引先の決定を決定します。 |
+| `metadata` | `Metadata` |メタデータはレジストラによって任意に管理されます (テキスト記録、証明)。 |
 
-Structs de suporte:
+サポートする構造体:
 
 ```text
 Enum NameStatus {
@@ -117,26 +119,24 @@ Enum AuctionKind {
 }
 ```
 
-### 2.2 SuffixPolicyV1
-
-| Campo | Tipo | Notas |
-|-------|------|-------|
-| `suffix_id` | `u16` | Chave primaria; estavel entre versoes de politica. |
-| `suffix` | `AsciiString` | por exemplo, `sora`. |
-| `steward` | `AccountId` | Steward definido no charter de governanca. |
-| `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Identificador de ativo de settlement por padrao (por exemplo `xor#sora`). |
-| `pricing` | `Vec<PriceTierV1>` | Coeficientes de preco por tiers e regras de duracao. |
-| `min_term_years` | `u8` | Piso para o termo comprado independentemente de overrides de tier. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
-| `max_term_years` | `u8` | Maximo de renovacao antecipada. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) segundo o charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | Lista fornecida pela governanca com instrucoes de atribuicao. |
-| `fee_split` | `SuffixFeeSplitV1` | Partes tesouraria / steward / referral (basis points). |
-| `fund_splitter_account` | `AccountId` | Conta que mantem escrow + distribui fundos. |
-| `policy_version` | `u16` | Incrementa em cada mudanca. |
-| `metadata` | `Metadata` | Notas estendidas (KPI covenant, hashes de docs de compliance). |
+### 2.2 SuffixPolicyV1|カンポ |ティポ |メモ |
+|------|------|------|
+| `suffix_id` | `u16` |チャーベ・プライマリア。政治の中心。 |
+| `suffix` | `AsciiString` |たとえば、`sora`。 |
+| `steward` | `AccountId` |スチュワードは統治憲章を定めていない。 |
+| `status` | `SuffixStatus` | `Active`、`Paused`、`Revoked`。 |
+| `payment_asset_id` | `AsciiString` | Padrao による決済の ID (例 `xor#sora`)。 |
+| `pricing` | `Vec<PriceTierV1>` |デュラソーの事前管理係数。 |
+| `min_term_years` | `u8` |層をオーバーライドするための独立した要素を相互に比較します。 |
+| `grace_period_days` | `u16` |デフォルトは 30。
+| `redemption_period_days` | `u16` |デフォルトは 60。
+| `max_term_years` | `u8` | Maximo de renovacao antecipada。 |
+| `referral_cap_bps` | `u16` | <=1000 (10%) セグンド・オ・チャーター。 |
+| `reserved_labels` | `Vec<ReservedNameV1>` | Lista fornecida pela Governmenta com instrucoes de atribuicao。 |
+| `fee_split` | `SuffixFeeSplitV1` | Partes tesouraria / スチュワード / 紹介 (基本ポイント)。 |
+| `fund_splitter_account` | `AccountId` | Conta que mantem エスクロー + 配布資金。 |
+| `policy_version` | `u16` |ムダンカを増やしていきます。 |
+| `metadata` | `Metadata` |重要事項 (KPI 規約、ドキュメントのコンプライアンスのハッシュ)。 |
 
 ```text
 Struct PriceTierV1 {
@@ -164,18 +164,18 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 Registros de receita e settlement
+### 2.3 和解の受領記録
 
-| Struct | Campos | Proposito |
-|--------|--------|-----------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Registro deterministico de pagamentos roteados por epoca de settlement (semanal). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitido cada vez que um pagamento e postado (registro, renovacao, leilao). |
+|構造体 |カンポス |プロポジト |
+|----------|----------|----------|
+| `RevenueShareRecordV1` | `suffix_id`、`epoch_id`、`treasury_amount`、`steward_amount`、`referral_amount`、`escrow_amount`、`settled_at`、`tx_hash`。 |和解の時期を決定する登録 (セマナル)。 |
+| `RevenueAccrualEventV1` | `name_hash`、`suffix_id`、`event`、`gross_amount`、`net_amount`、`referral_account`。 | Emitido cada vez que um pagamento e postado (登録、レノバカオ、レイラオ)。 |
 
-Todos os campos `TokenValue` usam a codificacao fixa canonica de Norito com o codigo de moeda declarado no `SuffixPolicyV1` associado.
+`TokenValue` は、Norito のコードを修正し、`SuffixPolicyV1` 関連付けを宣言しません。
 
-### 2.4 Eventos do registro
+### 2.4 登録イベント
 
-Eventos canonicos fornecem um log de replay para automacao DNS/gateway e analiticas.
+DNS/ゲートウェイと分析を自動化するためのログ再生イベント。
 
 ```text
 Struct RegistryEventV1 {
@@ -204,52 +204,50 @@ Enum RegistryEventKind {
 }
 ```
 
-Os eventos devem ser anexados a um log reprodivel (por exemplo, o dominio `RegistryEvents`) e refletidos nos feeds de gateway para que os caches DNS invalidem dentro do SLA.
+OS イベント開発サーバーおよびログ再現 (例: ドミニオ `RegistryEvents`) は、ゲートウェイ パラメータのフィードを参照し、キャッシュ DNS を無効にし、SLA を実行します。
 
-## 3. Layout de armazenamento e indices
+## 3. インデックスの配置
 
-| Chave | Descricao |
-|-----|-------------|
-| `Names::<name_hash>` | Mapa primario de `name_hash` para `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Indice secundario para UI de wallet (paginacao amigavel). |
-| `NamesByLabel::<suffix_id, normalized_label>` | Detecta conflitos, habilita busca deterministica. |
-| `SuffixPolicies::<suffix_id>` | Ultimo `SuffixPolicyV1`. |
-| `RevenueShare::<suffix_id, epoch_id>` | Historico de `RevenueShareRecordV1`. |
-| `RegistryEvents::<u64>` | Log append-only com chave de sequencia monotona. |
+|チャベ |説明 |
+|-----|---------------|
+| `Names::<name_hash>` | `name_hash` と `NameRecordV1` を比較します。 |
+| `NamesByOwner::<AccountId, suffix_id>` | UI de ウォレットのインデックス (paginacao amigavel)。 |
+| `NamesByLabel::<suffix_id, normalized_label>` | Detecta conflitos、habilita Busca deterministica。 |
+| `SuffixPolicies::<suffix_id>` |ウルティモ `SuffixPolicyV1`。 |
+| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` の歴史。 |
+| `RegistryEvents::<u64>` |ログ追加専用の com Chave de sequencia monotona。 |
 
-Todas as chaves serializam usando tuplas Norito para manter o hashing deterministico entre hosts. Atualizacoes de indice ocorrem de forma atomica junto com o registro primario.
+Todas はホストのシリアル化を使用して Norito パラメータのハッシュ決定を行います。初期の登録情報を基に、正しい形式のインデックスが作成されます。
 
-## 4. Maquina de estados do ciclo de vida
+## 4. マキナ・デ・エスタドス・ド・シクロ・デ・ヴィーダ
 
-| Estado | Condicoes de entrada | Transicoes permitidas | Notas |
-|-------|----------------------|----------------------|-------|
-| Available | Derivado quando `NameRecord` esta ausente. | `PendingAuction` (premium), `Active` (registro standard). | A busca de disponibilidade le apenas indices. |
-| PendingAuction | Criado quando `PriceTierV1.auction_kind` != none. | `Active` (leilao liquida), `Tombstoned` (sem lances). | Leiloes emitem `AuctionOpened` e `AuctionSettled`. |
-| Active | Registro ou renovacao bem-sucedida. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` guia a transicao. |
-| GracePeriod | Automatico quando `now > expires_at`. | `Active` (renovacao em dia), `Redemption`, `Tombstoned`. | Default +30 dias; ainda resolve mas sinalizado. |
-| Redemption | `now > grace_expires_at` mas `< redemption_expires_at`. | `Active` (renovacao tardia), `Tombstoned`. | Comandos exigem taxa de penalidade. |
-| Frozen | Freeze de governanca ou guardian. | `Active` (apos remediacao), `Tombstoned`. | Nao pode transferir nem atualizar controllers. |
-| Tombstoned | Renuncia voluntaria, resultado de disputa permanente ou redemption expirada. | `PendingAuction` (Dutch reopen) ou permanece tombstoned. | O evento `NameTombstoned` deve incluir razao. |
+|エスタード |コンディコス デ エントラーダ |トランシコエス許可 |メモ |
+|------|----------------------|-----------|------|
+|利用可能 |デリバド クアンド `NameRecord` エスタ アウセンテ。 | `PendingAuction` (プレミアム)、`Active` (レジストロ標準)。 |ディスポニビリダーデ ル アペナスのインデックスを参照。 |
+|保留中のオークション | Criado quando `PriceTierV1.auction_kind` != なし。 | `Active` (レイラオ リキッドダ)、`Tombstoned` (セミランス)。 |レイロは `AuctionOpened` と `AuctionSettled` を発します。 |
+|アクティブ |レジストリを更新してください。 | `GracePeriod`、`Frozen`、`Tombstoned`。 | `expires_at` ギア ア トランジソン。 |
+|猶予期間 |オートマチックカンド `now > expires_at`。 | `Active` (レノバカオエムディア)、`Redemption`、`Tombstoned`。 |デフォルト +30 dia;私はマス・シナリザドを解決します。 |
+|償還 | `now > grace_expires_at` マス `< redemption_expires_at`。 | `Active` (レノバカオ タルディア)、`Tombstoned`。 |刑罰分類群のコマンド。 |
+|冷凍 |フリーズ・ド・ガバナンカ・オ・ガーディアン。 | `Active` (アポス レメディアカオ)、`Tombstoned`。 | Nao はコントローラを転送します。 |
+|墓石 |自発的な放棄、永久的な紛争の結果、償還の期限切れ。 | `PendingAuction` (オランダの再開) 永久に墓石にされています。 | O イベント `NameTombstoned` はラザオを含みます。 |DEVEM エミッターの転送として、`RegistryEventKind` はダウンストリーム コエンテスをキャッシュします。 Nomes tombstoned que entram em leiloes オランダの再開試験 um ペイロード `AuctionKind::DutchReopen`。
 
-As transicoes de estado DEVEM emitir o `RegistryEventKind` correspondente para manter caches downstream coerentes. Nomes tombstoned que entram em leiloes Dutch reopen anexam um payload `AuctionKind::DutchReopen`.
+## 5. ゲートウェイのイベントと同期
 
-## 5. Eventos canonicos e sync de gateways
+ゲートウェイ assinam `RegistryEventV1` および同期 DNS/SoraFS ao:
 
-Gateways assinam `RegistryEventV1` e sincronizam DNS/SoraFS ao:
+1. 究極のイベント `NameRecordV1` 参照。
+2. Regenerar テンプレート デ リゾルバー (enderecos IH58 優先 + 圧縮 (`sora`) como segunda opcao、テキスト レコード)。
+3. Fluxo SoraDNS の説明 [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) を介して、真の状態を示します。
 
-1. Buscar o ultimo `NameRecordV1` referenciado pela sequencia de eventos.
-2. Regenerar templates de resolver (enderecos IH58 preferidos + compressed (`sora`) como segunda opcao, text records).
-3. Pinnear dados de zona atualizados via o fluxo SoraDNS descrito em [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
+イベントの開催日:
 
-Garantias de entrega de eventos:
+- `NameRecordV1` *deve* は、イベント com `version` estritamente での取引を実行します。
+- Eventos `RevenueSharePosted` は、`RevenueShareRecordV1` の液体放出を参照します。
+- 凍結/凍結解除/トゥームストーンのイベントには、`metadata` パラリプレイ デ オーディオの政府機関の芸術作品のハッシュが含まれます。
 
-- Cada transacao que afeta um `NameRecordV1` *deve* anexar exatamente um evento com `version` estritamente crescente.
-- Eventos `RevenueSharePosted` referenciam liquidacoes emitidas por `RevenueShareRecordV1`.
-- Eventos de freeze/unfreeze/tombstone incluem hashes de artefatos de governanca dentro de `metadata` para replay de auditoria.
+## 6. ペイロードの例 Norito
 
-## 6. Exemplos de payloads Norito
-
-### 6.1 Exemplo de NameRecord
+### 6.1 NameRecord の例
 
 ```text
 NameRecordV1 {
@@ -279,7 +277,7 @@ NameRecordV1 {
 }
 ```
 
-### 6.2 Exemplo de SuffixPolicy
+### 6.2 SuffixPolicy の例
 
 ```text
 SuffixPolicyV1 {
@@ -307,10 +305,10 @@ SuffixPolicyV1 {
 }
 ```
 
-## 7. Proximos passos
+## 7. プロキシモス・パソス
 
-- **SN-2b (Registrar API & governance hooks):** expor estes structs via Torii (bindings Norito e JSON) e ligar checks de admission a artefatos de governanca.
-- **SN-3 (Auction & registration engine):** reutilizar `NameAuctionStateV1` para implementar logica de commit/reveal e Dutch reopen.
-- **SN-5 (Payment & settlement):** aproveitar `RevenueShareRecordV1` para reconciliacao financeira e automacao de relatorios.
+- **SN-2b (レジストラー API およびガバナンス フック):** Torii (バインディング Norito e JSON) 経由で構造体をエクスポートし、ガバナンスの技術的な入場許可をチェックします。
+- **SN-3 (オークションおよび登録エンジン):** コミット/公開ロジックの再利用 `NameAuctionStateV1` およびダッチ オープン。
+- **SN-5 (支払いと決済):** `RevenueShareRecordV1` は金融と自動関係の調整に使用されます。
 
-Perguntas ou solicitacoes de mudanca devem ser registradas junto com as atualizacoes do roadmap SNS em `roadmap.md` e refletidas em `status.md` quando integradas.
+ロードマップ SNS em `roadmap.md` と refletidas em `status.md` を統合するための準備として、ムダンカの開発者登録申請を行ってください。

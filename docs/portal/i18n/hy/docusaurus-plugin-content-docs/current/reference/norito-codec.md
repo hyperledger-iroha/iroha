@@ -4,62 +4,64 @@ direction: ltr
 source: docs/portal/docs/reference/norito-codec.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Codec Reference
+# Norito Կոդեկ տեղեկանք
 
-Norito is Iroha’s canonical serialization layer. Every on-wire message, on-disk
-payload, and cross-component API uses Norito so nodes agree on identical bytes
-even when they run on different hardware. This page summarises the moving parts
-and points to the full specification in `norito.md`.
+Norito-ը Iroha-ի կանոնական սերիալացման շերտն է: Ամեն մի հաղորդագրություն, սկավառակի վրա
+օգտակար բեռնվածություն, և խաչաձեւ բաղադրիչ API-ն օգտագործում է Norito, այնպես որ հանգույցները համաձայնվում են նույնական բայթերի վրա
+նույնիսկ երբ դրանք աշխատում են տարբեր սարքավորումների վրա: Այս էջում ամփոփված են շարժվող մասերը
+և մատնանշում է ամբողջական բնութագրերը `norito.md`-ում:
 
-## Core layout
+## Հիմնական դասավորությունը
 
-| Component | Purpose | Source |
+| Բաղադրիչ | Նպատակը | Աղբյուր |
 | --- | --- | --- |
-| **Header** | Frames payloads with magic/version/schema hash, CRC64, length, and compression tag; v1 requires `VERSION_MINOR = 0x00` and validates header flags against the supported mask (default `0x00`). | `norito::header` — see `norito.md` (“Header & Flags”, repository root) |
-| **Bare payload** | Deterministic value encoding used for hashing/comparison. On-wire transport always uses a header; bare bytes are internal-only. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Optional Zstd (and experimental GPU acceleration) selected via the header compression byte. | `norito.md`, “Compression negotiation” |
+| **Վերնագիր** | Շրջանակներ օգտակար բեռները կախարդական/տարբերակի/սխեմայի հեշով, CRC64, երկարությամբ և սեղմման պիտակով; v1-ը պահանջում է `VERSION_MINOR = 0x00` և վավերացնում է վերնագրի դրոշները աջակցվող դիմակի հետ (կանխադրված `0x00`): | `norito::header` — տես `norito.md` («Header & Flags», պահեստի արմատ) |
+| **Մերկ օգտակար բեռ ** | Դետերմինիստական ​​արժեքի կոդավորում, որն օգտագործվում է հեշինգի/համեմատման համար: On-wire transport միշտ օգտագործում է վերնագիր; մերկ բայթերը միայն ներքին են: | `norito::codec::{Encode, Decode}` |
+| **Սեղմում** | Ընտրովի Zstd (և փորձարարական GPU արագացում) ընտրված վերնագրի սեղմման բայթի միջոցով: | `norito.md`, «Կոմպրեսիոն բանակցություններ» |
 
-The layout flag registry (packed-struct, packed-seq, field bitset, compact
-lengths) lives in `norito::header::flags`. V1 defaults to flags `0x00` but
-accepts explicit header flags within the supported mask; unknown bits are
-rejected. `norito::header::Flags` is retained for internal inspection and
-future versions.
+Դասավորության դրոշի ռեեստրը (փաթեթավորված-struct, packed-seq, դաշտային բիթերի հավաքածու, կոմպակտ
+երկարություններ) ապրում է `norito::header::flags`-ում: V1-ը լռելյայն նշում է `0x00`-ը, բայց
+ընդունում է բացահայտ վերնագրի դրոշները աջակցվող դիմակի ներսում. անհայտ բիթերն են
+մերժվել է. `norito::header::Flags`-ը պահվում է ներքին ստուգման և
+ապագա տարբերակները։
 
-## Derive support
+## Ստացեք աջակցություն
 
-`norito_derive` ships `Encode`, `Decode`, `IntoSchema`, and JSON helper derives.
-Key conventions:
+`norito_derive` առաքվում է `Encode`, `Decode`, `IntoSchema` և JSON օգնականը ստացվում է:
+Հիմնական կոնվենցիաներ.
 
-- Derives generate both AoS and packed code paths; v1 defaults to the AoS
-  layout (flags `0x00`) unless header flags opt into packed variants.
-  Implementation lives in `crates/norito_derive/src/derive_struct.rs`.
-- Layout-affecting features (`packed-struct`, `packed-seq`, `compact-len`) are
-  opt-in via header flags and must be encoded/decoded consistently across peers.
-- JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
-  open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
+- Ածանցյալները առաջացնում են ինչպես AoS, այնպես էլ փաթեթավորված կոդերի ուղիներ; v1-ը կանխադրված է AoS-ի համար
+  դասավորություն (դրոշակներ `0x00`), եթե վերնագրի դրոշները չընտրվեն փաթեթավորված տարբերակների մեջ:
+  Իրականացումն ապրում է `crates/norito_derive/src/derive_struct.rs`-ում:
+- Դասավորության վրա ազդող հատկանիշները (`packed-struct`, `packed-seq`, `compact-len`) են
+  միանալ վերնագրի դրոշների միջոցով և պետք է հետևողականորեն կոդավորվի/վերծանվի հավասարակիցների միջև:
+- JSON օգնականները (`norito::json`) ապահովում են դետերմինիստական Norito-ով ապահովված JSON
+  բացել API-ները: Օգտագործեք `norito::json::{to_json_pretty, from_json}` — երբեք `serde_json`:
 
-## Multicodec & identifier tables
+## Multicodec & identifier աղյուսակներ
 
-Norito keeps its multicodec assignments in `norito::multicodec`. The reference
-table (hashes, key types, payload descriptors) is maintained in `multicodec.md`
-at the repository root. When a new identifier is added:
+Norito-ը պահում է իր բազմակոդերի նշանակումները `norito::multicodec`-ում: Տեղեկանքը
+աղյուսակը (հեշերը, հիմնական տեսակները, օգտակար բեռի նկարագրիչները) պահպանվում է `multicodec.md`-ում
+պահեստի արմատում: Երբ ավելացվում է նոր նույնացուցիչ.
 
-1. Update `norito::multicodec::registry`.
-2. Extend the table in `multicodec.md`.
-3. Regenerate downstream bindings (Python/Java) if they consume the map.
+1. Թարմացրեք `norito::multicodec::registry`:
+2. Ընդլայնել աղյուսակը `multicodec.md`-ում:
+3. Վերականգնեք հոսանքով ներքև գտնվող կապերը (Python/Java), եթե դրանք սպառում են քարտեզը:
 
-## Regenerating docs & fixtures
+## Վերականգնող փաստաթղթեր և հարմարանքներ
 
-With the portal currently hosting a prose summary, use the upstream Markdown
-sources as the source of truth:
+Այն դեպքում, երբ պորտալը ներկայումս պարունակում է արձակ ամփոփում, օգտագործեք Markdown-ի վերին հոսանքը
+աղբյուրները որպես ճշմարտության աղբյուր.
 
-- **Spec**: `norito.md`
-- **Multicodec table**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **Տեխնիկական **՝ `norito.md`
+- **Մուլտիկոդեկ սեղան**՝ `multicodec.md`
+- **Հենանիշներ**՝ `crates/norito/benches/`
+- **Ոսկե թեստեր **՝ `crates/norito/tests/`
 
-When the Docusaurus automation goes live, the portal will be updated via a
-sync script (tracked in `docs/portal/scripts/`) that pulls the data from these
-files. Until then, keep this page aligned manually whenever the spec changes.
+Երբ Docusaurus ավտոմատացումը գործարկվի, պորտալը կթարմացվի
+համաժամացման սկրիպտ (հետևվում է `docs/portal/scripts/`-ում), որը տվյալներ է վերցնում դրանցից
+ֆայլեր։ Մինչ այդ, պահեք այս էջը ձեռքով հավասարեցված, երբ բնութագրերը փոխվեն:

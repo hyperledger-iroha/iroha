@@ -4,45 +4,45 @@ direction: rtl
 source: docs/portal/docs/reference/norito-codec.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # مرجع ترميز Norito
 
-Norito هو طبقة التسلسل القياسية في Iroha. كل رسالة on-wire وكل payload على القرص وكل API بين المكونات يستخدم Norito حتى تتفق العقد على نفس البايتات حتى مع اختلاف العتاد. هذه الصفحة تلخص الاجزاء المتحركة وتشير الى المواصفة الكاملة في `norito.md`.
+Norito هو التسلسل القياسي في Iroha. كل رسالة on-wire وكل الحمولة على القرص وكل API بين المكونات تستخدم Norito حتى تتفق على نفس البايتات حتى مع الاختلاف في المعدات. هذه الصفحة تلخص الاجزاء بالاضافة الى المواصفة الكاملة في `norito.md`.
 
-## البنية الاساسية
+##بنية الأساسية
 
-| المكون | الغرض | المصدر |
+| المكون | اللحوم | المصدر |
 | --- | --- | --- |
-| **الرأس** | يؤطر payloads مع magic/version/schema hash و CRC64 والطول وعلامة الضغط؛ v1 يتطلب `VERSION_MINOR = 0x00` ويتحقق من header flags مقابل القناع المدعوم (الافتراضي `0x00`). | `norito::header` — راجع `norito.md` ("Header & Flags"، جذر المستودع) |
-| **Payload بدون رأس** | ترميز قيم حتمي يستخدم للـ hashing/المقارنة. النقل on-wire يستخدم دائما رأسا؛ البايتات بدون رأس داخلية فقط. | `norito::codec::{Encode, Decode}` |
-| **الضغط** | Zstd اختياري (وتسريع GPU تجريبي) يتم اختياره عبر بايت الضغط في الرأس. | `norito.md`, “Compression negotiation” |
+| **الرأس** | يؤتيطر الحمولات بتجزئة السحر/الإصدار/المخطط و CRC64 والطول وعلامة الضغط؛ v1 يتطلب `VERSION_MINOR = 0x00` ويتحقق من أعلام الرأس مقابل الرضا المدعوم (الافتراضي `0x00`). | `norito::header` — راجع `norito.md` ("الرأس والأعلام"، جذر المستودع) |
+| **الحمولة بدون رأس** | ترميز قيم حتمي يستخدم للـ hashing/المقارنة. النقل on-wire يستخدم دائمًا رأسًا؛ البايتات بدون رأس داخلي فقط. | `norito::codec::{Encode, Decode}` |
+| **الضغط** | يتم اختيار Zstd اختياري (وتسريع GPU بسعر) عبر الضغط على القرص في الرأس. | `norito.md`، "تفاوض الضغط" |
 
-سجل flags الخاص بالـ layout (packed-struct, packed-seq, field bitset, compact lengths) موجود في `norito::header::flags`. تستخدم V1 افتراضيا flags `0x00` لكنها تقبل flags صريحة ضمن القناع المدعوم؛ يتم رفض البتات غير المعروفة. يتم الاحتفاظ بـ `norito::header::Flags` للفحص الداخلي والنسخ المستقبلية.
+سجل الأعلام الخاص بالـ التخطيط (البنية المعبأة، والتسلسل المعبأ، ومجموعة بتات الحقل، والأطوال المدمجة) موجود في `norito::header::flags`. تستخدم V1 افتراضيا فلاجز `0x00` ولكن تقبل أعلامًا صريحة ضمن الطمأنينة العلاج؛ يتم الرفض بشكل غير معروف. يتم إصلاحه بـ `norito::header::Flags` للفحص الداخلي والنسخ المستقبلي.
 
-## دعم derive
+## دعم مشتق
 
-يوفر `norito_derive` مشتقات `Encode`, `Decode`, `IntoSchema` ومساعدات JSON. اهم الاعراف:
-
-- المشتقات تولد مسارات AoS و packed؛ v1 يستخدم تخطيط AoS افتراضيا (flags `0x00`) ما لم تختَر header flags متغيرات packed. التنفيذ موجود في `crates/norito_derive/src/derive_struct.rs`.
-- الميزات المؤثرة على التخطيط (`packed-struct`, `packed-seq`, `compact-len`) هي opt-in عبر header flags ويجب ترميزها/فك ترميزها بشكل متسق عبر peers.
-- مساعدات JSON (`norito::json`) توفر JSON حتميا مدعوما بـ Norito لواجهات API العامة. استخدم `norito::json::{to_json_pretty, from_json}` — ولا تستخدم `serde_json`.
+يوفر `norito_derive` مشغلات `Encode`, `Decode`, `IntoSchema` ومساعدات JSON. اهمية الاعراف:- المشتقات تولد مسارات AoS ومعبأة؛ v1 يستخدم تخطيط AoS افتراضيا (flags `0x00`) ما لم تختَر header flags تنوعات معبأة. التنفيذ موجود في `crates/norito_derive/src/derive_struct.rs`.
+- الميزات المؤثرة على التخطيط (`packed-struct`, `packed-seq`, `compact-len`) هي إشارات اختيارية متقاطعة ويجب ترميزها/فك ترميزها بشكل متسق عبر الأقران.
+- مساعدات JSON (`norito::json`) توفر JSON هتميا مدعوما بـ Norito لواجهات API العامة. استخدم `norito::json::{to_json_pretty, from_json}` — ولا استخدم `serde_json`.
 
 ## Multicodec وجداول المعرفات
 
-يحتفظ Norito بتعيينات multicodec في `norito::multicodec`. الجدول المرجعي (hashes، انواع المفاتيح، واصفات payload) محفوظ في `multicodec.md` بجذر المستودع. عند اضافة معرف جديد:
+التأكيد على Norito فتحات multicodec في `norito::multicodec`. الجدول المرجعي (تجزئات، انواع المفاتيح، وصفات الحمولة) محفوظ في `multicodec.md` بجذر المستودع. عند اضافة معرف جديد:
 
-1. حدث `norito::multicodec::registry`.
-2. وسع الجدول في `multicodec.md`.
-3. اعد توليد bindings downstream (Python/Java) اذا كانت تستهلك الخريطة.
+1. الحدث `norito::multicodec::registry`.
+2. جدول واسع في `multicodec.md`.
+3. لا يتم إنشاء الارتباطات النهائية (Python/Java) إذا كانت تستهلك الخريطة.
 
-## اعادة توليد docs و fixtures
+## إعادة توليد المستندات والتجهيزات
 
-مع استضافة البوابة حاليا لملخص وصفي، استخدم مصادر Markdown الاصلية كمصدر للحقيقة:
+مع استضافة البوابة الخارجية لملخص وصفي، استخدم مصادر Markdown الأصلية كمصدر للحقيقة:
 
-- **Spec**: `norito.md`
-- **جدول multicodec**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **المواصفات**: `norito.md`
+- **جدول الترميز المتعدد**: `multicodec.md`
+- **المقاييس**: `crates/norito/benches/`
+- **الاختبارات الذهبية**: `crates/norito/tests/`
 
-عندما تعمل اتوماتة Docusaurus، سيتم تحديث البوابة عبر سكربت sync (متابع في `docs/portal/scripts/`) الذي يسحب البيانات من هذه الملفات. حتى ذلك الحين، حافظ على مواءمة هذه الصفحة يدويا كلما تغيرت المواصفة.
+عندما تعمل أتمتة Docusaurus، سيتم تحديث البوابة الإلكترونية عبر سكربت sync (متابع في `docs/portal/scripts/`) الذي يسحب من هذه الملفات. حتى ذلك الحين، ستخسر، حافظ على موامة هذه الصفحة إذا تغيرت المواصفة.

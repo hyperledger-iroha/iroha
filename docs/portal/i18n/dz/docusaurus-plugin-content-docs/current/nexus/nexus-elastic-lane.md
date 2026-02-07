@@ -8,37 +8,39 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Elastic lane provisioning (NX-7)
 sidebar_label: Elastic Lane Provisioning
 description: Bootstrap workflow for creating Nexus lane manifests, catalog entries, and rollout evidence.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_elastic_lane.md`. Keep both copies aligned until the translation sweep lands in the portal.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ངོས་འདིའི་ནང་ `docs/source/nexus_elastic_lane.md` ལུ་མཐོང་སྣང་། འདྲ་བཤུས་གཉིས་ཆ་ར་ སྐད་སྒྱུར་གྱི་ས་ཆ་ཚུ་ དྲྭ་ཐོག་ཁར་ མ་ལྷོད་ཚུན་ཚོད་ ཕྲང་སྒྲིག་འབད་བཞག།
 :::
 
-# Elastic Lane Provisioning Toolkit (NX-7)
+# ཨི་ལཱསི་ཊིག་ལམ་གྱི་ མཁོ་སྒྲུབ་ལག་ཆས་ (NX-7)
 
-> **Roadmap item:** NX-7 — Elastic lane provisioning tooling  
-> **Status:** Tooling complete — generates manifests, catalog snippets, Norito payloads, smoke tests,
-> and the load-test bundle helper now stitches slot latency gating + evidence manifests so validator
-> load runs can be published without bespoke scripting.
+> **ལམ་མེཔ་རྣམ་གྲངས་:** NX-7 — བསྒྱིར་བའི་ལམ་ཐིག་སྤྲོད་ལེན་ལག་ཆས།  
+> **Status:** ལག་ཆས་ཆ་ཚང་ — གསལ་སྟོན་དང་ ཐོ་གཞུང་ནང་ བརྡ་རྟགས་ཚུ་ བཏོནམ་ཨིན།
+> དང་ མངོན་གསལ་-བརྟག་དཔྱད་ཀྱི་ བཱན་ཌལ་ རོགས་རམ་འབད་མི་གིས་ ད་ལྟོ་ བཤུད་བརྙན་གྱི་ འཕྲོ་མཐུད་སྒོ་སྒྲིག + སྒྲུབ་བྱེད་ མངོན་གསལ་འབདཝ་ཨིན།
+> མངོན་གསལ་གྱི་གཡོག་བཀོལ་ཚུ་ བེ་སི་པོཀ་ཡིག་གཟུགས་མེད་པར་ དཔར་བསྐྲུན་འབད་ཚུགས།
 
-This guide walks operators through the new `scripts/nexus_lane_bootstrap.sh` helper that automates
-lane manifest generation, lane/dataspace catalog snippets, and rollout evidence. The goal is to make
-it easy to spin up new Nexus lanes (public or private) without hand-editing multiple files or
-re-deriving the catalog geometry by hand.
+ལམ་སྟོན་འདི་གིས་ རང་བཞིན་གྱིས་ `scripts/nexus_lane_bootstrap.sh` གྲོགས་རམ་བརྒྱུད་དེ་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་འགྱོཝ་ཨིན།
+ལམ་གྱི་གསལ་སྟོན་མི་རབས་དང་ ལམ་/གནས་སྡུད་ས་ཆའི་ཐོ་གཞུང་གི་ བརྡ་རྟགས་ དེ་ལས་ བསྐོར་བའི་སྒྲུབ་བྱེད་ཚུ། དམིགས་ཡུལ་འདི་ བཟོ་ནིའི་དོན་ལུ་ཨིན།
+ལགཔ་གིས་ ཡིག་སྣོད་ཚུ་ ཞུན་དག་འབད་མི་ སྣ་མང་ཡིག་སྣོད་ཚུ་མེད་པར་ I18NT000000001X ལམ་ཚུ་ (མི་མང་ཡང་ན་ སྒེར་གྱི་) གསརཔ་འགོ་བཙུགས་ནི་ལུ་ འཇམ་ཏོང་ཏོ་ཨིན།
+ལགཔ་གིས་ ཐོ་གཞུང་དབྱིབས་རྩིས་འདི་ ལོག་བཏོན་ནི།
 
-## 1. Prerequisites
+## 1. སྔོན་འགྲོ།
 
-1. Governance approval for the lane alias, dataspace, validator set, fault tolerance (`f`), and settlement policy.
-2. A finalized validator list (account IDs) and protected namespace list.
-3. Access to the node configuration repository so you can append the generated snippets.
-4. Paths for the lane manifest registry (see `nexus.registry.manifest_directory` and
-   `cache_directory`).
-5. Telemetry contacts/PagerDuty handles for the lane so alerts can be wired as soon as the lane
-   comes online.
+༡ ལམ་གཞན་དང་ གནས་སྡུད་ས་སྟོང་ བདེན་དཔྱད་པ་ ནོར་འཁྲུལ་བཟོད་བསྲན་ (`f`) དང་ གཞིས་ཆགས་སྲིད་བྱུས་ཚུ་གི་དོན་ལུ་ གཞུང་སྐྱོང་གནང་བ།
+2. མཐའ་མའི་བདེན་དཔྱད་ཐོ་ཡིག་ (རྩིས་ཐོ་ཨའི་ཌི་ཚུ་) དང་ ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་ས་སྒོ་ཐོ་ཡིག་ཅིག།
+༣ ཁྱོད་ཀྱིས་ བཟོ་བཏོན་འབད་ཡོད་པའི་ ཆ་ཤས་ཚུ་ མཐུད་ནིའི་དོན་ལུ་ མཐུད་མཚམས་རིམ་སྒྲིག་མཛོད་ཁང་ནང་ འཛུལ་སྤྱོད་འབད་དགོ།
+4. ལམ་གྱི་གསལ་སྟོན་ཐོ་བཀོད་ཀྱི་ལམ་ཚུ་ (`nexus.registry.manifest_directory` དང་ བལྟ།
+   I18NI0000029X).
+༥ ལམ་གྱི་དོན་ལུ་ ཊེ་ལི་མི་ཊི་འབྲེལ་བ་/པེ་གར་ཌུ་ཊི་ ལག་ལེན
+   ཡོངས་འབྲེལ་ཐོག་ལས་འོང་།
 
-## 2. Generate lane artefacts
+## 2. ལམ་གྱི་རྙིང་མ་བཟོ་བ།
 
-Run the helper from the repository root:
+མཛོད་ཁང་གི་རྩ་བ་ལས་ གྲོགས་རམ་པ་འདི་གཡོག་བཀོལ།
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -60,60 +62,60 @@ scripts/nexus_lane_bootstrap.sh \
   --output-dir artifacts/nexus/payments_lane
 ```
 
-Key flags:
+གཙོ་བོའི་རྒྱལ་དར་ཚུ།
 
-- `--lane-id` must match the new entry’s index in `nexus.lane_catalog`.
-- `--dataspace-alias` and `--dataspace-id/hash` control the dataspace catalog entry (defaults to the
-  lane id when omitted).
-- `--validator` can be repeated or sourced from `--validators-file`.
-- `--route-instruction` / `--route-account` emit ready-to-paste routing rules.
-- `--metadata key=value` (or `--telemetry-contact/channel/runbook`) capture runbook contacts so
-  dashboards immediately list the right owners.
-- `--allow-runtime-upgrades` + `--runtime-upgrade-*` add the runtime-upgrade hook to the manifest
-  when the lane requires extended operator controls.
-- `--encode-space-directory` invokes `cargo xtask space-directory encode` automatically. Pair it with
-  `--space-directory-out` when you want the encoded `.to` file somewhere other than the default.
+- I18NI0000000030X གིས་ `nexus.lane_catalog` ནང་ ཐོ་བཀོད་གསརཔ་གི་ཟུར་ཐོ་འདི་ མཐུན་སྒྲིག་འབད་དགོ།
+- `--dataspace-alias` དང་ I18NI000000033X གནད་སྡུད་ས་སྟོང་ཐོ་གཞུང་ཐོ་བཀོད་འདི་ཚད་འཛིན་ (སྔོན་སྒྲིག་ཚུ་ ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
+  lane id བཤུབ་པའི་སྐབས་)།
+- `--validator` འདི་ ཡང་བསྐྱར་འབད་བཏུབ་ ཡང་ན་ `--validators-file` ལས་ འབྱུང་ཁུངས་བཟོ་ཚུགས།
+- I18NI000000036X / I18NI000000037X གིས་ འགྲུལ་ལམ་ལམ་ལུགས་ཚུ་ བཀོད་སྒྲིག་འབད་ཡོདཔ།
+- I18NI000000038X (ཡང་ན་ I18NI000000039X) གིས་ རན་བུག་འབྲེལ་འཐུད་ཚུ་ བཟུང་ཡོདཔ་ཨིན།
+  dashboards དེ་འཕྲོ་ལས་ ཇོ་བདག་འོས་འབབ་ཅན་ཚུ་ཐོ་བཀོད་འབདཝ་ཨིན།
+- I18NI000000040X + I18NI000000041X མངའ་ཁོངས་ལུ་ རན་ཊའིམ་-ཡར་འཕར་གྱི་ཧུཀ་ཁ་སྐོང་བརྐྱབ་ཨིན།
+  རིམ་ལུགས་དེ་ལུ་ རྒྱ་བསྐྱེད་འབད་ཡོད་པའི་བཀོལ་སྤྱོད་ཚད་འཛིན་ཚུ་དགོཔ་ཨིན།
+- `--encode-space-directory` རང་བཞིན་གྱིས་ `cargo xtask space-directory encode` འབོད་བརྡ་འབདཝ་ཨིན། དེ་དང་མཉམ་དུ་བསྡམས།
+  ཁྱོད་ཀྱིས་ ཨིན་ཀོཌི་འབད་ཡོད་མི་ `.to` འདི་ སྔོན་སྒྲིག་ལས་ལྷག་སྟེ་ གཞན་ཁར་དགོཔ་ད་ I18NI000000044X དགོཔ་ཨིན།
 
-The script produces three artefacts inside the `--output-dir` (defaults to the current directory),
-plus an optional fourth when encoding is enabled:
+ཡིག་ཆ་འདི་གིས་ I18NI000000046X ནང་ལུ་ ཅ་ཆས་ཚུ་གསུམ་བཏོནམ་ཨིན། (ད་ལྟོའི་སྣོད་ཐོ་ལུ་སྔོན་སྒྲིག་ཚུ་)
+ཨིན་ཀོ་ཌིང་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་གདམ་ཁ་ཅན་གྱི་བཞི་པ་བཞི་པ་::
 
-1. `<slug>.manifest.json` — lane manifest containing the validator quorum, protected namespaces, and
-   optional runtime-upgrade hook metadata.
-2. `<slug>.catalog.toml` — a TOML snippet with `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]`,
-   and any requested routing rules. Ensure `fault_tolerance` is set on the dataspace entry to size
-   the lane-relay committee (`3f+1`).
-3. `<slug>.summary.json` — audit summary describing the geometry (slug, segments, metadata) plus the
-   required rollout steps and the exact `cargo xtask space-directory encode` command (under
-   `space_directory_encode.command`). Attach this JSON to the onboarding ticket for evidence.
-4. `<slug>.manifest.to` — emitted when `--encode-space-directory` is set; ready for Torii’s
-   `iroha app space-directory manifest publish` flow.
+1. `<slug>.manifest.json` — ལམ་གྱི་གསལ་སྟོན་ནང་ བདེན་དཔྱད་ཀྱི་ ཚད་གཞི་དང་ ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ཚུ་ཡོདཔ་ཨིན།
+   གདམ་ཁ་ཅན་རན་ཊའིམ་-ཡར་འཕེལ་ཧུཀ་མེ་ཊ་ཌེ་ཊ་.
+2. `<slug>.catalog.toml` — `[[nexus.lane_catalog]]`, I18NI00000000500X, ཡོད་པའི་ TOML གི་ཤོག་བུ།
+   དང་ ཞུ་བ་འབད་མི་ འགྲུལ་ལམ་ལམ་ལུགས་གང་རུང་ཅིག། I18NI000000051X འདི་ ཚད་ལུ་ གནད་སྡུད་ས་སྒོ་ཐོ་བཀོད་གུ་གཞི་སྒྲིག་འབད་ཡོདཔ་ངེས་གཏན་བཟོ།
+   ལམ་ཐིག་རི་ལེ་ཚོགས་ཆུང་ (I18NI0000002X).
+3. `<slug>.summary.json` — དབྱིབས་རྩིས་ (slug, ཆ་ཤས་མེ་ཊ་ཌེ་ཊ་) དང་ 18NI000000053X རྩིས་ཞིབ་བཅུད་བསྡུས་རྩིས་ཞིབ་ཀྱི་བཅུད་བསྡུས།
+   དགོས་མཁོ་བའི་ བསྐོར་རིམ་དང་ ཏག་ཏག་ `cargo xtask space-directory encode` བརྡ་བཀོད་ (འོག་ལུ།
+   I18NI0000005X). སྒྲུབ་བྱེད་ཀྱི་དོན་ལུ་ JSON འདི་ གུ་བཀལ་བའི་ཤོག་བྱང་ལུ་མཉམ་སྦྲགས་འབད།
+4. `<slug>.manifest.to` — I18NI000000057X གཞི་སྒྲིག་འབད་བའི་སྐབས་ བཏོན་ཡོདཔ་ཨིན། Torii’s གི་དོན་ལུ་གྲ་སྒྲིག་ཡོད།
+   `iroha app space-directory manifest publish` བཞུར།
 
-Use `--dry-run` to preview the JSON/ snippets without writing files, and `--force` to overwrite
-existing artefacts.
+ཡིག་སྣོད་ཚུ་མ་བྲིས་པར་ ཇེ་ཨེསི་ཨོ་ཨེན་/ པར་ཆས་ཚུ་ སྔོན་ལྟ་འབད་ནི་ལུ་ `--dry-run` ལག་ལེན་འཐབ།
+ད་ལྟའི་ ཅ་རྙིང་།
 
-## 3. Apply the changes
+## 3. བསྒྱུར་བ་འཇུག་པ།
 
-1. Copy the manifest JSON into the configured `nexus.registry.manifest_directory` (and into the cache
-   directory if the registry mirrors remote bundles). Commit the file if manifests are versioned in
-   your configuration repo.
-2. Append the catalog snippet to `config/config.toml` (or the appropriate `config.d/*.toml`). Ensure
-   `nexus.lane_count` is at least `lane_id + 1`, and update any `nexus.routing_policy.rules` that
-   should point at the new lane.
-3. Encode (if you skipped `--encode-space-directory`) and publish the manifest to the Space Directory
-   using the command captured in the summary (`space_directory_encode.command`). This produces the
-   `.manifest.to` payload Torii expects and records the evidence for auditors; submit via
+1. གསལ་སྟོན་འདི་ JSON རིམ་སྒྲིག་འབད་ཡོད་པའི་ I18NI0000061X ནང་ལུ་ (དང་འདྲ་མཛོད་ནང་ལུ་འདྲ་བཤུས་རྐྱབས།
+   ཐོ་བཀོད་འདི་གིས་ ཐག་རིང་གི་བཱན་ཌལ་ཚུ་ མེ་ལོང་ནང་བཀོད་པ་ཅིན་ སྣོད་ཐོ།) གསལ་རྟགས་ཚུ་ ནང་ན་ཐོན་རིམ་བཟོ་ཡོད་པ་ཅིན་ ཡིག་སྣོད་འདི་ ཚད་སྒྲིག་འབད།
+   ཁྱོད་ཀྱི་རིམ་སྒྲིག་རི་པོ།.
+2. ཐོ་གཞུང་ནང་ `config/config.toml` ལུ་ མཐུད་དེ་ཡོདཔ་ཨིན། ངེས༌བརྟན༌བཟོ༌ནི
+   I18NI000000064X ཉུང་མཐར་ཡང་ `lane_id + 1` དང་ I18NI000000066X གང་རུང་དུས་མཐུན་བཟོ་ཡོད།
+   ལམ་གསརཔ་ལུ་སྟོན་དགོ།
+3. Encode (ཁྱོད་ཀྱིས་ I18NI000000067X གིས་ གོམ་འགྱོ་བ་ཅིན་) དེ་ལས་ གསལ་སྟོན་འདི་ གནམ་སྟོང་སྣོད་ཐོ་ལུ་ དཔར་བསྐྲུན་འབད།
+   བཅུད་བསྡུས་ནང་འཛིན་བཟུང་འབད་ཡོད་པའི་བརྡ་བཀོད་ (I18NI0000068X) ལག་ལེན་འཐབ། འདི་གིས་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+   `.manifest.to` གླ་ཆ་ I18NT0000008X རེ་བ་དང་ རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ སྒྲུབ་བྱེད་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན། ནང་འཇུག་
    `iroha app space-directory manifest publish`.
-4. Run `irohad --sora --config path/to/config.toml --trace-config` and archive the trace output in
-   the rollout ticket. This proves the new geometry matches the generated slug/kura segments.
-5. Restart the validators assigned to the lane once the manifest/catalog changes are deployed. Keep
-   the summary JSON in the ticket for future audits.
+4. I18NI000000071X དང་ 2 201 2013
+   the བསྐོར་བའི་ཤོག་བྱང་། འདི་གིས་ དབྱིབས་རྩིས་གསརཔ་འདི་ བཏོན་ཡོད་པའི་ སི་ལག་/ཀུ་ར་ཆ་ཤས་ཚུ་དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+༥ གསལ་སྟོན་/ཐོ་གཞུང་བསྒྱུར་བཅོས་ཚུ་ བཀྲམ་སྤེལ་འབད་ཚར་བའི་ཤུལ་ལས་ ལམ་ལུ་འགན་སྤྲོད་འབད་ཡོད་པའི་ བདེན་དཔྱད་པ་ཚུ་ ལོག་འགོ་བཙུགས། བཞག
+   མ་འོངས་པའི་རྩིས་ཞིབ་ཀྱི་ཤོག་འཛིན་ནང་ བཅུད་བསྡུས་ JSON ཚུ།
 
-## 4. Build a registry distribution bundle
+## 4. ཐོ་འགོད་སྤེལ་བའི་བགོ་རྩིས་བཞེངས།
 
-Package the generated manifest and overlay so operators can distribute lane governance data without
-editing configs on every host. The bundler helper copies manifests into the canonical layout,
-produces an optional governance catalog overlay for `nexus.registry.cache_directory`, and can emit a
-tarball for offline transfers:
+ཐུམ་སྒྲིལ་གྱི་གསལ་སྟོན་དང་ བཀབ་སྟེ་ཡོདཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ལམ་གཞུང་གི་གནས་སྡུད་འདི་ མེད་པར་ བཀྲམ་སྤེལ་འབད་ཚུགས།
+ཧོསིཊི་ག་ར་གུ་ རིམ་སྒྲིག་འབད་དོ། བཱན་ཌལ་གྱི་གྲོགས་རམ་པ་འདྲ་བཤུས་ཚུ་ ཀེ་ནོ་ནིག་སྒྲིག་བཀོད་ནང་ལུ་ མངོན་གསལ་འབདཝ་ཨིན།
+I18NI000000072X གི་དོན་ལུ་ གདམ་ཁའི་གཞུང་སྐྱོང་ཐོ་གཞུང་བཀབ་སྟེ་ བཏོན་ཚུགསཔ་ཨིནམ་དང་ དེ་ལས་ a འདི་ བཏོན་ཚུགས།
+ཊར་བཱོལ་ཨོཕ་ལའིན་སྤོ་བཤུད་ཚུ་གི་དོན་ལུ་:
 
 ```bash
 scripts/nexus_lane_registry_bundle.sh \
@@ -124,25 +126,25 @@ scripts/nexus_lane_registry_bundle.sh \
   --bundle-out artifacts/nexus/payments_lane/registry_bundle.tar.gz
 ```
 
-Outputs:
+ཐོན་འབྲས་ཚུ།
 
-1. `manifests/<slug>.manifest.json` — copy these into the configured
+1. `manifests/<slug>.manifest.json` — རིམ་སྒྲིག་འབད་ཡོད་པའི་ནང་ལུ་འདི་ཚུ་འདྲ་བཤུས་རྐྱབས།
    `nexus.registry.manifest_directory`.
-2. `cache/governance_catalog.json` — drop into `nexus.registry.cache_directory`. Every `--module`
-   entry becomes a pluggable module definition, enabling governance-module swap-outs (NX-2) by
-   updating the cache overlay instead of editing `config.toml`.
-3. `summary.json` — includes hashes, overlay metadata, and operator instructions.
-4. Optional `registry_bundle.tar.*` — ready for SCP, S3, or artifact trackers.
+2. I18NI000000075X — I18NI000000076X ནང་དུ་བླངས། I18NI0000007X རེ།
+   ཐོ་བཀོད་འདི་ གློག་ཐག་ཅན་གྱི་ཚད་གཞི་ངེས་ཚིག་ཅིག་ལུ་འགྱུརཝ་ཨིན།
+   `config.toml` ཞུན་དག་འབད་ནིའི་ཚབ་ལུ་ འདྲ་མཛོད་བཀབ་བཙུགས་འབད་དོ།
+3. I18NI000000079X — ནི་ཧ་ཤེ་དང་ བཀབ་པའི་མེ་ཊ་ཌེ་ཊ་ དེ་ལས་ བཀོལ་སྤྱོད་པའི་བཀོད་རྒྱ་ཚུ་ཚུདཔ་ཨིན།
+༤ གདམ་ཁ་ཅན་གྱི་ `registry_bundle.tar.*` — ཨེསི་སི་པི་ ཨེསི་༣ ཡང་ན་ ཅ་རྙིང་རྗེས་འདེད་འབད་མི་ཚུ་གི་དོན་ལུ་ གྲ་སྒྲིག་ཡོདཔ་ཨིན།
 
-Sync the entire directory (or the archive) to each validator, extract on air-gapped hosts, and copy
-the manifests + cache overlay into their registry paths before restarting Torii.
+སྣོད་ཐོ་ཧྲིལ་བུ་(ཡང་ན་ཡིག་མཛོད་) བདེན་དཔྱད་པ་རེ་རེ་ལུ་མཉམ་འབྱུང་འབད་ཞིནམ་ལས་ རླུང་གིས་གྱེན་ཐིག་བཀོད་ཡོད་པའི་ཧོསིཊི་ཚུ་གུ་བཏོན་ཞིནམ་ལས་ འདྲ་བཤུས་རྐྱབས།
+the values ​​+ I18NT000009X ལོག་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ ཁོང་རའི་ཐོ་བཀོད་འགྲུལ་ལམ་ཚུ་ནང་ འདྲ་མཛོད་བཀབ་དགོ།
 
-## 5. Validator smoke tests
+## 5. བདེན་དཔྱད་ཀྱི་དུ་བའི་བརྟག་དཔྱད།
 
-After Torii restarts, run the new smoke helper to verify the lane reports `manifest_ready=true`,
-metrics expose the expected lane count, and the sealed gauge is clear. Lanes that require manifests
-must expose a non-empty `manifest_path`; the helper now fails immediately when the path is missing so
-every NX-7 deployment record includes the signed manifest evidence:
+I18NT0000000010X ལོག་འགོ་བཙུགས་པའི་ཤུལ་ལས་ ལམ་གྱི་སྙན་ཞུ་ `manifest_ready=true`,
+འཇལ་ཚད་ཚུ་གིས་ རེ་བ་བསྐྱེད་མི་ ལམ་གྱི་གྱངས་ཁ་འདི་ གསལ་སྟོན་འབད་དེ་ བསྡམ་བཞག་ཡོད་པའི་ འཇལ་ཚད་འདི་ གསལ་ཏོག་ཏོ་ཨིན། མངོན་རྟགས་དགོ་པའི་ལམ་ལུགས།
+སྟོངམ་མེན་པའི་ I18NI0000082X ཅིག་བཏོན་དགོ། ད་ལྟོ་འགྲུལ་ལམ་འདི་མེད་པའི་སྐབས་ གྲོགས་རམ་པ་དེ་ དེ་འཕྲོ་ལས་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན།
+NX-7 བཀྲམ་སྤེལ་དྲན་ཐོ་རེ་རེ་ནང་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ གསལ་སྟོན་སྒྲུབ་བྱེད་ཚུ་ཚུདཔ་ཨིན།
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -165,15 +167,15 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Add `--insecure` when testing self-signed environments. The script exits non-zero if the lane is
-missing, sealed, or metrics/telemetry drift from the expected values. Use the
-`--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog`, and
-`--max-headroom-events` knobs to keep per-lane block height/finality/backlog/headroom telemetry
-within your operational envelopes, and couple them with `--max-slot-p95` / `--max-slot-p99`
-(plus `--min-slot-samples`) to enforce the NX‑18 slot-duration targets without leaving the helper.
+རང་གིས་མིང་རྟགས་བཀོད་ཡོད་པའི་མཐའ་འཁོར་བརྟག་དཔྱད་འབད་བའི་སྐབས་ `--insecure` ཁ་སྐོང་འབད། ཡིག་ཚུགས་འདི་ ཐིག་འདི་ཨིན་པ་ཅིན་ ཀླད་ཀོར་མེན་པའི་ཕྱིར་འཐོན་འབདཝ་ཨིན།
+རེ་བ་བསྐྱེད་པའི་གནས་གོང་ཚུ་ལས་ བརླག་སྟོར་ཞུགས་ཡོདཔ་ ཡང་ན་ བསྡམ་བཞག་མི་ ཡང་ན་ མེ་ཊིགསི་/འཕྲུལ་རིག་ཌིརཕཊ་ཚུ་ཨིན། ལག་ལེན་འཐབ།
+`--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog`, དང་།
+I18NI000000087X གིས་ ལམ་ཐིག་རེ་རེའི་མཐོ་ཚད་/མཐའ་མཇུག་/རྒྱབ་ལོག་/མགུ་ཏོ་ཁང་གི་ བརྒྱུད་འཕྲིན་བཞག་ནི་ལུ་ བཞག་ནིའི་དོན་ལུ་ མཛུབ་མོ་ཚུ།
+ཁྱོད་ཀྱི་བཀོལ་སྤྱོད་ཀྱི་ཡིག་ཤུབས་ནང་ལུ་ I18NI0000008X / I18NI0000089X དང་ཅིག་ཁར་ གཉེན་སྒྲིག་འབདཝ་ཨིན།
+(`--min-slot-samples`) རོགས་རམ་མ་བཞག་པར་ NX‑ ༡༨ གི་ས་ཆའི་དུས་ཡུན་དམིགས་གཏད་ཚུ་ བསྟར་སྤྱོད་འབད་ནི་ལུ་ཨིན།
 
-For air-gapped validations (or CI) you can replay a captured Torii response instead of hitting a live
-endpoint:
+རླུང་གིས་ བདེན་དཔྱད་འབད་ནི་གི་དོན་ལུ་ (ཡང་ན་ སི་ཨའི་) ཁྱོད་ཀྱིས་ བཟུང་ཡོད་པའི་ I18NT0000011X ལན་འདི་ ཐད་རི་བ་རི་ རྡུང་རྡེག་གཏང་ནིའི་ཚབ་ལུ་ ལོག་སྟེ་རྩེད་ཚུགས།
+མཇུག་མཐའ།
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -197,16 +199,16 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-The recorded fixtures under `fixtures/nexus/lanes/` mirror the artefacts produced by the bootstrap
-helper so new manifests can be linted without bespoke scripting. CI exercises the same flow via
-`ci/check_nexus_lane_smoke.sh` and `ci/check_nexus_lane_registry_bundle.sh`
-(alias: `make check-nexus-lanes`) to prove the NX-7 smoke helper stays aligned with the published
-payload format and to ensure bundle digests/overlays remain reproducible.
+I18NI000000091X གི་འོག་ལུ་ ཐོ་བཀོད་འབད་དེ་ཡོད་པའི་སྒྲིག་བཀོད་ཚུ་གིས་ བུཊ་སི་ཊརཔ་གིས་ བཏོན་མི་ ཅ་རྙིང་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+གྲོགས་རམ་པ་དེ་སྦེ་ གསལ་སྟོན་གསརཔ་ཚུ་ བེ་སི་པོཀ་ཡིག་གཟུགས་མེད་པར་ གྱལ་རིམ་བཟོ་ཚུགས། CI བརྒྱུད་དེ་ འདྲ་མཚུངས་ཀྱི་ རྒྱུན་རིམ་ཚུ་ ལག་ལེན་འཐབ་ཨིན།
+I18NI0000092X དང་ I18NI0000093X
+(alias: `make check-nexus-lanes`) གིས་ NX-7 གི་ཐ་མག་རོགས་རམ་པ་དེ་ དཔར་བསྐྲུན་འབད་མི་དང་གཅིག་ཁར་ མཐུན་སྒྲིག་སྦེ་སྡོད་ཡོདཔ་ཨིན།
+པེ་ལོཌ་རྩ་སྒྲིག་དང་ བཱན་ཌལ་བཞུ་ནི་/མཇུག་ཐིག་ཚུ་ བསྐྱར་བཟོ་འབད་བཏུབ་སྦེ་བཞག་ནི་ལུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ཨིན།
 
-When a lane is renamed, capture the `nexus.lane.topology` telemetry events (for example with
-`journalctl -u irohad -o json | jq 'select(.msg=="nexus.lane.topology")'`) and feed them back into
-the smoke helper. The `--telemetry-file/--from-telemetry` flag accepts the newline-delimited log and
-`--require-alias-migration old:new` asserts that a `alias_migrated` event recorded the rename:
+ལམ་ཐིག་ཅིག་བསྐྱར་མིང་བཏགས་པའི་སྐབས་ `nexus.lane.topology` ཊེ་ལི་མི་ཊི་རེཊི་བྱུང་རིམ་ཚུ་ བཟུང་ (དཔེར་ན་ དང་ཅིག་ཁར་ དང་ཅིག་ཁར་
+`journalctl -u irohad -o json | jq 'select(.msg=="nexus.lane.topology")'`) དེ་ལས་ དེ་ཚུ་ལོག་ལུ་སྤྲོད་དགོ།
+ཐ་མག་རོགས་སྐྱོར་པ། `--telemetry-file/--from-telemetry` དར་ཆ་འདི་གིས་ གྲལ་ཐིག་གསརཔ་བཏོན་ཡོད་པའི་དྲན་ཐོ་དང་ ངོས་ལེན་འབདཝ་ཨིན།
+`--require-alias-migration old:new` གིས་ `alias_migrated` བྱུང་ལས་ཅིག་གིས་ བསྐྱར་མིང་འདི་སྒྲ་བཟུང་འབདཝ་ཨིནམ་སྦེ་བཀོདཔ་ཨིན།
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -232,14 +234,14 @@ scripts/nexus_lane_smoke.py \
   --require-alias-migration core:payments
 ```
 
-The `telemetry_alias_migrated.ndjson` fixture bundles the canonical rename sample so CI can verify
-the telemetry parsing path without contacting a live node.
+`telemetry_alias_migrated.ndjson` གཏན་བཟོའི་སྒྲིག་ཆས་འདི་གིས་ ཀེ་ནོ་ནིག་བརྗེ་སོར་དཔེ་ཚད་འདི་བསྡོམ་ཞིནམ་ལས་ སི་ཨའི་བདེན་དཔྱད་འབད་ཚུགས།
+ཐད་རི་བ་རི་ མཐུད་མཚམས་ཅིག་དང་ འབྲེལ་བ་མ་འཐབ་པར་ ཊེ་ལི་མི་ཊི་དབྱེ་དཔྱད་ལམ་ལུགས།
 
-## Validator load tests (NX-7 evidence)
+## བདེན་དཔྱད་མངོན་གསལ་བརྟག་དཔྱད་ (NX-7 སྒྲུབ་བྱེད་)
 
-Roadmap **NX-7** requires every new lane to ship a reproducible validator load run. Use
-`scripts/nexus_lane_load_test.py` to stitch the smoke checks, slot-duration gates, and slot bundle
-manifest into a single artefact set that governance can replay:
+ལམ་སྟོན་པ་ **NX-7** ལུ་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ བདེན་དཔྱད་ཀྱི་ མངོན་གསལ་གཡོག་བཀོལ་ནིའི་དོན་ལུ་ ལམ་གསརཔ་རེ་རེ་ནང་ གཏང་དགོཔ་ཨིན། ལག་ལེན་འཐབ་ནི
+I18NI00000101010
+གཞུང་སྐྱོང་གིས་ ལོག་སྟེ་རྩེད་ཚུགས་པའི་ ཅ་རྙིང་ཆ་ཚང་ཅིག་ལུ་ གསལ་སྟོན་འབད།
 
 ```bash
 scripts/nexus_lane_load_test.py \
@@ -255,26 +257,26 @@ scripts/nexus_lane_load_test.py \
   --out-dir artifacts/nexus/load/payments-2026q2
 ```
 
-The helper enforces the same DA quorum, oracle, settlement buffer, TEU, and slot-duration gates used
-by the smoke helper and writes `smoke.log`, `slot_summary.json`, a slot bundle manifest, and
-`load_test_manifest.json` into the chosen `--out-dir` so load runs can be attached directly to
-rollout tickets without bespoke scripting.
+གྲོགས་རམ་པ་འདི་གིས་ DA quorum, oracle, གཞིས་ཆགས་བཱ་ཕར་, TEU, དང་ slot-disuration Gates ལག་ལེན་འཐབ་མི་ ཅོག་འཐདཔ་ཨིན།
+ཐ་མག་འཐེན་མཁན་གྱིས་ `smoke.log`, I18NI000000103X བྲིས།
+`load_test_manifest.json` གདམ་ཁ་རྐྱབ་ཡོད་པའི་ `--out-dir` ལུ་ དེ་འབདཝ་ལས་ མངོན་གསལ་རྒྱུག་ནི་འདི་ ཐད་ཀར་དུ་ ལུ་ མཐུད་ཚུགས།
+བསྒྲིགས་པའི་ཡིག་ཆའི་ཡིག་ཆ།
 
-## 6. Telemetry & governance follow-ups
+## 6. བརྒྱུད་འཕྲིན་དང་གཞུང་སྐྱོང་རྗེས་འཇུག་།
 
-- Update the lane dashboards (`dashboards/grafana/nexus_lanes.json` and related overlays) with the
-  new lane id and metadata. The generated metadata keys (`contact`, `channel`, `runbook`, etc.) make
-  it simple to pre-fill labels.
-- Wire PagerDuty/Alertmanager rules for the new lane before enabling admission. The `summary.json`
-  next-steps array mirrors the checklist in [Nexus operations](./nexus-operations).
-- Register the manifest bundle in the Space Directory once the validator set is live. Use the same
-  manifest JSON generated by the helper, signed according to the governance runbook.
-- Follow [Sora Nexus operator onboarding](./nexus-operator-onboarding) for smoke tests (FindNetworkStatus, Torii
-  reachability) and capture the evidence with the artefact set produced above.
+- ལམ་གྱི་ཌེཤ་བོརཌི་ཚུ་ (`dashboards/grafana/nexus_lanes.json` དང་འབྲེལ་བའི་ བཀབ་བཙུགས་ཚུ་) དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ།
+  ལེན་གསརཔ་ཨའི་ཌི་དང་ མེ་ཊ་ཌེ་ཊ་ཚུ། བཏོན་ཡོད་པའི་མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ (`contact`, `channel`, `runbook`, ལ་སོགས་པ་ཚུ་གིས་) བཟོཝ་ཨིན།
+  འདི་སྔོན་སྒྲིག་ཁ་ཡིག་ཚུ་བཀང་ནི་ལུ་འཇམ་ཏོང་ཏོ་ཨིན།
+- འཛུལ་ཞུགས་མ་འབད་བའི་ཧེ་མ་ ལམ་གསརཔ་གི་དོན་ལུ་ ཝ་ཡར་པེ་གར་ཌུཊི་/ཨེ་ལར་ཊི་མ་ནར་གྱི་ལམ་ལུགས་ཚུ། `summary.json`
+  ཤུལ་མམ་གྱི་རིམ་པ་ཨེ་རེ་གིས་ [I18NT0000002X བཀོལ་སྤྱོད་](./nexus-operations)ནང་ ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+- བདེན་དཔྱད་ཆ་ཚན་འདི་ ཐད་རི་འབའ་རི་ ཐད་རི་འབའ་རི་ ཡོད་པའི་སྐབས་ གནམ་སྟོང་སྣོད་ཐོ་ནང་ གསལ་སྟོན་གྱི་ བང་རིམ་འདི་ཐོ་བཀོད་འབད། དེ་དང་འདྲ་བར་ལག་ལེན་འཐབ།
+  གཞུང་སྐྱོང་རྒྱུག་དེབ་དང་འཁྲིལ་ཏེ་ མཚན་རྟགས་བཀོད་མི་ གྲོགས་རམ་པ་གིས་ བཟོ་བསྐྲུན་འབད་མི་ JSON མངོན་གསལ་འབད་ཡོདཔ།
+- [Sora I18NT0000003X བཀོལ་སྤྱོད་པ་ onboarding](./nexus-operator-onboarding) ནང་དུ་དུ་བའི་བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་ (FindNetworkStatus, Torii)
+  ལྷོད་ཚུགས་ཚུགསཔ་) དང་ གོང་ལུ་བཟོ་ཡོད་པའི་ ཅ་ཆས་ཚུ་དང་གཅིག་ཁར་ སྒྲུབ་བྱེད་ཚུ་ བཟུང་དགོ།
 
-## 7. Dry-run example
+## 7. སྐམ་གཡོག་དཔེ།
 
-To preview the artefacts without writing files:
+ཡིག་སྣོད་ཚུ་མ་བྲིས་པར་ ཅ་རྙིང་ཚུ་སྔོན་ལྟ་འབད་ནི་ལུ།
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -288,14 +290,12 @@ scripts/nexus_lane_bootstrap.sh \
   --dry-run
 ```
 
-The command prints the JSON summary and the TOML snippet to stdout, allowing quick iteration during
-planning.
+བརྡ་བཀོད་ཀྱིས་ ཇེ་ཨེསི་ཨོ་ཨེན་ བཅུད་དོན་དང་ ཊོམ་ཨེལ་ སི་ནིཔ་ཊི་འདི་ stdout ལུ་དཔར་བསྐྲུན་འབདཝ་ཨིནམ་ད་ དེ་གིས་ མགྱོགས་དྲགས་སྦེ་ བསྐྱར་ལོག་འབད་བཅུགཔ་ཨིན།
+འཆར་གཞི།
 
 ---
 
-For additional context see:
-
-- [Nexus operations](./nexus-operations) — operational checklist and telemetry requirements.
-- [Sora Nexus operator onboarding](./nexus-operator-onboarding) — detailed onboarding flow that references the
-  new helper.
-- [Nexus lane model](./nexus-lane-model) — lane geometry, slugs, and storage layout used by the tool.
+སྐབས་དོན་ཁ་སྐོང་གི་དོན་ལུ་བལྟ།- [I18NT0000004X བཀོལ་སྤྱོད་](./nexus-operations) — བཀོལ་སྤྱོད་ཞིབ་དཔྱད་ཐོ་ཡིག་དང་ བརྒྱུད་འཕྲིན་དགོས་མཁོ་ཚུ།
+- [Sora I18NT0000005X བཀོལ་སྤྱོད་ཨོན་བོང་ཌིང་](./nexus-operator-onboarding) ཁ་གསལ་གྱི་བཀོད་སྒྲིག།
+  རོགས་རམ་གསརཔ་།
+- [I18NT000006X ལམ་གྱི་དཔེ་ཚད་](I18NU000000024X) — ལག་ཆས་འདི་གིས་ལག་ལེན་འཐབ་མི་ ལམ་ཐིག་དབྱིབས་རྩིས་དང་ གཅན་གཟན་ དེ་ལས་ གསོག་འཇོག་སྒྲིག་བཀོད་ཚུ་ཨིན།

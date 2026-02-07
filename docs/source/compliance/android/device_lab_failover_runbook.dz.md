@@ -7,122 +7,119 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 473b2b49d32c32d2b884b670ba35e9aa3d0606cfd451d441a7ca927c1160311d
 source_last_modified: "2025-12-29T18:16:35.923579+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Failover Drill Runbook (AND6/AND7)
+# Android Device བརྟག་དཔྱད་ཁང་།
 
-This runbook captures the procedure, evidence requirements, and contact matrix
-used when exercising the **device-lab contingency plan** referenced in
-`roadmap.md` (§“Regulatory artefact approvals & lab contingency”). It complements
-the reservation workflow (`device_lab_reservation.md`) and the incident log
-(`device_lab_contingency.md`) so compliance reviewers, legal counsel, and SRE
-have a single source of truth for how we validate failover readiness.
+རྔོན་དེབ་འདི་གིས་ བྱ་རིམ་དང་ སྒྲུབ་བྱེད་དགོས་མཁོ་ དེ་ལས་ འབྲེལ་གཏུག་མེ་ཊིགསི་ཚུ་ བསྡུ་ལེན་འབདཝ་ཨིན།
+**device-lab གློ་བུར་འཆར་གཞི་** ནང་ལུ་ གཞི་བསྟུན་འབད་བའི་སྐབས་ ལག་ལེན་འཐབ་པའི་སྐབས་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+`roadmap.md` (§“བཀག་སྡོམ་གྱི་ཆ་འཇོག་ཆ་འཇོག་དང་བརྟག་དཔྱད་ཁང་གི་གློ་བུར་”)། འདི།
+བཀག་ཆ་འབད་བའི་ལཱ་གི་རྒྱུན་རིམ་ (`device_lab_reservation.md`) དང་ བྱུང་རྐྱེན་དྲན་ཐོ་།
+(`device_lab_contingency.md`) དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་དང་ ཁྲིམས་དོན་གྲོས་སྟོན་ དེ་ལས་ ཨེསི་ཨར་ཨི་ཚུ་ཨིན།
+ང་བཅས་ཀྱིས་ སྐྱོན་བརྗོད་འབད་ཐངས་འདི་ ག་དེ་སྦེ་ བདེན་དཔྱད་འབདཝ་ཨིན་ན་ བདེན་པ་གི་འབྱུང་ཁུངས་གཅིག་ཡོདཔ་ཨིན།
 
-## Purpose & Cadence
+## དམིགས་དོན་དང་གྲངས།
 
-- Demonstrate that the Android StrongBox + general device pools can fail over
-  to the fallback Pixel lanes, shared pool, Firebase Test Lab burst queue, and
-  external StrongBox retainer without missing AND6/AND7 SLAs.
-- Produce an evidence bundle that legal can attach to ETSI/FISC submissions
-  ahead of the Feb compliance review.
-- Run at least once per quarter, plus any time the lab hardware roster changes
-  (new devices, retirement, or maintenance longer than 24 h).
+- Android StrongBox + སྤྱིར་བཏང་ཐབས་འཕྲུལ་ཆུ་རྫིང་ཚུ་ འཐུས་ཤོར་བྱུང་ཚུགས་པའི་ བརྡ་སྟོནམ་ཨིན།
+  ཕ་ཡར་བེསི་བརྟག་དཔྱད་བརྟག་དཔྱད་ཁང་གིས་ འབར་བའི་གྱལ་དང་ བགོ་བཤའ་རྐྱབ་ཡོད་པའི་ ཆུ་རྫིང་།
+  ཕྱི་རོལ་གྱི་ StrongBox བདག་འཛིན་མེད་པར་ AND6/AND7 SLAs.
+- ཁྲིམས་མཐུན་གྱི་ ETSI/FISC བཙུགས་མི་ཚུ་ལུ་ མཐུད་ཚུགས་པའི་ སྒྲུབ་བྱེད་ཀྱི་ བང་རིམ་ཅིག་ བཀོད།
+  Feb བསྟུན་གྲོས་བསྐྱར་ཞིབ་ཀྱི་གདོང་ཁར་
+- སྤྱི་ཟླ་རེ་ནང་ ཉུང་མཐའ་ཚར་གཅིག་གཡོག་བཀོལ།
+  (ཐབས་འཕྲུལ་གསརཔ་ དགོངས་ཞུ། ཡང་ན་ ཉམས་བཅོས་འདི་ ཆུ་ཚོད་༢༤ ལས་རིངམ་ཨིན།)
 
-| Drill ID | Date | Scenario | Evidence Bundle | Status |
-|----------|------|----------|-----------------|--------|
-| DR-2026-02-Q1 | 2026-02-20 | Simulated Pixel 8 Pro lane outage + attestation backlog with AND7 telemetry rehearsal | `artifacts/android/device_lab_contingency/20260220-failover-drill/` | ✅ Completed — bundle hashes recorded in `docs/source/compliance/android/evidence_log.csv`. |
-| DR-2026-05-Q2 | 2026-05-22 (scheduled) | StrongBox maintenance overlap + Nexus rehearsal | `artifacts/android/device_lab_contingency/20260522-failover-drill/` *(pending)* — `_android-device-lab` ticket **AND6-DR-202605** holds the reservations; bundle will be populated post-drill. | 🗓 Scheduled — calendar block added to “Android Device Lab – Reservations” per AND6 cadence. |
+| ཌིརིལ་ཨའི་ཌི་ | ཚེས་གྲངས་ | པར་སྐྲུན། | སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ | གནས་ཚད་ |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| DR-2026-02-Q1 | ༢༠༢༦-༠༢-༢༠ | བརྗོད་སྒྲའི་པིག་སེལ་༨པྲོ་ལའིན་ + ཨེན་ཌི་༧ ཊེ་ལི་མི་ཊི་རི་ཡར་སེལ་དང་གཅིག་ཁར་ བདེན་ཁུངས་བཀལ་བའི་རྒྱབ་ལོག་ | Nexus | ✅ མཇུག་བསྡུ་ — `docs/source/compliance/android/evidence_log.csv` ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ བཱན་ཌལ་ཧེ་ཤེ་ཚུ། |
+| DR-2026-05-Q2 | ༢༠༢༦-༠༥-༢༢ (དུས་ཚོད་བཀོད་ཡོདཔ་) | StrongBox བདག་འཛིན་འཐབ་འཛིང་ + Nexus བསྐྱར་སྦྱོང་། | `artifacts/android/device_lab_contingency/20260522-failover-drill/` *(Pending)* — `_android-device-lab` ཤོག་འཛིན་ **AND6-DR-202605** གིས་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན། བཱན་ཌལ་འདི་ མི་རློབས་བཙུགས་པའི་ཤུལ་ལས་ འབད་འོང་། | 🗓 དུས་ཚོད་བཀོད་ཡོདཔ་ — ཟླ་ཐོ་བཀག་ཆ་གིས་ “Android Device Lab – བཀག་ཆ་འབད་ནི་” ལུ་ AND6 གི་ཚད་གཞི། |
 
-## Procedure
+## བྱ༌རིམ
 
-### 1. Pre-drill preparation
+### 1. སྔོན་འགྲོའི་སྦྱོང་བརྡར་གྱི་གྲ་སྒྲིག་།
 
-1. Confirm baseline capacity in `docs/source/sdk/android/android_strongbox_capture_status.md`.
-2. Export the reservation calendar for the target ISO week via
+1. `docs/source/sdk/android/android_strongbox_capture_status.md` ནང་གཞི་རྩའི་ནུས་པ།
+༢ དམིགས་གཏད་ཨའི་ཨེསི་ཨོ་བདུན་ཕྲག་གི་དོན་ལུ་ བཀག་ཆ་འབད་བའི་ཟླ་ཐོ་འདི་ ཕྱིར་འདྲེན་འབད།
    `python3 scripts/android_device_lab_export.py --week <ISO week>`.
-3. File `_android-device-lab` ticket
-   `AND6-DR-<YYYYMM>` with scope (“failover drill”), planned slots, and affected
-   workloads (attestation, CI smoke, telemetry chaos).
-4. Update the contingency log template in `device_lab_contingency.md` with a
-   placeholder row for the drill date.
+3. ཡིག་སྣོད་ `_android-device-lab` ཤོག་བྱང་།
+   `AND6-DR-<YYYYMM>` ཁྱབ་ཁོངས་ (“failover redill”) འཆར་གཞི་བརྩམས་ཡོད་པའི་ ས་སྒོ་ཚུ་དང་ གནོད་སྐྱོན་བྱུང་ཡོདཔ།
+   ལཱ་གི་འབོར་ཚད་ (བདེན་དཔང་།, CI ཐ་མག་, བརྡ་འཕྲིན་གྱི་ཟང་ཟིང་།)
+4. `device_lab_contingency.md` ནང་ གཅིག་ ནང་ཡོད་པའི་ གློ་བུར་དྲན་ཐོ་ཊེམ་པེལེཊི་ དུས་མཐུན་བཟོ་དགོ།
+   ས་སྒོའི་འཛིན་གྲྭ་དོན་ལུ་ བྱང་སྟོར་ཤོར་བའི་ཚེས་གྲངས་དོན་ལུ་ གྲལ་ཐིག་།
 
-### 2. Simulate failure conditions
+### 2. འཐུས་ཤོར་གྱི་གནས་སྟངས།
 
-1. Disable or depool the primary lane (`pixel8pro-strongbox-a`) inside the lab
-   scheduler and tag the reservation entry as “drill”.
-2. Trigger a mock outage alert in PagerDuty (`AND6-device-lab` service) and
-   capture the notification export for the evidence bundle.
-3. Annotate the Buildkite jobs that normally consume the lane
-   (`android-strongbox-attestation`, `android-ci-e2e`) with the drill ID.
+1. བརྟག་དཔྱད་ཁང་གི་ནང་དུ་གཙོ་བོ་ལམ་ (`pixel8pro-strongbox-a`) ལྕོགས་མིན་ཡང་ན་ depool དང་།
+   དུས་ཚོད་བཀོད་མི་དང་ བཀག་འཛིན་ཐོ་བཀོད་འདི་ “drill” ཟེར་ རྟགས་བཀལ།
+2. པེ་གར་ཌུ་ཊི་ (`AND6-device-lab` ཞབས་ཏོག་) ནང་ མོ་ཀ་ གློག་ཐག་བཏང་བའི་ཉེན་བརྡ་ ཊི་རི་གར་ དང་།
+   སྒྲུབ་བྱེད་བང་རིམ་གྱི་དོན་ལུ་ བརྡ་དོན་ཕྱིར་ཚོང་འདི་ བཟུང་དགོ།
+3. སྤྱིར་བཏང་ལམ་འདི་བཀོལ་སྤྱོད་འབད་མི་ སྒྲིང་ཁྱིམ་གྱི་ལཱ་གཡོག་ཚུ་ མཆན་འགྲེལ།
+   (`android-strongbox-attestation`, `android-ci-e2e`) དམག་སྦྱོང་ ID.
 
-### 3. Failover execution
+### 3. འཐུས་ཤོར་འཕྲོད་བསྟེན།1. finkback Pixel7 ལམ་འདི་ གཞི་རིམ་ CI ལུ་ ཡར་འཕེལ་གཏང་ཞིནམ་ལས་ དུས་ཚོད་བཀོད་དགོ།
+   འཆར་གཞི་བརྩམས་པའི་ལཱ་གི་འབོར་ཚད་དེ་ལུ་རྒྱབ་འགལ་འབད་ཡོདཔ།
+2. ཕ་ཡར་བེསི་བརྟག་དཔྱད་བརྟག་དཔྱད་ཁང་གིས་ `firebase-burst` ལམ་བརྒྱུད་དེ་ 2 for for for the 2013
+   བརྡ་རྟགས་བརྗེ་རེས་འབད་བའི་སྐབས་ སིལ་སིལ་ཝ་ལེཊ་ དུ་ཁའི་བརྟག་དཔྱད་ཚུ་ བགོ་བཤའ་རྐྱབ་ས་ལུ་སྤོ་བཤུད་འབདཝ་ཨིན།
+   ལམ། རྩིས་ཞིབ་ཀྱི་ཤོག་འཛིན་ནང་ སི་ཨེལ་ཨའི་ འབོད་བརྡ་ (ཡང་ན་ ཀོན་སོལ་ཕྱིར་ཚོང་) བཟུང་།
+   ཕྱོགས༌ཏོང༌
+༣ ཕྱི་རོལ་གྱི་ StrongBox བརྟག་དཔྱད་ཁང་འདི་ དུས་ཡུན་ཐུང་ཀུ་ཅིག་གི་དོན་ལུ་ བཀག་ཆ་འབད་དགོ།
+   གཤམ་གསལ་ལྟར་ འབྲེལ་གཏུག་ངོས་ལེན།
+4. ནང་ བའིཊ་ཀི་ཊི་ རན་ཨའི་ཌི་ དང་ ཕ་ཡར་བེསི་ལཱ་ཡུ་ཨར་ཨེལ་ དེ་ལས་ བདག་འཛིན་གྱི་ ཡིག་ཆ་ཚུ་ ༢༠ ནང་ ཐོ་བཀོད་འབད།
+   `_android-device-lab` ཤོག་འཛིན་དང་ སྒྲུབ་བྱེད་བསྡུ་སྒྲིག་གསལ་བསྒྲགས།
 
-1. Promote the fallback Pixel 7 lane to primary CI target and schedule the
-   planned workloads against it.
-2. Trigger the Firebase Test Lab burst suite via the `firebase-burst` lane for
-   the retail-wallet smoke tests while StrongBox coverage moves to the shared
-   lane. Capture the CLI invocation (or console export) in the ticket for audit
-   parity.
-3. Engage the external StrongBox lab retainer for a short attestation sweep;
-   log contact acknowledgement as described below.
-4. Record all Buildkite run IDs, Firebase job URLs, and retainer transcripts in
-   the `_android-device-lab` ticket and the evidence bundle manifest.
+### 4. ཆ་འགྲིག་དང་ཕྱིར་ལོག།
 
-### 4. Validation & rollback
+༡ གཞི་རྟེན་གྱི་རྒྱབ་འགལ་ལུ་ བདེན་ཁུངས་/སི་ཨའི་ རན་དུས་ཚོད་ཚུ་ ག་བསྡུར་རྐྱབ། དར་ཆ་ཌེལ་ཊསི་>༡༠% ལུ།
+   མཐུན་རྐྱེན་བརྟག་དཔྱད་ཁང་།
+༢ གཞི་རྟེན་ལམ་འདི་ བསྐྱར་བཟོ་འབད་ཞིནམ་ལས་ ལྕོགས་གྲུབ་ཀྱི་པར་ཆས་དང་ གྲ་སྒྲིག་ཚུ་ དུས་མཐུན་བཟོ་དགོ།
+   བདེན་བཤད་ཆ་འཇོག་འབད་ཚརཝ་ཅིག་ matrix ཨིན།
+3. མཐའ་མའི་གྲལ་ཐིག་འདི་ `device_lab_contingency.md` ལུ་ འབྱུང་ཁུངས་དང་ བྱ་བ་ཚུ་ མཉམ་སྦྲགས་འབད།
+   དང་རྗེས་འཇུག་ཚུ།
+4. དང་བཅས་ `docs/source/compliance/android/evidence_log.csv` དུས་ཚོད།
+   bundle འགྲུལ་ལམ་, SHA-256 གསལ་སྟོན་, བཱའིཊི་ཀི་ཊི་གཡོག་བཀོལ་བའི་ཨའི་ཌི་ཚུ་, པེ་ཇར་ཌུཊི་ཕྱིར་འདྲེན་ཧེ་ཤི་དང་།
+   བསྐྱར་ཞིབ་པ་གིས་ མཚན་རྟགས་བཀོད་ཡོདཔ།
 
-1. Compare attestation/CI runtimes against baseline; flag deltas >10 % to the
-   Hardware Lab Lead.
-2. Restore the primary lane and update the capacity snapshot plus the readiness
-   matrix once validation passes.
-3. Append the final row to `device_lab_contingency.md` with trigger, actions,
-   and follow-ups.
-4. Update `docs/source/compliance/android/evidence_log.csv` with:
-   bundle path, SHA-256 manifest, Buildkite run IDs, PagerDuty export hash, and
-   reviewer sign-off.
+## བདེན་པའི་བསྡམས་སྒྲིག་བཀོད་པ།
 
-## Evidence Bundle Layout
+| ཡིག་སྣོད་ | འགྲེལ་བཤད་ |
+|-------|-------------------------------------------------------------------------------------------------
+| `README.md` | བཅུད་བསྡུས་ (སྦྱོང་བརྡར་ ID, ཁྱབ་ཁོངས་, ཇོ་བདག་, དུས་ཚོད་ཀྱི་ལ)། |
+| `bundle-manifest.json` | SHA-256 ས་ཁྲ་ ཡིག་སྣོད་རེ་རེའི་དོན་ལུ་ བཱན་ཌལ་ནང་ཨིན། |
+| `calendar-export.{ics,json}` | ཕྱིར་འདྲེན་ཡིག་གཟུགས་ལས་ ཨའི་ཨེསི་ཨོ་-བདུན་ཕྲག་བཀག་ཆ་ཟླ་ཐོ་། |
+| `pagerduty/incident_<id>.json` | PagerDuty བྱུང་ལས་ ཉེན་བརྡ་ + ངོས་ལེན་གྱི་དུས་ཚོད་སྟོན་མི་ ཕྱིར་འདྲེན་འབདཝ་ཨིན། |
+| `buildkite/<job>.txt` | གནོད་སྐྱོན་ཕོག་མི་ལཱ་གཡོག་ཚུ་གི་དོན་ལུ་ བཱའིཊི་ཀི་ཊི་གཡོག་བཀོལ་མི་ ཡུ་ཨར་ཨེལ་དང་དྲན་ཐོ་ཚུ། |
+| `firebase/burst_report.json` | Firebase བརྟག་དཔྱད་བརྟག་དཔྱད་ཁང་གིས་ ལག་ལེན་འཐབ་པའི་བཅུད་དོན། |
+| `retainer/acknowledgement.eml` | ཕྱི་ཁའི་ StrongBox བརྟག་དཔྱད་ཁང་ལས་ གཏན་འཁེལ་བཟོ་ནི། |
+| `photos/` | མཐུན་རྐྱེན་འདི་ལོག་སྟེ་རླུང་འཕྲིན་བཏང་པ་ཅིན་ བརྟག་དཔྱད་ཁང་གི་ ཊོ་པོ་ལོ་ཇི་གི་ གདམ་ཁ་ཅན་གྱི་པར་རིས་/གསལ་གཞི་ཚུ་ བཏབ་དགོ། |
 
-| File | Description |
-|------|-------------|
-| `README.md` | Summary (drill ID, scope, owners, timeline). |
-| `bundle-manifest.json` | SHA-256 map for every file in the bundle. |
-| `calendar-export.{ics,json}` | ISO-week reservation calendar from the export script. |
-| `pagerduty/incident_<id>.json` | PagerDuty incident export showing alert + acknowledgement timeline. |
-| `buildkite/<job>.txt` | Buildkite run URLs & logs for affected jobs. |
-| `firebase/burst_report.json` | Firebase Test Lab burst execution summary. |
-| `retainer/acknowledgement.eml` | Confirmation from the external StrongBox lab. |
-| `photos/` | Optional photos/screenshots of lab topology if hardware was re-cabled. |
+བང་རིམ་འདི་ ༡ ལུ་གསོག་འཇོག་འབད།
+`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` དང་སྒྲ་གྲུབ།
+སྒྲུབ་བྱེད་དྲན་དེབ་ནང་ལུ་ གསལ་སྟོན་འདི་གིས་ AND6 དང་མཐུན་པའི་ བརྟག་ཞིབ་ཐོ་ཡིག་ཚུ་ཨིན།
 
-Store the bundle at
-`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` and record
-the manifest checksum inside the evidence log plus the AND6 compliance checklist.
+## འབྲེལ་གཏུགས་དང་ཡར་འཕར་གྱི་མེ་ཊིགསི།
 
-## Contact & Escalation Matrix
+| འགན་ཁུར་ | གཞི་རྟེན་འབྲེལ་བ་འཐབ་ནི། | རྒྱུན་ལམ་(ཚུ་) | དྲན་ཐོ། |
+|-------------------------------------------------------- -|
+| མཐུན་རྐྱེན་བརྟག་དཔྱད་ཁང་། | པྲི་ཡ་ར་མ་ཐན་ | `@android-lab` བརྡ་རྟགས་ · +༨༡-༣-༥༥༥༠-༡༢༣༤ | རང་སོའི་བྱ་བ་དང་ཟླ་ཐོ་དུས་མཐུན་བཟོཝ་ཨིན། |
+| ཐབས་འཕྲུལ་བརྟག་དཔྱད་ཁང་ Ops | མེ་ཊིའོ་ ཀྲུ་ཟི་ | `_android-device-lab` གྱལ་རིམ་ | བཀག་ཆ་འབད་ནིའི་ཤོག་འཛིན་ + བཱན་ཌལ་སྐྱེལ་བཙུགས་ཚུ་ མཉམ་འབྲེལ་འབདཝ་ཨིན། |
+| བཟོ་རིག | ཨེ་ལེགསི་མོ་རོ་ཛོབ་ | ཨིང་སི་ལེག་ · `release-eng@iroha.org` | Buildkite སྒྲུབ་བྱེད་ + དཔར་བསྐྲུན་འབདཝ་ཨིན། |
+| ཕྱི་རོལ་གྱི་ StrongBox Lab | Sakura ལག་ཆས་ NOC | `noc@sakura.example` · +81-3-5550-9876 | ཟུར་འཛིན་འབྲེལ་བ་འཐབ་ནི། ཆུ་ཚོད་༦ གི་ནང་འཁོད་ལུ་ འཐོབ་ཚུགསཔ་ངེས་གཏན་བཟོ། |
+| ཕ་ཡར་བེསི་བྷརསི་ཊི་མཉམ་འབྲེལ་པ་ | ཊེས་ས་ རའིཊ་ | `@android-ci` སྒམ་ | ཊི་རི་གཱར་ཕ་ཡར་བེསི་ཊེསི་ཊེཌ་བརྟག་དཔྱད་འཕྲུལ་ཆས། |
 
-| Role | Primary Contact | Channel(s) | Notes |
-|------|-----------------|------------|-------|
-| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | Owns on-site actions and calendar updates. |
-| Device Lab Ops | Mateo Cruz | `_android-device-lab` queue | Coordinates reservation tickets + bundle uploads. |
-| Release Engineering | Alexei Morozov | Release Eng Slack · `release-eng@iroha.org` | Validates Buildkite evidence + publishes hashes. |
-| External StrongBox Lab | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | Retainer contact; confirm availability within 6 h. |
-| Firebase Burst Coordinator | Tessa Wright | `@android-ci` Slack | Triggers Firebase Test Lab automation when fallback is needed. |
+དམག་སྦྱོང་ཅིག་གིས་ བཀག་ཆ་འབད་བའི་གནད་དོན་ཚུ་ གསལ་སྟོན་འབད་བ་ཅིན་ འོག་གི་གོ་རིམ་ནང་ ཡར་འཕར་འབད།
+1. མཐུན་རྐྱེན་བརྟག་དཔྱད་ཁང་།
+2. Android གཞི་ཚོགས་ TL
+3. ལས་རིམ་འགོ་ཁྲིད་ / ལས་རིམ།
+༤ མཐུན་སྒྲིག་འགོ་ཁྲིད་ + ཁྲིམས་མཐུན་གྲོས་སྟོན་པ་ (སྦྱོང་བརྡར་འབད་བ་ཅིན་ ལམ་ལུགས་ཀྱི་ཉེན་ཁ་གསལ་སྟོན་འབད་བ་ཅིན།)
 
-Escalate in the following order if a drill uncovers blocking issues:
-1. Hardware Lab Lead
-2. Android Foundations TL
-3. Program Lead / Release Engineering
-4. Compliance Lead + Legal Counsel (if drill reveals regulatory risk)
-
-## Reporting & Follow-Ups
-
-- Link this runbook alongside the reservation procedure whenever referencing
-  failover readiness in `roadmap.md`, `status.md`, and governance packets.
-- Email the quarterly drill recap to Compliance + Legal with the evidence bundle
-  hash table and attach the `_android-device-lab` ticket export.
-- Mirror key metrics (time-to-failover, workloads restored, outstanding actions)
-  inside `status.md` and the AND7 hot-list tracker so reviewers can trace the
-  dependency to a concrete rehearsal.
+## སྙན་ཞུ་དང་ རྗེས་འཇུག་འབད་ནི།- ནམ་ར་འབད་རུང་ གཞི་བསྟུན་འབད་བའི་སྐབས་ བཀག་ཆ་འབད་ནིའི་བྱ་རིམ་དང་གཅིག་ཁར་ རན་དེབ་འདི་ འབྲེལ་མཐུད་འབད།
+  `roadmap.md` ནང་ faintense , `status.md`, དང་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ཚུ།
+- ཟླཝ་གསུམ་པའི་སྦྱོང་བརྡར་བསྐྱར་ཞིབ་འདི་ བསྟར་སྤྱོད་ + ཁྲིམས་མཐུན་ལུ་ གློག་འཕྲིན་གཏང་།
+  ཧེཤ་ཐིག་ཁྲམ་དང་ `_android-device-lab` ཤོག་འཛིན་ཕྱིར་གཏོང་འདི་མཉམ་སྦྲགས་འབད།
+- མེ་རོར་ལྡེ་མིག་མེ་ཊིགསི་ (དུས་ཚོད་--ཕེ་ལོ་ཝར་, ལཱ་གི་མངའ་ཁོངས་ཚུ་ སླར་གསོ་འབད་ཡོདཔ་ ཁྱད་དུ་འཕགས་པའི་བྱ་བ་)།
+  ནང་ན་ `status.md` དང་ AND7 དང་ AnD7 གི་ ཚ་དྲོད་ཐོ་ཡིག་འཚོལ་ཞིབ་འབད་མི་དེ་གིས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ འཚོལ་ཞིབ་འབད་ཚུགས།
+  བརྟན་བཞུགས་སྦྱོང་བརྡར་ལུ་བརྟེན་དགོ།

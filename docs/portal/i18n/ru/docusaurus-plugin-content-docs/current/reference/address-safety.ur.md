@@ -4,43 +4,43 @@ direction: ltr
 source: docs/portal/docs/reference/address-safety.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Address safety اور accessibility
-description: Iroha addresses کو محفوظ انداز میں پیش کرنے اور شیئر کرنے کیلئے UX requirements (ADDR-6c).
+title: Безопасность адреса и доступность
+описание: Адреса Iroha могут быть связаны с требованиями UX (ADDR-6c).
 ---
 
-یہ صفحہ ADDR-6c documentation deliverable کو ظاہر کرتا ہے۔ ان پابندیوں کو wallets، explorers، SDK tooling، اور کسی بھی portal surface پر لاگو کریں جو human-facing addresses کو render یا accept کرتا ہو۔ canonical data model `docs/account_structure.md` میں ہے؛ نیچے دیا گیا checklist بتاتا ہے کہ ان formats کو safety یا accessibility کو متاثر کئے بغیر کیسے expose کیا جائے۔
+Дополнительная документация по ADDR-6c. Для работы с кошельками, проводниками, инструментами SDK, а также для создания поверхности портала и создания адресов, ориентированных на человека, для рендеринга и принятия решения. ہو۔ каноническая модель данных `docs/account_structure.md` میں ہے؛ Есть контрольный список, какие форматы, безопасность и доступность, и какие форматы можно разоблачить.
 
-## Safe sharing flows
+## Безопасные потоки обмена
 
-- ہر copy/share action کی default کو IH58 address بنائیں۔ resolved domain کو supporting context کے طور پر دکھائیں تاکہ checksummed string سامنے رہے۔
-- ایک “Share” affordance فراہم کریں جو full plain-text address اور اسی payload سے بنے QR code کو bundle کرے۔ users کو commit کرنے سے پہلے دونوں inspect کرنے دیں۔
-- جب جگہ کم ہو (tiny cards, notifications)، human-readable prefix رکھیں، ellipses دکھائیں، اور آخری 4–6 characters برقرار رکھیں تاکہ checksum anchor قائم رہے۔ truncation کے بغیر full string copy کرنے کیلئے tap/keyboard shortcut دیں۔
-- clipboard desync کو روکنے کیلئے confirmation toast دیں جو بالکل وہی IH58 string preview کرے جو copy ہوئی۔ جہاں telemetry دستیاب ہو، copy attempts کو share actions کے مقابل count کریں تاکہ UX regressions جلد سامنے آئیں۔
+- Действие копирования/передачи по умолчанию или адрес IH58. разрешенный домен کو поддерживающий контекст کے طور پر دکھائیں تاکہ строка с контрольной суммой
+- Доступность «Поделиться» или полный текстовый адрес, а также полезная нагрузка и QR-код и пакет пакетов. пользователи могут совершить کرنے سے پہلے и проверить их
+- جب جگہ کم ہو (миниатюрные карточки, уведомления), удобочитаемый префикс رکھیں, эллипсы دکھائیں, اور آخری 4–6 символов برقرار رکھیں Якорь контрольной суммы قائم رہے۔ усечение کے بغیر полное копирование строки کرنے کیلئے нажатие/сочетание клавиш دیں۔
+- рассинхронизация буфера обмена или всплывающее сообщение о подтверждении, а также возможность предварительного просмотра строки IH58 и копирования. Телеметрия Попытки копирования и действия по обмену Подсчет количества попыток UX-регрессии
 
-## IME اور input safeguards
+## Защита ввода IME
 
-- address fields میں non-ASCII input reject کریں۔ جب IME composition artifacts (full width, Kana, tone marks) ظاہر ہوں تو inline warning دکھائیں جو بتائے کہ دوبارہ کوشش سے پہلے keyboard کو Latin input پر کیسے لایا جائے۔
-- ایک plain-text paste zone فراہم کریں جو combining marks ہٹائے اور whitespace کو ASCII spaces سے بدل دے، پھر validation کرے۔ اس سے users IME بند کرنے پر بھی progress نہیں کھوتے۔
-- zero-width joiners، variation selectors، اور دیگر stealth Unicode code points کے خلاف validation سخت کریں۔ rejected code point category log کریں تاکہ fuzzing suites telemetry import کر سکیں۔
+- Поля адреса, входные данные, отличные от ASCII, отклоняются. Артефакты композиции IME (полная ширина, кана, знаки тона). Латинский ввод پر کیسے لایا جائے۔
+- Зона вставки простого текста или объединение знаков, пробелы и пробелы ASCII, а также проверка проверки. У многих пользователей IME есть возможность просмотреть прогресс и просмотреть результаты.
+- соединения нулевой ширины, селекторы вариантов, скрытые кодовые точки Unicode и возможность проверки правильности. журнал категорий отклоненных кодовых точек Доступ к пакету фаззинга импорт телеметрии Дополнительный файл
 
-## Assistive technology expectations
+## Ожидания от ассистивных технологий
 
-- ہر address block کو `aria-label` یا `aria-describedby` سے annotate کریں جو human-readable prefix spell کرے اور payload کو 4–8 character groups میں chunk کرے (“ih dash b three two …”). اس سے screen readers بے معنی کرداروں کی لڑی نہیں بولتے۔
-- successful copy/share events کو polite live region update کے ذریعے announce کریں۔ destination (clipboard, share sheet, QR) شامل کریں تاکہ user کو focus بدلے بغیر action مکمل ہونے کا پتا ہو۔
-- QR previews کیلئے descriptive `alt` text دیں (مثال: “IH58 address for `<account>` on chain `0x1234`”). کم بصارت والے users کیلئے QR canvas کے ساتھ “Copy address as text” fallback دیں۔
+- Блок адреса: `aria-label`. `aria-describedby`. Аннотация. Удобочитаемый префикс. Заклинание. Полезная нагрузка. 4–8 групп символов. б три два…»). Программы чтения с экрана могут быть использованы для чтения с экрана
+- успешные мероприятия по копированию/распространению, вежливое обновление региона в реальном времени, анонс объявления. пункт назначения (буфер обмена, общий лист, QR) Выберите пользователя, выберите фокус, выберите действие, выберите пункт назначения.
+- Предварительный просмотр QR отображает описательный текст `alt` (например: «Адрес IH58 для `<account>` в цепочке `0x1234`»). Доступно для пользователей Использование QR-холста Функция «Копировать адрес как текст» резервный вариант
 
-## Sora-only compressed addresses
+## Сжатые адреса только для Sora- Стробирование: сжатая строка `sora…` для явного подтверждения или подтверждения. подтверждение میں دہرائیں کہ یہ форма صرف Sora Nexus цепи پر کام کرتی ہے۔
+- Маркировка: ہر появление или значок «Только для Sora» и всплывающая подсказка, а также наличие сетей в форме IH58 چاہیے۔
+- Ограждения: выделение дискриминанта активной цепи Nexus и создание сжатого адреса для создания запроса на выбор пользователя IH58. واپس بھیجیں۔
+- Телеметрия: сжатая форма, запрос/копирование, частота, сценарий инцидента, случайный обмен всплесками, обнаружение данных.
 
-- Gating: compressed string `sora…` کو explicit confirmation کے پیچھے چھپائیں۔ confirmation میں دہرائیں کہ یہ form صرف Sora Nexus chains پر کام کرتی ہے۔
-- Labelling: ہر occurrence میں واضح “Sora-only” badge اور tooltip دیں جو بتائے کہ دوسری networks کو IH58 form کیوں چاہیے۔
-- Guardrails: اگر active chain discriminant Nexus allocation نہ ہو تو compressed address generate کرنے سے مکمل انکار کریں اور user کو IH58 پر واپس بھیجیں۔
-- Telemetry: compressed form کے request/copy کی frequency ریکارڈ کریں تاکہ incident playbook accidental sharing spikes کو detect کر سکے۔
+## Качественные ворота
 
-## Quality gates
-
-- automated UI tests (یا storybook a11y suites) کو بڑھائیں تاکہ address components مطلوبہ ARIA metadata expose کریں اور IME rejection messages ظاہر ہوں۔
-- manual QA scenarios میں IME input (kana, pinyin)، screen reader pass (VoiceOver/NVDA)، اور high-contrast themes پر QR copy شامل کریں، release سے پہلے۔
-- ان checks کو release checklists میں IH58 parity tests کے ساتھ شامل کریں تاکہ regressions درست ہونے تک blocked رہیں۔
+- автоматизированные тесты пользовательского интерфейса (пакеты сборника рассказов a11y). Поддержка компонентов адреса. Метаданные ARIA предоставляют доступ к сообщениям об отклонении IME.
+- ручные сценарии контроля качества, ввод IME (кана, пиньинь), программа чтения с экрана (VoiceOver/NVDA), высококонтрастные темы, QR-копия, выпуск версии سے پہلے۔
+- Проверки, контрольные списки выпуска, тесты на четность IH58, а также регрессии и блокировка блокировки.

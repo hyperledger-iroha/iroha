@@ -4,15 +4,17 @@ direction: rtl
 source: docs/portal/docs/sorafs/migration-ledger.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Libro mayor de migración de SoraFS
-description: Registro canónico de cambios que rastrea cada hito de migración, responsables y seguimientos requeridos.
+عنوان: SoraFS ہجرت لیجر
+تفصیل: کیننیکل چینج لاگ جو ہر منتقلی کا سنگ میل ، ذمہ دار جماعتیں ، اور مطلوبہ فالو اپس کو ٹریک کرتا ہے۔
 ---
 
-> Adaptado de [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+> [`docs/source/sorafs/migration_ledger.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) سے موافقت پذیر۔
 
-# Libro mayor de migración de SoraFS
+#SoraFS ہجرت لیجر
 
-Este documento no aplica a la primera release. No hay migraciones pendientes; se mantiene reservado para futuras actualizaciones.
+یہ دستاویز پہلی ریلیز پر لاگو نہیں ہوتی ہے۔ ہجرت کا کوئی زیر التوا نہیں ہے۔ یہ مستقبل کی تازہ کاریوں کے لئے مخصوص ہے۔

@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Partner SLA Discovery Notes — Template
+# Android ပါတနာ SLA Discovery မှတ်စုများ — နမူနာပုံစံ
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+AND8 SLA ရှာဖွေတွေ့ရှိမှုအပိုင်းတိုင်းအတွက် ဤပုံစံကို အသုံးပြုပါ။ ပြည့်စုံသောမိတ္တူကိုသိမ်းဆည်းပါ။
+`docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md` အောက်
+ပံ့ပိုးပေးသော ပစ္စည်းများကို ပူးတွဲပါ (မေးခွန်းလွှာ၊ အသိအမှတ်ပြုချက်များ၊
+ပူးတွဲပါဖိုင်များ) တူညီသောလမ်းညွှန်တွင်။
 
 ```
 Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
@@ -29,53 +30,53 @@ Meeting link / ticket: <URL or ID>
 
 ## 1. Agenda & Context
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
-  telemetry dashboards).
+- စက်ရှင်၏ရည်ရွယ်ချက် (ရှေ့ပြေးနယ်ပယ်၊ ထုတ်လွှတ်သည့်ပြတင်းပေါက်၊ တယ်လီမီတာမျှော်လင့်ချက်များ)။
+- ခေါ်ဆိုမှုမတိုင်မီ မျှဝေထားသော အကိုးအကားစာရွက်စာတမ်းများ (ပလေးစာအုပ်ကို ပံ့ပိုးပေးခြင်း၊ ထုတ်ပြက္ခဒိန်၊
+  တယ်လီမီတာ ဒက်ရှ်ဘုတ်များ)။
 
 ## 2. Workload Overview
 
-| Topic | Notes |
-|-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+| ခေါင်းစဉ် | မှတ်စုများ |
+|---------|-------|
+| Target workloads/ chains | |
+| မျှော်လင့်ထားသော ငွေလွှဲပမာဏ | |
+| အရေးကြီးသော စီးပွားရေး ပြတင်းပေါက်များ / မီးပျက်ချိန်များ | |
+| စည်းမျဉ်းစည်းကမ်းများ (GDPR၊ MAS၊ FISC စသည်) | |
+| လိုအပ်သော ဘာသာစကားများ / ဒေသန္တရပြုခြင်း | |
 
-## 3. SLA Discussion
+## 3. SLA ဆွေးနွေးခြင်း။
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
-|-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| SLA အတန်း | လက်တွဲဖော် မျှော်လင့်ခြင်း | အခြေခံလိုင်းမှ မြစ်ဝကျွန်းပေါ်ဒေသ။ | လိုအပ်သောလုပ်ဆောင်ချက် |
+|--------------------|--------------------------------|----------------------------------------------------------------|
+| ဝေဖန်ပိုင်းခြားခြင်း (48h) | | ဟုတ်/မဟုတ် | |
+| ပြင်းထန်မှုမြင့်မားခြင်း (5business days) | | ဟုတ်/မဟုတ် | |
+| ပြုပြင်ထိန်းသိမ်းမှု (30days) | | ဟုတ်/မဟုတ် | |
+| ဖြတ်တောက်ခြင်း သတိပေးချက် (60 ရက်) | | ဟုတ်/မဟုတ် | |
+| Incident communications cadence | | ဟုတ်/မဟုတ် | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+ပါတနာမှ တောင်းဆိုထားသော နောက်ထပ် SLA အပိုဒ်များကို မှတ်တမ်းတင်ပါ (ဥပမာ၊ အပ်နှံထားသည်။
+ဖုန်းတံတား၊ အပိုကြေးနန်းတင်ပို့မှု)။
 
 ## 4. Telemetry & Access Requirements
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / Prometheus အသုံးပြုခွင့် လိုအပ်သည်-
+- မှတ်တမ်း/ခြေရာခံ တင်ပို့မှု လိုအပ်ချက်များ-
+- အော့ဖ်လိုင်းအထောက်အထားများ သို့မဟုတ် စာရွက်စာတမ်းမျှော်လင့်ချက်များ-
 
-## 5. Compliance & Legal Notes
+## 5. လိုက်နာမှုနှင့် ဥပဒေမှတ်စုများ
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- တရားစီရင်ရေးဆိုင်ရာ အသိပေးချက်လိုအပ်ချက်များ (ဥပဒေ + အချိန်ဇယား)။
+- အဖြစ်အပျက်အပ်ဒိတ်များအတွက် တရားဝင်အဆက်အသွယ်များ လိုအပ်သည်။
+- ဒေတာနေထိုင်ခွင့်ကန့်သတ်ချက်များ / သိုလှောင်မှုလိုအပ်ချက်များ။
 
-## 6. Decisions & Action Items
+## 6. ဆုံးဖြတ်ချက်များနှင့် လုပ်ဆောင်ချက်များ
 
-| Item | Owner | Due | Notes |
-|------|-------|-----|-------|
+| ပစ္စည်း | ပိုင်ရှင် | စူးစူး | မှတ်စုများ |
+|---|-------|-----|-------|
 | | | | |
 
-## 7. Acknowledgement
+## 7. အသိအမှတ်ပြုခြင်း။
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- ပါတနာအသိအမှတ်ပြု အခြေခံလိုင်း SLA? (Y/N)
+- နောက်ဆက်တွဲအသိအမှတ်ပြုနည်းလမ်း (အီးမေးလ် / လက်မှတ် / လက်မှတ်):
+- မပိတ်မီ အတည်ပြုအီးမေးလ် သို့မဟုတ် အစည်းအဝေးမှတ်တမ်းများ ပူးတွဲပါ ။

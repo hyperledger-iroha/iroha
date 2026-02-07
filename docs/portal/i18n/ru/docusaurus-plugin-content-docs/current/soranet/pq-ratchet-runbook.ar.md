@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/soranet/pq-ratchet-runbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-ratchet-runbook
-title: تمرين PQ Ratchet في SoraNet
-sidebar_label: دليل PQ Ratchet
-description: خطوات تمرين المناوبة لترقية او خفض سياسة اخفاء الهوية PQ المرحلية مع تحقق telemetry حتمي.
+идентификатор: pq-ratchet-runbook
+название: Упражнение PQ Ratchet в SoraNet
+Sidebar_label: Руководство по PQ Ratchet
+Описание: шаги для сменного упражнения по обновлению или понижению уровня политики поэтапной анонимности PQ с детерминированной проверкой телеметрии.
 ---
 
-:::note المصدر القياسي
-تعكس هذه الصفحة `docs/source/soranet/pq_ratchet_runbook.md`. حافظ على النسختين متطابقتين حتى يتم تقاعد الوثائق القديمة.
+:::note Стандартный источник
+Эта страница отражает `docs/source/soranet/pq_ratchet_runbook.md`. Сохраняйте две копии идентичными до тех пор, пока старые документы не будут удалены.
 :::
 
-## الغرض
+##Цель
 
-هذا الدليل يوجه تسلسل تمرين الطوارئ لسياسة اخفاء الهوية post-quantum (PQ) المرحلية في SoraNet. يتدرب المشغلون على الترقية (Stage A -> Stage B -> Stage C) وعلى خفض منضبط الى Stage B/A عندما تنخفض امدادات PQ. يتحقق التمرين من telemetry hooks (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) ويجمع artefacts لسجل تدريب الحوادث.
+В этом руководстве описывается последовательность действий на случай непредвиденных обстоятельств для политики поэтапной постквантовой (PQ) анонимизации SoraNet. Операторы практикуют модернизацию (Этап A -> Этап B -> Этап C) и контролируемый переход на этап B/A, когда запасы PQ заканчиваются. В ходе упражнения проверяются перехватчики телеметрии (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) и собираются артефакты для журнала детализации инцидентов.
 
-## المتطلبات
+## Требования
 
-- احدث binary لـ `sorafs_orchestrator` مع capability-weighting (commit عند او بعد مرجع التمرين المعروض في `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- الوصول الى حزمة Prometheus/Grafana التي تخدم `dashboards/grafana/soranet_pq_ratchet.json`.
-- snapshot اسمي للـ guard directory. اجلب وتحقق من نسخة قبل التمرين:
+- Новейший двоичный файл для `sorafs_orchestrator` с взвешиванием возможностей (фиксация в или после ссылки на упражнение, отображаемой в `docs/source/soranet/reports/pq_ratchet_validation.md`).
+- Доступ к пакету Prometheus/Grafana, который обслуживает `dashboards/grafana/soranet_pq_ratchet.json`.
+- снимок Мое имя для охранного каталога. Принесите и проверьте копию перед тренировкой:
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -34,9 +36,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-اذا كان source directory ينشر JSON فقط، فاعد ترميزه الى Norito binary عبر `soranet-directory build` قبل تشغيل helpers التدوير.
+Если исходный каталог публикует только JSON, перекодируйте его в двоичный файл Norito через `soranet-directory build` перед запуском ротации помощников.
 
-- التقط metadata وجهز مسبقا artefacts تدوير issuer عبر CLI:
+- Соберите метаданные и подготовьте ротацию эмитента артефактов через CLI:
 
 ```bash
 soranet-directory inspect \
@@ -47,67 +49,67 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- نافذة تغيير معتمدة من فرق on-call الخاصة بالشبكات والمراقبة.
+- Окно изменений одобрено дежурными сетевыми группами и группами мониторинга.
 
-## خطوات الترقية
+## Этапы обновления
 
-1. **تدقيق المرحلة**
+1. **Этап проверки**
 
-   سجل المرحلة الابتدائية:
+   Запись начальной школы:
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   توقع `anon-guard-pq` قبل الترقية.
+   Перед обновлением ожидайте `anon-guard-pq`.
 
-2. **الترقية الى Stage B (Majority PQ)**
+2. **Переход на этап B (большинство PQ)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   - انتظر >=5 دقائق حتى تتجدد manifests.
-   - في Grafana (لوحة `SoraNet PQ Ratchet Drill`) اكد ان لوحة "Policy Events" تعرض `outcome=met` للـ `stage=anon-majority-pq`.
-   - التقط لقطة شاشة او JSON للوحة وارفقها بسجل الحوادث.
+   – Подождите >=5 минут, пока манифесты обновятся.
+   - В Grafana (панель `SoraNet PQ Ratchet Drill`) убедитесь, что на панели «События политики» отображается `outcome=met` для `stage=anon-majority-pq`.
+   - Сделайте снимок экрана или JSON панели управления и прикрепите его к журналу инцидентов.
 
-3. **الترقية الى Stage C (Strict PQ)**
+3. **Переход на этап C (строгий PQ)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - تحقق ان مخططات `sorafs_orchestrator_pq_ratio_*` تتجه الى 1.0.
-   - تاكد ان عداد brownout يبقى ثابتا؛ خلاف ذلك اتبع خطوات الخفض.
+   - Убедитесь, что диаграммы `sorafs_orchestrator_pq_ratio_*` соответствуют 1,0.
+   - Убедитесь, что счетчик провалов остается постоянным; В противном случае следуйте инструкциям по сокращению.
 
-## تمرين الخفض / brownout
+## Упражнение на снижение напряжения
 
-1. **احداث نقص PQ اصطناعي**
+1. **Вызывание искусственного дефицита PQ**
 
-   عطل relays PQ في بيئة playground بتقليم guard directory الى entries كلاسيكية فقط، ثم اعد تحميل cache الخاص بالـ orchestrator:
+   Отключите реле PQ в среде игровой площадки, сократив каталог защиты только до классических записей, а затем перезагрузив кеш оркестратора:
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **مراقبة telemetry الخاصة بـ brownout**
+2. **Отслеживание телеметрии отключения**
 
-   - Dashboard: لوحة "Brownout Rate" ترتفع فوق 0.
-   - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - يجب ان يبلغ `sorafs_fetch` عن `anonymity_outcome="brownout"` مع `anonymity_reason="missing_majority_pq"`.
+   - Панель мониторинга: панель «Уровень затемнения» поднимается выше 0.
+   - ПромQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
+   - `sorafs_fetch` должен сообщать `anonymity_outcome="brownout"` с `anonymity_reason="missing_majority_pq"`.
 
-3. **الخفض الى Stage B / Stage A**
+3. **Понижение до этапа B/этапа A**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   اذا بقيت امدادات PQ غير كافية، اخفض الى `anon-guard-pq`. ينتهي التمرين عند استقرار عدادات brownout ويمكن اعادة الترقية.
+   Если питания PQ остается недостаточным, уменьшите его до `anon-guard-pq`. Упражнение заканчивается, когда показания счетчиков провалов стабилизируются и обновление можно будет перезапустить.
 
-4. **استعادة guard directory**
+4. **Восстановить каталог охраны**
 
    ```bash
    sorafs_cli guard-directory import \
@@ -115,14 +117,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetry و artefacts
+## Телеметрия и артефакты
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **تنبيهات Prometheus:** تاكد من ان تنبيه brownout لـ `sorafs_orchestrator_policy_events_total` يبقى دون SLO المعتمد (&lt;5% ضمن اي نافذة 10 دقائق).
-- **Incident log:** ارفق مقتطفات telemetry وملاحظات المشغل الى `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **التقاط موقع:** استخدم `cargo xtask soranet-rollout-capture` لنسخ drill log ولوحة النتائج الى `artifacts/soranet_pq_rollout/<timestamp>/`، وحساب BLAKE3 digests، وانتاج `rollout_capture.json` موقع.
+- **Панель управления:** `dashboards/grafana/soranet_pq_ratchet.json`
+- **Предупреждения Prometheus:** Убедитесь, что предупреждение о снижении напряжения для `sorafs_orchestrator_policy_events_total` остается ниже утвержденного SLO (<5 % в течение любого 10-минутного окна).
+- **Журнал происшествий:** Прикрепите выдержки из телеметрии и примечания оператора к `docs/examples/soranet_pq_ratchet_fire_drill.log`.
+- **Захват местоположения:** используйте `cargo xtask soranet-rollout-capture`, чтобы скопировать журнал тренировки и табло в `artifacts/soranet_pq_rollout/<timestamp>/`, рассчитать дайджесты BLAKE3 и создать местоположение `rollout_capture.json`.
 
-مثال:
+Пример:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -134,12 +136,10 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-ارفق البيانات المولدة والتوقيع بحزمة governance.
+Прикрепите сгенерированные данные и подпись к управлению.
 
-## Rollback
+## ОткатЕсли упражнение выявит истинный недостаток PQ, оставайтесь на этапе A, уведомите Networking TL и прикрепите собранные метрики с отклонениями в каталоге защиты к системе отслеживания инцидентов. Используйте ранее захваченный экспорт защитного каталога для восстановления нормального обслуживания.
 
-اذا كشف التمرين عن نقص PQ حقيقي، ابق على Stage A، اخطر Networking TL، وارفق المقاييس المجمعة مع فروقات guard directory الى متتبع الحوادث. استخدم تصدير guard directory الذي تم التقاطه سابقا لاستعادة الخدمة الطبيعية.
-
-:::tip تغطية الانحدار
-`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` يوفر التحقق الاصطناعي الذي يدعم هذا التمرين.
+:::tip Регрессионное покрытие
+`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` обеспечивает синтетическую проверку, которая поддерживает это упражнение.
 :::

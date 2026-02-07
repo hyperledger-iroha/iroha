@@ -6,36 +6,37 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: "SoraFS Migration Ledger"
 description: "Canonical change log tracking every migration milestone, owners, and required follow-ups."
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Adapted from [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+> ከ[`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) የተወሰደ።
 
-# SoraFS Migration Ledger
+# SoraFS የፍልሰት መዝገብ
 
-This ledger mirrors the migration change log captured in the SoraFS
-Architecture RFC. Entries are grouped by milestone and list the effective
-window, impacted teams, and required actions. Updates to the migration plan
-MUST modify both this page and the RFC (`docs/source/sorafs_architecture_rfc.md`)
-to keep downstream consumers aligned.
+ይህ መዝገብ በSoraFS ውስጥ የተያዘውን የፍልሰት ለውጥ መዝገብ ያንጸባርቃል
+አርኪቴክቸር RFC. ግቤቶች በወሳኝ ደረጃ የተከፋፈሉ እና ውጤታማውን ይዘረዝራሉ
+መስኮት፣ ተጽዕኖ የተደረገባቸው ቡድኖች እና አስፈላጊ እርምጃዎች። የፍልሰት እቅድ ዝማኔዎች
+ሁለቱንም ይህንን ገጽ እና RFC (`docs/source/sorafs_architecture_rfc.md`) ማሻሻል አለቦት
+የታችኛው ተፋሰስ ተጠቃሚዎች እንዲሰለፉ ለማድረግ።
 
-| Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
-|-----------|------------------|----------------|----------------|--------------|--------|
-| M1 | Weeks&nbsp;7–12 | CI enforces deterministic fixtures; alias proofs available in staging; tooling exposes explicit expectation flags. | Docs, Storage, Governance | Ensure fixtures stay signed, register aliases in staging registry, update release checklists with `--car-digest/--root-cid` enforcement. | ⏳ Pending |
+| ወሳኝ ምዕራፍ | ውጤታማ መስኮት | ማጠቃለያ ለውጥ | ተጽዕኖ ያላቸው ቡድኖች | የተግባር እቃዎች | ሁኔታ |
+|--------|-------------|
+| M1 | ሳምንታት 7–12 | CI የመወሰኛ ዕቃዎችን ያስፈጽማል; በመድረክ ውስጥ የሚገኙ ተለዋጭ ማረጋገጫዎች; መሳሪያ ማድረግ ግልጽ የሆኑ የሚጠበቁ ባንዲራዎችን ያጋልጣል። | ሰነዶች፣ ማከማቻ፣ አስተዳደር | የቤት ዕቃዎች ፊርማ መያዛቸውን ያረጋግጡ፣ በመመዝገቢያ መዝገብ ውስጥ ተለዋጭ ስም ይመዝገቡ፣ የመልቀቂያ ማረጋገጫ ዝርዝሮችን በI18NI0000006X ማስፈጸሚያ ያዘምኑ። | ⏳ በመጠባበቅ ላይ |
 
-Governance control plane minutes referencing these milestones live under
-`docs/source/sorafs/`. Teams should add dated bullet points beneath each row
-when notable events occur (e.g., new alias registrations, registry incident
-retrospectives) to provide an auditable paper trail.
+እነዚህን ወሳኝ ክንውኖች የሚያመለክቱ የአስተዳደር ቁጥጥር አውሮፕላን ደቂቃዎች ይኖራሉ
+`docs/source/sorafs/`. ቡድኖች ከእያንዳንዱ ረድፍ በታች የነጥብ ነጥቦችን ማከል አለባቸው
+ታዋቂ ክስተቶች ሲከሰቱ (ለምሳሌ፣ አዲስ ቅጽል ምዝገባዎች፣ የመመዝገቢያ ክስተት
+ወደ ኋላ) ኦዲት ሊደረግ የሚችል የወረቀት መንገድ ለማቅረብ.
 
-## Recent Updates
+## የቅርብ ጊዜ ዝመናዎች
 
-- 2025-11-01 — Circulated `migration_roadmap.md` to governance council and
-  operator lists for review; awaiting sign-off at the next council session
-  (ref: `docs/source/sorafs/council_minutes_2025-10-29.md` follow-up).
-- 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy
-  validation via `sorafs_manifest` helpers, keeping on-chain paths aligned
-  with Torii checks.
-- 2026-02-13 — Added provider advert rollout phases (R0–R3) to the ledger and
-  published the associated dashboards and operator guidance
-  (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
-
+- 2025-11-01 - `migration_roadmap.md` ወደ አስተዳደር ምክር ቤት ተሰራጭቷል እና
+  ለግምገማ የኦፕሬተር ዝርዝሮች; በሚቀጥለው የምክር ቤት ስብሰባ ላይ መፈረም በመጠባበቅ ላይ
+  (ማጣቀሻ፡ `docs/source/sorafs/council_minutes_2025-10-29.md` ክትትል)።
+- 2025-11-02 — የፒን መዝገብ ቤት መመዝገቢያ ISI አሁን የጋራ ቸንከር/መመሪያን ተግባራዊ ያደርጋል
+  በ`sorafs_manifest` ረዳቶች በኩል ማረጋገጥ፣ በሰንሰለት ላይ ያሉ መንገዶችን በማቆየት
+  በ Torii ቼኮች።
+- 2026-02-13 — ታክሏል አቅራቢ የታቀዱ ደረጃዎችን (R0–R3) ወደ ደብተር እና
+  ተዛማጅ ዳሽቦርዶችን እና የኦፕሬተር መመሪያን አሳትሟል
+  (`provider_advert_rollout.md`፣ `grafana_sorafs_admission.json`)።

@@ -9,7 +9,7 @@ mod tests {
     use iroha_version_derive::{declare_versioned, version};
     use norito::{
         Decode as NoritoDecode, Encode as NoritoEncode,
-        json::{JsonDeserialize, JsonSerialize},
+        json::{JsonDeserialize, JsonSerialize, Value},
     };
 
     mod model_1 {
@@ -163,6 +163,9 @@ mod tests {
             Err(Error::UnsupportedVersion(unsupported_version)) => {
                 assert_eq!(unsupported_version.version, 3);
                 if let RawVersioned::Json(json) = unsupported_version.raw {
+                    let json: Value = norito::json::from_str(&json).map_err(|e| e.to_string())?;
+                    let raw_string: Value =
+                        norito::json::from_str(raw_string).map_err(|e| e.to_string())?;
                     assert_eq!(json, raw_string);
                     Ok(())
                 } else {

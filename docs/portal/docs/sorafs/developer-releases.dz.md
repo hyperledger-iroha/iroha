@@ -9,99 +9,98 @@ source_last_modified: "2026-01-05T09:28:11.867590+00:00"
 translation_last_reviewed: 2026-02-07
 title: Release Process
 summary: Run the CLI/SDK release gate, apply the shared versioning policy, and publish canonical release notes.
+translator: machine-google-reviewed
 ---
 
-# Release Process
+# གསར་བསྒྲུབ།
 
-SoraFS binaries (`sorafs_cli`, `sorafs_fetch`, helpers) and SDK crates
-(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) ship together. The release
-pipeline keeps the CLI and libraries aligned, ensures lint/test coverage, and
-captures artefacts for downstream consumers. Run the checklist below for every
-candidate tag.
+SoraFS གཉིས་ལྡན་ (`sorafs_cli`, I18NI000000011X, གྲོགས་རམ་པ་) དང་ SDK crets
+(I18NI0000000012X, I18NI000000013X, I18NI0000000014X) མཉམ་དུ་གྲུ་གཟིངས། གློད་གྲོལ་ནི།
+པའིཔ་ལཱའིན་གྱིས་ སི་ཨེལ་ཨའི་དང་དཔེ་མཛོད་ཚུ་ཕྲང་སྒྲིག་འབད་དེ་ ལིན་ཊི་/བརྟག་དཔྱད་ཁྱབ་ཚད་འདི་ངེས་གཏན་བཟོཝ་ཨིནམ་དང་ དང་།
+མར་མར་གྱི་ཉོ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ ཅ་རྙིང་ཚུ་བཟུང་དོ་ཡོདཔ་ཨིན། འོག་གི་ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ རེ་རེ་གི་དོན་ལུ་གཡོག་བཀོལ།
+འདེམས་ངོ་རྟགས་མ།
 
-## 0. Confirm security review sign-off
+## 0. བདེ་འཇགས་བསྐྱར་ཞིབ་མིང་རྟགས་བཀོད།
 
-Before executing the technical release gate, capture the latest security review
-artefacts:
+འཕྲུལ་རིག་གསར་བཏོན་སྒོ་འདི་ ལག་ལེན་འཐབ་པའི་ཧེ་མ་ ཉེན་སྲུང་བསྐྱར་ཞིབ་གསརཔ་འདི་ བཟུང་དགོ།
+ལག་ཆས།
 
-- Download the most recent SF-6 security review memo ([reports/sf6-security-review](./reports/sf6-security-review.md))
-  and record its SHA256 hash in the release ticket.
-- Attach the remediation ticket link (e.g., `governance/tickets/SF6-SR-2026.md`) and note the sign-off
-  approvers from Security Engineering and the Tooling Working Group.
-- Verify that the remediation checklist in the memo is closed; unresolved items block the release.
-- Prepare to upload parity harness logs (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
-  alongside the manifest bundle.
-- Confirm the signing command you plan to run includes both `--identity-token-provider` and an explicit
-  `--identity-token-audience=<aud>` so Fulcio scope is captured in the release evidence.
+- འཕྲལ་གྱི་ཨེསི་ཨེཕ་-༦ ཉེན་སྲུང་བསྐྱར་ཞིབ་དྲན་འཛིན་ ཕབ་ལེན་འབད།([སྙན་ཞུ་/ཨེསི་ཨེཕ་༦-ཉེན་སྲུང་བསྐྱར་ཞིབ་](I18NU0000008X)
+  དང་ དེ་གི་ SHA256 ཧེཤ་ གསར་བཏོན་འབད་ནིའི་ ཤོག་བྱང་ནང་ ཐོ་བཀོད་འབད།
+- བཅོས་སྒྲིག་ཤོག་བྱང་འབྲེལ་མཐུད་ (དཔེར་ན་ I18NI0000015X) མཐུད་དེ་ བརྡ་མཚོན་འདི་དྲན་འཛིན་འབད།
+  བདེ་སྲུང་བཟོ་རིག་དང་ ལག་ཆས་ལས་བྱེད་སྡེ་ཚན་ལས་ ཆ་འཇོག་འབད་མི།
+- བརྗེད་ཐོ་ནང་ བཅོ་ཁའི་ཐོ་ཡིག་འདི་ ཁ་བསྡམས་ཡོདཔ་ཨིན་ན་ བདེན་དཔྱད་འབད། མ་བཟོས་པའི་རྣམ་གྲངས་ཚུ་གིས་ བཏོན་གཏང་ནི་འདི་བཀག་བཞགཔ་ཨིན།
+- ཆ་སྙོམ་གྱི་ ཧར་ནིསི་དྲན་ཐོ་ཚུ་ སྐྱེལ་བཙུགས་འབད་ནི་ལུ་ གྲ་སྒྲིག་འབད། (I18NI0000016X)
+  མངོན་པར་གསལ་བའི་བསྡམས་པའི་མཉམ་དུ།
+- ཁྱོད་ཀྱིས་གཡོག་བཀོལ་ནི་གི་འཆར་གཞི་ཡོད་མི་ མཚན་རྟགས་བརྡ་བཀོད་འདི་ངེས་དཔྱད་འབད་ I18NI000000017X དང་ གསལ་རི་རི་ཅིག་ཚུདཔ་ཨིན།
+  `--identity-token-audience=<aud>` དེ་འབདཝ་ལས་ Fulcio ཁྱབ་ཁོངས་འདི་ གསར་བཏོན་འབད་ཡོད་པའི་སྒྲུབ་བྱེད་ནང་ བཟུང་ཡོདཔ་ཨིན།
 
-Include these artefacts when notifying governance and publishing the release.
+གཞུང་སྐྱོང་བརྡ་སྤྲོད་དང་ གསར་བཏོན་འབད་བའི་སྐབས་ འ་ནི་ཅ་ཆས་ཚུ་ བཙུགས་དགོ།
 
-## 1. Execute the release/test gate
+## 1. གསར་བཏོན་/བརྟག་དཔྱད་སྒོ་འདི་ལག་ལེན་འཐབ།
 
-The `ci/check_sorafs_cli_release.sh` helper runs formatting, Clippy, and tests
-across the CLI and SDK crates with a workspace-local target directory (`.target`)
-to avoid permission conflicts when executing inside CI containers.
+I18NI000000019X གྲོགས་རམ་འདི་གིས་ རྩ་སྒྲིག་འབད་ནི་དང་ བཏོན་གཏང་ནི་ དེ་ལས་ བརྟག་དཔྱད་ཚུ་གཡོག་བཀོལཝ་ཨིན།
+ལཱ་གི་ས་སྒོ་གི་དམིགས་གཏད་སྣོད་ཐོ་ (`.target`) དང་གཅིག་ཁར་ CLI དང་ SDK crates ཕར་ཚུར།
+སི་ཨའི་ དོས་ཚུ་ནང་ལུ་ ལག་ལེན་འཐབ་པའི་སྐབས་ གནང་བ་གི་འགལ་བ་ཚུ་ བཀག་ཐབས་ལུ་ཨིན།
 
-```bash
-CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
-```
+I18NF0000004X
 
-The script performs the following assertions:
+ཡིག་ཆ་འདི་གིས་ འོག་གི་བདེན་བཤད་ཚུ་འབདཝ་ཨིན།
 
-- `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` for `sorafs_car` (with the `cli` feature),
-  `sorafs_manifest`, and `sorafs_chunker`
-- `cargo test --locked --all-targets` for those same crates
+- `cargo fmt --all -- --check` (ལས་ཀ)
+- `cargo clippy --locked --all-targets` `sorafs_car` (I18NI000000024X ཁྱད་རྣམ་དང་བཅས་)
+  I18NI0000025X, དང་ I18NI0000026X
+- I18NI000000027X དེ་བཟུམ་མའི་ ཀེརེསི་ཚུ་གི་དོན་ལུ་ཨིན།
 
-If any step fails, fix the regression before tagging. Release builds must be
-continuous with main; do not cherry-pick fixes into release branches. The gate
-also checks that keyless signing flags (`--identity-token-issuer`, `--identity-token-audience`)
-are provided where applicable; missing arguments fail the run.
+གོམ་པ་གང་རུང་ཅིག་འཐུས་ཤོར་བྱུང་པ་ཅིན་ རྟགས་བཀོད་མ་འབད་བའི་ཧེ་མ་ འགྱུར་ལྡོག་འདི་ བདེ་སྒྲིག་འབད། བཏོན་གཏང་ནི་བཟོ་བསྐྲུན་འབད་དགོ།
+གཙོ་བོ་དང་གཅིག་ཁར་ མུ་མཐུད་དེ་; ཡན་ལག་ཚུ་ནང་ལུ་ ཅེ་རི་-པིག་སྒྲིག་བཀོད་ཚུ་མ་འབད། སྒོ་ར་འདི།
+དེ་མ་ཚད་ ལྡེ་མིག་མེད་པའི་ མིང་རྟགས་བཀོད་པའི་ དར་ཆ་ (`--identity-token-issuer`, I18NI0000029X) ཡང་ བརྟག་དཔྱད་འབདཝ་ཨིན།
+ཚུ་ འཇུག་སྤྱོད་འབད་ས་ལུ་བྱིན་ཡོདཔ་ཨིན། བརླག་སྟོར་ཞུགས་ཡོད་པའི་སྒྲུབ་རྟགས་ཚུ་གིས་ གཡོག་བཀོལ།
 
-## 2. Apply the versioning policy
+## 2. ཐོན་རིམ་བཟོ་བའི་སྲིད་བྱུས་འཇུག་སྤྱོད་འབད།
 
-All SoraFS CLI/SDK crates use SemVer:
+SoraFS སི་ཨེལ་ཨའི་/ཨེསི་ཌི་ཀེ་ ཀེརེཊིས་ སེམཝར་ལག་ལེན་འཐབ་ཨིན།
 
-- `MAJOR`: Introduced for the first 1.0 release. Before 1.0 the `0.y` minor bump
-  **indicates breaking changes** in the CLI surface or Norito schemas.
-  fields gated behind optional policy, telemetry additions).
-- `PATCH`: Bug fixes, documentation-only releases, and dependency updates that
-  do not change observable behaviour.
+- I18NI000000030X: འགོ་དང་པ་ ༡.༠ གསར་བཏོན་འབད་ནིའི་དོན་ལུ་ འགོ་བཙུགས་ཡོདཔ་ཨིན། 1.0 གི་ཧེ་མ་ I18NI000000031X ཆུང་ཆུང་གི་ བམ་བམ།
+  **བསྒྱུར་བཅོས་ཚུ་ སི་ཨེལ་ཨའི་ ཁ་ཐོག་ཡང་ན་ I18NT0000000X ལས་འཆར་ནང་ བརྡ་སྟོན་འབདཝ་ཨིན།
+  གདམ་ཁའི་སྲིད་བྱུས་ཀྱི་རྒྱབ་ལུ་འཛུལ་མི་ས་ཁོངས་ཚུ་ བརྒྱུད་འཕྲིན་ཁ་སྐོང་བཀོད་ནི།)
+- `PATCH`: རྐྱེན་སེལ་ཚུ་, ཡིག་ཆ་རྐྱངམ་ཅིག་གསར་བཏོན་ཚུ་ དེ་ལས་ བརྟེན་པའི་དུས་མཐུན་ཚུ་ ༡ ཨིན།
+  བལྟ་བརྟོག་འབད་བཏུབ་པའི་སྤྱོད་ལམ་འདི་བསྒྱུར་བཅོས་མ་འབད།
 
-Always keep `sorafs_car`, `sorafs_manifest`, and `sorafs_chunker` on the same
-version so downstream SDK consumers can depend on a single aligned version
-string. When bumping versions:
+དུས་རྒྱུན་དུ་ `sorafs_car`, I18NI000000034X, དང་ I18NI0000000035X དེ་དང་འདྲ་བར་བཞག་དགོ།
+ཐོན་རིམ་དེ་ དེ་འབདཝ་ལས་ མར་འབབ་ཨེསི་ཌི་ཀེ་ ཉོ་སྤྱོད་འབད་མི་ཚུ་གིས་ ཕྲང་སྒྲིག་འབད་ཡོད་པའི་ཐོན་རིམ་གཅིག་ལུ་ བརྟེན་ཚུགས།
+ཐགཔ། ཐོན་རིམ་ཚུ་ བམ་བའི་སྐབས།
 
-1. Update `version =` fields in each crate’s `Cargo.toml`.
-2. Regenerate the `Cargo.lock` via `cargo update -p <crate>@<new-version>` (the
-   workspace enforces explicit versions).
-3. Run the release gate again to ensure no stale artefacts remain.
+1. ཀེརེ་ཊི་རེ་རེའི་ནང་ `version =` ས་སྒོ་ཚུ་ དུས་མཐུན་བཟོ་ནི།
+2. I18NI000000038X འདི་ `cargo update -p <crate>@<new-version>` བརྒྱུད་དེ་ ལོག་བཟོ་ནི།
+   ལཱ་གི་ས་སྒོ་གིས་ གསལ་སྟོན་ཐོན་རིམ་ཚུ་ ཚུདཔ་ཨིན།
+༣ བཏོན་གཏང་ནིའི་སྒོ་འདི་ལོག་སྟེ་གཡོག་བཀོལ་དགོ།
 
-## 3. Prepare release notes
+## 3. གསར་བཏོན་དྲན་ཐོ།
 
-Every release must publish a markdown changelog that highlights CLI, SDK, and
-governance-impacting changes. Use the template in
-`docs/examples/sorafs_release_notes.md` (copy it to your release artifacts
-directory and fill in the sections with concrete details).
+གསར་བཏོན་རེ་རེ་གིས་ སི་ཨེལ་ཨའི་ ཨེསི་ཌི་ཀེ་ དང་ སི་ཨེལ་ཨའི་ འོད་རྟགས་འབད་མི་ མཱརཀ་ཌའི་འགྱུར་བ་ཅིག་ དཔར་བསྐྲུན་འབད་དགོ།
+གཞུང་སྐྱོང་ཤུགས་རྐྱེན་གྱི་འགྱུར་བ། ནང་ལུ་ ཊེམ་པེལེཊི་འདི་ལག་ལེན་འཐབ།
+`docs/examples/sorafs_release_notes.md` (དེ་ཁྱོད་ཀྱི་གསར་བཏོན་གྱི་ཅ་རྙིང་ཚུ་ལུ་འདྲ་བཤུས་རྐྱབས།
+སྣོད་ཐོ་དང་ དབྱེ་ཚན་ཚུ་ནང་ ཁ་གསལ་ཚུ་ བཀང་དགོ།)
 
-Minimum content:
+ནང་དོན་ཉུང་མཐའ།
 
-- **Highlights**: feature headlines for CLI and SDK consumers.
-  requirements.
-- **Upgrade steps**: TL;DR commands for bumping cargo dependencies and rerunning
-  deterministic fixtures.
-- **Verification**: command output hashes or envelopes and the exact
-  `ci/check_sorafs_cli_release.sh` revision executed.
+- **Highlights**: སི་ཨེལ་ཨའི་དང་ཨེསི་ཌི་ཀེ་ ཉོ་སྤྱོད་འབད་མི་ཚུ་གི་དོན་ལུ་ ཁྱད་རྣམ་མགོ་ཡིག་ཚུ།
+  དགོས་མཁོ་
+- **རིམ་པ་ཚུ་ལག་ལེན་འཐབ་ནི་**:: ཊི་ཨེལ་;ཌི་ཨར་ སྐྱེལ་འདྲེན་ལུ་བརྟེན་ནི་དང་ ལོག་གཡོག་བཀོལ་ནིའི་དོན་ལུ་ བརྡ་བཀོད་ཚུ།
+  determistic སྒྲིག་ཆས།
+- **བདེན་དཔྱད་**: བརྡ་བཀོད་ཨའུཊི་པུཊི་ཧ་ཤེ་ ཡང་ན་ ཡིག་ཤུབས་ཚུ་དང་ ཏག་ཏག་།
+  `ci/check_sorafs_cli_release.sh` བསྐྱར་བཟོ་འབད་ཡོདཔ།
 
-Attach the filled release notes to the tag (e.g., GitHub release body) and store
-them alongside deterministically generated artefacts.
+བཀང་ཡོད་པའི་གསར་བཏོན་དྲན་ཐོ་ཚུ་ ངོ་རྟགས་(དཔེར་ན་ གིཊི་ཧབ་གསར་བཏོན་འབད་སའི་གཟུགས་)དང་ གསོག་འཇོག་ལུ་མཉམ་སྦྲགས་འབད།
+འདི་དང་གཅིག་ཁར་ གཏན་འབེབས་བཟོ་བའི་ ཅ་རྙིང་ཚུ་དང་གཅིག་ཁར་ཨིན།
 
-## 4. Execute release hooks
+## 4. གསར་བཏོན་ཧུཀ།
 
-Run `scripts/release_sorafs_cli.sh` to generate the signature bundle and
-verification summary that ship with every release. The wrapper builds the CLI
-when necessary, calls `sorafs_cli manifest sign`, and immediately replays
-`manifest verify-signature` so failures surface before tagging. Example:
+མཚན་རྟགས་བང་རིམ་དང་ `scripts/release_sorafs_cli.sh` གཡོག་བཀོལ།
+གྲུ་གཟིངས་དེ་ གསར་བཏོན་ག་ར་དང་གཅིག་ཁར་ བདེན་དཔྱད་བཅུད་དོན། བཀབ་ཆས་འདི་གིས་ སི་ཨེལ་ཨའི་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+དགོས་མཁོ་ཡོད་པའི་སྐབས་ `sorafs_cli manifest sign` ལུ་འབོད་བརྡ་འབདཝ་ཨིན།
+`manifest verify-signature` དེ་འབདཝ་ལས་ འཐུས་ཤོར་ཚུ་ རྟགས་མ་བཀོད་པའི་ཧེ་མ་ ཕྱིར་ཐོན་འབདཝ་ཨིན། དཔེ:
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -115,31 +114,31 @@ scripts/release_sorafs_cli.sh \
   --expect-token-hash "$(cat .release/token.hash)"
 ```
 
-Tips:
+ཐབས་ལམ:
 
-- Track release inputs (payload, plans, summaries, expected token hash) in your
-  repo or deployment config so the script remains reproducible. The CI fixture
-  bundle under `fixtures/sorafs_manifest/ci_sample/` shows the canonical layout.
-- Base CI automation on `.github/workflows/sorafs-cli-release.yml`; it runs the
-  release gate, invokes the script above, and archives bundles/signatures as
-  workflow artefacts. Mirror the same command order (release gate → sign →
-  verify) in other CI systems so audit logs line up with the generated hashes.
-- Keep the generated `manifest.bundle.json`, `manifest.sig`,
-  `manifest.sign.summary.json`, and `manifest.verify.summary.json` together—they
-  form the packet referenced in the governance notification.
-- When the release updates canonical fixtures, copy the refreshed manifest,
-  chunk plan, and summaries into `fixtures/sorafs_manifest/ci_sample/` (and update
-  `docs/examples/sorafs_ci_sample/manifest.template.json`) before tagging.
-  Downstream operators depend on the committed fixtures to reproduce the release
-  bundle.
-- Capture the run log for `sorafs_cli proof stream` bounded-channel verification and attach it to the
-  release packet to demonstrate proof streaming safeguards remain active.
-- Record the exact `--identity-token-audience` used during signing in the release notes; governance
-  cross-checks the audience against Fulcio policy before approving publication.
+- ཁྱོད་ཀྱི་ནང་ལུ་ བཏོན་གཏང་མི་ཨིན་པུཊི་ (payload, འཆར་གཞི།
+  repo ཡང་ན་ བཀྲམ་སྤེལ་རིམ་སྒྲིག་ དེ་འབདཝ་ལས་ ཡིག་ཆ་འདི་ བསྐྱར་བཟོ་འབད་ཚུགསཔ་ཨིན། CI གི་སྒྲིག་ཆས།
+  I18NI000000045X གི་འོག་ལུ་ bundle གིས་ ཀེ་ནོ་ནིག་སྒྲིག་བཀོད་སྟོནམ་ཨིན།
+- གཞི་རྟེན་ CI རང་བཞིན་ `.github/workflows/sorafs-cli-release.yml` གུ་; འདི་གིས་གཡོག་བཀོལཝ་ཨིན།
+  གསར་བཏོན་སྒོ་དང་ གོང་འཁོད་ཡིག་ཆ་འདི་ ཡིག་ཐོག་ལུ་བཀོད་ཡོདཔ་དང་ གཏན་མཛོད་ཀྱི་ བང་རིམ་/མཚན་རྟགས་ཚུ་ ༡ གིས་
+  ལས་ཀའི་རྒྱུན་རིམ། བརྡ་བཀོད་རིམ་པ་གཅིག་པ་ (སྒོ་བསྐྲད་གཏང་ནི་ → མཚན་རྟགས་ → བཏོན་གཏང་།
+  བདེན་བཤད་) སི་ཨའི་རིམ་ལུགས་གཞན་ཚུ་ནང་ དེ་འབདཝ་ལས་ བཟོ་བཏོན་འབད་མི་ ཧ་ཤེ་ཚུ་གིས་ དྲན་ཐོ་ཚུ་ གྱལ་རིམ་བཟོཝ་ཨིན།
+- བཟོ་བཏོན་འབད་མི་ `manifest.bundle.json`, I18NI000000048X, འདི་བཞག་དགོ།
+  `manifest.sign.summary.json`, དང་ `manifest.verify.summary.json` མཉམ་དུ་—ཁོང་ཚོ།
+  གཞུང་སྐྱོང་བརྡ་དོན་ནང་ སྦུང་ཚན་གཞི་བསྟུན་འབད་ཡོད་མི་འདི་ སེལ་འཐུ་འབད་།
+- གསར་བཏོན་དུས་མཐུན་ཚུ་གིས་ ཀེནོ་ནིག་གཏན་བཟོའི་སྐབས་ལུ་ གསར་བསྐྲུན་འབད་ཡོད་པའི་གསལ་སྟོན་འདི་འདྲ་བཤུས་རྐྱབ་པའི་སྐབས་ལུ།
+  ཆ་ཤས་འཆར་གཞི་དང་ བཅུད་བསྡུས་ `fixtures/sorafs_manifest/ci_sample/` ནང་ (དང་དུས་མཐུན་བཟོ་ནི།
+  `docs/examples/sorafs_ci_sample/manifest.template.json`) མཚན་རྟགས་མ་བཀོད་པའི་ཧེ་མ།
+  མར་ཕབ་འདི་ གསར་བཏོན་འབད་ནི་གི་དོན་ལུ་ ཁས་བླངས་ཀྱི་སྒྲིག་བཀོད་ཚུ་ལུ་རག་ལསཔ་ཨིན།
+  བམ་ཆག།
+- `sorafs_cli proof stream` མཐའ་མཚམས་-རྒྱུན་ལམ་བདེན་དཔྱད་ཀྱི་དོན་ལུ་ རན་དྲན་ཐོ་འདི་ བསྡུ་སྒྲིག་འབད་དེ་ ལུ་མཉམ་སྦྲགས་འབད།
+  བཏོན་གཏང་ནིའི་ཐུམ་སྒྲིལ་འདི་ བདེན་ཁུངས་རྒྱུན་ལམ་གྱི་ཉེན་སྲུང་ཚུ་ ཤུགས་ཅན་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
+- གསར་བཏོན་དྲན་ཐོ་ནང་ མཚན་རྟགས་བཀོད་པའི་སྐབས་ ལག་ལེན་འཐབ་མི་ I18NI000000054X ངོ་མ་འདི་ ངེས་བདེན་སྦེ་ཐོ་བཀོད་འབད། གཞུང་སྐྱོང་།
+  དཔར་བསྐྲུན་ཆ་འཇོག་མ་འབད་བའི་ཧེ་མ་ ཕུལ་སིའོ་སྲིད་བྱུས་ལུ་ ལྟདམོ་ལྟ་མི་ཚུ་ བརྒལ་གཏངམ་ཨིན།
 
-Use `scripts/sorafs_gateway_self_cert.sh` when the release also carries a
-gateway rollout. Point it at the same manifest bundle to prove the attestation
-matches the candidate artefact:
+གསར་བཏོན་འབད་བའི་སྐབས་ I18NI0000005X ལག་ལེན་འཐབ།
+འཛུལ་སྒོ་བསྐོར་བ། བདེན་དཔང་བྱེད་པའི་ཆེད་དུ་མངོན་རྟགས་ཅན་གྱི་བང་སྒྲིག་གཅིག་པ་ལ་སྟོན།
+མཐུན་སྒྲིག་ཅན་གྱི་ཅ་རྙིང་ཚུ་:
 
 ```bash
 scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_cert.conf \
@@ -147,42 +146,42 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
   --manifest-bundle artifacts/release/manifest.bundle.json
 ```
 
-## 5. Tag and publish
+## 5. རྟགས་དང་དཔེ་སྐྲུན།
 
-After the checks pass and hooks complete:
+དངུལ་འཛིན་ཚུ་ འགྱོ་ཞིནམ་ལས་ ཧུཀ་ཚུ་ མཇུག་བསྡུ་བའི་ཤུལ་ལས་:
 
-1. Run `sorafs_cli --version` and `sorafs_fetch --version` to confirm binaries
-   report the new version.
-2. Prepare the release configuration in a checked-in `sorafs_release.toml`
-   (preferred) or another config file tracked by your deployment repo. Avoid
-   relying on ad-hoc environment variables; pass paths to the CLI with
-   `--config` (or equivalent) so the release inputs are explicit and
-   reproducible.
-3. Create a signed tag (preferred) or annotated tag:
+1. གཉིས་མེད་གཉིས་ལྡན་གྱི་དོན་དུ་ I18NI000000056X དང་ I18NI000000057X བརྒྱུགས་དགོ།
+   ཐོན་རིམ་གསརཔ་འདི་སྙན་ཞུ་འབད།
+2. བརྟག་ཞིབ་འབད་ཡོད་པའི་ I18NI0000058X ནང་ གསར་བཏོན་རིམ་སྒྲིག་འདི་གྲ་སྒྲིག་འབད།
+   (དགའ་གདམ་) ཡང་ན་ ཁྱོད་རའི་བཀྲམ་སྤེལ་རི་པོ་གིས་ བརྟག་ཞིབ་འབད་མི་ རིམ་སྒྲིག་ཡིག་སྣོད་གཞན་ཅིག་ཨིན། འཛེམ་ནི
+   ad-hoc མཐའ་འཁོར་འགྱུར་ཅན་ལུ་བརྟེན་ཏེ་; དང་བཅས་ CLI ལུ་འགྲུལ་ལམ་ཚུ།
+   I18NI000000059X (ཡང་ན་ འདྲ་མཉམ་) དེ་འབདཝ་ལས་ བཏོན་གཏང་ཨིན་པུཊི་ཚུ་ གསལ་རི་རི་དང་ ཨིན།
+   བསྐྱར་བཟོ་འབད་ཚུགསཔ།
+༣ མིང་རྟགས་བཀོད་ཡོད་པའི་ངོ་རྟགས་ (དགའ་གདམ་) ཡང་ན་ མཆན་བཀོད་ཡོད་པའི་ངོ་རྟགས་ཅིག་གསར་བསྐྲུན་འབད།
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
    git push origin sorafs-vX.Y.Z
    ```
-4. Upload artefacts (CAR bundles, manifests, proof summaries, release notes,
-   attestation outputs) to the project registry following the governance
-   checklist in [deployment guide](./developer-deployment.md). If the release
-   minted new fixtures, push them to the shared fixture repo or object store so
-   audit automation can diff the published bundle against source control.
-5. Notify the governance channel with links to the signed tag, release notes,
-   manifest bundle/signature hashes, the archived `manifest.sign/verify` summaries,
-   and any attestation envelopes. Include the CI job URL (or log archive) that
-   ran `ci/check_sorafs_cli_release.sh` and `scripts/release_sorafs_cli.sh`. Update
-   the governance ticket so auditors can trace approvals to artefacts; when the
-   `.github/workflows/sorafs-cli-release.yml` job posts notifications, link the
-   recorded hash outputs rather than pasting ad-hoc summaries.
+༤ སྐྱེལ་བཙུགས་འབད་ནི། (CAR bundles, གསལ་བསྒྲགས།
+   གཞུང་སྐྱོང་གི་ཤུལ་ལས་ ལས་འགུལ་ཐོ་བཀོད་ལུ་ ཉེས་འགེལ་གྱི་ཐོན་འབྲས་ཚུ་)
+   [Iployment ལམ་སྟོན་](I18NU0000009X) ནང་ བརྟག་ཞིབ་ཐོ་ཡིག་། གློད་གྲོལ་གཏང་པ་ཅིན།
+   བཀོད་སྒྲིག་གསརཔ་ བརྗེ་སོར་གྱི་སྒྲིག་ཆས་ repo ཡང་ན་ དངོས་པོ་ཚོང་ཁང་ལུ་ སོབ་བཏང་ཡོདཔ་ཨིན།
+   རྩིས་ཞིབ་རང་བཞིན་གྱིས་ འབྱུང་ཁུངས་ཚད་འཛིན་ལུ་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ བཱན་ཌལ་འདི་ དབྱེ་བ་ཕྱེ་ཚུགས།
+༥ མཚན་རྟགས་བཀོད་པའི་ངོ་རྟགས་དང་འབྲེལ་མཐུད་ཡོད་པའི་ གཞུང་སྐྱོང་རྒྱུན་ལམ་འདི་ བརྡ་སྤྲོད་འབད་དགོ།
+   soundle bundle/isggarature hashes, གཏན་མཛོད་ `manifest.sign/verify` བཅུད་བསྡུས་,
+   དང་ བདེན་དཔང་འབད་ཡོད་པའི་ ཡིག་ཆ་གང་རུང་ཅིག། སི་ཨའི་ལཱ་གི་ཡུ་ཨར་ཨེལ་(ཡང་ན་ ནང་བསྐྱོད་ཡིག་མཛོད་) འདི་བཙུགས།
+   རན་ `ci/check_sorafs_cli_release.sh` དང་ `scripts/release_sorafs_cli.sh`. དུས༌མཐུན༌བཟོ༌ནི
+   རྩིས་ཞིབ་པ་ཚུ་གིས་ ཅ་ཆས་ཚུ་ལུ་ ཆ་འཇོག་ཚུ་ འཚོལ་ཞིབ་འབད་ཚུགས། སྐབས༌
+   I18NI000000063X ལཱ་གཡོག་གི་བརྡ་བསྐུལ་ཚུ་, འབྲེལ་མཐུད་འབད།
+   ཐོ་བཀོད་འབད་ཡོད་པའི་ ཧེཤ་ཨའུཊི་པུཊི་ཚུ་ ad-hoc བཅུད་བསྡུས་ཚུ་ སྦྱར་བརྩེགས་འབད་ནི་ཨིན།
 
-## 6. Post-release follow-up
+## 6. གློད་སྤྱོད་རྗེས་ཀྱི་རྗེས་འབྲང་།
 
-- Ensure documentation pointing at the new version (quickstarts, CI templates)
-  is updated or confirm no changes are required.
-- File roadmap entries if follow-on work (e.g., migration flags, deprecation of
-- Archive the release gate output logs for auditors—store them beside the signed
-  artefacts.
+- ཐོན་རིམ་གསརཔ་ལུ་ དཔག་བྱེད་འབད་མི་ ཡིག་ཆ་ཚུ་ ངེས་གཏན་བཟོ།
+  is དུས་མཐུན་བཟོ་ཡོདཔ་ ཡང་ན་ བསྒྱུར་བཅོས་ཚུ་དགོཔ་མེད།
+- ལཱ་འབད་བ་ཅིན་ ཡིག་སྣོད་ཀྱི་ས་ཁྲ་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+- རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ གསར་བཏོན་སྒོ་སྒྲིག་གི་དྲན་ཐོ་ཚུ་ གཏན་མཛོད་འབད་—དེ་ཚུ་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ཉེ་འདབས་ལུ་ གསོག་འཇོག་འབད།
+  ཅ་རྙིང་།
 
-Following this pipeline keeps the CLI, SDK crates, and governance collateral in
-lock-step for each release cycle.
+འདི་གི་ཤུལ་ལས་ སི་ཨེལ་ཨའི་དང་ ཨེསི་ཌི་ཀེ་ དེ་ལས་ གཞུང་སྐྱོང་བརྟན་བཞུགས་ཚུ་ བཞག་ཡོདཔ་ཨིན།
+གསར་བཏོན་འཁོར་རིམ་རེ་རེ་གི་དོན་ལུ་ ལྕགས་ཐག་རིམ་པ་།

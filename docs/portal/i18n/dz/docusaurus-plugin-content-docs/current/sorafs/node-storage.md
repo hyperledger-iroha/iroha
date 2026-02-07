@@ -8,84 +8,61 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Node Storage Design
 sidebar_label: Node Storage Design
 description: Storage architecture, quotas, and lifecycle hooks for Torii nodes hosting SoraFS data.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-## SoraFS Node Storage Design (Draft)
+## I18NT0000012X ནའུཊི་གསོག་འཇོག་བཟོ་བཀོད།(ཟིན་བྲིས་)
 
-This note refines how an Iroha (Torii) node can opt-in to the SoraFS data
-availability layer and dedicate a slice of local disk for storing and serving
-chunks. It complements the `sorafs_node_client_protocol.md` discovery spec and
-the SF-1b fixture work by outlining the storage-side architecture, resource
-controls, and configuration plumbing that must land in the node and gateway
-code paths. Practical operator drills live in the
-[Node Operations Runbook](./node-operations).
+དྲན་འཛིན་འདི་གིས་ Iroha (Torii) མཐུད་མཚམས་ཅིག་གིས་ SoraFS གནད་སྡུད་འདི་ག་དེ་སྦེ་གདམ་ཁ་རྐྱབས་ཚུགསཔ་ཨིན་ན་ གསལ་སྟོན་འབདཝ་ཨིན།
+འཐོབ་ཚུགས་པའི་བང་རིམ་དང་ གསོག་འཇོག་དང་ ཕྱག་ཞུ་ནིའི་དོན་ལུ་ ས་གནས་ཀྱི་ཌིཀསི་གི་ཆ་ཤས་ཚུ་ བསྒྲུབ་དགོ།
+དུམ་གྲ་ཅིག། འདི་གིས་ I18NI000000033X གསར་ཐོབ་ཀྱི་ཁྱད་ཚད་དང་ དེ་ལས་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+ཨེསི་ཨེཕ་-༡བི་སྒྲིག་ཆས་འདི་ གསོག་འཇོག་ཕྱོགས་ཀྱི་བཟོ་བཀོད་ཐོན་ཁུངས་ཚུ་ བཀོད་སྒྲིག་འབད་དེ་ ལཱ་འབདཝ་ཨིན།
+ཚད་འཛིན་དང་ རིམ་སྒྲིག་ཆུ་གཡུར་ཚུ་ མཐུད་མཚམས་དང་ འཛུལ་སྒོ་ནང་ ལྷོད་དགོ་པའི་ རིམ་སྒྲིག་ཆུ་གཡུར་ཚུ།
+གསང་གྲངས་འགྲུལ་ལམ་ཚུ། སྦྱོང་བརྡར་བཀོལ་སྤྱོད་ཀྱི་སྦྱོང་བརྡར་ཚུ་ ༡ ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+[Node བཀོལ་སྤྱོད་རྒྱུག](I18NU0000032X).
 
-### Goals
+### རིལ་ཚང
 
-- Allow any validator or auxiliary Iroha process to expose spare disk as a
-  SoraFS provider without affecting the core ledger responsibilities.
-- Keep the storage module deterministic and Norito-driven: manifests,
-  chunk plans, Proof-of-Retrievability (PoR) roots, and provider adverts are the
-  source of truth.
-- Enforce operator-defined quotas so a node cannot exhaust its own resources by
-  accepting too many pin or fetch requests.
-- Surface health/telemetry (PoR sampling, chunk fetch latency, disk pressure)
-  back to governance and clients.
+- བདེན་དཔྱད་པ་ ཡང་ན་ ལྷན་ཐབས་ I18NT0000019X ལས་སྦྱོར་གང་རུང་ཅིག་ བཀྲམ་སྤེལ་ཌིཀསི་འདི་ ཕྱིར་བཏོན་འབད་ནི་ལུ་ ཕྱིར་བཏོན་འབད་བཅུག།
+  I18NT000000014X གིས་ ལེཊ་ཇར་གྱི་འགན་ཁུར་གཙོ་བོ་ལུ་ གནོད་པ་མེད་པར་ བྱིན་ཡོདཔ།
+- གསོག་འཇོག་ཚད་གཞི་གཏན་འབེབས་དང་ Norito-driven: གསལ་སྟོན་ཚུ་བཞག་དགོ།
+  ཆ་ཤས་འཆར་གཞི་ བདེན་དཔང་ (PoR) གི་རྩ་བ་ (PoR) དང་ བྱིན་མི་ཁྱབ་བསྒྲགས་ཚུ་ ཨིན།
+  བདེན་པའི་འབྱུང་ཁུངས།
+- ཕོརསི་ཕོརསི་བཀོལ་སྤྱོད་པ་ངེས་འཛིན་འབད་ཡོད་པའི་ ཟུར་ཐོ་ཚུ་ དེ་འབདཝ་ལས་ མཐུད་མཚམས་ཅིག་གིས་ རང་སོའི་ཐོན་ཁུངས་ཚུ་ 1 གིས་ བཏོན་མི་ཚུགས།
+  པིན་ཡང་ན་ ཕེཆ་ཞུ་བ་མང་དྲགས།
+- ཁ་ཐོག་གི་ གསོ་བ་དང་ བརྒྱུད་འཕྲིན་ (PoR དཔེ་ཚད་ ཆུང་ཆུང་ འཕྲོ་བརླག་ ཌིཀསི་གནོན་ཤུགས།)
+  ལོག་གཞུང་སྐྱོང་དང་མཁོ་མངགས་འབད་མི་ཚུ།
 
-### High-level Architecture
+### མཐོ་རིམ་བཟོ་བཀོད།
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         Iroha/Torii Node                             │
-│                                                                      │
-│  ┌──────────────┐      ┌────────────────────┐                        │
-│  │  Torii APIs  │◀────▶│   SoraFS Gateway   │◀───────────────┐       │
-│  └──────────────┘      │ (Norito endpoints) │                │       │
-│                        └────────┬───────────┘                │       │
-│                                 │                            │       │
-│                        ┌────────▼────────┐                   │       │
-│                        │  Pin Registry   │◀───── manifests   │       │
-│                        │ (State / DB)    │                   │       │
-│                        └────────┬────────┘                   │       │
-│                                 │                            │       │
-│                        ┌────────▼────────┐                   │       │
-│                        │  Chunk Storage  │◀──── chunk plans  │       │
-│                        │  (ChunkStore)   │                   │       │
-│                        └────────┬────────┘                   │       │
-│                                 │                            │       │
-│                        ┌────────▼────────┐                   │       │
-│                        │  Disk Quota/IO  │─Pin/serve chunks─▶│ Fetch │
-│                        │  Scheduler      │                   │ Clients│
-│                        └─────────────────┘                   │       │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
-```
+I18NF0000029X
 
-Key modules:
+ལྡེ་མིག་ཚད་གཞི་ཚུ་:
 
-- **Gateway**: exposes Norito HTTP endpoints for pin proposals, chunk fetch
-  requests, PoR sampling, and telemetry. It validates Norito payloads and
-  marshals requests into the chunk store. Reuses the existing Torii HTTP stack
-  to avoid a new daemon.
-- **Pin Registry**: the manifest pin state tracked in `iroha_data_model::sorafs`
-  and `iroha_core`. When a manifest is accepted the registry records the
-  manifest digest, chunk plan digest, PoR root, and provider capability flags.
-- **Chunk Storage**: disk-backed `ChunkStore` implementation that ingests
-  signed manifests, materialises chunk plans using `ChunkProfile::DEFAULT`, and
-  persists chunks under a deterministic layout. Each chunk is associated with a
-  content fingerprint and PoR metadata so sampling can re-validate without
-  re-reading the entire file.
-- **Quota/Scheduler**: enforces operator-configured limits (maximum disk bytes,
-  maximum outstanding pins, maximum parallel fetches, chunk TTL) and coordinates
-  IO so the node's ledger duties are not starved. The scheduler is also
-  responsible for serving PoR proofs and sampling requests with bounded CPU.
+- **Gateway**: པིན་གྲོས་འཆར་ཚུ་གི་དོན་ལུ་ Norito ཨེཆ་ཊི་ཊི་པི་མཇུག་བསྡུའི་ས་ཚིགས་ཚུ་, ཆུངཀ་ཕེཆ་གིས་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  ཞུ་བ་དང་ POR དཔེ་ཚད་ དེ་ལས་ བརྒྱུད་འཕྲིན་ཚུ། འདི་གིས་ I1NT00000004X གླ་ཆ་དང་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  marshals གིས་ ཆ་ཤས་ཚོང་ཁང་ནང་ ཞུ་བ་འབདཝ་ཨིན། ད་ལྟོ་ཡོད་པའི་ Torii ཨེཆ་ཊི་ཊི་པི་བརྩེགས་ཕུང་འདི་ལོག་ལག་ལེན་འཐབ་ཨིན།
+  ཌེ་མཱོན་གསརཔ་ཅིག་ལས་ འཛེམ་དགོ།
+- **པིན་ཐོ་བཀོད་**: I18NI0000034X ནང་ བརྟག་ཞིབ་འབད་ཡོད་པའི་ གསལ་སྟོན་པིན་གནས་སྟངས་དེ་
+  དང་ `iroha_core`. གསལ་སྟོན་ཅིག་ངོས་ལེན་འབད་ད་ ཐོ་བཀོད་འདི་ཐོ་བཀོད་འབདཝ་ཨིན།
+  funsegest དང་ ཆ་ཤས་འཆར་གཞི་ ཟས་བཅུད་ PoR རྩ་བ་ དེ་ལས་ བྱིན་ཚུགས་པའི་ ལྕོགས་གྲུབ་ཀྱི་རྒྱལ་དར་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+- **ཆུན་ཀ་གསོག་འཇོག་**:: ཌིཀསི་རྒྱབ་ལོག་ I18NI000000036X ལག་ལེན་འཐབ་ཨིན།
+  མཚན་རྟགས་བཀོད་ཡོད་པའི་ གསལ་སྟོན་ཚུ་ I18NI000000037X ལག་ལེན་འཐབ་སྟེ་ ཆ་ཤས་འཆར་གཞི་ཚུ་ ཆ་འཇོག་འབདཝ་ཨིན།
+  གཏན་འཇགས་ཀྱི་ཆ་ཤས་ཚུ་ ཐག་བཅད་སྒྲིག་བཀོད་ཀྱི་འོག་ལུ་ཡོདཔ་ཨིན། ཆ་ཤས་རེ་རེ་བཞིན་ ༡ དང་འབྲེལ་བ་ཡོད།
+  ནང་དོན་མཛུབ་མོ་གི་པར་དང་ པོ་ཨར་ མེ་ཊ་ཌེ་ཊ་ དེ་མེད་པར་ མེད་པར་ ལོག་བདེན་དཔྱད་འབད་ཚུགས།
+  ཡིག་སྣོད་ཧྲིལ་བུ་ལྷག་དོ།
+- **Quota/Schenuler**:: བཀོལ་སྤྱོད་པ་-རིམ་སྒྲིག་འབད་ཡོད་པའི་ཚད་གཞི་ཚུ་ (མཐོ་ཤོས་ཌིཀསི་བཱའིཊིསི་,
+  མཐོ་ཤོས་ལས་འདས་པའི་པིན་དང་ མཐོ་ཤོས་མཉམ་འགྲོས་ཕེཊི་ཆི་ ཆ་ཤས་ཊི་ཊི་ཨེལ་) དེ་ལས་ མཉམ་འབྲེལ་ཚུ།
+  IO དེ་འབདཝ་ལས་ ནའུཊི་གི་ ལག་དེབ་ཀྱི་འགན་ཁུར་ཚུ་ ལྟོཝ་བཀྱེས་ཏེ་མེདཔ་ཨིན། ལས་རིམ་བཟོ་མི་འདི་ཡང་།
+  མཐའ་མཚམས་ཅན་གྱི་སི་པི་ཡུ་དང་གཅིག་ཁར་ པོ་ཨར་ བདེན་ཁུངས་དང་ དཔེ་ཚད་ཀྱི་ཞུ་བ་ཚུ་ ཕྱག་ཞུ་ནིའི་འགན་ཁུར་འབག་དགོ།
 
-### Configuration
+### རིམ་སྒྲིག་འབད་ནི།
 
-Add a new section to `iroha_config`:
+དབྱེ་ཚན་གསརཔ་ཅིག་ I18NI000000038X ལུ་ཁ་སྐོང་འབད།
 
 ```toml
 [sorafs.storage]
@@ -103,40 +80,40 @@ adverts:
   topics = ["sorafs.sf1.primary:global"]
 ```
 
-- `enabled`: participation toggle. When false the gateway returns a 503 for
-  storage endpoints and the node does not advertise in discovery.
-- `data_dir`: root directory for chunk data, PoR trees, and fetch telemetry.
-  Defaults to `<iroha.data_dir>/sorafs`.
-- `max_capacity_bytes`: hard limit for pinned chunk data. A background task
-  rejects new pins when the limit is reached.
-- `max_parallel_fetches`: concurrency cap enforced by the scheduler to balance
-  bandwidth/disk IO against validator workload.
-- `max_pins`: maximum number of manifest pins the node accepts before applying
-  eviction/back pressure.
-- `por_sample_interval_secs`: cadence for automatic PoR sampling jobs. Each job
-  samples `N` leaves (configurable per manifest) and emits telemetry events.
-  Governance can scale `N` deterministically by setting the capacity metadata
-  key `profile.sample_multiplier` (integer `1-4`). The value may be a single
-  number/string or an object with per-profile overrides, e.g.
+- `enabled`: བཅའ་མར་གཏོགས་མི་སོར་བསྒྱུར་འབད་ནི། འཛུལ་སྒོ་འདི་རྫུན་མ་ཨིན་པ་ཅིན་ དོན་ལུ་ ༥༠༣ སླར་ལོག་འབདཝ་ཨིན།
+  གསོག་འཇོག་མཇུག་བསྡུ་ཚུ་དང་ མཐུད་མཚམས་དེ་ གསར་འཚོལ་ནང་ ཁྱབ་བསྒྲགས་མི་འབད།
+- `data_dir`: ཅནཀ་གནས་སྡུད་དང་ པོ་ཨར་ཤིང་ དེ་ལས་ ཊེ་ལི་མི་ཊི་ཚུ་ ལེན་ནིའི་དོན་ལུ་ རྩ་བའི་སྣོད་ཐོ།
+  `<iroha.data_dir>/sorafs` ལུ་སྔོན་སྒྲིག་ཚུ།
+- `max_capacity_bytes`: པིན་འབད་ཡོད་པའི་ ཅནཀ་གནས་སྡུད་ཀྱི་དོན་ལུ་ ཧརཌི་ཚད་གཞི། རྒྱབ་གཞིའི་ལས་ཀ་ཅིག།
+  ཚད་གཞི་ལུ་ལྷོད་པའི་སྐབས་ པིན་གསརཔ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+- `max_parallel_fetches`: ལས་འཆར་བཟོ་མི་གིས་ མཉམ་བསྡོམས་འབད་ནིའི་ ཁ་དོག་འདི་ ཚད་སྙོམས་ལུ་ བཀལ་ཡོདཔ།
+  bandwidth/disk IO བདེན་དཔྱད་འབད་མི་ལཱ་གི་མངའ་ཁོངས།
+- `max_pins`: འཇུག་སྤྱོད་མ་འབད་བའི་ཧེ་མར་ མཐུད་མཚམས་ཀྱིས་ མཐུད་མཚམས་ཀྱིས་ངོས་ལེན་འབད་མི་ གསལ་སྟོན་པིན་གྱི་གྱངས་ཁ་མཐོ་ཤོས་ཚུ།
+  བཏོན་གཏང་ནི་/རྒྱབ་ཀྱི་གནོན་ཤུགས།
+- `por_sample_interval_secs`: རང་བཞིན་གྱིས་ པོ་ཨར་དཔེ་ཚད་ཀྱི་ལཱ་ཚུ་གི་དོན་ལུ་ ཚད་གཞི། ལས་ཀ་རེ་རེ་བཞིན་ །
+  དཔེ་ཚད་ `N` འདབ་མ་ཚུ་ ༼གསལ་སྟོན་རེ་ལུ་རིམ་སྒྲིག་འབད་ཚུགསཔ་ཨིན་༽ དེ་ལས་ ཊེ་ལི་མི་ཊི་བྱུང་རིམ་ཚུ་ བཏོནམ་ཨིན།
+  གཞུང་སྐྱོང་གིས་ ལྕོགས་གྲུབ་མེ་ཊ་ཌེ་ཊ་གཞི་སྒྲིག་འབད་ཐོག་ལས་ `N` ཚད་འཇལ་ཚུགས།
+  ལྡེ་མིག་ `profile.sample_multiplier` (ཧྲིལ་གྲངས་ `1-4`). གནས་གོང་འདི་རྐྱངམ་ཅིག་འོང་ནི་མས།
+  ཨང་གྲངས་/ཡིག་རྒྱུན་ཡང་ན་ གསལ་སྡུད་རེ་ལུ་ བརྒལ་ཡོད་པའི་དངོས་པོ་ཅིག་ དཔེར་ན་.
   `{"default":2,"sorafs.sf2@1.0.0":3}`.
-- `adverts`: structure used by the provider advert generator to fill
-  `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
-  node uses defaults from the governance registry.
+- `adverts`: བྱིན་མི་ ཁྱབ་བསྒྲགས་འཕྲུལ་ཆས་ཀྱིས་ ལག་ལེན་འཐབ་མི་ གཞི་བཀོད་འདི་ བཀང་ནི་ལུ་ བཀང་དགོ།
+  I18NI0000002X ས་སྒོ་ཚུ་ (བགོ་བཤའ་དཔག་བྱེད་, QoS བརྡ་སྟོན་དང་ དོན་ཚན་ཚུ།) བཀོ་བཞག་པ་ཅིན་
+  མཐུད་མཚམས་འདི་གིས་ གཞུང་སྐྱོང་ཐོ་བཀོད་ལས་ སྔོན་སྒྲིག་ཚུ་ལག་ལེན་འཐབ་ཨིན།
 
-Config plumbing:
+ཆུ་དུང་རིམ་སྒྲིག་འབད།
 
-- `[sorafs.storage]` is defined in `iroha_config` as `SorafsStorage` and is
-  loaded from the node config file.
-- `iroha_core` and `iroha_torii` thread the storage config into the gateway
-  builder and chunk store at startup.
-- Dev/test env overrides exist (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), but
-  production deployments should rely on the config file.
+- I18NI000000053X འདི་ I18NI000000054X ནང་ Norito ལུ་ ངེས་ཚིག་བརྗོད་དེ་ འདི་ཨིན།
+  ནའུཊི་རིམ་སྒྲིག་ཡིག་སྣོད་ནང་ལས་མངོན་གསལ་འབད་ཡོདཔ།
+- I18NI000000056X དང་ `iroha_torii` གསོག་འཇོག་འདི་ འཛུལ་སྒོ་ནང་ལུ་རིམ་སྒྲིག་འབདཝ་ཨིན།
+  འགོ་བཙུགས་ས་ལུ་ བཟོ་བསྐྲུན་པ་དང་ ཆ་ཤས་ཚོང་ཁང་།
+- ཌེབ་/བརྟག་དཔྱད་ཨེན་ཝི་ཌི་ཚུ་ཡོདཔ་ཨིན། (I18NI000000058X, `SORAFS_STORAGE_PIN_*`)
+  ཐོན་སྐྱེད་བཀྲམ་སྤེལ་ཚུ་ རིམ་སྒྲིག་ཡིག་སྣོད་ལུ་ བརྟེན་དགོ།
 
-### CLI Utilities
+### སི་ཨེལ་ཨའི་ལག་ལེན་འཐབ་ཚུལ།
 
-While Torii’s HTTP surface is still being wired, the `sorafs_node` crate ships a
-thin CLI so operators can script ingestion/export drills against the persistent
-backend.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
+I18NT000000025X གི་HTTP ཁ་ཐོག་འདི་ད་ལྟོ་ཡང་གློག་ཐག་བཏང་བཞིན་ཡོད་རུང་ `sorafs_node` cret གིས་ 1.
+thin སི་ཨེལ་ཨའི་ དེ་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཡིག་གཟུགས་བཙུགས་ནི་/ཕྱིར་ཚོང་འཐབ་ཐངས་ཚུ་ རྟག་བརྟན་གྱི་རྒྱབ་འགལ་ལུ་འབད་ཚུགས།
+རྒྱབ་ལྗོངས།【ཀར/སོ་རཕསི_ནོད/སརཆ/བིན་/སོ་རཕ་-ནོ་ཌི་.rs:1】】】】།
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -146,106 +123,104 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` expects a Norito-encoded manifest `.to` file plus the matching payload
-  bytes. It reconstructs the chunk plan from the manifest’s chunking profile,
-  enforces digest parity, persists chunk files, and optionally emits a
-  `chunk_fetch_specs` JSON blob so downstream tooling can sanity-check the
-  layout.
-- `export` accepts a manifest ID and writes the stored manifest/payload to disk
-  (with optional plan JSON) so fixtures remain reproducible across environments.
+- I18NI000000061X གིས་ Norito-encoded གསལ་སྟོན་ `.to` ཡིག་སྣོད་དང་ མཐུན་སྒྲིག་ཅན་གྱི་པེ་ལོཌི་ཅིག་རེ་བ་བསྐྱེདཔ་ཨིན།
+  བཱའིཊིསི། འདི་གིས་ ཆ་ཤས་འཆར་གཞི་འདི་ གསལ་སྟོན་གྱི་ཆ་ཤས་གསལ་སྡུད་ལས་ བསྐྱར་བཟོ་འབདཝ་ཨིན།
+  ཆ་སྙོམས་འདི་ ཌའི་ཊིསི་ ཆ་སྙོམས་དང་ ཆ་ཤས་ཡིག་སྣོད་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིནམ་དང་ གདམ་ཁ་ཅན་སྦེ་ ཅིག་བཏོནམ་ཨིན།
+  I18NI000000063X JSON blob དེ་འབདཝ་ལས་ མར་གྱི་ལག་ཆས་འདི་གིས་ བློ་སྟོབས་བརྟག་དཔྱད་འབད་ཚུགས།
+  སྒྲིག༌བཀོད།
+- I18NI000000064X གིས་ གསལ་རྟགས་ཨའི་ཌི་ཅིག་ དང་ལེན་འབདཝ་ཨིནམ་དང་ གསོག་འཇོག་འབད་ཡོད་པའི་ གསལ་རྟགས་/སྤྲོད་ལེན་འདི་ ཌིཀསི་ལུ་བྲིས་དོ་ཡོདཔ་ཨིན།
+  (གདམ་ཁ་ཅན་གྱི་འཆར་གཞི་ JSON དང་གཅིག་ཁར་) དེ་བཟུམ་མའི་སྒྲིག་ཆས་འདི་ མཐའ་འཁོར་ནང་ལུ་ བསྐྱར་བཟོ་འབད་བཏུབ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན།
 
-Both commands print a Norito JSON summary to stdout, making it easy to pipe into
-scripts. The CLI is covered by an integration test to ensure manifests and
-payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tests/cli.rs:1】
+བརྡ་བཀོད་གཉིས་ཆ་ར་གིས་ Norito JSON བཅུད་དོན་འདི་ stdout ལུ་དཔར་བསྐྲུན་འབད་དེ་ ནང་ལུ་ མདོང་ལམ་བཟོ་ནི་ལུ་འཇམ་ཏོང་ཏོ་བཟོཝ་ཨིན།
+ཡིག་གཟུགས་ཚུ། སི་ཨེལ་ཨའི་འདི་ གསལ་སྟོན་དང་ གསལ་སྟོན་ཚུ་ ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ མཉམ་བསྡོམ་བརྟག་དཔྱད་ཀྱིས་ ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+Torii APIs ས་ཆའི་སྔོན་ལ། 【crats/sorafs_node/tests/cli.s:1】】
 
-> HTTP parity
+> ཨེཆ་ཊི་ཊི་པི་ ཆ་ཚད།
 >
-> The Torii gateway now exposes read-only helpers backed by the same
-> `NodeHandle`:
+> Torii གི་སྒོ་འདི་གིས་ ད་ལྟོ་དེ་གིས་རྒྱབ་སྐྱོར་འབད་མི་ ལྷག་ནི་རྐྱངམ་ཅིག་གི་གྲོགས་རམ་པ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+> I18NI00000065:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
->   Norito manifest (base64) alongside digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
->   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - Norito — གསོག་འཇོག་འབད་ཡོད་པའི་སླར་ལོག་འབདཝ་ཨིན།
+> I18NT0000000007X གསལ་སྟོན་ (base64) དང་གཅིག་ཁར་ ཟས་བཅུད་/མེ་ཊ་ཌེ་ཊ་.【ctrates/iroha_torii/src/sorafs/api.s:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — གཏན་འབེབས་འདི་སླར་ལོག་འབདཝ་ཨིན།
+> ཆ་ཤས་འཆར་གཞི་ JSON (`chunk_fetch_specs`) ལས་མར་གྱི་ལག་ཆས་ཚུ་གི་དོན་ལུ་.【ཀརེ་ཊི་/ཨི་རོ་ཧ་_ཊོ་རི་/སོ་རཕ་/པི་ཨེསི་/ཨེ་པི་.ཨར་སི་:༡༢༥༩】
 >
-> These endpoints mirror the CLI output so pipelines can switch from local
-> scripts to HTTP probes without changing parsers.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
+> འདི་ཚུ་གི་མཇུག་སྣོད་ཚུ་ མེ་ལོང་ནང་ སི་ཨེལ་ཨའི་ཨའུཊི་པུཊི་འབདཝ་ལས་ མདོང་ལམ་འདི་ ཉེ་གནས་ལས་ སོར་བསྒྱུར་འབད་ཚུགས།
+> ཡིག་ཆའི་ཡིག་ཆ་ཚུ་ མིང་དཔྱད་པ་མ་བསྒྱུར་བར་ ཨེཆ་ཊི་ཊི་པི་འཚོལ་ཞིབ་ལུ་།
 
-### Node Lifecycle
+### མཛུབ་གནོན་གྱི་སྲོག་ཆད།
 
-1. **Startup**:
-   - If storage is enabled the node initialises the chunk store with the
-     configured directory and capacity. This includes verifying or creating the
-     PoR manifest database and replaying pinned manifests to warm caches.
-   - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
-     fetch, PoR sample, telemetry).
-   - Spawn the PoR sampling worker and quota monitor.
-2. **Discovery / Adverts**:
-   - Generate `ProviderAdvertV1` documents using current capacity/health, sign
-     them with the council-approved key, and publish via the discovery channel.
-     available.
-3. **Pin Workflow**:
-   - Gateway receives a signed manifest (including chunk plan, PoR root, council
-     signatures). Validate the alias list (`sorafs.sf1@1.0.0` required) and
-     ensure the chunk plan matches the manifest metadata.
-   - Check quotas. If capacity/pin limits would be exceeded respond with a
-     policy error (Norito structured).
-   - Stream chunk data into the `ChunkStore`, verifying digests as we ingest.
-     Update PoR trees and store manifest metadata in the registry.
-4. **Fetch Workflow**:
-   - Serve chunk range requests from disk. Scheduler enforces
-     `max_parallel_fetches` and returns `429` when saturated.
-   - Emit structured telemetry (Norito JSON) with latency, bytes served, and
-     error counts for downstream monitoring.
-5. **PoR Sampling**:
-   - Worker selects manifests proportional to weight (e.g., bytes stored) and
-     runs deterministic sampling using the chunk store's PoR tree.
-   - Persist results for governance audits and include summaries in provider
-     adverts / telemetry endpoints.
-6. **Eviction / Quota Enforcement**:
-   - When capacity is reached the node rejects new pins by default. Optionally,
-     operators may configure eviction policies (e.g., TTL-based, LRU) once the
-     governance model is agreed; for now the design assumes strict quotas and
-     operator-initiated unpin operations.
+1. **འགོ་བཙུགས་**:
+   - གསོག་འཇོག་འདི་ལྕོགས་ཅན་བཟོ་བ་ཅིན་ ནོཌི་གིས་ ཅནཀསི་གསོག་འཇོག་འདི་ ༡ དང་གཅིག་ཁར་འགོ་བཙུགསཔ་ཨིན།
+     རིམ་སྒྲིག་འབད་ཡོད་པའི་སྣོད་ཐོ་དང་ནུས་པ། འདི་ནང་ བདེན་དཔྱད་འབད་ནི་ཡང་ན་ གསར་བསྐྲུན་འབད་ནི་ཚུ་ཚུདཔ་ཨིན།
+     PoR གིས་ གནས་སྡུད་གཞི་རྟེན་དང་ དྲོད་ཤེལ་ཚུ་ལུ་ གསལ་སྟོན་འབད་ཡོད་པའི་ གསལ་སྟོན་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+   - SoraFS སྒོ་སྒྲིག་ལམ་ཚུ་ (Norito JSON POST/GET མཐའ་མཚམས་ཚུ་ པིན་གྱི་དོན་ལུ་ཐོ་བཀོད་འབད།
+     fatch, PoR དཔེ་ཚད་ ཊེ་ལི་མི་ཊི།)
+   - པོ་ཨར་དཔེ་ཚད་ལས་བྱེདཔ་དང་ ཀོ་ཊ་བལྟ་རྟོག་པ་ཚུ་ བཀྲམ་སྤེལ་འབད།
+2. **གསར་འཚོལ་ / ཁྱབ་བསྒྲགས་**:
+   - ད་ལྟོའི་ཤུགས་ཚད་/གསོ་བའི་ ཡིག་ཆ་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་ `ProviderAdvertV1` ཡིག་ཆ་ཚུ་ བཟོ་བསྐྲུན་འབད།
+     དེ་ཚུ་གིས་ ཚོགས་སྡེ་གིས་ ཆ་འཇོག་འབད་མི་ ལྡེ་མིག་དང་ གསར་འཚོལ་གྱི་ རྒྱུན་ལམ་བརྒྱུད་དེ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
+     ཡོད༌པ།
+3. **པིན་ལཱ་གི་རྒྱུན་རིམ་**:
+   - གཱེཊ་ཝེ་གིས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ གསལ་སྟོན་ཅིག་ཐོབ་ (ཆ་ཤས་འཆར་གཞི་ པོ་ཨར་ རྩ་བ་ ཚོགས་སྡེ་ཚུ་རྩིས་ཏེ་
+     མཚན་རྟགས་ཚུ། མིང་གཞན་ཐོ་ཡིག་ (`sorafs.sf1@1.0.0` དགོས་མཁོ་) དང་ དེ་ལས་ བདེན་དཔྱད་འབད།
+     ཆ་ཤས་འཆར་གཞི་འདི་ གསལ་སྟོན་མེ་ཊ་ཌེ་ཊ་དང་མཐུན་སྒྲིག་འབད་ཡོདཔ་ངེས་གཏན་བཟོ།
+   - ལུང་འདྲེན་ཚུ་ཞིབ་དཔྱད་འབད། གལ་སྲིད་ ཤོང་ཚད་/པིན་ཚད་གཞི་འདི་ ༡ དང་གཅིག་ཁར་ ལན་འདེབས་འབད་འོང་།
+     སྲིད་བྱུས་འཛོལ་བ་ (Norito གཞི་བཀོད་འབད་ཡོདཔ།)
+   - ང་བཅས་ཀྱིས་ བཞུ་བའི་སྐབས་ `ChunkStore` ནང་ལུ་ གནད་སྡུད་ཆ་ཤས་ཚུ་ ཆ་ཤས་སྦེ་བཏོནམ་ཨིན།
+     ཐོ་བཀོད་ནང་ པོ་ཨར་ ཤིང་ཚུ་ དུས་མཐུན་བཟོ་ནི་དང་ གསོག་འཇོག་འབད་ མེ་ཊ་ཌེ་ཊ་ གསལ་སྟོན་འབད།
+4. **ཕེཆ་ལཱ་གི་རྒྱུན་རིམ་**:
+   - ཌིཀསི་ལས་ ཅངཀསི་ཁྱབ་ཚད་ཀྱི་ཞུ་བ་ཚུ་ཞབས་ཏོག་སྤྲོད་ནི། ལས་འཆར་བཀག་དམ་ཚུ།
+     `max_parallel_fetches` དང་ I18NI000000073X དེ་ ཚགས་ཚར་བའི་སྐབས་ སླར་ལོག་འབདཝ་ཨིན།
+   - བཀོད་སྒྲིག་འབད་ཡོད་པའི་ ཊེ་ལི་མི་ཊི་ (Norito JSON) འདི་ བར་ཆད་དང་ བཱའིཊི་ཚུ་ ཕྱག་ཞུ་ཡོདཔ་ཨིན།
+     འཛོལ་བའི་བལྟ་རྟོག་དོན་ལུ་འཛོལ་བ།
+5. **PoR དཔེ་ཚད་**:
+   - ལས་མི་གིས་ ལྗིད་ཚད་ལུ་ཚད་སྙོམས་སྦེ་གསལ་སྟོན་ཚུ་ (དཔེར་ན་ བཱའིཊིསི་གསོག་འཇོག་འབད་ཡོདཔ་) དང་ ཚད་སྙོམས་ཚུ་སེལ་འཐུ་འབདཝ་ཨིན།
+     རན་སི་ གཏན་འབེབས་དཔེ་ཚད་འདི་ ཅངཀ་ཚོང་ཁང་གི་ པོ་ཨར་ཤིང་ལག་ལེན་འཐབ་སྟེ་ .
+   - གཞུང་སྐྱོང་རྩིས་ཞིབ་ཀྱི་དོན་ལུ་ གྲུབ་འབྲས་དང་ བྱིན་མི་ནང་ བཅུད་བསྡུས་ཚུ་ ཚུད་དགོ།
+     ཁྱབ་བསྒྲགས་ཚུ་ / ཊེ་ལི་མི་ཊི་མཐའ་མཇུག་ཚུ།
+6. **ཕྱིར་འབུད་ / ཀོ་ཊ་བཀག་སྡོམ་**:
+   - ཤུགས་ཚད་ལུ་ལྷོད་པའི་སྐབས་ མཐུད་མཚམས་ལུ་ལྷོདཔ་ད་ སྔོན་སྒྲིག་ཐོག་ལས་ པིན་གསརཔ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན། གདམ་ཁའི་ཐོག་།
+     བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བཏོན་གཏང་ནི་གི་སྲིད་བྱུས་ཚུ་ རིམ་སྒྲིག་འབད་འོང་ (དཔེར་ན་ ཊི་ཊི་ཨེལ་གཞི་བཞག་ ཨེལ་ཨར་ཨ) ཚར་གཅིག་
+     གཞུང་སྐྱོང་དཔེ་སྟོན་འདི་ མོས་མཐུན་ཡོདཔ་ཨིན། ད་ལྟའི་དོན་ལུ་ བཟོ་བཀོད་འདི་ དམ་དམ་སྦེ་ མནོ་བསམ་གཏངམ་ཨིན།
+     བཀོལ་སྤྱོད་པ་གིས་ unpin བཀོལ་སྤྱོད་ཚུ།
 
-### Capacity Declaration & Scheduling Integration
-
-- Torii now relays `CapacityDeclarationRecord` updates from `/v1/sorafs/capacity/declare`
-  to the embedded `CapacityManager`, so each node builds an in-memory view of its
-  committed chunker and lane allocations. The manager exposes read-only snapshots
-  for telemetry (`GET /v1/sorafs/capacity/state`) and enforces per-profile or per-lane
-  reservations before new orders are accepted.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- The `/v1/sorafs/capacity/schedule` endpoint accepts governance-issued `ReplicationOrderV1`
-  payloads. When the order targets the local provider the manager checks for
-  duplicate scheduling, verifies chunker/lane capacity, reserves the slice, and
-  returns a `ReplicationPlan` describing remaining capacity so orchestration tools
-  can proceed with ingestion. Orders for other providers are acknowledged with an
-  `ignored` response to ease multi-operator workflows.【crates/iroha_torii/src/routing.rs:4845】
-- Completion hooks (e.g., triggered after ingestion succeeds) hit
-  `POST /v1/sorafs/capacity/complete` to release reservations via
-  `CapacityManager::complete_order`. The response includes a `ReplicationRelease`
-  snapshot (remaining totals, chunker/lane residuals) so orchestration tooling can
-  queue the next order without polling. Follow-up work will wire this into the chunk
-  store pipeline once ingestion logic lands.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
-- The embedded `TelemetryAccumulator` can be mutated through
-  `NodeHandle::update_telemetry`, letting background workers record PoR/uptime samples
-  and eventually derive canonical `CapacityTelemetryV1` payloads without touching the
+### ཤོང་ཚད་གསལ་བསྒྲགས།- Torii ད་ལྟ་I18NI000000074X གིས་ I18NI000000075X ལས་དུས་མཐུན་བཟོཝ་ཨིན།
+  བཙུགས་ཡོད་པའི་ I18NI000000076X ལུ་ མཐུད་མཚམས་རེ་རེ་གིས་ དེ་གི་དྲན་ཚད་ནང་མཐོང་སྣང་ཅིག་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+  ཁས་བླངས་འབད་ཡོད་པའི་ཆ་ཤས་ཚུ་དང་ ལམ་ཐིག་བགོ་བཀྲམ་ཚུ། འཛིན་སྐྱོང་པ་གིས་ ལྷག་ནི་རྐྱངམ་གཅིག་གི་པར་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+  ཊེ་ལི་མི་ཊི་རི་ (`GET /v1/sorafs/capacity/state`) དང་ ངོ་རྐྱང་རེ་རེ་ལུ་ ཡང་ན་ ལམ་རེ་རེ་ལུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  བཀའ་རྒྱ་གསརཔ་ཚུ་ ངོས་ལེན་མ་འབད་བའི་ཧེ་མ་ 【ཀརཕ་/སོ་ཌི་/ཨེསི་ཨར་སི་/ནུས་སྟོབས་.༡】ཀྲེཊ་/སོ་རཕ་ས_ནོཌི་/ཨེསི་ཨར་སི་/ལིབ་.ཨེསི་:༦༠】 བསྡོམས།
+- I18NI00000000078X མཐའ་མཚམས་ཀྱིས་ གཞུང་སྐྱོང་གིས་ བཏོན་མི་ I18NI0000079X འདི་ངོས་ལེན་འབདཝ་ཨིན།
+  པེ་ལོཌ་ཚུ། བཀའ་རྒྱ་འདི་གིས་ ཉེ་གནས་བྱིན་མི་ལུ་དམིགས་གཏད་བསྐྱེད་པའི་སྐབས་ འཛིན་སྐྱོང་པ་གིས་ འཚོལ་ཞིབ་འབདཝ་ཨིན།
+  འདྲ་མཚུངས་དུས་ཚོད་བཟོ་ནི་ ཆ་ཀར་/ལམ་ཐིག་གི་ནུས་ཤུགས་བདེན་དཔྱད་འབད་ཞིནམ་ལས་ བཤུད་ཕྲ་འདི་ གསོག་འཇོག་འབདཝ་ཨིན།
+  ལྷག་ལུས་ནུས་ཤུགས་འདི་ དེ་འབདཝ་ལས་ རོལ་དབྱངས་ལག་ཆས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་དོ་ཡོདཔ་ཨིན་ སླར་ལོག་འབདཝ་ཨིན།
+  མངལ་ཆགས་དང་གཅིག་ཁར་ འཕྲོ་མཐུད་ཚུགས། གཞན་བྱིན་མི་ཚུ་གི་དོན་ལུ་ བཀའ་རྒྱ་ཚུ་ ཅིག་དང་གཅིག་ཁར་ངོས་ལེན་འབད་ཡོདཔ་ཨིན།
+  I18NI000000081X སྣ་མང་བཀོལ་སྤྱོད་ཀྱི་ལཱ་གི་རྒྱུན་རིམ་ཚུ་ འཇམ་ཏོང་ཏོ་བཟོ་ནིའི་དོན་ལུ་ ལན་འདེབས་འབད་ནི།
+- མཇུག་བསྡུ་བའི་ ཧུཀ་ (དཔེར་ན་ བཙའ་ཐངས་མཐར་འཁྱོལ་བའི་ཤུལ་ལས་ འགོ་བཙུགས་ཡོདཔ་) ལུ་ རྐྱབ་ཡོདཔ་ཨིན།
+  `POST /v1/sorafs/capacity/complete` བརྒྱུད་དེ་ བཀག་འགོག་ཚུ་ བརྒྱུད་དེ་ གསར་བཏོན་འབད་ནི།
+  `CapacityManager::complete_order`. ལན་འདེབས་ནང་ I18NI0000084X དང་།
+  པར་ལེན་ (ལྷག་ལུས་བསྡོམས་, ཅར་ཀར་/ལམ་གྱི་ལྷག་ལུས་) དེ་འབདཝ་ལས་ རོལ་དབྱངས་ལག་ཆ་ ཅན།
+  འོས་བསྡུའི་ཤུལ་མའི་གོ་རིམ་འདི་ འོས་བསྡུར་མེད་པར་། རྗེས་འཇུག་ལས་ཀ་འདི་ ཆ་ཤས་ནང་ལུ་ གློག་ཐག་བཏང་འོང་།
+  so bain mipeurine sobegy ས་གཞི།【ཀྲེ་ཊི་/ཨི་རོ་ཧ་_ཊོ་རི/རའུཊ་.༤༨༨༥】 】  】སོ་རཕས་_ནོ་ཌི་/སརc/ནུས་ཚད་.༩༠】 །
+- བཙུགས་ཡོད་པའི་ `TelemetryAccumulator` འདི་ བསྒྱུར་བཅོས་འབད་ཚུགས།
+  `NodeHandle::update_telemetry`, རྒྱབ་ལྗོངས་ལས་བྱེད་པའི་ལས་བྱེད་པ་ PopoR/ཡར་འཕར་གྱི་དཔེ་ཚད་ཐོ་འགོད།
+  དང་མཐར་ཐུག་ལུ་ ཀེ་ནོ་ནིག་ `CapacityTelemetryV1` གིས་ ལགཔ་མ་རྐྱབ་པར་ བཏོན་ཡོདཔ་ཨིན།
   scheduler internals.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
-### Integrations & Future Work
+### མཉམ་སྡེབ་དང་མ་འོངས་བསྡམས།
 
-- **Governance**: extend `sorafs_pin_registry_tracker.md` with storage telemetry
-  (PoR success rate, disk utilisation). Admission policies can require minimum
-  capacity or minimum PoR success rate before adverts are accepted.
-- **Client SDKs**: expose the new storage config (disk limits, alias) so
-  management tooling can bootstrap nodes programmatically.
-- **Telemetry**: integrate with the existing metrics stack (Prometheus /
-  OpenTelemetry) so storage metrics appear in observability dashboards.
-- **Security**: run the storage module inside a dedicated async task pool with
-  back-pressure and consider sandboxing chunk reads via io_uring or tokio's
-  bounded pools to prevent malicious clients from exhausting resources.
+- **གཞུང་སྐྱོང་**: རྒྱ་བསྐྱེད་I18NI0000008X
+  (Po མཐར་ཕྱིན་ཚད་གཞི། ཌིཀསི་ལག་ལེན་འཐབ་ནི།) འཛུལ་ཞུགས་སྲིད་བྱུས་ཚུ་ཉུང་མཐའ་དགོཔ་འོང་།
+  ལྕོགས་གྲུབ་ཡང་ན་ ཁྱབ་བསྒྲགས་ཚུ་ ངོས་ལེན་མ་འབད་བའི་ཧེ་མ་ ཉུང་མཐའ་ པོ་ཨར་ མཐར་འཁྱོལ་ཚད་གཞི།
+- **Client SDKs**: དེ་འབདཝ་ལས་ གསོག་འཇོག་རིམ་སྒྲིག་གསརཔ་ (ཌིཀསི་ཚད་གཞི།, མིང་གཞན་) དེ་འབད་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  འཛིན་སྐྱོང་ལག་ཆས་འདི་གིས་ བུཊི་སི་ཊརཔ་ནོཌསི་ལས་རིམ་གྱི་ཐོག་ལས་ འབད་ཚུགས།
+- **Telemetry**: ད་ལྟོ་ཡོད་པའི་མེ་ཊིགསི་བང་རིམ་ཚུ་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་འབད་ (I18NT000000000X /
+  OpenTelemetry) དེ་འབདཝ་ལས་ གསོག་འཇོག་མེ་ཊིགསི་ཚུ་ བལྟ་བརྟོག་འབད་བཏུབ་པའི་ ཌེཤ་བོརཌི་ཚུ་ནང་ འབྱུངམ་ཨིན།
+- **ཉེན་སྲུང་**: དང་གཅིག་ཁར་ བློ་གཏད་ཅན་གྱི་ཨ་སིན་ཀ་ལཱ་ཆུ་ནང་ལུ་ གསོག་འཇོག་ཚད་གཞི་འདི་གཡོག་བཀོལ།
+  རྒྱབ་ལོག་གནོན་ཤུགས་དང་ བྱེམ་སྒྲོམ་གྱི་ཆ་ཤས་ལྷག་ནི་ལུ་ io_uring ཡང་ན་ tokio's བརྒྱུད་དེ་ བརྩི་འཇོག་འབད།
+  མཐའ་མཚམས་ཅན་གྱི་ཚོང་མགྲོན་པ་ཚུ་ ཐོན་སྐྱེད་ཚུ་ ཐང་ཆད་ནི་ལས་ བཀག་ཐབས་ལུ་ ཆུ་རྫིང་ཚུ།
 
-This design keeps the storage module optional and deterministic while giving
-operators the knobs they need to participate in the SoraFS data availability
-layer. Implementing it will involve changes across `iroha_config`, `iroha_core`,
-`iroha_torii`, and the Norito gateway, plus the provider advert tooling.
+བཟོ་བཀོད་འདི་གིས་ གསོག་འཇོག་ཚད་གཞི་འདི་ གདམ་ཁ་ཅན་དང་ གཏན་འབེབས་བཟོ་བའི་སྐབས་ བཞགཔ་ཨིན།
+བཀོལ་སྤྱོད་པ་ཚུ་ SoraFS གནད་སྡུད་འཐོབ་ཚུགསཔ་ནང་ བཅའ་མར་གཏོགས་དགོ་པའི་ མཛུབ་མོ་ཚུ།
+རིམ༌པ། ལག་ལེན་འཐབ་མི་འདི་གིས་ `iroha_config`, `iroha_core`, ནང་ལུ་ བསྒྱུར་བཅོས་ཚུ་ཚུདཔ་ཨིན།
+`iroha_torii`, དང་ Norito གི་སྒོ་སྒྲིག་དང་ བྱིན་མི་ ཁྱབ་བསྒྲགས་ལག་ཆས་ཚུ་དང་ དེ་དང་གཅིག་ཁར་ བརྡ་ཁྱབ་ལག་ཆས་ཚུ་ཡང་ ཡོདཔ་ཨིན།

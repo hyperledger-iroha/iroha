@@ -4,69 +4,71 @@ direction: ltr
 source: docs/portal/docs/sorafs/gateway-dns-runbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# دليل تشغيل انطلاقة Gateway وDNS في SoraFS
+# Введите адрес шлюза и DNS для SoraFS.
 
 تعكس نسخة البوابة هذا الدليل التشغيلي المعتمد الموجود في
 [`docs/source/sorafs_gateway_dns_design_runbook.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_design_runbook.md).
-وهي تلتقط الضوابط التشغيلية لمسار Decentralized DNS & Gateway كي تتمكن فرق
-الشبكات والعمليات والتوثيق من تدريب حزمة الأتمتة قبل انطلاقة 2025-03.
+Для создания децентрализованного DNS и шлюза в Интернете
+Он провел матч за сборную США в сезоне 2025–03.
 
 ## النطاق والمخرجات
 
-- ربط معالم DNS (SF-4) وgateway (SF-5) عبر تمارين اشتقاق المضيفات الحتمي،
-  وإصدارات دليل resolvers، وأتمتة TLS/GAR، وجمع الأدلة.
-- إبقاء مدخلات الانطلاقة (الأجندة، الدعوة، متعقب الحضور، لقطة تليمترية GAR)
-  متزامنة مع آخر تعيينات المالكين.
-- إنتاج حزمة آرتيفاكتات قابلة للتدقيق لمراجعي الحوكمة: ملاحظات إصدار دليل
-  resolvers، سجلات فحوصات gateway، مخرجات أداة التوافق، وملخص Docs/DevRel.
+- Доступ к DNS (SF-4) и шлюзу (SF-5)
+  Доступны резольверы, TLS/GAR и другие устройства.
+- Дэвис Миссисипи (Старый город, Колумбия, Великобритания)
+  Он был создан в Колумбии.
+- Написано в журнале "Лидер продаж": Убийца.
+  резольверы, создание шлюза, проверка безопасности и документации Docs/DevRel.
 
 ## الأدوار والمسؤوليات
 
-| المسار | المسؤوليات | الآرتيفاكتات المطلوبة |
+| المسار | المسؤوليات | Информационные технологии |
 |--------|-------------|------------------------|
-| Networking TL (حزمة DNS) | الحفاظ على خطة المضيفات الحتمية، تشغيل إصدارات دليل RAD، نشر مدخلات تليمترية resolvers. | `artifacts/soradns_directory/<ts>/`، فروق `docs/source/soradns/deterministic_hosts.md`، وبيانات RAD الوصفية. |
-| Ops Automation Lead (gateway) | تنفيذ تمارين أتمتة TLS/ECH/GAR، تشغيل `sorafs-gateway-probe`، وتحديث خطافات PagerDuty. | `artifacts/sorafs_gateway_probe/<ts>/`، JSON للـ probe، ومدخلات `ops/drill-log.md`. |
-| QA Guild & Tooling WG | تشغيل `ci/check_sorafs_gateway_conformance.sh`، تنسيق fixtures، وأرشفة حزم self-cert الخاصة بـ Norito. | `artifacts/sorafs_gateway_conformance/<ts>/`، `artifacts/sorafs_gateway_attest/<ts>/`. |
-| Docs / DevRel | تدوين المحاضر، تحديث pre-read التصميم + الملاحق، ونشر ملخص الأدلة في هذا البوابة. | ملفات `docs/source/sorafs_gateway_dns_design_*.md` المحدثة وملاحظات الإطلاق. |
+| Сетевой TL (под управлением DNS) | Он был отправлен в отдел RAD, а затем в RAD. Распознавательные резольверы. | `artifacts/soradns_directory/<ts>/`, `docs/source/soradns/deterministic_hosts.md`, RAD الوصفية. |
+| Руководитель отдела автоматизации операций (шлюз) | Подключите TLS/ECH/GAR, установите `sorafs-gateway-probe` и включите PagerDuty. | `artifacts/sorafs_gateway_probe/<ts>/`, пробник JSON, файл `ops/drill-log.md`. |
+| Рабочая группа по обеспечению качества и инструментарию | تشغيل `ci/check_sorafs_gateway_conformance.sh`, дополнительные светильники, وأرشفة حزم self-cert الخاصة بـ Norito. | `artifacts/sorafs_gateway_conformance/<ts>/`, `artifacts/sorafs_gateway_attest/<ts>/`. |
+| Документы / DevRel | تدوين المحاضر، تحديث предварительно прочитайте التصميم + الملاحق, ونشر ملخص الأدلة في هذا البوابة. | Проверьте `docs/source/sorafs_gateway_dns_design_*.md`. |
 
 ## المدخلات والمتطلبات المسبقة
 
-- مواصفة المضيفات الحتمية (`docs/source/soradns/deterministic_hosts.md`) وبنية
-  اعتماد resolvers (`docs/source/soradns/resolver_attestation_directory.md`).
-- آرتيفاكتات gateway: دليل المشغل، مساعدات أتمتة TLS/ECH، إرشادات direct-mode،
-  ومسار self-cert ضمن `docs/source/sorafs_gateway_*`.
-- الأدوات: `cargo xtask soradns-directory-release`،
-  `cargo xtask sorafs-gateway-probe`، `scripts/telemetry/run_soradns_transparency_tail.sh`،
-  `scripts/sorafs_gateway_self_cert.sh`، وأدوات CI المساعدة
+- Дополнительная информация о программе (`docs/source/soradns/deterministic_hosts.md`)
+  Дополнительные резольверы (`docs/source/soradns/resolver_attestation_directory.md`).
+- Межсетевой шлюз: прямой доступ, TLS/ECH, прямой режим,
+  Имеется самосертификат `docs/source/sorafs_gateway_*`.
+- Сообщение: `cargo xtask soradns-directory-release`,
+  `cargo xtask sorafs-gateway-probe`, `scripts/telemetry/run_soradns_transparency_tail.sh`,
+  `scripts/sorafs_gateway_self_cert.sh`, подключение CI
   (`ci/check_sorafs_gateway_conformance.sh`, `ci/check_sorafs_gateway_probe.sh`).
-- الأسرار: مفتاح إصدار GAR، بيانات اعتماد ACME لـ DNS/TLS، مفتاح توجيه PagerDuty،
-  ورمز مصادقة Torii لجلب resolvers.
+- Доступ: вызов GAR, поддержка ACME для DNS/TLS, поддержка PagerDuty,
+  Установите резольверы Torii.
 
 ## قائمة التحقق قبل التنفيذ
 
 1. تأكيد الحضور والأجندة بتحديث
    `docs/source/sorafs_gateway_dns_design_attendance.md` وتعميم الأجندة الحالية
    (`docs/source/sorafs_gateway_dns_design_agenda.md`).
-2. تجهيز جذور الآرتيفاكتات مثل
+2. Тэхен Билли
    `artifacts/sorafs_gateway_dns/<YYYYMMDD>/` و
    `artifacts/soradns_directory/<YYYYMMDD>/`.
-3. تحديث fixtures (manifests الخاصة بـ GAR، أدلة RAD، حزم توافق gateway) مع التأكد
-   من أن حالة `git submodule` تطابق آخر وسم تدريب.
-4. التحقق من الأسرار (مفتاح إصدار Ed25519، ملف حساب ACME، رمز PagerDuty) ومطابقة
-   checksums في vault.
-5. تنفيذ smoke-test لأهداف التليمترية (endpoint الخاص بـ Pushgateway، لوحة GAR في Grafana)
+3. Светильники (демонстрирует наличие GAR, RAD, шлюза) и шлюза.
+   Был установлен `git submodule`, который был установлен.
+4. Зарегистрируйтесь на сайте (на английском языке Ed25519, на сайте ACME, в PagerDuty)
+   контрольные суммы в хранилище.
+5. Запустите дымовой тест в режиме онлайн (конечная точка на сервере Pushgateway, в GAR на Grafana)
    قبل التمرين.
 
 ## خطوات تمرين الأتمتة
 
 ### خريطة المضيفات الحتمية وإصدار دليل RAD
 
-1. تشغيل مساعد اشتقاق المضيفات الحتمي على مجموعة manifests المقترحة والتأكد
-   من عدم وجود drift مقارنةً بـ
+1. Внешность человека, страдающего от ярости, проявляет недовольство собой.
+   В дрифте مقارنةً
    `docs/source/soradns/deterministic_hosts.md`.
-2. إنشاء حزمة دليل resolvers:
+2. Используйте резольверы:
 
 ```bash
 cargo xtask soradns-directory-release \
@@ -77,18 +79,16 @@ cargo xtask soradns-directory-release \
   --note "dns-kickoff-20250303"
 ```
 
-3. تدوين معرّف الدليل المطبوع وSHA-256 ومسارات الإخراج داخل
-   `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` وفي محاضر الانطلاقة.
+3. Установленный в блоке управления SHA-256 блок управления.
+   `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` в случае необходимости.
 
-### التقاط تليمترية DNS
-
-- تتبع سجلات شفافية resolvers لمدة ≥10 دقائق عبر
+### Проверка DNS- Наличие резольверов с числом ≥10 дней.
   `scripts/telemetry/run_soradns_transparency_tail.sh --mode staging`.
-- تصدير مقاييس Pushgateway وأرشفة لقطات NDJSON بجانب مجلد run ID.
+- Откройте приложение Pushgateway и проверьте идентификатор запуска NDJSON.
 
-### تمارين أتمتة gateway
+### تمارين أتمتة шлюз
 
-1. تشغيل فحص TLS/ECH:
+1. Подключение к TLS/ECH:
 
 ```bash
 cargo xtask sorafs-gateway-probe \
@@ -96,51 +96,51 @@ cargo xtask sorafs-gateway-probe \
   --output artifacts/sorafs_gateway_probe/<run-id>.json
 ```
 
-2. تشغيل أداة التوافق (`ci/check_sorafs_gateway_conformance.sh`) ومساعد self-cert
-   (`scripts/sorafs_gateway_self_cert.sh`) لتحديث حزمة اعتماد Norito.
-3. التقاط أحداث PagerDuty/Webhook لإثبات أن مسار الأتمتة يعمل end-to-end.
+2. Проверка работоспособности (`ci/check_sorafs_gateway_conformance.sh`) с самопроверкой
+   (`scripts/sorafs_gateway_self_cert.sh`) Установите флажок Norito.
+3. Запустите PagerDuty/Webhook и выполните сквозное соединение.
 
 ### تجميع الأدلة
 
-- تحديث `ops/drill-log.md` بالطوابع الزمنية والمشاركين وهاشات probe.
-- تخزين الآرتيفاكتات ضمن مجلدات run ID ونشر ملخص تنفيذي ضمن محاضر Docs/DevRel.
+- Установите `ops/drill-log.md` для проверки состояния датчика.
+- В разделе «Просмотр идентификатора запуска» используется документ «Docs/DevRel».
 - ربط حزمة الأدلة في تذكرة الحوكمة قبل مراجعة الانطلاقة.
 
 ## إدارة الجلسة وتسليم الأدلة
 
 - **الخط الزمني للمشرف:**
-  - T-24 h — ينشر Program Management التذكير + لقطة الأجندة/الحضور في `#nexus-steering`.
-  - T-2 h — يقوم Networking TL بتحديث لقطة تليمترية GAR وتسجيل الفروقات في `docs/source/sorafs_gateway_dns_design_gar_telemetry.md`.
-  - T-15 m — يتحقق Ops Automation من جاهزية probes ويكتب run ID النشط في `artifacts/sorafs_gateway_dns/current`.
-  - أثناء المكالمة — يشارك المشرف هذا الدليل ويُعيّن ناسخًا مباشرًا؛ وتلتقط Docs/DevRel بنود العمل أثناء الجلسة.
+  - T-24 h — Управление программой التذكير + لقطة الأجندة/الحضور في `#nexus-steering`.
+  - T-2 h — Сеть Networking TL работает в GAR и использует `docs/source/sorafs_gateway_dns_design_gar_telemetry.md`.
+  - Т-15 м — используется системой автоматизации операций, когда зонды компании DAF запускают идентификатор `artifacts/sorafs_gateway_dns/current`.
+  - أثناء المكالمة — Джон Уилсон и Уилсон Нэнси Мэнсон Документы/DevRel опубликованы в разделе «Документы/DevRel».
 - **قالب المحاضر:** انسخ الهيكل من
-  `docs/source/sorafs_gateway_dns_design_minutes.md` (ومنعكس في bundle البوابة)
-  والتزم بإيداع نسخة مكتملة لكل جلسة. تضمّن قائمة الحضور والقرارات وبنود العمل
-  وهاشات الأدلة والمخاطر المفتوحة.
-- **رفع الأدلة:** اضغط مجلد `runbook_bundle/` الخاص بالتمرين، أرفق PDF المحاضر
-  المُصدّر، وسجّل هاشات SHA-256 في المحاضر + الأجندة، ثم نبّه اسم المراجعين
-  المعتمدين بعد رفع الملفات إلى `s3://sora-governance/sorafs/gateway_dns/<date>/`.
+  `docs/source/sorafs_gateway_dns_design_minutes.md` (отсутствует в комплекте поставки)
+  Он был убит в 1980-х годах. تضمّن قائمة الحضور والقرارات وبنود العمل
+  Вы можете сделать это в любое время.
+- **Просмотр:** Загрузите файл `runbook_bundle/` в PDF-файл.
+  Он был создан на базе SHA-256 в режиме "+" в режиме реального времени".
+  Он был создан для `s3://sora-governance/sorafs/gateway_dns/<date>/`.
 
-## لقطة الأدلة (انطلاقة مارس 2025)
+## لقطة الأدلة (начало 2025 г.)
 
 آخر الآرتيفاكتات المرتبطة بالخارطة والمحاضر محفوظة في
 `s3://sora-governance/sorafs/gateway_dns/`. الهاشات أدناه تعكس
-الـ manifest المعتمد (`artifacts/sorafs_gateway_dns/<run-id>/runbook_bundle/evidence_manifest_*.json`).
+В манифесте المعتمد (`artifacts/sorafs_gateway_dns/<run-id>/runbook_bundle/evidence_manifest_*.json`).
 
-- **Dry run — 2025-03-02 (`artifacts/sorafs_gateway_dns/20250302/`)**
-  - Tarball الحزمة: `b13571d2822c51f771d0e471f4f66d088a78ed6c1a5adb0d4b020b04dd9a5ae0`
-  - PDF المحاضر: `cac89ee3e6e4fa0adb9694941c7c42ffddb513f949cf1b0c9f375e14507f4f18`
-- **ورشة مباشرة — 2025-03-03 (`artifacts/sorafs_gateway_dns/20250303/runbook_bundle/`)**
+- ** Пробный прогон — 2 марта 2025 г. (`artifacts/sorafs_gateway_dns/20250302/`)**
+  - Файл архива: `b13571d2822c51f771d0e471f4f66d088a78ed6c1a5adb0d4b020b04dd9a5ae0`.
+  - PDF-файл: `cac89ee3e6e4fa0adb9694941c7c42ffddb513f949cf1b0c9f375e14507f4f18`.
+- **Отправлено — 03.03.2025 (`artifacts/sorafs_gateway_dns/20250303/runbook_bundle/`)**
   - `bc83e6a014c2d223433f04ddc3c588bfeff33ee5cdcb15aad6527efeba582a1c  minutes_20250303.md`
   - `030a98fb3e3a52dbb0fcf25a6ea4365b11d9487707bb6700cb632710f7c082e4  gar_snapshot_20250303.json`
   - `5ac17e684976d6862628672627f229f7719da74235aa0a5f0ce994dad34cb3c4  sorafs_gateway_dns_design_metrics_20250303.prom`
   - `5c6163d0ae9032c2d52ca2ecca4037dfaddcc503eb56239b53c5e9c4000997cf  probe_20250303.json`
   - `87f6341896bfb830966a4a5d0fc9158fabcc135ba16ef0d53882e558de77ba49  probe_20250303_webhook.jsonl`
   - `9b968b0bf4ca654d466ec2be5291936f1441908354e9d2da4d0a52f1568bbe03  probe.staging.toml`
-  - _(رفع متوقع: `gateway_dns_minutes_20250303.pdf` — ستضيف Docs/DevRel قيمة SHA-256 عند توفر PDF في الحزمة.)_
+  - _(описано: `gateway_dns_minutes_20250303.pdf` — ستضيف Docs/DevRel для SHA-256 в формате PDF в формате PDF.)_
 
 ## مواد ذات صلة
 
-- [دليل تشغيل عمليات gateway](./operations-playbook.md)
+- [Для шлюза шлюза](./operations-playbook.md)
 - [خطة مراقبة SoraFS](./observability-plan.md)
-- [متعقّب DNS اللامركزي وgateway](https://github.com/hyperledger-iroha/iroha/blob/master/roadmap.md#core-workstreams)
+- [Открытый DNS-шлюз](https://github.com/hyperledger-iroha/iroha/blob/master/roadmap.md#core-workstreams)

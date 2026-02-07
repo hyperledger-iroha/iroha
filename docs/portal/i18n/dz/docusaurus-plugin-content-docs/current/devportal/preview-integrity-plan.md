@@ -8,36 +8,38 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Checksum-Gated Preview Plan
 sidebar_label: Preview Integrity Plan
 description: Implementation roadmap for securing the docs portal preview pipeline with checksum validation and notarised artefacts.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This plan outlines the remaining work required to make every portal preview artefact verifiable before publication. The goal is to guarantee that reviewers download the exact snapshot built in CI, that the checksum manifest is immutable, and that the preview is discoverable through SoraFS with Norito metadata.
+འཆར་གཞི་འདི་གིས་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ དྲྭ་ཚིགས་སྔོན་ལྟ་གི་ཅ་ཆས་ཚུ་ བདེན་དཔྱད་འབད་ཚུགསཔ་སྦེ་བཟོ་ནི་གི་དོན་ལུ་ ལྷག་ལུས་ལཱ་ཚུ་ གསལ་བཀོད་འབདཝ་ཨིན། དམིགས་ཡུལ་འདི་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ CI ནང་ལུ་བཟོ་བསྐྲུན་འབད་མི་ པར་རིས་ངོ་མ་འདི་ ཕབ་ལེན་འབད་ནི་གི་དོན་ལུ་ཨིནམ་དང་ ཅེག་སམ་ གསལ་སྟོན་འདི་ འགྱུར་བཅོས་འགྱོ་མ་ཚུགསཔ་ཨིནམ་དང་ སྔོན་ལྟ་འདི་ I18NT0000000007X བརྒྱུད་དེ་ Norito མེ་ཊ་ཌེ་ཊ་བརྒྱུད་དེ་ འཚོལ་ཞིབ་འབད་ཚུགསཔ་ཨིན།
 
-## Objectives
+## དམིགས་ཡུལ།
 
-- **Deterministic builds:** Ensure `npm run build` produces reproducible output and always emits `build/checksums.sha256`.
-- **Verified previews:** Require every preview artefact to ship with a checksum manifest and refuse publication when verification fails.
-- **Norito-published metadata:** Persist preview descriptors (commit metadata, checksum digest, SoraFS CID) as Norito JSON so governance tooling can audit releases.
-- **Operator tooling:** Provide a one-step verification script that consumers can run locally (`./docs/portal/scripts/preview_verify.sh --build-dir build --descriptor <path> --archive <path>`); the script now wraps the checksum + descriptor validation flow end-to-end. The standard preview command (`npm run serve`) now invokes this helper automatically before `docusaurus serve` so local snapshots stay checksum-gated (with `npm run serve:verified` kept as an explicit alias).
+- ** ཌི་ཊར་མི་ནི་སི་ཊིག་བཟོ་བསྐྲུན་ཚུ་:** `npm run build` གིས་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ཐོན་འབྲས་བཟོཝ་ཨིནམ་དང་ ཨ་རྟག་རང་ `build/checksums.sha256` བཏོནམ་ཨིན།
+- **སྔོན་ལྟ་ཚུ་:* བདེན་དཔྱད་འཐུས་ཤོར་བྱུང་པའི་སྐབས་ ཅེག་སམ་གསལ་སྟོན་དང་གཅིག་ཁར་ གྲུ་ནང་སྔོན་ལྟའི་ཅ་མཛོད་དགོཔ་ཨིན།
+- **Norito-published metadata:** མེ་ཊ་ཌེ་ཊ་ ཞིབ་དཔྱད་ ཌའི་ཇེསཊ་ SoraFS CID) འདི་ I18NT000000003X JSON གིས་ རྩིས་ཞིབ་འབད་ཚུགས།
+- **Operator tooling:** ཉོ་སྤྱོད་པ་ཚུ་གིས་ ནང་འཁོད་ལས་གཡོག་བཀོལ་ཚུགས་པའི་ གོ་རིམ་གཅིག་གི་བདེན་དཔྱད་ཡིག་ཆ་ཅིག་བྱིན། (I18NI0000020X); ད་ལྟོ་ཡིག་གཟུགས་འདི་གིས་ ཅེག་སམ་ + འགྲེལ་བཤད་བདེན་དཔྱད་རྒྱུན་འགྲུལ་མཐའ་མ་ལས་མཇུག་ཚུན་ཚོད་ བཀབ་བཞགཔ་ཨིན། ཚད་ལྡན་སྔོན་ལྟའི་བརྡ་བཀོད་ (I18NI0000021X) གིས་ ད་ལྟོ་ I18NI000000022 གི་ཧེ་མ་ གྲོགས་རམ་འདི་ རང་བཞིན་གྱིས་ བསྐུལ་མ་འབདཝ་ལས་ ཉེ་གནས་ཀྱི་ པར་ལེན་ཚུ་ བརྟག་དཔྱད་འབད་དེ་སྡོད་སྡོདཔ་ཨིན།
 
-## Phase 1 — CI Enforcement
+## གོ་རིམ་དང་པོ་ — CI འཛིན།
 
-1. Update `.github/workflows/docs-portal-preview.yml` to:
-   - Run `node docs/portal/scripts/write-checksums.mjs` after the Docusaurus build (already invoked locally).
-   - Execute `cd build && sha256sum -c checksums.sha256` and fail the job on mismatch.
-   - Package the build directory as `artifacts/preview-site.tar.gz`, copy the checksum manifest, call `scripts/generate-preview-descriptor.mjs`, and execute `scripts/sorafs-package-preview.sh` with a JSON config (see `docs/examples/sorafs_preview_publish.json`) so the workflow emits both metadata and a deterministic SoraFS bundle.
-   - Upload the static site, metadata artefacts (`docs-portal-preview`, `docs-portal-preview-metadata`), and the SoraFS bundle (`docs-portal-preview-sorafs`) so the manifest, CAR summary, and plan can be inspected without re-running the build.
-2. Add a CI badge comment summarising the checksum verification result in pull requests (✅ implemented via `docs-portal-preview.yml` GitHub Script comment step).
-3. Document the workflow in `docs/portal/README.md` (CI section) and link to the verification steps in the publishing checklist.
+1. ལས་: I18NI0000024X དུས་ཚོད།
+   - I18NT000000000X བཟོ་བསྐྲུན་གྱི་ཤུལ་ལས་ I18NI000000025X གཡོག་བཀོལ།
+   - I18NI000000026X ལག་ལེན་འཐབ་སྟེ་ མ་མཐུན་པའི་ལཱ་འདི་ འཐུས་ཤོར་བྱུང་ཡོདཔ།
+   - བཟོ་བསྐྲུན་སྣོད་ཐོ་འདི་ `artifacts/preview-site.tar.gz` སྦེ་ ཐུམ་སྒྲིལ་འབད་ཞིནམ་ལས་ ཅེག་སམ་ གསལ་སྟོན་འདི་འདྲ་བཤུས་རྐྱབ་ཞིནམ་ལས་ I18NI0000028X ལུ་འབོ་སྟེ་ `scripts/sorafs-package-preview.sh` འདི་ JSON རིམ་སྒྲིག་དང་གཅིག་ཁར་ ལག་ལེན་འཐབ་ཨིན། SoraFS བསྡམས།
+   - གནས་སྟངས་མེད་པའི་ས་ཁོངས་དང་ མེ་ཊ་ཌེ་ཊ་ ཅ་རྙིང་ཚུ་ (`docs-portal-preview`, I18NI00000000322) དེ་ལས་ SoraFS བཱན་ཌལ་ (I18NI0000000003X) དེ་ གསལ་སྟོན་དང་ CAR བཅུད་བསྡུས་ དེ་ལས་ འཆར་གཞི་ཚུ་ བཟོ་བསྐྲུན་འདི་ ལོག་མ་བཏང་པར་ བརྟག་དཔྱད་འབད་ཚུགས།
+༢. འཐེན་འཕྲུལ་གྱི་ཞུ་བ་ཚུ་ བརྟག་ཞིབ་གྲུབ་འབྲས་ལུ་ བརྟག་ཞིབ་གྲུབ་འབྲས་ བཅུད་བསྡུས་འབད་མི་ སི་ཨའི་ངོ་རྟགས་ཁ་སྐོང་རྐྱབས་ (✅ I18NI000000034X GitHub Script བསམ་བརྗོད་རིམ་པ་) བརྒྱུད་དེ་ ལག་ལེན་འཐབ་དགོ།)
+༣ ལཱ་གི་རྒྱུན་རིམ་འདི་ `docs/portal/README.md` (CI དབྱེ་ཚན་) ནང་ ཡིག་ཐོག་ལུ་བཀོད་ཞིནམ་ལས་ དཔར་བསྐྲུན་ཞིབ་དཔྱད་ཐོ་ཡིག་ནང་ བདེན་དཔྱད་རིམ་པ་ལུ་འབྲེལ་མཐུད་འབད།
 
-## Verification Script
+## བདེན་དཔྱད་ཡིག་ཆ།
 
-`docs/portal/scripts/preview_verify.sh` validates downloaded preview artefacts without requiring manual `sha256sum` invocations. Use `npm run serve` (or the explicit `npm run serve:verified` alias) to run the script and launch `docusaurus serve` in one step when sharing local snapshots. The verification logic:
+I18NI000000036X གིས་ ལག་ཐོག་ལས་ `sha256sum` འབོད་བརྡ་ཚུ་ མ་དགོ་པར་ ཕབ་ལེན་འབད་ཡོད་པའི་ སྔོན་ལྟའི་ཅ་ཆས་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། ཡིག་ཚུགས་འདི་གཡོག་བཀོལ་ནི་དང་ བརྗེ་སོར་འབད་ཡོད་པའི་ས་གནས་ཀྱི་པར་ཚུ་ གོ་རིམ་གཅིག་ནང་ I18NI000000038X (ཡང་ན་ གསལ་རི་རི་ I18NI0000039X alias) ལག་ལེན་འཐབ། བདེན་དཔྱད་ཚད་མ་འདི:
 
-1. Runs the appropriate SHA tool (`sha256sum` or `shasum -a 256`) against `build/checksums.sha256`.
-2. Optionally compares the preview descriptor’s `checksums_manifest` digest/filename and, when provided, the preview archive digest/filename.
-3. Exits non-zero when any mismatch is detected so reviewers can block tampered previews.
+1. འོས་འཚམ་གྱི་ShA ལག་ཆས་ (`sha256sum` ཡང་ན་ I18NI000000042X) འདི་ `build/checksums.sha256` ལུ་འགྱོཝ་ཨིན།
+2. གདམ་ཁའི་ཐོག་ལས་ སྔོན་ལྟའི་འགྲེལ་བཤད་ཀྱི་ `checksums_manifest` བཞུ་བཅོས་/ཡིག་སྣོད་མིང་དང་ བྱིན་པའི་སྐབས་ སྔོན་ལྟ་ཡིག་མཛོད་བཞུ་ནི་/ཡིག་སྣོད་མིང་འདི་བྱིན་པའི་སྐབས་ ག་བསྡུར་འབདཝ་ཨིན།
+༣ མ་མཐུནམ་གང་རུང་ཅིག་ བརྟག་དཔྱད་འབད་བའི་སྐབས་ ཀླད་ཀོར་མེན་པའི་ ཕྱིར་ཐོན་ཚུ་གིས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ སྔོན་ལྟ་ཚུ་ བཀག་ཆ་འབད་ཚུགས།
 
-Example usage (after extracting the CI artefacts):
+དཔེ་མཚོན་ལག་ལེན་ (CI ཅ་རྙིང་ཚུ་བཏོན་ཚར་བའི་ཤུལ་ལས་):
 
 ```bash
 ./docs/portal/scripts/preview_verify.sh \
@@ -46,37 +48,37 @@ Example usage (after extracting the CI artefacts):
   --archive artifacts/preview-site.tar.gz
 ```
 
-CI and release engineers should call the script whenever they download a preview bundle or attach artefacts to a release ticket.
+CI དང་ གསར་བཏོན་འབད་མི་ བཟོ་རིག་པ་ཚུ་གིས་ གསར་བཏོན་འབད་ནི་གི་དོན་ལུ་ སྔོན་ལྟའི་བང་རིམ་ཡང་ན་ ཅ་ཆས་ཚུ་ ཕབ་ལེན་འབད་བའི་སྐབས་ ཡིག་ཆ་འདི་ལུ་ ཁ་སླབ་དགོཔ་ཨིན།
 
-## Phase 2 — SoraFS Publishing
+## གོ་རིམ་ ༢ པ་ — SoraFS དཔེ་སྐྲུན་ཁང་།
 
-1. Extend the preview workflow with a job that:
-   - Uploads the built site to the SoraFS staging gateway using `sorafs_cli car pack` and `manifest submit`.
-   - Captures the returned manifest digest and SoraFS CID.
-   - Serialises `{ commit, branch, checksum_manifest, cid }` into Norito JSON (`docs/portal/preview/preview_descriptor.json`).
-2. Store the descriptor alongside the build artefact and expose the CID in the pull-request comment.
-3. Add integration tests that exercise `sorafs_cli` in dry-run mode to ensure future changes keep the metadata schema stable.
+༡ སྔོན་ལྟའི་ལཱ་གི་རྒྱུན་རིམ་འདི་ ལཱ་ཅིག་དང་གཅིག་ཁར་ རྒྱ་བསྐྱེད་འབད།
+   - བཟོ་བསྐྲུན་འབད་ཡོད་པའི་ས་ཁོངས་འདི་ I18NI000000045X དང་ I18NI000000046 X ལག་ལེན་འཐབ་སྟེ་ SoraFS གི་གནས་རིམ་ནང་ལུ་ སྐྱེལ་བཙུགས་འབདཝ་ཨིན།
+   - སླར་ལོག་འབད་ཡོད་པའི་གསལ་སྟོན་ ཌའི་སའིཊ་དང་ I18NT0000013X སི་ཨའི་ཌི་ཚུ་ བཟུང་ཡོདཔ་ཨིན།
+   - རིམ་སྒྲིག་ `{ commit, branch, checksum_manifest, cid }` I18NT000000004X ནང་ JSON (I18NI000000048X).
+༢ འགྲེལ་བཤད་འདི་ བཟོ་བསྐྲུན་གྱི་ཅ་ཆས་དང་གཅིག་ཁར་ གསོག་འཇོག་འབད་དེ་ འཐེན་དགོ་པའི་ཞུ་བ་ནང་ སི་ཨའི་ཌི་འདི་ གསལ་སྟོན་འབད།
+༣༽ མ་འོངས་པའི་བསྒྱུར་བཅོས་ཚུ་ མེ་ཊ་ཌེ་ཊ་འཆར་གཞི་ བརྟན་ཏོག་ཏོ་སྦེ་བཞག་ནི་ལུ་ སྐམ་གཡོག་ཐབས་ལམ་ནང་ I18NI000000049X ལག་ལེན་འཐབ་མི་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ཁ་སྐོང་འབད།
 
-## Phase 3 — Governance & Auditing
+## གོ་རིམ་༣ པ་ — གཞུང་སྐྱོང་དང་ རྩིས་ཞིབ་འབད་ནི།
 
-1. Publish a Norito schema (`PreviewDescriptorV1`) describing the descriptor structure under `docs/portal/schemas/`.
-2. Update the DOCS-SORA publishing checklist to require:
-   - Running `sorafs_cli manifest verify` against the uploaded CID.
-   - Recording the checksum manifest digest and CID in the release PR description.
-3. Wire the governance automation to cross-check the descriptor against the checksum manifest during release votes.
+1. I18NI000005X གི་ལས་རིམ་ (`PreviewDescriptorV1`) འདི་ `docs/portal/schemas/` གི་འོག་ལུ་ འགྲེལ་བཤད་ཀྱི་གཞི་བཀོད་འགྲེལ་བཤད་རྐྱབ་དོ།
+2. DOCS-I1NT00000016X དགོས་མཁོའི་ ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ དུས་མཐུན་བཟོ་དགོ།
+   - སྐྱེལ་བཙུགས་འབད་ཡོད་པའི་སི་ཨའི་ཌི་ལུ་ `sorafs_cli manifest verify` གཡོག་བཀོལ།
+   - བཏོན་གཏང་པི་ཨར་འགྲེལ་བཤད་ནང་ ཅེག་སམ་ གསལ་སྟོན་དང་ སི་ཨའི་ཌི་འདི་ཐོ་བཀོད་འབད་ནི།
+༣ གཞུང་སྐྱོང་རང་བཞིན་གྱིས་ འགྲེམ་ཐོག་ཚོགས་རྒྱན་གྱི་སྐབས་ལུ་ ཞིབ་དཔྱད་སམ་གསལ་སྟོན་ལུ་འགོག་པའི་ འགྲེལ་བཤད་འདི་ བརྒལ་ནིའི་དོན་ལུ་ གློག་ཐག་བཏང་ནི།
 
-## Deliverables & Ownership
+## བུ་ལོན་དང་བདག་དབང་།
 
-| Milestone | Owner(s) | Target | Notes |
-|-----------|----------|--------|-------|
-| CI checksum enforcement landed | Docs Infrastructure | Week 1 | Adds failure gate + artefact uploads. |
-| SoraFS preview publishing | Docs Infrastructure / Storage Team | Week 2 | Requires access to staging credentials and Norito schema updates. |
-| Governance integration | Docs/DevRel Lead / Governance WG | Week 3 | Publishes schema + updates checklists and roadmap entries. |
+| མའིལ་སི་ཊོན་ | ཇོ་བདག་(ཚུ་) | དམིགས་ཚད་ | དྲན་ཐོ། |
+|---------------------------------------------- -------------------
+| CI བརྟག་དཔྱད་གསུམ་བསྟར་འགོག་བྱེད་པ་ཆགས་ཡོད། | Docs གཞི་རྩ། | བདུན་ཕྲག་ ༡ | འཐུས་ཤོར་གྱི་སྒོ་ར་ + ཅ་ཆས་སྐྱེལ་བཙུགས་ཚུ་ཁ་སྐོང་འབདཝ་ཨིན། |
+| I18NT0000014X སྔོན་ལྟ་དཔེ་སྐྲུན་ | ཡིག་ཆ་གཞི་རིམ་ / གསོག་འཇོག་སྡེ་ཚན། | བདུན་ཕྲག་ ༢ | གནས་རིམ་གྱི་ངོ་རྟགས་དང་ I18NT0000006X ལས་རིམ་དུས་མཐུན་ཚུ་ལུ་འཛུལ་སྤྱོད་འབད་དགོཔ་ཨིན། |
+| གཞུང་སྐྱོང་མཉམ་བསྡོམས་ | Docs/DevRel Lead / གཞུང་སྐྱོང་ WG | བདུན་ཕྲག་ ༣ | འཆར་གཞིའི་དཔེ་བསྐྲུན་ + དུས་མཐུན་ཚུ་ ཞིབ་དཔྱད་ཐོ་ཡིག་དང་ ལམ་གྱི་ས་ཁྲ་ཐོ་བཀོད་ཚུ། |
 
-## Open Questions
+## དྲི་བ་ཁ་ཕྱེ།
 
-- Which SoraFS environment should hold preview artefacts (staging vs. dedicated preview lane)?
-- Do we need dual signatures (Ed25519 + ML-DSA) on the preview descriptor before publication?
-- Should the CI workflow pin the orchestrator configuration (`orchestrator_tuning.json`) when running `sorafs_cli` to keep manifests reproducible?
+- I18NT0000015X མཐའ་འཁོར་ག་འདི་ སྔོན་ལྟ་གི་ཅ་ཆས་ཚུ་ (གནས་རིམ་དང་ བློ་གཏད་ཅན་གྱི་སྔོན་ལྟའི་ལམ་) འཛིན་དགོཔ་ཨིན་ན།
+- ང་བཅས་ལུ་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ སྔོན་ལྟའི་འགྲེལ་བཤད་ནང་ མཚན་རྟགས་གཉིས་ལྡན་ (Ed25519 + ML-DSA) དགོཔ་ཨིན་ན?
+- གསལ་སྟོན་ཚུ་ བསྐྱར་བཟོ་འབད་བཞག་ནིའི་དོན་ལུ་ `sorafs_cli` གཡོག་བཀོལ་བའི་སྐབས་ སི་ཨའི་ལཱ་གི་རྒྱུན་རིམ་འདི་ རོལ་དབྱངས་སྒྲིག་ཆས་རིམ་སྒྲིག་ (`orchestrator_tuning.json`) ལུ་བཙུགས་དགོཔ་ཨིན་ན?
 
-Capture decisions in `docs/portal/docs/reference/publishing-checklist.md` and update this plan once the unknowns are resolved.
+མ་ཤེས་མི་ཚུ་ བསལ་ཚར་བའི་ཤུལ་ལས་ Norito ནང་ གྲོས་ཐག་ཚུ་ བཟུང་ཞིནམ་ལས་ དུས་མཐུན་བཟོ་དགོ།

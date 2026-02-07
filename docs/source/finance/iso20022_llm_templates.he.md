@@ -6,22 +6,23 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8d4569e75fb219979ee7c5e776427336bc43c155a24210af977e7a8e6ee1c8be
 source_last_modified: "2026-01-03T18:08:00.803277+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! ISO 20022 clarification prompt templates for roadmap Milestone F3.
+//! תבניות הבראה להבהרת ISO 20022 עבור מפת הדרכים Milestone F3.
 
-# ISO 20022 Clarification Prompt Templates
+# תבניות הנחיות הבהרה של ISO 20022
 
-These templates help seed requests to LLM (or other assistants) when financial-settlement engineers need quick references from ISO 20022 documentation or market-structure norms. Always include concrete payload samples and cite the specific message families you are working on so responses remain deterministic and audit-friendly.
+תבניות אלו מסייעות ל-Seed בקשות ל-LLM (או עוזרים אחרים) כאשר מהנדסי יישוב פיננסי זקוקים להפניות מהירות מתיעוד ISO 20022 או נורמות מבנה שוק. כלול תמיד דוגמאות מטען קונקרטיות וציטט את משפחות המסרים הספציפיות עליהן אתה עובד כדי שהתגובות יישארו דטרמיניסטיות וידידותיות לביקורת.
 
-## Before You Ask
-- Identify the ISO 20022 message (`MsgDefId`, variant, market practice pack) and version.
-- Collect the Norito/ISI context: instruction name, legs, optional parameters, expected execution timeline.
-- Note which artefacts you already have (schema snippet, BR-n validation rule, market practice note).
-- Clarify whether you need regulatory guidance (e.g., CPMI-IOSCO) or operational norms (cut-off windows, liquidity buffers).
+## לפני שאתה שואל
+- זהה את הודעת ISO 20022 (`MsgDefId`, גרסה, חבילת שיטות שוק) והגרסה.
+- אסוף את ההקשר Norito/ISI: שם הוראות, רגליים, פרמטרים אופציונליים, ציר זמן צפוי לביצוע.
+- שימו לב אילו חפצים כבר יש לכם (קטע סכימה, כלל אימות BR-n, הערת נוהג בשוק).
+- הבהירו אם אתם זקוקים להנחיות רגולטוריות (למשל, CPMI-IOSCO) או נורמות תפעוליות (חלונות ניתוק, מאגרי נזילות).
 
-## Template 1 – Field Mapping & Semantics
+## תבנית 1 - מיפוי שדה וסמנטיקה
 ```text
 You are LLM acting as an ISO 20022 integration analyst.
 Goal: map {{Norito_instruction_or_field}} in Hyperledger Iroha to ISO 20022 {{message_id}} (version {{version}}).
@@ -38,7 +39,7 @@ Questions:
 Return the answer as a table with `Field`, `ISO Path`, `Rules`, `Notes`.
 ```
 
-## Template 2 – Settlement Workflow & Timeline Clarifications
+## תבנית 2 - זרימת עבודה והבהרות ציר זמן
 ```text
 You are LLM advising on DvP/PvP settlement workflows referencing ISO 20022 repo/payments messages.
 Scenario: {{brief_repo_or_pvp_scenario}}, including legs, currencies, and counterparties.
@@ -55,7 +56,7 @@ Questions:
 Deliver the answer as bullet lists grouped by phase, citing ISO references (e.g., sese.023 BR23).
 ```
 
-## Template 3 – Validation Rules & Code Sets
+## תבנית 3 - כללי אימות וערכות קוד
 ```text
 You are LLM validating ISO 20022 message content.
 Message: {{message_id_version}} for {{business_process}}.
@@ -68,7 +69,7 @@ Tasks:
 Produce the result as a checklist with `Requirement`, `Reference`, `Implementation Hint`.
 ```
 
-## Template 4 – Market-Structure & Regulatory Context
+## תבנית 4 - מבנה שוק והקשר רגולטורי
 ```text
 You are LLM providing market-structure references for ISO 20022 settlement.
 Region/Market: {{market_or_region}}
@@ -81,7 +82,7 @@ Need:
 Return concise paragraphs with citations and note where operator documentation should reference these rules.
 ```
 
-## Template 5 – Exception Handling & Reconciliation
+## תבנית 5 - טיפול ותיאום חריגים
 ```text
 You are LLM focusing on exception handling for ISO 20022-driven settlements.
 Scenario: {{failure_case}} (e.g., counterparty fails cash leg).
@@ -94,7 +95,7 @@ Questions:
 Respond with a step-by-step outline and map each action to ISO codes.
 ```
 
-## Usage Notes
-- Store filled-in prompts in the issue tracker or design docs to ensure conversations remain auditable.
-- When sharing external references, link to official ISO documentation portals or SMPG extracts; avoid unpublished material.
-- Update this template set whenever new ISO message families or market practices enter scope (e.g., pacs.009, derivatives collateral).
+## הערות שימוש
+- אחסן הנחיות מלאות במעקב הבעיות או במסמכי העיצוב כדי להבטיח שהשיחות יישארו ניתנות לביקורת.
+- בעת שיתוף הפניות חיצוניות, קישור לפורטלים רשמיים של תיעוד ISO או תמציות SMPG; להימנע מחומר שלא פורסם.
+- עדכן ערכת תבנית זו בכל פעם שמשפחות הודעות ISO חדשות או נוהלי שוק נכנסים להיקף (למשל, pacs.009, בטחונות נגזרים).

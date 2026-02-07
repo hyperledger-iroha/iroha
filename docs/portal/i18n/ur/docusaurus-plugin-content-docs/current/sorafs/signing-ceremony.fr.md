@@ -4,82 +4,82 @@ direction: rtl
 source: docs/portal/docs/sorafs/signing-ceremony.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: signing-ceremony
-title: Remplacement de la ceremony de signature
-description: Comment le Parlement Sora approuve et distribue les fixtures du chunker SoraFS (SF-1b).
-sidebar_label: Ceremonie de signature
+ID: سائننگ-سیریمنی
+عنوان: دستخطی تقریب کی تبدیلی
+تفصیل: سورہ پارلیمنٹ کس طرح چنکر فکسچر SoraFS (SF-1B) کی منظوری اور تقسیم کرتی ہے۔
+سائڈبار_لیبل: دستخط کرنے کی تقریب
 ---
 
-> Roadmap : **SF-1b — approbations des fixtures du Parlement Sora.**
-> Le workflow du Parlement remplace l'ancienne « ceremonie de signature du conseil » hors ligne.
+> روڈ میپ: ** SF-1B-سورہ پارلیمنٹ فکسچر کی منظوری۔ **
+> پارلیمنٹ کا ورک فلو پرانے آف لائن "کونسل پر دستخط کرنے کی تقریب" کی جگہ لے لیتا ہے۔
 
-Le rituel manuel de signature des fixtures du chunker SoraFS est retire. Toutes les
-approbations passent desormais par le **Parlement Sora**, la DAO basee sur le tirage
-au sort qui gouverne Nexus. Les membres du Parlement bloquent du XOR pour obtenir la
-citoyennete, tournent entre panels et votent on-chain pour approuver, rejeter ou
-revenir sur des releases de fixtures. Ce guide explique le processus et le tooling
-pour les developers.
+چنکر فکسچر SoraFS پر دستخط کرنے کے لئے دستی رسم کو ہٹا دیا گیا ہے۔ سب
+منظوری اب ** سورہ پارلیمنٹ ** سے گزرتی ہے ، جو قرعہ اندازی پر مبنی ڈی اے او ہے
+اس قسمت سے جو Nexus پر حکومت کرتا ہے۔ پارلیمنٹ کے ممبران بلاک XOR حاصل کریں
+شہریت ، پینلز کے درمیان گھومیں اور منظور کرنے کے لئے آن چین کو ووٹ دیں ، مسترد کریں یا
+فکسچر ریلیز پر واپس جائیں۔ یہ گائیڈ عمل اور ٹولنگ کی وضاحت کرتا ہے
+ڈویلپرز کے لئے۔
 
-## Vue d'ensemble du Parlement
+## پارلیمنٹ کا جائزہ
 
-- **Citoyennete** — Les operateurs immobilisent le XOR requis pour s'inscrire comme
-  citoyens et devenir eligibles au tirage au sort.
-- **Panels** — Les responsabilites sont reparties entre des panels rotatifs
-  (Infrastructure, Moderation, Tresorerie, ...). Le Panel Infrastructure detient
-  les approbations de fixtures SoraFS.
-- **Tirage au sort et rotation** — Les sieges de panel sont reattribues selon la
-  cadence specifiee dans la constitution du Parlement afin qu'aucun groupe ne
-  monopolise les approbations.
+- ** شہریت ** - آپریٹرز کو رجسٹر کرنے کے لئے ضروری XOR میں تالا لگا
+  شہری اور ڈرائنگ کے اہل ہوجائیں۔
+- ** پینل ** - گھومنے والے پینلز کے مابین ذمہ داریاں تقسیم کی جاتی ہیں
+  (انفراسٹرکچر ، اعتدال پسندی ، خزانے ، ...)۔ انفراسٹرکچر پینل کا حامل ہے
+  حقیقت کی منظوری SoraFS۔
+- ** ڈرائنگ اور گردش ** - پینل کی نشستوں کو کے مطابق دوبارہ تفویض کیا گیا ہے
+  پارلیمنٹ کے آئین میں اس کی رفتار متعین کی گئی ہے تاکہ کوئی گروپ نہ ہو
+  اجارہ داریوں کی منظوری۔
 
-## Flux d'approbation des fixtures
+## حقیقت کی منظوری کا بہاؤ
 
-1. **Soumission de proposition**
-   - Le Tooling WG televerse le bundle candidat `manifest_blake3.json` et le diff
-     de fixture dans le registre on-chain via `sorafs.fixtureProposal`.
-   - La proposition enregistre le digest BLAKE3, la version semantique et les notes
-     de changement.
-2. **Revue et vote**
-   - Le Panel Infrastructure recoit l'affectation via la file de taches du Parlement.
-   - Les membres inspectent les artefacts CI, executent des tests de parite et
-     emettent des votes ponderes on-chain.
-3. **Finalisation**
-   - Une fois le quorum atteint, le runtime emet un evenement d'approbation incluant
-     le digest canonique du manifest et l'engagement Merkle du payload de fixture.
-   - L'evenement est duplique dans le registry SoraFS afin que les clients puissent
-     recuperer le dernier manifest approuve par le Parlement.
-4. **Distribution**
-   - Les helpers CLI (`cargo xtask sorafs-fetch-fixture`) recuperent le manifest
-     approuve via Nexus RPC. Les constantes JSON/TS/Go du depot restent synchronisees
-     en relancant `export_vectors` et en validant le digest par rapport a l'enregistrement
-     on-chain.
+1. ** تجویز پیش کرنا **
+   - ٹولنگ ڈبلیو جی امیدوار کے بنڈل `manifest_blake3.json` اور فرق کو اپ لوڈ کرتا ہے
+     `sorafs.fixtureProposal` کے ذریعے آن چین رجسٹر میں حقیقت۔
+   - تجویز بلیک 3 ڈائجسٹ ، سیمنٹک ورژن اور نوٹوں کو بچاتا ہے
+     تبدیلی کی
+2. ** جائزہ لیں اور ووٹ دیں **
+   - انفراسٹرکچر پینل پارلیمنٹ ٹاسک قطار کے ذریعے مختص وصول کرتا ہے۔
+   - ممبران سی آئی نمونے کا معائنہ کریں ، برابری کے ٹیسٹ چلائیں اور
+     وزن والے ووٹوں کو آن چین پر خارج کریں۔
+3. ** حتمی شکل **
+   - ایک بار جب کورم پہنچ جاتا ہے تو ، رن ٹائم ایک منظوری کا واقعہ خارج کرتا ہے جس میں بھی شامل ہے
+     منشور کی کیننیکل ڈائجسٹ اور حقیقت پے لوڈ کا مرکل کا عزم۔
+   - ایونٹ کو رجسٹری SoraFS میں نقل کیا گیا ہے تاکہ کلائنٹ کرسکیں
+     پارلیمنٹ کے ذریعہ منظور شدہ تازہ ترین منشور کو بازیافت کریں۔
+4. ** تقسیم **
+   - سی ایل آئی مددگار (`cargo xtask sorafs-fetch-fixture`) منشور کو بازیافت کریں
+     Nexus RPC کے ذریعے ٹرسٹ۔ ذخیرہ میں JSON/TS/GO مستقل ہم آہنگ رہتے ہیں
+     `export_vectors` کو دوبارہ شروع کرکے اور ریکارڈ کے خلاف ڈائجسٹ کی توثیق کرکے
+     آن چین
 
-## Workflow developpeur
+## ڈویلپر ورک فلو
 
-- Regenerer les fixtures avec :
+- فکسچر کو دوبارہ تخلیق کریں:
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Utiliser le helper de fetch du Parlement pour telecharger l'enveloppe approuvee,
-  verifier les signatures et rafraichir les fixtures locales. Pointer `--signatures`
-  vers l'enveloppe publiee par le Parlement ; le helper resout le manifest associe,
-  recalcule le digest BLAKE3 et impose le profil canonique `sorafs.sf1@1.0.0`.
+- منظور شدہ لفافے کو ڈاؤن لوڈ کرنے کے لئے پارلیمنٹ بازیافت مددگار کا استعمال کریں ،
+  دستخطوں کو چیک کریں اور مقامی فکسچر کو ریفریش کریں۔ پوائنٹر `--signatures`
+  پارلیمنٹ کے ذریعہ شائع کردہ لفافے کی طرف۔ مددگار وابستہ منشور کو حل کرتا ہے ،
+  بلیک 3 ڈائجسٹ کو دوبارہ گنتی کرتا ہے اور کیننیکل پروفائل `sorafs.sf1@1.0.0` کو مسلط کرتا ہے۔
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
   --signatures https://nexus.example/api/sorafs/manifest_signatures.json \
   --out fixtures/sorafs_chunker
-```
+````--manifest` کو پاس کریں اگر منشور کسی اور URL میں ہے۔ لفافے نمبر
+جب تک `--allow-unsigned` مقامی دھواں رنز کے لئے فعال نہیں ہے اس وقت تک دستخط شدہ سے انکار کردیا جاتا ہے۔
 
-Passer `--manifest` si le manifest se trouve a une autre URL. Les enveloppes non
-signees sont refusees sauf si `--allow-unsigned` est active pour des smoke runs locaux.
-
-- Pour valider un manifest via un gateway de staging, cibler Torii plutot que des
-  payloads locaux :
+- اسٹیجنگ گیٹ وے کے ذریعے کسی مینی فیسٹ کو توثیق کرنے کے لئے ، اس کے بجائے Torii کو نشانہ بنائیں
+  مقامی پے لوڈ:
 
 ```bash
 sorafs-fetch \
@@ -90,31 +90,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Le CI local n'exige plus un roster `signer.json`.
-  `ci/check_sorafs_fixtures.sh` compare l'etat du repo avec le dernier engagement
-  on-chain et echoue lorsqu'ils divergent.
+- مقامی CI کو اب `signer.json` روسٹر کی ضرورت نہیں ہے۔
+  `ci/check_sorafs_fixtures.sh` آخری عہد کے ساتھ ریپو اسٹیٹ کا موازنہ کرتا ہے
+  آن چین اور جب وہ موڑ دیتے ہیں تو ناکام ہوجاتے ہیں۔
 
-## Notes de gouvernance
+## گورننس نوٹس
 
-- La constitution du Parlement gouverne le quorum, la rotation et l'escalade ;
-  aucune configuration au niveau du crate n'est necessaire.
-- Les rollbacks d'urgence sont geres via le panel de moderation du Parlement. Le
-  Panel Infrastructure depose une proposition de revert qui reference le digest
-  precedent du manifest, et la release est remplacee une fois approuvee.
-- Les approbations historiques restent disponibles dans le registry SoraFS pour
-  un replay forensique.
+- پارلیمنٹ کا آئین کورم ، گردش اور اضافے پر حکومت کرتا ہے۔
+  کوئی کریٹ سطح کی تشکیل ضروری نہیں ہے۔
+- ایمرجنسی رول بیکس کا انتظام پارلیمنٹ کے اعتدال پسند پینل کے ذریعے کیا جاتا ہے۔
+  پینل انفراسٹرکچر ایک ریورٹ تجویز پیش کرتا ہے جو ڈائجسٹ کا حوالہ دیتا ہے
+  مینی فیسٹ کا پچھلا حصہ ، اور ایک بار منظور ہونے کے بعد رہائی کو تبدیل کردیا گیا ہے۔
+- تاریخی منظوری رجسٹری SoraFS میں دستیاب ہے
+  ایک فرانزک ری پلے۔
 
-## FAQ
+## عمومی سوالنامہ
 
-- **Ou est passe `signer.json` ?**  
-  Il a ete supprime. Toute attribution de signature vit on-chain ; `manifest_signatures.json`
-  dans le depot n'est qu'un fixture developpeur qui doit correspondre au dernier
-  evenement d'approbation.
+- ** `signer.json` کہاں گیا؟ **  
+  اسے حذف کردیا گیا ہے۔ تمام دستخطی انتساب چین پر رہتا ہے۔ `manifest_signatures.json`
+  ذخیرہ میں صرف ایک ڈویلپر کی حقیقت ہے جو آخری کے مطابق ہونی چاہئے
+  منظوری کا واقعہ۔
 
-- **Faut-il encore des signatures Ed25519 locales ?**  
-  Non. Les approbations du Parlement sont stockees comme artefacts on-chain. Les fixtures
-  locales existent pour la reproductibilite mais sont validees contre le digest du Parlement.
+- ** کیا ہمیں ابھی بھی مقامی ED25519 دستخطوں کی ضرورت ہے؟ **  
+  نہیں۔ پارلیمانی منظوریوں کو آن چین نمونے کے طور پر محفوظ کیا جاتا ہے۔ فکسچر
+  مقامی افراد دوبارہ تولیدی صلاحیت کے لئے موجود ہیں لیکن پارلیمنٹ کے ڈائجسٹ کے خلاف توثیق کی جاتی ہیں۔
 
-- **Comment les equipes surveillent-elles les approbations ?**  
-  Abonnez-vous a l'evenement `ParliamentFixtureApproved` ou interrogez le registry via
-  Nexus RPC pour obtenir le digest actuel du manifest et la liste des membres du panel.
+- ** ٹیمیں منظوریوں کی نگرانی کیسے کرتی ہیں؟ **  
+  ایونٹ `ParliamentFixtureApproved` کو سبسکرائب کریں یا رجسٹری کے ذریعے استفسار کریں
+  Nexus RPC موجودہ مینی فیسٹ ڈائجسٹ اور پینل ممبروں کی فہرست حاصل کرنے کے لئے۔

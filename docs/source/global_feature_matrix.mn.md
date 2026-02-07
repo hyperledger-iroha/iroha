@@ -7,111 +7,104 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T23:46:10.135119+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# Глобал онцлог матриц
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+Домог: `◉` бүрэн хэрэгжсэн · `○` ихэвчлэн хэрэгжсэн · `▲` хэсэгчлэн хэрэгжүүлсэн · `△` хэрэгжилт дөнгөж эхэлсэн · `✖︎` эхлээгүй
 
-## Consensus & Networking
+## Зөвшилцөл ба сүлжээ
 
-| Feature | Status | Notes | Evidence |
+| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| Олон цуглуулагч K/r дэмжлэг & эхний-commit-сертификат-хож | ◉ | Тодорхойлогч цуглуулагчийн сонголт, илүүдэл сэнс гарах, гинжин хэлхээн дэх K/r параметрүүд, эхний хүчинтэй-commit-сертификатыг туршилтын хамт илгээсэн. | status.md:255; status.md:314 |
+| Зүрхний аппаратын буцалт, RTT давхар, детерминист чит | ◉ | Тохиргоо, телеметр, баримт бичигт холбогдсон жийргэвчний зурвас бүхий тохируулах боломжтой таймерууд. | status.md:251 |
+| NEW_VIEW гарц & хамгийн өндөр QC хянах | ◉ | Хяналтын урсгал нь NEW_VIEW/Evidence-г агуулдаг бөгөөд хамгийн өндөр QC нь нэг хэвийн байдлаар, гар барих нь тооцоолсон хурууны хээг хамгаалдаг. | status.md:210 |
+| олдоц нотлох баримтыг хянах (зөвлөгөө) | ◉ | Олдоц нотлох баримтыг гаргаж, хянах; commit нь v1-д байгаа эсэхийг шалгахгүй. | status.md:хамгийн сүүлийн үеийн |
+| Найдвартай нэвтрүүлэг (DA даацын тээвэрлэлт) | ◉ | RBC мессежийн урсгал (Init/Chunk/Ready/Deliver) нь тээвэрлэлт/сэргээх зам болгон `da_enabled=true` үед идэвхждэг; Орлогыг бие даан гүйцэтгэх явцад бэлэн байдлын нотолгоог хянадаг (зөвлөгөө). | status.md:хамгийн сүүлийн үеийн |
+| QC state-root binding хийх | ◉ | Чанарын хяналтыг `parent_state_root`/`post_state_root`-ээр хангадаг; Тусдаа гүйцэтгэлийн-QC хаалга байхгүй. | status.md:хамгийн сүүлийн үеийн |
+| Нотлох баримт түгээх ба аудитын эцсийн цэгүүд | ◉ | ControlFlow::Нотлох баримт, Torii нотлох төгсгөлийн цэгүүд, туршилтууд сөрөг гарсан. | status.md:176; статус.md:760-761 |
+| RBC телеметр, бэлэн байдал/хүргэгдсэн хэмжигдэхүүн | ◉ | `/v1/sumeragi/rbc*` төгсгөлийн цэгүүд болон телеметрийн тоолуур/гистограмыг операторуудад ашиглах боломжтой. | status.md:283-284; status.md:772 |
+| Зөвшилцлийн параметрийн зар сурталчилгаа ба топологийн баталгаажуулалт | ◉ | Зангилаанууд `(collectors_k, redundant_send_r)` цацаж, үе тэнгийнхэндээ тэгш байдлыг баталгаажуулдаг. | status.md:255 |
+| Зөвшөөрөгдсөн PRF-д суурилсан эргэлт | ◉ | Зөвшөөрөгдсөн удирдагч/цуглуулагчийг сонгохдоо PRF үрийг + каноник жагсаалт дээрх өндөр/харалтыг ашигладаг; өмнөх хэш эргэлт нь хуучин туслах хэвээр байна. | status.md:хамгийн сүүлийн үеийн |
 
-## Pipeline, Kura & State
-
-| Feature | Status | Notes | Evidence |
+## Дамжуулах хоолой, Кура ба муж| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+| Хорио цээрийн зурвас ба телеметр | ◉ | Тохируулгын товчлуурууд, тодорхойлогч халих зохицуулалт, телеметрийн тоолуурууд хэрэгжсэн. | status.md:263 |
+| Дамжуулах хоолойн ажилчдын усан сангийн бариул | ◉ | `[pipeline].workers`-г env задлан шинжлэх тестээр төлөвийн эхлэлээр дамжуулсан. | status.md:264 |
+| Snapshot query lane (stored/ephemeral cursors) | ◉ | Torii интеграци бүхий хадгалсан курсор горим болон ажилчдын санг блоклох. | status.md:265; status.md:371; status.md:501 |
+| Static DAG fingerprint recovery sidecars | ◉ | Кура-д хадгалагдсан хажуугийн машиныг эхлүүлэх үед баталгаажуулсан, таарахгүй байх үед анхааруулга өгдөг. | status.md:106; status.md:349 |
+| Кура блок дэлгүүр хэш тайлах хатуурал | ◉ | Хэш уншилтыг Norito-аас хамааралгүй эргэлтийн туршилтаар 32 байт түүхий боловсруулалтад шилжүүлсэн. | status.md:608; status.md:668 |
+| Norito кодлогчдод зориулсан дасан зохицох телеметр | ◉ | Norito дээр нэмсэн AoS ба NCB сонголтын хэмжүүр. | status.md:156 |
+| Snapshot WSV queries via Torii | ◉ | Torii агшин зуурын асуулгын эгнээ нь блоклох ажилчдын сан, детерминист семантикийг ашигладаг. | status.md:501 |
+| Trigger by-call execution chaining | ◉ | Өгөгдөл нь тодорхой дарааллаар дуудлагыг гүйцэтгэсний дараа шууд гинжин хэлхээ үүсгэдэг. | status.md:668 |
 
 ## Norito Serialization & Tooling
 
-| Feature | Status | Notes | Evidence |
+| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
+| Norito JSON migration (workspace) | ◉ | Serde removed from production; Бараа материал + хашлага нь зөвхөн Norito ажлын талбарыг хадгалдаг. | status.md:112; status.md:124 |
+| Serde deny-list & CI guardrails | ◉ | Хамгаалалтын ажлын урсгалууд/скриптүүд нь ажлын талбарт шинээр шууд Серде ашиглахаас сэргийлдэг. | status.md:218 |
+| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB алтан өнгө, таслах тест, баримт бичгийн синк нэмсэн. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
 | Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+| Norito language bindings (Python/Java) | ◉ | Python болон Java Norito кодлогч нь синхрончлолын скриптүүдтэй. | status.md:74; status.md:81 |
+| Norito шат-1 SIMD бүтцийн ангилагч | ◉ | NEON/AVX2 үе шат-1 ангилагч, хөндлөн нуман алтан өнгө, санамсаргүй биет тестүүд. | status.md:241 |
 
-## Governance & Runtime Upgrades
-
-| Feature | Status | Notes | Evidence |
+## Governance & Runtime Upgrades| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+| Ажиллах цагийг шинэчлэх элсэлт (ABI gating) | ◉ | Идэвхтэй ABI багцыг элсэлтийн үеэр бүтэцлэгдсэн алдаа, тестээр хэрэгжүүлдэг. | status.md:196 |
+| Хамгаалагдсан нэрийн орон зайг байрлуулах хаалга | ▲ | Мета өгөгдлийн шаардлагуудыг байрлуулж, утастай холболт хийх; бодлого/UX хөгжиж байна. | status.md:171 |
+| Torii засаглалын төгсгөлийн цэгүүдийг уншина уу | ◉ | `/v1/gov/*` чиглүүлэгчийн туршилтаар чиглүүлсэн API-уудыг уншдаг. | status.md:212 |
+| Баталгаажуулах түлхүүр бүртгэлийн амьдралын мөчлөг ба үйл явдлууд | ◉ | VK бүртгэл/шинэчлэх/хуульдах, үйл явдал, CLI шүүлтүүр, хадгалах семантикийг хэрэгжүүлсэн. | status.md:236-239; status.md:595; status.md:603 |
 
-## Zero-Knowledge Infrastructure
+## Тэг мэдлэгтэй дэд бүтэц
 
-| Feature | Status | Notes | Evidence |
+| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+| Хавсралт хадгалах API | ◉ | `POST/GET/LIST/DELETE` тодорхойлох id болон тест бүхий хавсралтын төгсгөлийн цэгүүд. | status.md:231 |
+| Суурь prover ажилтан & тайлан TTL | ▲ | Онцлог тугны ард Prover stub; TTL GC болон тохиргооны товчлуурууд утастай; бүрэн дамжуулах хоолой хүлээгдэж байна. | status.md:212; status.md:233 |
+| CoreHost | дээр дугтуйны хэш холбох ◉ | CoreHost-ээр холбогдож, аудитын импульсээр ил гарсан дугтуйны хэшийг шалгана уу. | status.md:250 |
+| Хамгаалагдсан эх түүхийн хаалга | ◉ | Хязгаарлагдмал түүх, хоосон root тохиргоотой CoreHost-д үндсэн агшин зуурын агшингуудыг суулгасан. | status.md:303 |
+| ZK саналын хуудас гүйцэтгэл & засаглалын цоож | ○ | Хүчингүй болгох гаралт, түгжээний шинэчлэлт, баталгаажуулалтын унтраалга хэрэгжсэн; бүрэн нотлох амьдралын мөчлөг нь төлөвшсөн хэвээр байна. | status.md:126-128; статус.md:194-195 |
+| Баталгаажуулах хавсралт урьдчилан баталгаажуулах & dedup | ◉ | Backend-tag-ийн эрүүл мэнд, давхардал болон нотлох бүртгэлүүд нь гүйцэтгэлийн өмнөх хэвээр байсан. | status.md:348; status.md:602 |
+| ZK Torii баталгаатай татах эцсийн цэг | ◉ | `/v1/zk/proof/{backend}/{hash}` нотлох баримтуудыг (статус, өндөр, vk_ref/commitment) ил гаргадаг. | status.md:94 |
 
-## IVM & Kotodama Integration
-
-| Feature | Status | Notes | Evidence |
+## IVM & Kotodama интеграци| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+| CoreHost syscall→ISI гүүр | ○ | Заагч TLV код тайлах болон системийн дуудлагын дараалал ажиллах боломжтой; хамрах хүрээний цоорхой/паритет тест хийхээр төлөвлөж байна. | status.md:299-307; статус.md:477-486 |
+| Заагч бүтээгчид & домайн бүтээгчид | ◉ | Kotodama бүтээцүүд нь IR/e2e тест, баримт бичиг бүхий Norito төрлийн TLV болон SCALL-уудыг ялгаруулдаг. | статус.md:299-301 |
+| Заагч-ABI хатуу баталгаажуулалт & баримт бичгийн синхрончлол | ◉ | TLV бодлогыг алтан тест болон үүсгэсэн баримтын хамт хост/IVM дээр хэрэгжүүлсэн. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
+| CoreHost |-ээр дамжуулан ZK системийн холболтын гарц ◉ | Үйлдлийн дараалал нь баталгаажуулсан дугтуйнуудыг хааж, ISI-г гүйцэтгэхээс өмнө хэш тохируулгыг хэрэгжүүлдэг. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
+| Kotodama заагч-ABI баримт бичиг, дүрэм | ◉ | Дүрэм/баримт бичгийг амьд бүтээгчид болон SCALL зураглалтай синк хийсэн. | статус.md:299-301 |
+| ISO 20022 схем дээр суурилсан хөдөлгүүр & Torii гүүр | ◉ | Каноник ISO 20022 схемүүд суулгагдсан, тодорхойлогдсон XML задлан шинжилгээ, `/v1/iso20022/status/{MsgId}` API ил гарсан. | статус.md:65-70 |
 
-## Hardware Acceleration
+## Техник хангамжийн хурдатгал
 
-| Feature | Status | Notes | Evidence |
+| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+| SIMD сүүл/буруу тэгш байдлын тестүүд | ◉ | Санамсаргүй байдлаар тохируулсан паритет тестүүд нь SIMD векторын опционууд нь дур зоргоороо зохицох скаляр семантиктай тохирч байгааг баталгаажуулдаг. | status.md:243 |
+| Металл/CUDA нөөц ба өөрөө туршилт | ◉ | GPU backends-ууд нь өөрөө алтан тестийг ажиллуулж, таарахгүй тохиолдолд скаляр/SIMD руу буцдаг; Parity Suites нь SHA-256/Keccak/AES-ийг хамардаг. | статус.md:244-246 |
 
-## Network Time & Consensus Modes
+## Сүлжээний цаг ба зөвшилцлийн горимууд
 
-| Feature | Status | Notes | Evidence |
+| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
+| Сүлжээний цагийн үйлчилгээ (NTS) | ✖︎ | Дизайн нь `new_pipeline.md` дээр байдаг; хэрэгжилтийг статусын шинэчлэлтэд хараахан хянаж амжаагүй байна. | new_pipeline.md |
+| Нэр дэвшсэн PoS зөвшилцлийн горим | ✖︎ | Nexus дизайны баримт бичгийн хаалттай багц ба NPoS горимууд; үндсэн хэрэгжилт хүлээгдэж байна. | new_pipeline.md; nexus.md |
 
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
+## Nexus дэвтэр замын зураг| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
+| Сансрын лавлах гэрээний шат | ✖︎ | DS манифест/засаглалын дэлхийн бүртгэлийн гэрээ хараахан хэрэгжээгүй байна. | nexus.md |
+| Data Space манифест формат ба амьдралын мөчлөг | ✖︎ | Norito манифест схем, хувилбар болон засаглалын урсгал нь замын зураг дээр хэвээр байна. | nexus.md |
+| DS засаглал ба баталгаажуулагчийн эргэлт | ✖︎ | DS-ийн гишүүнчлэл/ротацийн гинжин хэлхээний журам нь дизайны үе шатанд байна. | nexus.md |
+| Cross-DS зангуу & Nexus блокийн найрлага | ✖︎ | Бүрэлдэхүүн давхарга болон бэхэлгээний үүрэг хариуцлагыг тодорхойлсон боловч хэрэгжүүлээгүй. | nexus.md |
+| Kura/WSV устгах кодтой хадгалах сан | ✖︎ | Нийтийн/хувийн DS-д зориулсан устгах кодтой blob/snapshot хадгалах сан хараахан бүтээгдээгүй байна. | nexus.md |
+| ZK/ DS нэг өөдрөг нотлох бодлого | ✖︎ | DS-ийн баталгааны шаардлага болон хэрэгжилтийг кодонд хянадаггүй. | nexus.md |
+| Дата орон зайд ногдох хураамж/квотын тусгаарлалт | ✖︎ | DS-ийн тусгай квот болон төлбөрийн бодлогын механизм нь цаашдын ажил хэвээр байна. | nexus.md |
 
-## Chaos & Fault Injection
+## Эмх замбараагүй байдал ба алдааны шахалт
 
-| Feature | Status | Notes | Evidence |
+| Онцлог | Статус | Тэмдэглэл | Нотлох баримт |
 |---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+| Izanami эмх замбараагүй байдлын оркестр | ○ | Izanami ажлын ачаалал одоо хөрөнгийн тодорхойлолт, мета өгөгдөл, NFT болон триггер-давталтын жоруудыг шинэ замуудын нэгжийн хамрах хүрээгээр удирддаг. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |

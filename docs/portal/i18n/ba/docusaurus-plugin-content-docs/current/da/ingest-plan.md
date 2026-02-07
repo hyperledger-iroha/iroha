@@ -4,340 +4,261 @@ direction: ltr
 source: docs/portal/docs/da/ingest-plan.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-title: Data Availability Ingest Plan
-sidebar_label: Ingest Plan
-description: Schema, API surface, and validation plan for Torii blob ingestion.
+исем: Мәғлүмәттәр булыуы ингест планы
+sidebar_label: Ингест планы
+тасуирламаһы: Схема, API өҫтө, һәм I18NT000000033X блоб ингестияһы өсөн раҫлау планы.
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# Sora Nexus Data Availability Ingest Plan
+# Сора I18NT00000000031X мәғлүмәт булыуы ингест планы
 
-_Drafted: 2026-02-20 - Owner: Core Protocol WG / Storage Team / DA WG_
+_2026-02-20 - Хужаһы: Ядро протоколы WG / Һаҡлау командаһы / DA WG_
 
-The DA-2 workstream extends Torii with a blob ingest API that emits Norito
-metadata and seeds SoraFS replication. This document captures the proposed
-schema, API surface, and validation flow so implementation can proceed without
-blocking on outstanding simulations (DA-1 follow-ups). All payload formats MUST
-use Norito codecs; no serde/JSON fallbacks are permitted.
+DA-2 эш ағымы I18NT0000000034X оҙайтыу менән блоб ингест API, был I18NT000000000X сыға.
+метамағлүмәттәр һәм орлоҡтар I18NT000000022Х репликацияһы. Был документта тәҡдим ителгән
+схема, API өҫтө, һәм раҫлау ағымы шулай тормошҡа ашырыу мөмкин түгел, тип дауам итә.
+блокировка өҫтөндә күренекле моделләштереү (DA-1 күҙәтеүҙәр). Бөтә файҙалы йөк форматтары МУСТ
+Norito кодектарын ҡулланыу; бер ниндәй ҙә серҙә/JSON fallbacks рөхсәт ителмәй.
 
-## Goals
+## Маҡсаттар
 
-- Accept large blobs (Taikai segments, lane sidecars, governance artefacts)
-  deterministically over Torii.
-- Produce canonical Norito manifests describing the blob, codec parameters,
-  erasure profile, and retention policy.
-- Persist chunk metadata in SoraFS hot storage and enqueue replication jobs.
-- Publish pin intents + policy tags to the SoraFS registry and governance
-  observers.
-- Expose admission receipts so clients regain deterministic proof of publication.
+- Ҙур таптарҙы ҡабул итеү (Тайкай сегменттары, һыҙатлы мейка, идара итеү артефакттары)
+  детерминистик яҡтан I18NT000000035X өҫтөндә.
+- I18NT000000002X канонлы етештереүе блоб, кодек параметрҙарын һүрәтләгән,
+  юйыу профиле, һәм һаҡлау сәйәсәте.
+- I18NT000000023X эҫе һаҡлау һәм репликация эш урындары персенный өлөшө метамағлүмәттәре.
+- I18NT000000024X реестрына һәм идара итеүгә нәшриәт булавка ниәттәре + сәйәсәт тегтары
+  күҙәтеүселәр.
+- Ҡабул итеү квитанцияларын фашлау, шулай итеп, клиенттар тергеҙергә детерминистик иҫбатлау баҫма.
 
-## API Surface (Torii)
+## API өҫтө (I18NT0000000036X)
 
-```
-POST /v1/da/ingest
-Content-Type: application/norito+v1
-```
+I18NF000000059X
 
-Payload is a Norito-encoded `DaIngestRequest`. Responses use
-`application/norito+v1` and return `DaIngestReceipt`.
+Payload — Norito-кодланған `DaIngestRequest`. Яуаптар ҡулланыу
+I18NI000000062X һәм ҡайтарыу I18NI0000000063X.
 
-| Response | Meaning |
+| Яуап | Мәғәнәһе |
 | --- | --- |
-| 202 Accepted | Blob queued for chunking/replication; receipt returned. |
-| 400 Bad Request | Schema/size violation (see validation checks). |
-| 401 Unauthorized | Missing/invalid API token. |
-| 409 Conflict | Duplicate `client_blob_id` with mismatched metadata. |
-| 413 Payload Too Large | Exceeds configured blob length limit. |
-| 429 Too Many Requests | Rate limit hit. |
-| 500 Internal Error | Unexpected failure (logged + alert). |
+| 202 Ҡабул ителгән | Блоб сиратҡа эләккән өсөн өлөшләтә/репликация; квитанция ҡайтты. |
+| 400 Насар үтенес | Схема/размер хоҡуҡ боҙоу (ҡара: раҫлау тикшерелгән). |
+| 401 Рөхсәтһеҙ | Юғалған/дөрөҫ түгел API токен. |
+| 409 Конфликт | Дубликат I18NI000000064X менән тап килмәгән метамағлүмәттәр. |
+| 413 Тулы йөк бик ҙур | Артыҡ конфигурацияланған тап оҙонлоғо сиге. |
+| 429 Бик күп үтенестәр | Стенд сиге хит. |
+| 500 Эске хата | Көтөлмәгән етешһеҙлек (лог, + иҫкәртмә). |
 
-## Proposed Norito Schema
+## тәҡдим I18NT0000000004X схемаһы
 
-```rust
-/// Top-level ingest request.
-pub struct DaIngestRequest {
-    pub client_blob_id: BlobDigest,      // submitter-chosen identifier
-    pub lane_id: LaneId,                 // target Nexus lane
-    pub epoch: u64,                      // epoch blob belongs to
-    pub sequence: u64,                   // monotonic sequence per (lane, epoch)
-    pub blob_class: BlobClass,           // TaikaiSegment, GovernanceArtifact, etc.
-    pub codec: BlobCodec,                // e.g. "cmaf", "pdf", "norito-batch"
-    pub erasure_profile: ErasureProfile, // parity configuration
-    pub retention_policy: RetentionPolicy,
-    pub chunk_size: u32,                 // bytes (must align with profile)
-    pub total_size: u64,
-    pub compression: Compression,        // Identity, gzip, deflate, or zstd
-    pub norito_manifest: Option<Vec<u8>>, // optional pre-built manifest
-    pub payload: Vec<u8>,                 // raw blob data (<= configured limit)
-    pub metadata: ExtraMetadata,          // optional key/value metadata map
-    pub submitter: PublicKey,             // signing key of caller
-    pub signature: Signature,             // canonical signature over request
-}
+I18NF000000060X
 
-pub enum BlobClass {
-    TaikaiSegment,
-    NexusLaneSidecar,
-    GovernanceArtifact,
-    Custom(u16),
-}
+> Ғәмәлгә ашырыу иҫкәрмәһе: был файҙалы йөктәр өсөн канонлы Руст күрһәтеүҙәре хәҙер йәшәй.
+> I18NI000000065X, запрос/квитанция урауҙары менән I18NI000000666X
+> һәм `iroha_data_model::da::manifest`-тағы асыҡ структура.
 
-pub struct ErasureProfile {
-    pub data_shards: u16,
-    pub parity_shards: u16,
-    pub chunk_alignment: u16, // chunks per availability slice
-    pub fec_scheme: FecScheme,
-}
+I18NI000000068X яланында шылтыратыусылар файҙалы йөктө нисек әҙерләгәнен рекламалай. I18NT000000037X ҡабул итә
+I18NI0000000069X, `gzip`, `deflate`, һәм `zstd`, байттарҙы асыҡтан-асыҡ декомпрессияға тиклем.
+хешинг, чанкинг һәм опциональ манифесттарҙы раҫлау.
 
-pub struct RetentionPolicy {
-    pub hot_retention_secs: u64,
-    pub cold_retention_secs: u64,
-    pub required_replicas: u16,
-    pub storage_class: StorageClass,
-    pub governance_tag: GovernanceTag,
-}
+### раҫлаусы исемлек
 
-pub struct ExtraMetadata {
-    pub items: Vec<MetadataEntry>,
-}
+1. Тикшерергә үтенес I18NT000000007X баш матчтары `DaIngestRequest`.
+2. Әгәр `total_size` канонлы (декомпрессияланған) файҙалы йөк оҙонлоғонан айырылһа йәки конфигурацияланған макстан артһа.
+3. `chunk_size` тура килтереп (ҡөҙрәт-ике, <= 2 Миб).
+4. `data_shards + parity_shards` <= глобаль максималь һәм паритет >= 2 тәьмин итеү.
+5. `retention_policy.required_replica_count` идара итеү башланғыс һыҙығын хөрмәт итергә тейеш.
+6. Каноник хешҡа ҡаршы ҡултамға тикшерелеүе (ҡулташ яланын иҫәпкә алмағанда).
+7. дубликаты I18NI000000078X, әгәр ҙә файҙалы йөк хеш + метамағлүмәттәр бер үк.
+.
+   өлөшләтә торғандан һуң күренә; юғиһә төйөн генерациялай, уны асыҡ һәм һаҡлай.
+9. Конфигурацияланған репликация сәйәсәтен үтәү: I18NT00000000038X X
+   `RetentionPolicy` I18NI000000081X менән (ҡара:
+   I18NI000000082X) һәм алдан төҙөлгән манифестарҙы кире ҡаға, уларҙы һаҡлау
+   метамағлүмәттәр мәжбүр ителгән профилгә тап килмәй.
 
-pub struct MetadataEntry {
-    pub key: String,
-    pub value: Vec<u8>,
-    pub visibility: MetadataVisibility, // public vs governance-only
-}
+### Chunking & репликация ағымы
 
-pub enum MetadataVisibility {
-    Public,
-    GovernanceOnly,
-}
+.
+.
+   юйыу планировкаһы (рәт һәм бағана паритеты һаны плюс I18NI000000085X), һаҡлау сәйәсәте,
+   һәм метамағлүмәттәр.
+.
+   (I18NT00000000039X яҙа I18NI0000000087X файлдар клавиша һыҙат/эпоха/эҙмә-эҙлеклелек/билет/бармаҡ эҙҙәре) шулай I18NT0000000025Х.
+   оркестрлаштырыу уларҙы ашап ала һәм һаҡлау билетын һаҡланған мәғлүмәттәргә бәйләй ала.
+4. I18NI000000088X аша идара итеү тег + сәйәсәте менән баҫтырыу булавка ниәттәре.
+5. Emil I18NT000000009X ваҡиға I18NI000000089X күҙәтеүселәргә хәбәр итеү өсөн (еңел клиенттар,
+   идара итеү, аналитика).
+6. Ҡайтарыу I18NI0000000090X шылтыратыусыға (I18NT0000000040X DA хеҙмәтләндереүҙең асҡысы менән ҡул ҡуйылған) һәм сығарыла
+   `Sora-PDP-Commitment` башлығы шулай SDKs тиҙ арала кодланған йөкләмәне тота ала. Квитанция
+   Хәҙер инде I18NI000000092X (I18NT000000010X I18NI0000000093X) һәм `stripe_layout`, тапшырыусыларҙы күрһәтергә рөхсәт итеүҙе үҙ эсенә ала
+   база аренда, запас өлөшө, PDP/PoTR бонус өмөттәр, һәм 2D юйыу макеты менән бергә
+   һаҡлау билеты аҡса эшләгәнсе.
 
-pub struct DaIngestReceipt {
-    pub client_blob_id: BlobDigest,
-    pub lane_id: LaneId,
-    pub epoch: u64,
-    pub blob_hash: BlobDigest,          // BLAKE3 of raw payload
-    pub chunk_root: BlobDigest,         // Merkle root after chunking
-    pub manifest_hash: BlobDigest,      // Norito manifest hash
-    pub storage_ticket: StorageTicketId,
-    pub pdp_commitment: Option<Vec<u8>>,     // Norito-encoded PDP bytes
-    #[norito(default)]
-    pub stripe_layout: DaStripeLayout,   // total_stripes, shards_per_stripe, row_parity_stripes
-    pub queued_at_unix: u64,
-    #[norito(default)]
-    pub rent_quote: DaRentQuote,        // XOR rent + incentives derived from policy
-    pub operator_signature: Signature,
-}
-```
+## Һаҡлау / Реестр яңыртыуҙары
 
-> Implementation note: the canonical Rust representations for these payloads now live under
-> `iroha_data_model::da::types`, with request/receipt wrappers in `iroha_data_model::da::ingest`
-> and the manifest structure in `iroha_data_model::da::manifest`.
+- I18NI0000095X оҙайтыу менән I18NI000000096X, детерминистик анализлау мөмкинлеген бирә.
+- Яңы реестр ағымы I18NI000000097X версияһында файҙалы йөкләмәләр һылтанмалары менән өҫтәй
+  асыҡ хеш + билет id.
+- Яңыртыу күҙәтеүсәнлек торбалары аша күҙәтеү glatenty, чанный үткәреүсәнлеге,
+  репликация артта ҡалыу, һәм етешһеҙлектәр һаны.
 
-The `compression` field advertises how callers prepared the payload. Torii accepts
-`identity`, `gzip`, `deflate`, and `zstd`, transparently decompressing the bytes before
-hashing, chunking, and verifying optional manifests.
+## Һынау стратегияһы
 
-### Validation Checklist
+- Схемаларҙы раҫлау, ҡултамға тикшерелеүе, дубликатын асыҡлау өсөн берәмек һынауҙары.
+- I18NT0000011X тикшергән алтын һынауҙар I18NI000000098X, манифест һәм квитанция.
+- Интеграция жгут әйләндереп өҫкә макет I18NT00000000026X + реестр, раҫлау өлөшө + булавка ағымдары.
+- осраҡлы юйыу профилдәрен һәм һаҡлау комбинацияларын ҡаплаған мөлкәт һынауҙары.
+- I18NT000000012X файҙалы йөкләмәләренең фенозиты, дөрөҫ булмаған метамағлүмәттәрҙән һаҡланыу өсөн.
 
-1. Verify request Norito header matches `DaIngestRequest`.
-2. Fail if `total_size` differs from the canonical (decompressed) payload length or exceeds the configured max.
-3. Enforce `chunk_size` alignment (power-of-two, <= 2 MiB).
-4. Ensure `data_shards + parity_shards` <= global maximum and parity >= 2.
-5. `retention_policy.required_replica_count` must respect governance baseline.
-6. Signature verification against canonical hash (excluding signature field).
-7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
-8. When `norito_manifest` provided, verify schema + hash matches recalculated
-   manifest after chunking; otherwise node generates manifest and stores it.
-9. Enforce the configured replication policy: Torii rewrites the submitted
-   `RetentionPolicy` with `torii.da_ingest.replication_policy` (see
-   `replication-policy.md`) and rejects pre-built manifests whose retention
-   metadata does not match the enforced profile.
+## CLI & SDK инструмент (DA-8)- I18NI000000099X (яңы CLI инеү нөктәһе) хәҙер дөйөм ингест төҙөүсе/нәшриәтсе шулай операторҙарҙы урап ала
+  аласыз, үҙ ирке менән таптар тышында тыш Тайкай өйөм ағымы. Команда 1991 йылда йәшәй.
+  `crates/iroha_cli/src/commands/da.rs:1` һәм файҙалы йөк, юйыу/һаҡлау профиле һәм
+  опциональ метамағлүмәттәр/махсус файлдар канонлы I18NI000000101X менән CLI ҡул ҡуйғансы
+  конфиг асҡысы. Уңышлы йүгереүҙәр `da_request.{norito,json}` һәм I18NI000000103X йәшкә тиклемге I18NI000002X һаҡлана.
+  I18NI000000104X (өҫтөнлөк аша I18NI000000105X) шулай сығарыу артефакттары ала
+  аныҡ I18NT000000013X байттарҙы ашау ваҡытында ҡулланылғанын теркәй.
+- Команда I18NI000000106X тиклем ғәҙәттәгесә, әммә ҡабул итә аша өҫтөнлөклө .
+  `--client-blob-id`, JSON карталары (I18NI000000108X) һәм алдан генерацияланған манифестарҙы хөрмәтләй
+  (`--manifest`), һәм офлайн әҙерләү өсөн I18NI0000000110X ярҙам итә плюс I18NI000000111X өсөн ҡулланыусылар өсөн
+  I18NT000000041X хужалары. Квитанция JSON баҫыла stdout өҫтәүенә, дискҡа яҙылған, ябыу
+  DA-8 “тапшырыу_блоб” инструменталь талап һәм блокировканы асыу SDK паритет эше.
+- I18NI000000112X өҫтәй DA-ориентированный псевдоним өсөн күп сығанаҡлы оркестр, тип инде вәкәләттәр .
+  `iroha app sorafs fetch`. Операторҙар уны асыҡ + өлөш-план артефакттарында күрһәтә ала (I18NI000000114X,
+  `--plan`, `--manifest-id`) ** йәки** I18NI0000000117X аша I18NT000000000042X үткәреү. Билет ҡасан
+  юл ҡулланыла CLI тарта манифест I18NI000000118X, һаҡлана өйөм аҫтында .
+  I18NI000000119X ( `--manifest-cache-dir` менән өҫтөнлөк), 1990 йылға таплы хеш ала.
+  `--manifest-id`, ә һуңынан оркестрҙы тәьмин итеү менән тәьмин ителгән `--gateway-provider` исемлеге. Бөтә
+  алдынғы ручкалар I18NT000000000027X fetcher fetcher ер өҫтө бөтөн (нисек конверттар, клиент ярлыҡтары, һаҡсы кэштары,
+  анонимлыҡ транспорты өҫтөнлөк итә, табло экспорты, һәм I18NI000000123X юлдар), һәм асыҡ нөктә ала
+  I18NI000000124X аша өҫтөнлөклө булырға I18NT000000043X хосттары өсөн, шуға күрә осона тиклем осҡа тиклем доступность тура эфир
+  тулыһынса `da` исемдәр киңлеге аҫтында оркестр логикаһы дубляжһыҙ.
+- `iroha app da get-blob` канон манифестарын туранан-тура I18NT0000000044X аша `GET /v1/da/manifests/{storage_ticket}` аша тарта.
+  Команда I18NI000000128X, `manifest_{ticket}.json`, һәм `chunk_plan_{ticket}.json` яҙа.
+  I18NI000000131X буйынса (йәки ҡулланыусы менән тәьмин ителгән `--output-dir`) теүәл яңғырағанда
+  I18NI000000133X инвокация (шул иҫәптән `--manifest-id`) өсөн кәрәкле эҙмә-эҙлекле оркестр өсөн фетч.
+  Был операторҙарҙы асыҡ катушка каталогтарынан ситтә тота һәм гарантиялай fetcher һәр ваҡыт ҡуллана
+  ҡул ҡуйылған артефакттар сығарылған I18NT00000000045X. JavaScript I18NT00000000046X клиент был ағымды көҙгөләй
+  I18NI000000135X, ҡайтарып декодланған I18NT00000000014X байт, манифест JSON,
+  һәм өлөшө планы шулай SDK шылтыратыусылар гидратацион оркестр сессияларын гидрататься снарядтарһыҙ CLI.
+  Swift SDK хәҙер шул уҡ өҫтөн фашлай (`ToriiClient.getDaManifestBundle(...)` плюс
+  I18NI000000137X), торбалар өйөмдәре тыуған I18NT00000000028X оркестры урау шулай
+  iOS клиенттар скачать манифест, башҡарыу күп сығанаҡлы фетч, һәм дәлилдәрҙе тотоу өсөн
+  CLI.【ИрохаСвифт/Сығанаҡтар/ИрохаСвифт/ToriiClient.swift:240】【ИрохаСвифт/ИрохаСвифт/СорафсОрхстраторКлиент.12】
+- I18NI0000000138X иҫәпләү детерминистик аренда һәм стимул өҙөлгән өсөн тәьмин ителгән һаҡлау күләме
+  һәм һаҡлау тәҙрәһе. Ярҙам йәки әүҙем I18NI000000139X (JSON йәки I18NT0000000015X байт) йәки ҡулланыу.
+  18NI0000140X, `months`, сәйәсәт метамағлүмәттәре, JSON йыйылмаһын баҫтырып сығара.
+  һәм I18NI000000142X яландары) шулай итеп, аудиторҙар идара итеү минуттары эсендә теүәл XOR ғәйепләүҙәрен килтерә ала.
+  яҙыу ad hoc сценарийҙары. Команда шулай уҡ бер юллыҡ I18NI000000143X резюме JSON алдынан сығарыла.
+  файҙалы йөкләмәһен һаҡлау өсөн консоль журналдары уҡылған ваҡытта инцидент күнекмәләр. Пар I18NI000000144X менән
+  I18NI000000145X йүнһеҙ prettified артефакттарҙы һаҡлау өсөн, улар теүәл сәйәсәт тауыш биреүҙе килтерә
+  йәки конфигурация өйөм; CLI ҡулланыусылар өсөн ярлыҡ һәм баш тарта буш ептәр шулай I18NI000000146X ҡиммәттәре .
+  Ҡалырға ғәмәлгә яраҡлы ҡаҙна панелдәре буйынса. Ҡара: I18NI000000147X өсөн подкомманд
+  һәм `docs/source/da/rent_policy.md` өсөн сәйәсәт схемаһы.【крат/ироха_кли/срк/командалар/да.р.:1】【Сығанаҡ/docs/da/dent_policy.md:1】
+- I18NI000000149X X сылбырҙары бөтә өҫтәге: ул һаҡлау билеты кәрәк, скачать
+  канонлы манифест өйөмө, күп сығанаҡлы оркестрҙа (I18NI000000150X) ҡаршы йүгерә
+  тәьмин итеү I18NI000000151X исемлеге, һаҡлана скачать файҙалы йөк + табло аҫтында .
+  I18NI000000152X, һәм шунда уҡ ғәмәлдәге PoR ярҙамсыһын саҡыра
+  (`iroha app da prove`) алынған байттарҙы ҡулланып. Операторҙар оркестр ручкаларын үҙгәртә ала
+  (I18NI000000154X, `--scoreboard-out`, асыҡ нөктә өҫтөнлөктәре) һәм иҫбатлаусы проба
+  (I18NI000000156X, `--leaf-index`, `--sample-seed`), ә бер команда артефакттарын етештерә
+  көтөлгән DA-5/DA-9 аудиттар: файҙалы йөк күсермәһе, табло дәлилдәре, һәм JSON иҫбатлау резюмеһы.
 
-### Chunking & Replication Flow
+## ТОДО ҡарары йомғаҡлау
 
-1. Chunk payload into `chunk_size`, compute BLAKE3 per chunk + Merkle root.
-2. Build Norito `DaManifestV1` (new struct) capturing chunk commitments (role/group_id),
-   erasure layout (row and column parity counts plus `ipa_commitment`), retention policy,
-   and metadata.
-3. Queue the canonical manifest bytes under `config.da_ingest.manifest_store_dir`
-   (Torii writes `manifest.encoded` files keyed by lane/epoch/sequence/ticket/fingerprint) so SoraFS
-   orchestration can ingest them and link the storage ticket to persisted data.
-4. Publish pin intents via `sorafs_car::PinIntent` with governance tag + policy.
-5. Emit Norito event `DaIngestPublished` to notify observers (light clients,
-   governance, analytics).
-6. Return `DaIngestReceipt` to caller (signed by the Torii DA service key) and emit the
-   `Sora-PDP-Commitment` header so SDKs can capture the encoded commitment immediately. The receipt
-   now includes `rent_quote` (a Norito `DaRentQuote`) and `stripe_layout`, letting submitters display
-   the base rent, reserve share, PDP/PoTR bonus expectations, and the 2D erasure layout alongside
-   the storage ticket before committing funds.
+Бөтә элек блокировкаланған ингест ТОДО-лар тормошҡа ашырылған һәм раҫланған:
 
-## Storage / Registry Updates
+- **Ҡыҫыу кәңәштәре** — I18NT0000000047X шылтыратыусы менән тәьмин ителгән лейблдарҙы ҡабул итә (I18NI000000159X, `gzip`, I18NI000000161X,
+  I18NI000000162X) һәм нормализация файҙалы йөктәр раҫлау алдынан, шулай итеп, канон манифест хеш тап килә
+  161
+- **Идара итеү-тик метамағлүмәттәр шифрлау** — I18NT00000000048X хәҙер идара итеү метамағлүмәттәрен шифрлай.
+  ChaCha20-Poly1305 асҡысын конфигурациялаған, тап килмәгән ярлыҡтарҙы кире ҡаға, ике асыҡтан-асыҡ ер өҫтөнә сыға
+  конфигурация ручкалары (`torii.da_ingest.governance_metadata_key_hex`,
+  I18NI000000164X) әйләнеш детерминистик һаҡлау өсөн.【крат/ироха_тории/срк/да/инс.:707】【крат/ироха_конфиг/срк/параметрҙар/ысын.р.
+- **Иң ҙур файҙалы йөк стриминг** — күп өлөшлө ашау тура эфирҙа. Клиенттар ағымы детерминистик
+  I18NI000000165X конверттар I18NI000000166X, I18NT000000049X X һәр киҫәге раҫлай, уларҙы этаплай
+  `manifest_store_dir` буйынса, һәм атомик рәүештә тергеҙелә манифест бер тапҡыр `is_last` флаг ерҙәре,
+  бер шылтыратыу тейәү менән күрелгән RAM шпицтарын бөтөрөү.【крат/ироха_тории/срк/да/инжест.р.с.392】
+- **Manifest версиялау** — I18NI000000169X асыҡтан-асыҡ I18NI000000170X яланы һәм I18NT000000050X ташлай.
+  билдәһеҙ версиялар, гарантиялау детерминистик яңыртыу ҡасан яңы манифест макеттар судно.【крат/ироха_мәғлүмәттәр/src/d/pys.rs:308】
+- **PDP/PoTR ҡармаҡтар** — PDP йөкләмәләре туранан-тура магазиндан килеп сыға һәм һаҡланған
+  тыш, манифест шулай DA-5 планлаштырыусылар канон мәғлүмәттәренән үлсәү проблемаларын башлай ала, һәм
+  I18NI000000171X плюс I18NI000000172X хәҙер I18NI000000173X башлығын үҙ эсенә ала
+  йөрөтөү base64 I18NT0000000016X файҙалы йөк шулай SDKs кэш теүәл йөкләмә DA-5 зондтар 1990 йылдарҙа был йүнәлештәге эшмәкәрлекте үҫтереүҙең маҡсаты булып тора.
 
-- Extend `sorafs_manifest` with `DaManifestV1`, enabling deterministic parsing.
-- Add new registry stream `da.pin_intent` with versioned payload referencing
-  manifest hash + ticket id.
-- Update observability pipelines to track ingest latency, chunking throughput,
-  replication backlog, and failure counts.
+## Ғәмәлгә ашырыу Иҫкәрмәләр
 
-## Testing Strategy
+- I18NT000000051X’s I18NI000000174X ос нөктәһе хәҙер файҙалы йөк ҡыҫыуҙы нормалләштерә, реплей кэшын үтәй,
+  детерминистик өлөштәр канонлы байт, I18NI000000175X тергеҙелгән, кодланған файҙалы йөктө төшөрә
+  I18NI000000176X өсөн SoraFS өсөн оркестрлаштырыу, һәм I18NI000001777X өҫтәй.
+  башлыҡ шулай операторҙар йөкләмәне тота, тип PDP планлаштырыусылар һылтанма буласаҡ.【крат/ироха_тории/срк/да/жингест.rs:220】
+- Хәҙер ҡабул ителгән һәр тап хәҙер `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito` етештерә.
+  I18NI000000179X буйынса инеү канонлы I18NI0000000180X сеймал менән бергә йыйылған
+  I18NI0000000181X байт шулай DA-3 өйөм төҙөүселәр һәм DA-5 планлаштырыусылар гидратацион бер үк инеүҙәрҙе 2012 йылмай.
+  ҡабаттан уҡыу йәки өлөштәр магазиндарында.
+- SDK ярҙамсы API-лар PDP башлы файҙалы йөктө фашлай, шылтыратыусыларҙы Norito декодлауҙы ҡабаттан тормошҡа ашырыу өсөн мәжбүр итмәйенсә:
+  руст йәшник экспорты I18NI0000000182X, Python
+  I18NI000000183X хәҙер I18NI000000184X, һәм I18NI000000185X суднолары инә
+  I18NI0000000186X сеймал баш карталары йәки I18NI000000187X өсөн артыҡ йөкләмәләр Ҡатнашыусылар.【крат/ироха/срк/да.р.р:1】【питон/ироха_клиент/клиент.п:1】【ИрохаСвифт/ИрохаСвифт/ТорийКлиент.1】
+- I18NT0000000052Х шулай уҡ I18NI000000188XX-ты фашлай, шуға күрә SDKs һәм операторҙар манифесттар ала ала
+  һәм өлөшләтә пландар теймәйенсә, төйөн’s катушка каталогы. Яуап I18NT0000000018X байт ҡайтара.
+  (база64), рендеринг JSON, I18NI0000000189X JSON блоб әҙер I18NI000000190X, актуаль
+  hex disists (I18NI000000191X, I18NI000000192X, I18NI000000193X, I18NI000000194X), һәм көҙгөләй
+  I18NI0000001955Х башы паритет өсөн аш-һыу яуаптарынан. 1819 йылда I18NI00000000196X тәьмин итеү.
+  эҙләү ептәрен ҡайтара детерминистик I18NI0000000197X (задание хеш, `sample_window`, һәм өлгөләр
+  I18NI0000000199X кортеждары тулы 2D макетын ҡаплай) шулай валидаторҙар һәм PoR ҡоралдары шул уҡ тарта
+  индексы.
 
-- Unit tests for schema validation, signature checks, duplicate detection.
-- Golden tests verifying Norito encoding of `DaIngestRequest`, manifest, and receipt.
-- Integration harness spinning up mock SoraFS + registry, asserting chunk + pin flows.
-- Property tests covering random erasure profiles and retention combinations.
-- Fuzzing of Norito payloads to guard against malformed metadata.
+### Ҙур түләү стручка ағымы
 
-## CLI & SDK Tooling (DA-8)
+Клиенттар, улар кәрәк, активтарҙы күберәк ашау өсөн конфигурацияланған бер запрос сиге башлана а .
+потоковый сессияһы шылтыратып I18NI0000000200X. I18NT000000053X яуап бирә
+`ChunkSessionId` (BLAKE3-производство һоралған блоб метамағлүмәттәре) һәм һөйләшеүҙәр үткәрелгән өлөштәр ҙурлығы.
+Артабанғы һәр `DaIngestChunk` запросы йөрөтә:- `client_blob_id` — I18NI000000204X һуңғыһы менән бер үк.
+- `chunk_session_id` — йүгерә сессияһы менән ҡырҡылған.
+- `chunk_index` һәм `offset` — детерминистик тәртипте үтәү.
+- `payload` — һөйләшеүҙәр алып барылған өлөш ҙурлығына тиклем.
+- `payload_hash` — BLAKE3 хеш шулай итеп, шулай I18NT000000054X раҫлай ала, бөтә тапты буферһыҙ.
+- `is_last` — терминаль киҫәкте күрһәтә.
 
-- `iroha app da submit` (new CLI entrypoint) now wraps the shared ingest builder/publisher so operators
-  can ingest arbitrary blobs outside of the Taikai bundle flow. The command lives in
-  `crates/iroha_cli/src/commands/da.rs:1` and consumes a payload, erasure/retention profile, and
-  optional metadata/manifest files before signing the canonical `DaIngestRequest` with the CLI
-  config key. Successful runs persist `da_request.{norito,json}` and `da_receipt.{norito,json}` under
-  `artifacts/da/submission_<timestamp>/` (override via `--artifact-dir`) so release artefacts can
-  record the exact Norito bytes used during ingestion.
-- The command defaults to `client_blob_id = blake3(payload)` but accepts overrides via
-  `--client-blob-id`, honours metadata JSON maps (`--metadata-json`) and pre-generated manifests
-  (`--manifest`), and supports `--no-submit` for offline preparation plus `--endpoint` for custom
-  Torii hosts. Receipt JSON is printed to stdout in addition to being written to disk, closing the
-  DA-8 “submit_blob” tooling requirement and unblocking SDK parity work.
-- `iroha app da get` adds a DA-focused alias for the multi-source orchestrator that already powers
-  `iroha app sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
-  `--plan`, `--manifest-id`) **or** pass a Torii storage ticket via `--storage-ticket`. When the ticket
-  path is used the CLI pulls the manifest from `/v1/da/manifests/<ticket>`, persists the bundle under
-  `artifacts/da/fetch_<timestamp>/` (override with `--manifest-cache-dir`), derives the blob hash for
-  `--manifest-id`, and then runs the orchestrator with the supplied `--gateway-provider` list. All
-  advanced knobs from the SoraFS fetcher surface intact (manifest envelopes, client labels, guard caches,
-  anonymity transport overrides, scoreboard export, and `--output` paths), and the manifest endpoint can
-  be overridden via `--manifest-endpoint` for custom Torii hosts, so end-to-end availability checks live
-  entirely under the `da` namespace without duplicating orchestrator logic.
-- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
-  The command writes `manifest_{ticket}.norito`, `manifest_{ticket}.json`, and `chunk_plan_{ticket}.json`
-  under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`) while echoing the exact
-  `iroha app da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
-  This keeps operators out of the manifest spool directories and guarantees the fetcher always uses the
-  signed artefacts emitted by Torii. The JavaScript Torii client mirrors this flow via
-  `ToriiClient.getDaManifest(storageTicketHex)`, returning the decoded Norito bytes, manifest JSON,
-  and chunk plan so SDK callers can hydrate orchestrator sessions without shelling out to the CLI.
-  The Swift SDK now exposes the same surfaces (`ToriiClient.getDaManifestBundle(...)` plus
-  `fetchDaPayloadViaGateway(...)`), piping bundles into the native SoraFS orchestrator wrapper so
-  iOS clients can download manifests, execute multi-source fetches, and capture proofs without
-  invoking the CLI.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】【IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift:12】
-- `iroha app da rent-quote` computes deterministic rent and incentive breakdowns for a supplied storage size
-  and retention window. The helper consumes either the active `DaRentPolicyV1` (JSON or Norito bytes) or
-  the built-in default, validates the policy, and prints a JSON summary (`gib`, `months`, policy metadata,
-  and the `DaRentQuote` fields) so auditors can cite exact XOR charges inside governance minutes without
-  writing ad hoc scripts. The command also emits a one-line `rent_quote ...` summary ahead of the JSON
-  payload to keep console logs readable during incident drills. Pair `--quote-out artifacts/da/rent_quotes/<stamp>.json` with
-  `--policy-label "governance ticket #..."` to persist prettified artefacts that cite the exact policy vote
-  or config bundle; the CLI trims the custom label and refuses blank strings so `policy_source` values
-  remain actionable across treasury dashboards. See `crates/iroha_cli/src/commands/da.rs` for the subcommand
-  and `docs/source/da/rent_policy.md` for the policy schema.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- `iroha app da prove-availability` chains all of the above: it takes a storage ticket, downloads the
-  canonical manifest bundle, runs the multi-source orchestrator (`iroha app sorafs fetch`) against the
-  supplied `--gateway-provider` list, persists the downloaded payload + scoreboard under
-  `artifacts/da/prove_availability_<timestamp>/`, and immediately invokes the existing PoR helper
-  (`iroha app da prove`) using the fetched bytes. Operators can tweak the orchestrator knobs
-  (`--max-peers`, `--scoreboard-out`, manifest endpoint overrides) and the proof sampler
-  (`--sample-count`, `--leaf-index`, `--sample-seed`) while a single command produces the artefacts
-  expected by DA-5/DA-9 audits: payload copy, scoreboard evidence, and JSON proof summaries.
+I18NT00000055Х һаҡлана раҫланған киҫәктәр буйынса I18NI0000002111Х һәм
+рекордтар эсендә прогресс реплей кэш идемпотенцияны хөрмәтләү өсөн. Һуңғы киҫәк ерҙәрҙә, I18NT0000000056X
+диск өҫтөндә файҙалы йөктө яңынан йыйып ала (хәтер шпицтарынан ҡотолоу өсөн өлөш каталогы аша стриминг),
+канонлы манифест/квитанцияны тап бер тапҡыр төшөрөлгән тейәү менән иҫәпләгән, һәм, ниһайәт, яуап бирә
+`POST /v1/da/ingest` сәхнәләштерелгән артефакт ҡулланыу юлы менән. Уңышһыҙ сеанстарҙы асыҡтан-асыҡ туҡтатырға мөмкин йәки
+`config.da_ingest.replay_cache_ttl`-тан һуң сүп-сар менән йыйыла. Был дизайн селтәр форматында һаҡлай .
+I18NT00000000019X-дуҫ, клиентҡа махсус тергеҙелгән протоколдарҙан ҡотолорға, һәм ғәмәлдәге манифест торбаһын ҡабаттан файҙалана
+үҙгәрешһеҙ.
 
-## TODO Resolution Summary
-
-All previously blocked ingest TODOs have been implemented and verified:
-
-- **Compression hints** — Torii accepts caller-provided labels (`identity`, `gzip`, `deflate`,
-  `zstd`) and normalises payloads before validation so the canonical manifest hash matches the
-  decompressed bytes.【crates/iroha_torii/src/da/ingest.rs:220】【crates/iroha_data_model/src/da/types.rs:161】
-- **Governance-only metadata encryption** — Torii now encrypts governance metadata with the
-  configured ChaCha20-Poly1305 key, rejects mismatched labels, and surfaces two explicit
-  configuration knobs (`torii.da_ingest.governance_metadata_key_hex`,
-  `torii.da_ingest.governance_metadata_key_label`) to keep rotation deterministic.【crates/iroha_torii/src/da/ingest.rs:707】【crates/iroha_config/src/parameters/actual.rs:1662】
-- **Large payload streaming** — multi-part ingestion is live. Clients stream deterministic
-  `DaIngestChunk` envelopes keyed by `client_blob_id`, Torii validates each slice, stages them
-  under `manifest_store_dir`, and atomically rebuilds the manifest once the `is_last` flag lands,
-  eliminating the RAM spikes seen with single-call uploads.【crates/iroha_torii/src/da/ingest.rs:392】
-- **Manifest versioning** — `DaManifestV1` carries an explicit `version` field and Torii refuses
-  unknown versions, guaranteeing deterministic upgrades when new manifest layouts ship.【crates/iroha_data_model/src/da/types.rs:308】
-- **PDP/PoTR hooks** — PDP commitments derive directly from the chunk store and are persisted
-  beside manifests so DA-5 schedulers can launch sampling challenges from canonical data, and
-  `/v1/da/ingest` plus `/v1/da/manifests/{ticket}` now include a `Sora-PDP-Commitment` header
-  carrying the base64 Norito payload so SDKs cache the exact commitment DA-5 probes target.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
-
-## Implementation Notes
-
-- Torii’s `/v1/da/ingest` endpoint now normalises payload compression, enforces the replay cache,
-  deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, drops the encoded payload
-  into `config.da_ingest.manifest_store_dir` for SoraFS orchestration, and adds the `Sora-PDP-Commitment`
-  header so operators capture the commitment that PDP schedulers will reference.【crates/iroha_torii/src/da/ingest.rs:220】
-- Every accepted blob now produces a `da-commitment-schedule-<lane>-<epoch>-<sequence>-<ticket>.norito`
-  entry under `manifest_store_dir` bundling the canonical `DaCommitmentRecord` together with the raw
-  `PdpCommitmentV1` bytes so DA-3 bundle builders and DA-5 schedulers hydrate identical inputs without
-  re-reading manifests or chunk stores.【crates/iroha_torii/src/da/ingest.rs:1814】
-- SDK helper APIs expose the PDP header payload without forcing callers to reimplement Norito decoding:
-  the Rust crate exports `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, the Python
-  `ToriiClient` now includes `decode_pdp_commitment_header`, and `IrohaSwift` ships
-  `decodePdpCommitmentHeader` overloads for raw header maps or `HTTPURLResponse` instances.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii also exposes `GET /v1/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
-  and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
-  (base64), rendered manifest JSON, a `chunk_plan` JSON blob ready for `sorafs fetch`, the relevant
-  hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`), and mirrors the
-  `Sora-PDP-Commitment` header from ingest responses for parity. Supplying `block_hash=<hex>` in the
-  query string returns a deterministic `sampling_plan` (assignment hash, `sample_window`, and sampled
-  `(index, role, group)` tuples spanning the full 2D layout) so validators and PoR tools draw the same
-  indices.
-
-### Large Payload Streaming Flow
-
-Clients that need to ingest assets larger than the configured single-request limit initiate a
-streaming session by calling `POST /v1/da/ingest/chunk/start`. Torii responds with a
-`ChunkSessionId` (BLAKE3-derived from the requested blob metadata) and the negotiated chunk size.
-Each subsequent `DaIngestChunk` request carries:
-
-- `client_blob_id` — identical to the final `DaIngestRequest`.
-- `chunk_session_id` — ties slices to the running session.
-- `chunk_index` and `offset` — enforce deterministic ordering.
-- `payload` — up to the negotiated chunk size.
-- `payload_hash` — BLAKE3 hash of the slice so Torii can validate without buffering the entire blob.
-- `is_last` — indicates the terminal slice.
-
-Torii persists validated slices under `config.da_ingest.manifest_store_dir/chunks/<session>/` and
-records progress inside the replay cache to honour idempotency. When the final slice lands, Torii
-reassembles the payload on disk (streaming through the chunk directory to avoid memory spikes),
-computes the canonical manifest/receipt exactly as with single-shot uploads, and finally responds to
-`POST /v1/da/ingest` by consuming the staged artifact. Failed sessions can be aborted explicitly or
-are garbage-collected after `config.da_ingest.replay_cache_ttl`. This design keeps the network format
-Norito-friendly, avoids client-specific resumable protocols, and reuses the existing manifest pipeline
-unchanged.
-
-**Implementation status.** The canonical Norito types now live in
+**Торологик статусы.** Канон I18NT00000000020X типтары хәҙер йәшәй.
 `crates/iroha_data_model/src/da/`:
 
-- `ingest.rs` defines `DaIngestRequest`/`DaIngestReceipt`, together with the
-  `ExtraMetadata` container used by Torii.【crates/iroha_data_model/src/da/ingest.rs:1】
-- `manifest.rs` hosts `DaManifestV1` and `ChunkCommitment`, which Torii emits after
-  chunking completes.【crates/iroha_data_model/src/da/manifest.rs:1】
-- `types.rs` provides shared aliases (`BlobDigest`, `RetentionPolicy`,
-  `ErasureProfile`, etc.) and encodes the default policy values documented below.【crates/iroha_data_model/src/da/types.rs:240】
-- Manifest spool files land in `config.da_ingest.manifest_store_dir`, ready for the SoraFS orchestration
-  watcher to pull into storage admission.【crates/iroha_torii/src/da/ingest.rs:220】
+- I18NI000000215X `DaIngestRequest`/`DaIngestReceipt`, бергә билдәләй.
+  `ExtraMetadata` һауыты I18NT000000057X ҡулланылған.
+- I18NI000000219X X-сы һәм I18NI000000221X хосуси 2012-не алып, был I18NT000000058X-тан һуң сығарыла.
+  1990 йылдарҙа был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып тора.
+- I18NI000000222Х уртаҡ плиталар тәьмин итә (I18NI000000223X, `RetentionPolicy`,
+  I18NI000000225X, һ.
+- Манифест катушка файлдары I18NI000000226X XX, I18NT0000000030X оркестрлаштырыу өсөн әҙер.
+  күҙәтеүсе һаҡлау ҡабул итеүгә тартыу өсөн.【краттар/ироха_тории/срк/да/жест.rs:220】
 
-Roundtrip coverage for the request, manifest, and receipt payloads is tracked in
-`crates/iroha_data_model/tests/da_ingest_roundtrip.rs`, ensuring the Norito codec
-remains stable across updates.【crates/iroha_data_model/tests/da_ingest_roundtrip.rs:1】
+Запрос, асыҡ һәм квитанция файҙалы йөктәре өсөн түңәрәк яҡтыртыу 1990 йылда күҙәтелә.
+I18NI000000227X, I18NT000000021X codec тәьмин итеү
+Яңыртыуҙар буйынса тотороҡло ҡала.【краттар/ироха_мәғлүмәттәр/модель/тестар/da_ingest_ruptrip.rs:1】
 
-**Retention defaults.** Governance ratified the initial retention policy during
-SF-6; the defaults enforced by `RetentionPolicy::default()` are:
+**Тотороҡһоҙлоҡ һаҡлау.** Идара итеү ратификацияланған тәүге һаҡлау сәйәсәте ваҡытында 2019.
+SF-6; I18NI000000228X тарафынан үтәлгән ғәҙәттән тыш хәлдәр:
 
-- hot tier: 7 days (`604_800` seconds)
-- cold tier: 90 days (`7_776_000` seconds)
-- required replicas: `3`
-- storage class: `StorageClass::Hot`
-- governance tag: `"da.default"`
+- эҫе ярус: 7 көн (I18NI000000229 секунд)
+- һалҡын ярус: 90 көн (`7_776_000` секунд)
+- кәрәкле репликалар: I18NI000000231X
+- һаҡлау класы: I18NI000000232X
+- идара итеү тегы: I18NI000000233X
 
-Downstream operators must override these values explicitly when a lane adopts
-stricter requirements.
+Аҫҡы операторҙар был ҡиммәттәрҙе асыҡтан-асыҡ өҫтөнлөк бирергә тейеш, ҡасан һыҙат ҡабул итә .
+ҡәтғиерәк талаптар.

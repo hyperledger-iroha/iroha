@@ -11,188 +11,187 @@
 #+TITLE: On selecting versions as LTS candidates
 #+AUTHOR: Aleksandr Petrosyan
 #+DATE: 12-08-2023
-* About
+#+TRANSLATOR: machine-google-reviewed
 
-In the interest of preserving the engineering resources, it is in our
-interests to limit the scope of post-release support. If one has
-several versions of Iroha running in parallel, they might need to
-replicate the support work as many times as there are parallel
-versions.
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* 关于
 
-Instead of attempting to support multiple versions badly, we try to
-cater to 80% of use cases with 20% of the effort and reach a
-compromise between supporting every released version equally and only
-supporting the latest stable version.
+为了保护工程资源，我们有责任
+限制发布后支持范围的利益。如果一个人有
+Iroha 的多个版本并行运行，它们可能需要
+尽可能多地重复支持工作
+版本。
 
-Specifically, we support the latest =stable= release. Often this
-release is either not as well-tested, well-documented, or
-well-supported by the SDKs, in addition to often changing in terms of
-thus have a monthly release cadence and one release per year is chosen
-to be the target of long-term support and development.
+我们没有试图糟糕地支持多个版本，而是尝试
+用 20% 的努力满足 80% 的用例并达到
+平等且仅支持每个已发布版本之间的妥协
+支持最新稳定版本。
 
-* LTS selection criteria
+具体来说，我们支持最新的 =stable= 版本。经常这样
+发布版本要么没有经过充分测试、没有充分记录，要么
+得到 SDK 的良好支持，此外还经常发生变化
+因此，每月发布一次，并选择每年一次发布
+成为长期支持和发展的目标。
 
-The following is a non-exhaustive list of recommended considerations
-for selecting a particular version as an LTS candidate
+* LTS选择标准
 
-1. The release should be /unlikely/ to contain major /known/ issues which
-   would preclude it from being useful.
+以下是建议注意事项的非详尽列表
+用于选择特定版本作为 LTS 候选版本
 
-   More specifically, the release should have a good coverage of a
-   basic use-case, for example, (Pre-)RC-6[fn:1] was the last release which
-   contained the old consensus engine. Given that the actor-based
-   consensus had a maximum stable throughput of 10 TPS, (Pre-)RC-6 was
-   not labelled as an LTS, despite being used as one.
+1. 该版本应该/不太可能/包含主要/已知/问题
+   会妨碍它发挥作用。
 
-   RC-9 contained all the necessary features for running an Iroha node
-   on the new consensus, some changes to the structure of the
-   configuration and a few fixes to the =p2p= subsystem. It could have
-   filled all the possible niches of any projects based on Iroha, and
-   as such it was labelled as an LTS release despite being less-well
-   tested.
+   更具体地说，该版本应该很好地覆盖
+   基本用例，例如，(Pre-)RC-6[fn:1] 是最后一个版本
+   包含旧的共识引擎。鉴于基于演员
+   共识的最大稳定吞吐量为 10 TPS，(Pre-)RC-6 是
+   尽管被用作 LTS，但并未标记为 LTS。
 
-   Releases RC8, RC12, RC13 and RC17 were disqualified based on this
-   criterion.
+   RC-9 包含运行 Iroha 节点的所有必要功能
+   根据新的共识，对结构进行了一些改变
+   配置以及对 =p2p= 子系统的一些修复。它可能有
+   填补了基于 Iroha 的任何项目的所有可能的空白，并且
+   因此，尽管不太好，它还是被标记为 LTS 版本
+   已测试。
 
-2. If there is a large feature that entails an API breakage, the
-   release that has the most stable version of the "old way of doing
-   things" should be prioritised as an LTS candidate.
+   RC8、RC12、RC13 和 RC17 版本因此被取消资格
+   标准。
 
-   For example, RC12 and RC13, were the last versions of Iroha that
-   still used a hard-coded permission validator. Them being labelled
-   as an LTS candidate was precluded by the major known issues,
-   particularly with stability, poor coverage, and because releasing
-   an LTS after RC9 would have split the development resources off
-   from fixing the issue of rigid un-modifiable permission validators.
+2. 如果存在导致 API 损坏的大型功能，
+   具有最稳定版本的“旧方法”的版本
+   事物”应该优先作为 LTS 候选者。
 
-   RC14 and RC15 on the other hand, were in the process of a slow
-   migration of features. As such, the latter versions would be
-   considered direct upgrades over the previous one, having more
-   optimisations and better feature coverage.
+   例如，RC12 和 RC13 是 Iroha 的最后一个版本
+   仍然使用硬编码的权限验证器。他们被贴上标签
+   作为 LTS 候选人，由于主要的已知问题而被排除在外，
+   特别是稳定性、覆盖范围差，并且因为释放
+   RC9 之后的 LTS 会分割开发资源
+   解决严格的不可修改权限验证器的问题。
 
-3. The release must be feature complete for a use-case.
+   另一方面，RC14 和 RC15 正处于缓慢的发展过程中。
+   特征的迁移。因此，后面的版本将是
+   考虑直接升级之前的，有更多
+   优化和更好的功能覆盖。
 
-   This is different to point 1, because while RC10 and RC13 were free
-   from major problems, they did not offer sufficiently full coverage
-   of the features required for the major project stakeholders.
+3. 该版本必须针对用例提供完整的功能。这与第 1 点不同，因为虽然 RC10 和 RC13 是免费的
+   对于重大问题，他们没有提供足够全面的覆盖
+   主要项目利益相关者所需的功能。
 
-4. The release must be supported by all SDKs.
+4. 该版本必须得到所有SDK的支持。
 
-   While the support in Iroha Python is largely confined to LTS
-   candidates, creating a catch 22 situation, it is an exception. The
-   two other major SDKs, namely Kotlin, and TypeScript must support
-   the LTS candidate. If the SDK cannot be made to support the
-   candidate, the candidate release is disqualified.
+   虽然 Iroha Python 中的支持主要局限于 LTS
+   考生，造成第22条军规的局面，实属例外。的
+   另外两个主要的 SDK，即 Kotlin 和 TypeScript 必须支持
+   LTS 候选人。如果SDK无法支持
+   候选人，该候选人被取消资格。
 
-5. The release must be well-tested.
+5. 发布必须经过充分测试。
 
-   This point supplements point 1, in that lack of known features
-   coupled with bad test coverage does not, in fact, mean freedom from
-   major problems.
+   这一点补充了第一点，因为缺乏已知的特征
+   事实上，加上糟糕的测试覆盖率并不意味着可以免受
+   主要问题。
 
-   This generally applies to all releases after RC6 and until RC17, as
-   the development team was told of a way of restructuring the
-   integration tests, but the process only ended with RC17 and the
-   introduction of the =pytest= framework.
+   这通常适用于 RC6 之后到 RC17 之前的所有版本，因为
+   开发团队被告知重组的方法
+   集成测试，但该过程仅以 RC17 结束，
+   引入 =pytest= 框架。
 
-   While passing integration tests is necessary it is not sufficient,
-   the following minimal testing is required to qualify a release as
-   an LTS candidate
+   虽然通过集成测试是必要的，但这还不够，
+   需要进行以下最低限度的测试才能使发布符合要求
+   LTS 候选人
 
-   1. Unit and Integration testing. One must take care to run all
-      integration tests, including the long and flaky ones. If tests
-      are unusually flaky that is indicative of a problem, and the
-      release should be disqualified (see [[../../flakyness.org]]).
+   1. 单元和集成测试。必须小心运行所有
+      集成测试，包括长的和片状的测试。如果测试
+      异常片状，表明存在问题，并且
+      发布应被取消资格（参见 [[../../flakyness.org]]）。
 
-   2. =pytest= tests, which technically qualify as integration
-      tests.
+   2. =pytest= 测试，技术上符合集成要求
+      测试。
 
-   3. Longevity testing. The candidate must be tested for at least two
-      weeks to qualify. If the candidate is accepted as an LTS, the
-      longevity testing should be conducted for at least four weeks.
+   3.寿命测试。候选人必须接受至少两项测试
+      几周才有资格。如果候选人被接受为 LTS，则
+      寿命测试应进行至少四个星期。
 
-   4. Load testing. The LTS candidate must satisfy all of the criteria
-      set out by the QA team as operational and developmental
-      requirements under load (also known as extra-functional, and
-      mistakenly as non-functional). Failure to produce blocks in a
-      timely fashion is an automatic disqualification. Other
-      disqualifying criteria are left up to the discretion of the QA
-      team.
+   4.负载测试。 LTS 候选人必须满足所有标准
+      由 QA 团队制定为运营和开发
+      负载下的要求（也称为额外功能，和
+      被误认为是非功能性的）。未能在 a 中生成区块
+      及时时尚是自动取消资格。其他
+      取消资格标准由 QA 自行决定
+      团队。
 
-   5. It must be deployed as a =development= container in at least one
-      project for at least two weeks, with no major problems. RC9 did
-      not pass this test and would have been disqualified with the
-      updated criteria listed in the present document.
+   5. 必须作为 =development= 容器部署在至少一个
+      项目至少两周，没有出现大问题。 RC9做到了
+      未通过此测试，将被取消资格
+      本文件中列出的更新标准。
 
-6. The release must be well-documented.
+6. 发布必须有详细记录。
 
-   It should not contain multiple new features that lack
-   documentation. Any shortfall in terms of documentation coverage
-   must be fixable within the time-frame of at most the release window
-   for the candidate. Failure to do so is an automatic disqualification.
+   它不应包含多个缺乏的新功能
+   文档。文档覆盖范围方面的任何不足
+   必须最多在发布窗口的时间范围内修复
+   为候选人。否则将自动取消资格。
 
-In addition to the regular release procedure outlined in
-[[release_procedure.org]], the LTS must adhere to the following additional
-steps.
+除了中概述的常规发布程序之外
+[[release_procedure.org]]，LTS 必须遵守以下附加条款
+步骤。除了执行常规发布之外，还需要一个单独的 PR
+标题 =[release]: <semver> LTS= 其中 =<semver>= 是语义
+必须创建来自开发分支的代码版本。的
+必须避免常规检查表，而必须使用 Pull Request
+由审查和批准该文件的同一人员进行审查
+=stable= 发布。最多需要两次审查，以确保所有
+更改将按正确的顺序进行，并且不会
+未记录的问题被忽略了。
 
-In /addition/ to performing a regular release, a separate PR with the
-title =[release]: <semver> LTS= where =<semver>= is the semantic
-version of the code from the development branch must be created. The
-regular checklist must be eschewed, and instead the Pull Request must
-be reviewed by the same personnel that reviewed and approved the
-=stable= release. At most two reviews are needed, to ensure that all
-the changes will take place in the correct order and that no
-undocumented issues slipped through.
+一旦 LTS 版本发布，CI 将生成一个 docker 容器
+随着 Alpine Linux 平台和 Ubuntu Linux 上的 LTS 版本的发布，
+使用 =glibc= 的平台本机版本。 CI 还必须提供
+所有受支持的包，并将它们发布到各自的
+存储库。例如，这意味着 AUR 包已更新
+合并拉取请求并生成正确的包后。的
+GitHub 发布页面必须填充名为
+LTS 并包含单文件 =AppImage=。这些版本必须
+作为单独的软件包出现，这些软件包被标记为不可与
+稳定版本。
 
-Once the LTS release is made, the CI will produce a docker container
-with the LTS release on the Alpine Linux platform and on Ubuntu Linux,
-using the platform-native version of =glibc=. The CI must also produce
-all of the supported packages, and publish them to their respective
-repositories. This means, for example, that the AUR package is updated
-after the pull request is merged and produces the correct package. The
-GitHub release page must be populated with a separate release entitled
-LTS and containing the single-file =AppImage=. These releases must
-come as separate packages that are marked as not installable alongside the
-stable version.
+* 向后移植政策
 
-* Back-porting policy
+通常，不鼓励向后移植到 LTS。以下
+向后移植的原因被认为是可以接受的：
+1. 与 Iroha API 无关的添加，例如将军
+   辅助工具和/或文档。
+2.修复重大安全漏洞。
+3.修复一个重大bug。
+4. 修复妨碍使用的重大设计疏忽，前提是：
+   当前 LTS 的主要利益相关者/用户已口头表示
+   证明向后移植是更好的解决方案。
 
-Generally, back-porting into the LTS is discouraged. The following
-back-porting reasons are considered acceptable:
-1. Addition that is not tied to the Iroha API, like e.g. a general
-   helper tool and/or documentation.
-2. Fixing a major security vulnerability.
-3. Fixing a major bug.
-4. Fixing a major design oversight that precludes usage, provided that
-   the key stakeholders/users of the current LTS have verbally
-   certified that a backport is a preferable solution.
+向后移植必须通过与发布版本相同的渠道宣布
+本身。所需的更改必须在两个版本中都标记为向后移植
+修复它们的上游版本以及其中的版本
+它们已被向后移植。
 
-Back-ports must be announced through the same channels, as the release
-itself. Required changes must be labelled as backported in both the
-upstream release in which they were fixed and the version into which
-they have been back-ported.
+公告必须说明
+1. 为什么选择向后移植（参见上述原因）
+2. 向后移植的影响是什么
+3. 功能、集成和应用的现状如何？
+   负载/寿命测试。
 
-The announcement must explain
-1. Why the backport was chosen (see above reasons)
-2. What the impact of the backport must be
-3. What is the current status of functional, integration and
-   load/longevity testing.
+* 适用性
 
-* Applicability
+LTS/稳定版本政策应在第一次发布后立即修改
+Iroha 的功能完整版本已发布 (v2.0.0)。不再给予
+积极开发，核心开发团队可以（并且应该）能够
+更加关注对不同版本的支持。
 
-The LTS/stable release policy should be revised as soon as the first
-feature-complete version of Iroha is announced (v2.0.0). Given no more
-active development, the core development team can (and should) be able
-to focus more on the support of the diverging versions.
-
-* Footnotes
-
-[fn:1] The naming convention was stabilised long before any plan to
-release a version of Iroha was made.  As such calling any version of
-Iroha a release candidate has some implications.  Calling them pre
-release candidates is a similar type of misnomer, but less egregious,
-because rather than a misapplication of an existing term, this is an
-invention of a term that /could/ have subtle differences from a
-release candidate.  In reality these should have been called
-*development snapshots*.  But in order not to break continuity too
-much with the existing SDKs a compromise was chosen.
+* 脚注[fn:1] 命名约定早在任何计划之前就已经稳定下来
+发布了 Iroha 的版本。  因此调用任何版本的
+Iroha 候选版本有一些影响。  称他们为预
+发布候选者是一种类似的用词不当，但不那么令人震惊，
+因为这不是对现有术语的误用，而是
+发明一个术语，/可能/与
+释放候选人。  实际上这些应该被称为
+*开发快照*。  但为了不破坏连续性
+对于现有的 SDK，我们选择了一种折衷方案。

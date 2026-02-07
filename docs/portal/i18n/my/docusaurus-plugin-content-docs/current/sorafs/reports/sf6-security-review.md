@@ -6,71 +6,73 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SF-6 Security Review
 summary: Findings and follow-up items from the independent assessment of keyless signing, proof streaming, and manifest submission pipelines.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SF-6 Security Review
+# SF-6 လုံခြုံရေးပြန်လည်သုံးသပ်ခြင်း။
 
-**Assessment window:** 2026-02-10 → 2026-02-18  
-**Review leads:** Security Engineering Guild (`@sec-eng`), Tooling Working Group (`@tooling-wg`)  
-**Scope:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, Torii manifest handling, Sigstore/OIDC integration, CI release hooks.  
-**Artifacts:**  
-- CLI source and tests (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
+**အကဲဖြတ်မှု ပြတင်းပေါက်-** 2026-02-10 → 2026-02-18  
+**ပြန်လည်သုံးသပ်ခြင်း-** လုံခြုံရေးအင်ဂျင်နီယာအသင်း (`@sec-eng`)၊ Tooling Working Group (`@tooling-wg`)  
+**Scope-** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, Torii manifest ကိုင်တွယ်မှု၊ Sigstore/OIDC ပေါင်းစည်းမှု၊ CI ထုတ်လွှတ်မှုချိတ်များ။  
+**ရှေးဟောင်းပစ္စည်း**  
+- CLI အရင်းအမြစ်နှင့် စမ်းသပ်မှုများ (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
 - Torii manifest/proof handlers (`crates/iroha_torii/src/sorafs/api.rs`)  
-- Release automation (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
-- Deterministic parity harness (`crates/sorafs_car/tests/sorafs_cli.rs`, [SoraFS Orchestrator GA Parity Report](./orchestrator-ga-parity.md))
+- အလိုအလျောက်စနစ်ထုတ်ခြင်း (`ci/check_sorafs_cli_release.sh`၊ `scripts/release_sorafs_cli.sh`)  
+- Deterministic parity harness (`crates/sorafs_car/tests/sorafs_cli.rs`၊ [SoraFS Orchestrator GA Parity Report](./orchestrator-ga-parity.md))
 
-## Methodology
+## နည်းစနစ်
 
-1. **Threat modelling workshops** mapped attacker capabilities for developer workstations, CI systems, and Torii nodes.  
-2. **Code review** focused on credential surfaces (OIDC token exchange, keyless signing), Norito manifest validation, and proof streaming back-pressure.  
-3. **Dynamic testing** replayed fixture manifests and simulated failure modes (token replay, manifest tampering, truncated proof streams) using the parity harness and bespoke fuzz drives.  
-4. **Configuration inspection** validated `iroha_config` defaults, CLI flag handling, and release scripts to ensure deterministic, auditable runs.  
-5. **Process interview** confirmed remediation flow, escalation paths, and audit evidence capture with Tooling WG release owners.
+1. **Threat modeling workshops** developer workstations၊ CI စနစ်များနှင့် Torii nodeများအတွက် တိုက်ခိုက်သူစွမ်းရည်များကို ပုံဖော်ထားသည်။  
+2. ** ကုဒ်ပြန်လည်သုံးသပ်ခြင်း** သည် ယုံကြည်စိတ်ချရသောမျက်နှာပြင်များ (OIDC တိုကင်လဲလှယ်မှု၊ သော့မဲ့လက်မှတ်ထိုးခြင်း)၊ Norito သက်သေအထောက်အထားအတည်ပြုခြင်းနှင့် ပြန်လည်ထုတ်လွှင့်ခြင်းဖိအားကို သက်သေပြခြင်းဖြစ်သည်။  
+3. ** Dynamic testing** သည် parity harness နှင့် bespoke fuzz drives များကို အသုံးပြု၍ ပြန်လည်ပြသပြီး အတုယူထားသော ကျရှုံးမှုမုဒ်များ (တိုကင်ပြန်ဖွင့်ခြင်း၊ သရုပ်ဖော်ခြင်း၊ ဖြတ်တောက်ခြင်း သက်သေပြခြင်းများ) ကို ပြန်လည်ပြသပါသည်။  
+4. **Configuration inspection** သည် `iroha_config` ၏ ပုံသေများ၊ CLI အလံကို ကိုင်တွယ်ခြင်းနှင့် အဆုံးအဖြတ်ပေးသော စစ်ဆေးခြင်းတို့ကို မှန်ကန်ကြောင်း အတည်ပြုထားသော scripts များကို ထုတ်ပြန်ပါသည်။  
+5. **လုပ်ငန်းစဥ်အင်တာဗျူး** အတည်ပြုပြန်လည်ကုစားခြင်းစီးဆင်းမှု၊ တိုးမြင့်လာမှုလမ်းကြောင်းများနှင့် Tooling WG ဖြန့်ချိရေးပိုင်ရှင်များနှင့်အတူ စာရင်းစစ်အထောက်အထားများ ဖမ်းယူအတည်ပြုခြင်း။
 
-## Findings Summary
+## တွေ့ရှိချက်အကျဉ်းချုပ်
 
-| ID | Severity | Area | Finding | Resolution |
-|----|----------|------|---------|------------|
-| SF6-SR-01 | High | Keyless signing | OIDC token audience defaults were implicit in CI templates, risking cross-tenant replay. | Added explicit `--identity-token-audience` enforcement in release hooks and CI templates ([release process](../developer-releases.md), `docs/examples/sorafs_ci.md`). CI now fails when the audience is omitted. |
-| SF6-SR-02 | Medium | Proof streaming | Back-pressure paths accepted unbounded subscriber buffers, enabling memory exhaustion. | `sorafs_cli proof stream` enforces bounded channel sizes with deterministic truncation, logging Norito summaries and aborting the stream; Torii mirror updated to bound response chunks (`crates/iroha_torii/src/sorafs/api.rs`). |
-| SF6-SR-03 | Medium | Manifest submission | CLI accepted manifests without verifying embedded chunk plans when `--plan` was absent. | `sorafs_cli manifest submit` now recomputes and compares CAR digests unless `--expect-plan-digest` is provided, rejecting mismatches and surfacing remediation hints. Tests cover success/failure cases (`crates/sorafs_car/tests/sorafs_cli.rs`). |
-| SF6-SR-04 | Low | Audit trail | Release checklist lacked a signed approval log for the security review. | Added [release process](../developer-releases.md) section requiring attachment of review memo hashes and sign-off ticket URL before GA. |
+| ID | ပြင်းထန်မှု | ဧရိယာ | ရှာဖွေခြင်း | ဆုံးဖြတ်ချက် |
+|----|----------|------|---------|-----------------|
+| SF6-SR-01 | မြင့် | Keyless လက်မှတ်ထိုး | OIDC တိုကင် ပရိသတ်၏ ပုံသေများသည် CI နမူနာပုံစံများတွင် အကျုံးဝင်ပြီး အပြန်အလှန်ငှားရမ်းသူ ပြန်လည်ပြသခြင်းကို အန္တရာယ်ဖြစ်စေပါသည်။ | ထုတ်လွှတ်မှုချိတ်များနှင့် CI နမူနာပုံစံများတွင် ပြတ်သားစွာ `--identity-token-audience` အား ထည့်သွင်းထားသည် ([ထုတ်လွှတ်ခြင်းလုပ်ငန်းစဉ်](../developer-releases.md), `docs/examples/sorafs_ci.md`)။ ပရိသတ်ကို ချန်လှပ်ထားသောအခါ ယခု CI ပျက်သွားပါသည်။ |
+| SF6-SR-02 | လတ် | သက်သေပြခြင်း | Back-pressure လမ်းကြောင်းများသည် အကန့်အသတ်မရှိ စာရင်းသွင်းသူကြားခံများကို လက်ခံပြီး မှတ်ဉာဏ်အားကုန်ခန်းစေပါသည်။ | `sorafs_cli proof stream` သည် အဆုံးအဖြတ်ဖြတ်တောက်ခြင်း၊ Norito အကျဉ်းချုပ်များကို မှတ်တမ်းတင်ခြင်းနှင့် ထုတ်လွှင့်ခြင်းကို ရပ်ဆိုင်းခြင်းတို့ဖြင့် ကန့်သတ်ထားသော ချန်နယ်အရွယ်အစားများကို ကန့်သတ်ထားသည်။ Torii မှန်သည် တုံ့ပြန်မှုအပိုင်းများ (`crates/iroha_torii/src/sorafs/api.rs`) သို့ အပ်ဒိတ်လုပ်ထားသည်။ |
+| SF6-SR-03 | လတ် | တင်ပြချက် | `--plan` မရှိတော့သောအခါတွင် ထည့်သွင်းထားသော အတုံးအခဲအစီအစဥ်များကို အတည်မပြုဘဲ CLI က လက်ခံခဲ့သည်။ | ယခု `sorafs_cli manifest submit` သည် `--expect-plan-digest` ကို ပံ့ပိုးမပေးပါက CAR အချေအတင်များကို ပြန်လည်တွက်ချက်ပြီး နှိုင်းယှဉ်ပြီး ကိုက်ညီမှုမရှိပါက ငြင်းဆိုကာ ပြန်လည်ပြင်ဆင်ခြင်းဆိုင်ရာ အရိပ်အမြွက်များကို ဖြည့်စွက်ထားပါသည်။ စမ်းသပ်မှုများသည် အောင်မြင်မှု/ကျရှုံးမှုများ (`crates/sorafs_car/tests/sorafs_cli.rs`) အကျုံးဝင်သည်။ |
+| SF6-SR-04 | နိမ့် | စာရင်းစစ်လမ်း | ထုတ်ဝေမှုစစ်ဆေးစာရင်းတွင် လုံခြုံရေးသုံးသပ်ချက်အတွက် လက်မှတ်ရေးထိုးထားသော အတည်ပြုချက်မှတ်တမ်း မရှိခဲ့ပါ။ | သုံးသပ်ချက်မှတ်စုတို ဟက်ကာများနှင့် GA မတိုင်မီ လက်မှတ် URL ကို ပူးတွဲပါရှိရန် လိုအပ်သော [ထုတ်ဝေမှုလုပ်ငန်းစဉ်](../developer-releases.md) ကဏ္ဍ။ |
 
-All high/medium findings were fixed during the review window and validated through the existing parity harness. No latent critical issues remain.
+မြင့်မားသော/အလတ်စား တွေ့ရှိချက်အားလုံးကို ပြန်လည်သုံးသပ်သည့် ဝင်းဒိုးအတွင်း ပြင်ဆင်ပြီး ရှိပြီးသား တူညီသောကြိုးကြိုးဖြင့် အတည်ပြုထားသည်။ ငုပ်လျှိုးနေသော အရေးပါသော ပြဿနာများ မရှိပါ။
 
-## Control Validation
+## ထိန်းချုပ်အတည်ပြုခြင်း။
 
-- **Credential scope:** Default CI templates now mandate explicit audience and issuer assertions; the CLI and release helper both fail fast unless `--identity-token-audience` accompanies `--identity-token-provider`.  
-- **Deterministic replay:** Updated tests cover positive/negative manifest submission flows, ensuring mismatched digests remain non-deterministic failures and are surfaced before touching the network.  
-- **Proof streaming back-pressure:** Torii now streams PoR/PoTR items over bounded channels, and the CLI retains only truncated latency samples + five failure exemplars, preventing unbounded subscriber growth while keeping deterministic summaries.  
-- **Observability:** Proof streaming counters (`torii_sorafs_proof_stream_*`) and CLI summaries capture abort reasons, providing operators with audit breadcrumbs.  
-- **Documentation:** Developer guides ([developer index](../developer-index.md), [CLI reference](../developer-cli.md)) call out security-sensitive flags and escalation workflows.
+- **ကိုယ်ရေးကိုယ်တာနယ်ပယ်-** မူရင်း CI တင်းပလိတ်များသည် တိကျပြတ်သားသော ပရိသတ်နှင့် ထုတ်ဝေသူ၏ အခိုင်အမာပြောဆိုချက်များကို ပြဌာန်းထားပါသည်။ `--identity-token-audience` သည် `--identity-token-provider` မပါပါက CLI နှင့် release helper နှစ်ခုစလုံးသည် မြန်ဆန်စွာပျက်ကွက်ပါသည်။  
+- **Deterministic replay:** အပ်ဒိတ်စစ်ဆေးမှုများသည် အပြုသဘော/အနုတ်လက္ခဏာတင်ပြမှုစီးဆင်းမှုများကို အကျုံးဝင်စေပြီး၊ ကိုက်ညီမှုမရှိသော အချေအတင်များသည် အဆုံးအဖြတ်မရှိသော ချို့ယွင်းမှုများရှိနေကာ ကွန်ရက်ကိုမထိမီတွင် ပေါ်လာကြောင်းသေချာစေပါသည်။  
+- **ပြန်လည်ထုတ်လွှင့်ခြင်းဆိုင်ရာ သက်သေပြချက်-** Torii သည် ယခုအခါ ကန့်သတ်ချန်နယ်များပေါ်ရှိ PoR/PoTR ပစ္စည်းများကို ထုတ်လွှင့်နေပြီး CLI သည် ဖြတ်တောက်ထားသော latency နမူနာများ + မအောင်မြင်သည့် နမူနာငါးခုကိုသာ ထိန်းသိမ်းထားပြီး၊ အကန့်အသတ်မရှိ စာရင်းသွင်းသူတိုးတက်မှုကို တားဆီးပေးပါသည်။  
+- **ကြည့်ရှုနိုင်မှု-** အထောက်အထားထုတ်လွှင့်ခြင်းကောင်တာများ (`torii_sorafs_proof_stream_*`) နှင့် CLI အနှစ်ချုပ်များသည် သားလျှောရသည့်အကြောင်းရင်းများကို ဖမ်းယူထားပြီး အော်ပရေတာများအား စာရင်းစစ်အကျဉ်းချုံးများဖြင့် ပံ့ပိုးပေးပါသည်။  
+- **စာရွက်စာတမ်း-** ဆော့ဖ်ဝဲရေးသားသူလမ်းညွှန်များ ([developer index](../developer-index.md), [CLI ရည်ညွှန်း](../developer-cli.md)) လုံခြုံရေး-ထိခိုက်လွယ်သော အလံများနှင့် တိုးမြှင့်လုပ်ဆောင်မှုလုပ်ငန်းစဉ်များကို ခေါ်ဆိုပါ။
 
-## Release Checklist Additions
+## စာရင်းစစ်စာရင်း ထပ်လောင်းများကို ထုတ်ပြန်ပါ။
 
-Release managers **must** attach the following evidence when promoting a GA candidate:
+ဖြန့်ချိရေးမန်နေဂျာများသည် GA ကိုယ်စားလှယ်လောင်းကို မြှင့်တင်သောအခါတွင် အောက်ပါအထောက်အထားများကို ပူးတွဲတင်ပြရပါမည်-
 
-1. Hash of the latest security review memo (this document).  
-2. Link to the tracked remediation ticket (e.g., `governance/tickets/SF6-SR-2026.md`).  
-3. Output of `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` showing explicit audience/issuer arguments.  
-4. Captured logs from the parity harness (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
-5. Confirmation that Torii release notes include bounded proof streaming telemetry counters.
+1. နောက်ဆုံးလုံခြုံရေးသုံးသပ်ချက်မှတ်စုတို၏ Hash (ဤစာရွက်စာတမ်း)။  
+2. ခြေရာခံထားသော ပြန်လည်ကုစားရေးလက်မှတ် (ဥပမာ၊ `governance/tickets/SF6-SR-2026.md`) သို့ လင့်ခ်ချိတ်ပါ။  
+3. `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` ၏ တိကျပြတ်သားသော ပရိတ်သတ်/ထုတ်ပေးသူ ငြင်းခုံချက်များကို ပြသခြင်း။  
+4. တူညီသောကြိုးကြိုး (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`) မှဖမ်းယူထားသောမှတ်တမ်းများ။  
+5. Torii ထုတ်ဝေမှုမှတ်စုများတွင် ကန့်သတ်ထားသော အထောက်အထားထုတ်လွှင့်ခြင်း တယ်လီမီတာကောင်တာများ ပါဝင်ကြောင်း အတည်ပြုခြင်း။
 
-Failure to collect the artefacts above blocks GA sign-off.
+အထက်ဖော်ပြပါ ပစ္စည်းများကို စုဆောင်းရန် ပျက်ကွက်ခြင်းသည် GA အကောင့်ဖွင့်ခြင်းကို ပိတ်ဆို့သည်။
 
-**Reference artefact hashes (2026-02-20 sign-off):**
+**ကိုးကား artefact hashes (2026-02-20 sign-off):**
 
 - `sf6_security_review.md` — `66001d0b53d8e7ed5951a07453121c075dea931ca44c11f1fcd1571ed827342a`
 
-## Outstanding Follow-ups
+## ထူးထူးခြားခြား နောက်ဆက်တွဲ
 
-- **Threat model refresh:** Repeat this review quarterly or before major CLI flag additions.  
-- **Fuzzing coverage:** Proof streaming transport encodings are fuzzed via `fuzz/proof_stream_transport`, covering identity, gzip, deflate, and zstd payloads.  
-- **Incident rehearsal:** Schedule an operator exercise simulating token compromise and manifest rollback, ensuring documentation reflects practised procedures.
+- **Threat model ကို ပြန်လည်ဆန်းသစ်ခြင်း-** ဤသုံးသပ်ချက်ကို သုံးလတစ်ကြိမ် သို့မဟုတ် အကြီးစား CLI အလံမထည့်မီ ပြန်လုပ်ပါ။  
+- **Fuzzing coverage-** အထောက်အထား streaming transport encodings များကို `fuzz/proof_stream_transport` မှတစ်ဆင့် fuzzed ဖြစ်ပြီး အထောက်အထား၊ gzip၊ deflate နှင့် zstd payload များကို ဖုံးအုပ်ထားသည်။  
+- **အခင်းအကျင်းပြန်လည်လေ့ကျင့်မှု-** အော်ပရေတာလေ့ကျင့်ခန်းတစ်ခုအား တိုကင်အပေးအယူလုပ်ခြင်းကို ပုံဖော်ကာ ပြန်လှည့်ခြင်းအား သက်သေပြပါ၊၊ စာရွက်စာတမ်းများသည် လေ့ကျင့်ထားသောလုပ်ထုံးလုပ်နည်းများကို ထင်ဟပ်စေကြောင်း သေချာစေခြင်း။
 
-## Approval
+## ခွင့်ပြုချက်
 
-- Security Engineering Guild representative: @sec-eng (2026-02-20)  
-- Tooling Working Group representative: @tooling-wg (2026-02-20)
+- Security Engineering Guild ကိုယ်စားလှယ်- @sec-eng (2026-02-20)  
+- Tooling Working Group ကိုယ်စားလှယ်- @tooling-wg (2026-02-20)
 
-Store signed approvals alongside the release artefact bundle.
+ထုတ်ဝေမှုအနုပညာအတွဲနှင့်အတူ လက်မှတ်ရေးထိုးထားသော အတည်ပြုချက်များကို သိမ်းဆည်းပါ။

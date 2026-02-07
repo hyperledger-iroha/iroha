@@ -7,262 +7,251 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 628eb2c7776bf818a310dd4bae51e3fc655f92e885d0cd9da7ff487fd9128102
 source_last_modified: "2025-12-29T18:16:35.976997+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Metal & NEON Acceleration Plan (Swift & Rust)
+# Металл & NEON тиҙләтеү планы (Swift & Rust)
 
-This document captures the shared plan for enabling deterministic hardware
-acceleration (Metal GPU + NEON/Accelerate SIMD + StrongBox integration) across
-the Rust workspace and the Swift SDK. It addresses the roadmap items tracked
-under **Hardware Acceleration Workstream (macOS/iOS)** and provides a hand-off
-artifact for the Rust IVM team, Swift bridge owners, and telemetry tooling.
+Был документ детерминистик аппарат мөмкинлек биргән дөйөм планды тота.
+тиҙләнеш (Металаль GPU + NEON/тиҙләтергә SIMD + StongBox интеграцияһы)
+«Раст» эш урыны һәм Свифт СДК. Ул юл картаһы әйберҙәрен күҙәтеп бара
+аҫтында **Аппарат тиҙләнеше Эш ағымы (macOS/iOS)** һәм ҡул-өҫтөндә тәьмин итә
+артефакт өсөн Rust IVM командаһы, Свифт күпер хужалары, һәм телеметрия инструменттары.
 
-> Last updated: 2026-01-12  
-> Owners: IVM Performance TL, Swift SDK Lead
+> Һуңғы яңыртылған: 2026-01-12  
+> Хужалары: IVM етештереүсәнлеге Т.Л., Свифт SDK етәксеһе
 
-## Goals
+## Маҡсаттар
 
-1. Reuse the Rust GPU kernels (Poseidon/BN254/CRC64) on Apple hardware via Metal
-   compute shaders with deterministic parity against CPU paths.
-2. Expose acceleration toggles (`AccelerationConfig`) end-to-end so Swift apps
-   can opt into Metal/NEON/StrongBox while preserving ABI/parity guarantees.
-3. Instrument CI + dashboards to surface parity/benchmark data and flag
-   regressions across CPU vs GPU/SIMD paths.
-4. Share StrongBox/secure-enclave lessons between Android (AND2) and Swift
-   (IOS4) to keep signing flows deterministically aligned.
+1. Ҡабаттан ҡулланыу руст GPU ядролары (Позиддон/BN254/CRC64) Apple аппаратура аша Металл .
+   процессор юлдарына ҡаршы детерминистик паритетлы күләгәләр.
+.
+   ABI/паритет гарантияларын һаҡлап ҡалыу менән бергә Металл/NEON/StrongBox-ҡа инә ала.
+3. Приборҙар CI + приборҙар таҡталары ер өҫтө паритеты/эталон мәғлүмәттәре һәм флаг
+   регрессиялар буйынса процессор vs GPU/SIMD юлдары.
+4. Android (AND2) һәм Swift араһында Көслөбокс/хәүефһеҙ ҡоҫоу дәрестәре менән уртаҡлашыу
+   (IOS4) ағымдар ҡул ҡуйыуҙы һаҡлау өсөн детерминистик тура килтерелгән.
 
-**Update (CRC64 + Stage‑1 refresh):** CRC64 GPU helpers are now wired into `norito::core::hardware_crc64` with a 192 KiB default cutoff (override via `NORITO_GPU_CRC64_MIN_BYTES` or explicit helper path `NORITO_CRC64_GPU_LIB`) while retaining SIMD and scalar fallbacks. JSON Stage‑1 cutovers were re-benchmarked (`examples/stage1_cutover` → `benchmarks/norito_stage1/cutover.csv`), keeping the scalar cutover at 4 KiB and aligning the Stage‑1 GPU default to 192 KiB (`NORITO_STAGE1_GPU_MIN_BYTES`) so small documents stay on CPU and large payloads amortize GPU launch costs.
+**Яңыртыу (CRC64 + Stage‐1 яңыртыу):** CRC64 GPU ярҙамсылары хәҙер `norito::core::hardware_crc64` сымдары менән 192KiB өҙөлгән өҙөлгән (өҫтөнлөк аша `NORITO_GPU_CRC64_MIN_BYTES` йәки асыҡ ярҙамсы юл `NORITO_CRC64_GPU_LIB`) ваҡытында SIMD һәм скаляр fallbacks. 192KiB (`NORITO_STAGE1_GPU_MIN_BYTES`X) скважина 4KiB-та скаляр скваверҙы һаҡлау һәм ҙур документтарҙа ҡала һәм ҙур ҡалаларҙа ҡала. файҙалы йөктәр амортизация GPU старт сығымдары.
 
-## Deliverables & Owners
+## тапшырыусылар & Хужалар
 
-| Milestone | Deliverable | Owner(s) | Target |
-|-----------|-------------|----------|--------|
-| Rust WP2-A/B | Metal shader interfaces mirroring CUDA kernels | IVM Perf TL | Feb 2026 |
-| Rust WP2-C | Metal BN254 parity tests & CI lane | IVM Perf TL | Q2 2026 |
-| Swift IOS6 | Bridge toggles wired (`connect_norito_set_acceleration_config`) + SDK API + samples | Swift Bridge Owners | Done (Jan 2026) |
-| Swift IOS5 | Sample apps/docs demonstrating config usage | Swift DX TL | Q2 2026 |
-| Telemetry | Dashboard feeds w/ acceleration parity + benchmark metrics | Swift Program PM / Telemetry | Pilot data Q2 2026 |
-| CI | XCFramework smoke harness exercising CPU vs Metal/NEON on device pool | Swift QA Lead | Q2 2026 |
-| StrongBox | Hardware-backed signing parity tests (shared vectors) | Android Crypto TL / Swift Security | Q3 2026 |
+| Мильстоун | Тапшырыу | Хужа(тар) | Маҡсат |
+|---------|---------------|---------|-------- |
+| Руст WP2-А/Б | Металл шейдер интерфейстары CUDA ядроларын көҙгөләй | IVM Перф ТЛ | 2026 йылдың февраль |
+| Rust WP2-C | Металл BN254 паритет һынауҙары & CI һыҙаты | IVM Перф ТЛ | 2026 йылдың 2-се кварталында |
+| Свифт IOS6 | Күпер сымлы (`connect_norito_set_acceleration_config`) + SDK API + өлгөләре | Свифт күпере хужалары | Эш (2026 йылдың ғинуары) |
+| Свифт IOS5 | Өлгө ҡушымталар/докторҙар күрһәтеү конфиг ҡулланыу | Свифт DX TL | 2026 йылдың 2-се кварталында |
+| Телеметрия | Приборҙар таҡтаһы w/ тиҙләтеү паритеты + ориентир метрикаһы | Свифт программаһы PM / Телеметрия | Пилот мәғлүмәттәре Q2 2026 |
+| CI | XCFramework төтөн жгут күнекмәләр процессоры vs Metal/NEON ҡоролма бассейны | Свифт QA ҡурғаш | 2026 йылдың 2-се кварталында |
+| Көслөбокс | Аппарат-арҡа ҡул ҡуйыу паритет һынауҙары (берләшкән векторҙар) | Андроид Крипто ТЛ / Свифт хәүефһеҙлеге | 2026 йылдың 1-се кварталында |
 
-## Interfaces & API Contracts
-
-### Rust (`ivm::AccelerationConfig`)
-- Keep existing fields (`enable_simd`, `enable_metal`, `enable_cuda`, `max_gpus`, thresholds).
-- Add explicit Metal warm-up to avoid first-use latency (Rust #15875).
-- Provide parity APIs returning status/diagnostics for dashboards:
-  - e.g. `ivm::vector::metal_status()` -> {enabled, parity, last_error}.
-- Output benchmarking metrics (Merkle tree timings, CRC throughput) via
-  telemetry hooks for `ci/xcode-swift-parity`.
-- Metal host now loads the compiled `fastpq.metallib`, dispatches FFT/IFFT/LDE
-  and Poseidon kernels, and falls back to the CPU implementation whenever the
-  metallib or device queue is unavailable.
+## Интерфейстар & API килешә### Rust (`ivm::AccelerationConfig`)
+- Ғәмәлдәге яландарҙы дауам итә (`enable_simd`, `enable_metal`, `enable_cuda`, `max_gpus`, сиктәр).
+- Беренсе ҡулланыу латентлығынан ҡотолоу өсөн асыҡтан-асыҡ Металл йылыныу өҫтәгеҙ (Раст #15875).
+- Паритет API-лар ҡайтарыу статусы/диагностика өсөн приборҙар таҡталары бирергә:
+  - мәҫ. `ivm::vector::metal_status()` -> {ҡуйылған, паритет, һуңғы_еррор}.
+- Сығыш бенчмаркинг метрикаһы (Меркл ағасы ваҡыты, CRC үткәреүсәнлеге) аша
+  телеметрия ҡармаҡтары өсөн `ci/xcode-swift-parity`.
+- Металл хост хәҙер тейәлгән `fastpq.metallib`, диспетчер FFT/IFFT/LDE
+  һәм Посейдон ядролары, һәм ҡасан ғына процессор тормошҡа ашырыуға кире төшә.
+  металл йәки ҡоролма сираты юҡ.
 
 ### C FFI (`connect_norito_bridge`)
-- New struct `connect_norito_acceleration_config` (completed).
-- Getter coverage now includes `connect_norito_get_acceleration_config` (config only) and `connect_norito_get_acceleration_state` (config + parity) to mirror the setter.
-- Document struct layout in header comments for SPM/CocoaPods consumers.
+- Яңы структур `connect_norito_acceleration_config` (тамамланған).
+- Геттер ҡаплауы хәҙер `connect_norito_get_acceleration_config` (конфигурация ғына) һәм `connect_norito_get_acceleration_state` (конфигурация + паритеты) көҙгөһөн үҙ эсенә ала.
+- Документ структураһы планировкаһы баш комментарийҙар өсөн SPM/КокаПодс ҡулланыусылар.
 
-### Swift (`AccelerationSettings`)
-- Defaults: Metal enabled, CUDA disabled, thresholds nil (inherit).
-- Negative values ignored; `apply()` invoked automatically by `IrohaSDK`.
-- `AccelerationSettings.runtimeState()` now surfaces the `connect_norito_get_acceleration_state`
-  payload (config + Metal/CUDA parity status) so Swift dashboards emit the same telemetry
-  as Rust (`supported/configured/available/parity`). The helper returns `nil` when the
-  bridge is absent to keep tests portable.
-- `AccelerationBackendStatus.lastError` copies the disable/error reason from
-  `connect_norito_get_acceleration_state` and frees the native buffer once the string is
-  materialised so mobile parity dashboards can annotate why Metal/CUDA were disabled on
-  each host.
-- `AccelerationSettingsLoader` (`IrohaSwift/Sources/IrohaSwift/AccelerationSettingsLoader.swift`,
-  tests under `IrohaSwift/Tests/IrohaSwiftTests/AccelerationSettingsLoaderTests.swift`) now
-  resolves operator manifests in the same priority order as the Norito demo: honour
-  `NORITO_ACCEL_CONFIG_PATH`, search bundled `acceleration.{json,toml}` / `client.{json,toml}`,
-  log the chosen source, and fall back to defaults. Apps no longer need bespoke loaders to
-  mirror the Rust `iroha_config` surface.
-- Update sample apps & README to show toggles and telemetry integration.
+### Свифт (`AccelerationSettings`)
+- Ғәҙәттәгесә: Металл мөмкинлек бирҙе, CUDA өҙөлгән, сиктәрҙе нуль (мираҫ).
+- Негатив ҡиммәттәр иғтибарға алынмаған; `apply()` автоматик рәүештә `IrohaSDK` тиклем мөрәжәғәт иткән.
+- `AccelerationSettings.runtimeState()` хәҙер `connect_norito_get_acceleration_state`
+  файҙалы йөк (конфиг + Металл/CUDA паритет статусы) шулай Свифт приборҙар таҡталары шул уҡ телеметрия сығара
+  руст ролендә (`supported/configured/available/parity`). Ярҙамсы ҡайтара `nil`, ҡасан
+  күпер юҡ, һынауҙарҙы һаҡлау өсөн күсмә.
+- `AccelerationBackendStatus.lastError` 2012 йылдан өҙөлгән/хаталы сәбәпте күсереп ала.
+  `connect_norito_get_acceleration_state` X һәм туған буферҙы азат итә, бер тапҡыр еп.
+  матдилаштырылған, шулай итеп, күсмә паритет приборҙар таҡталары аннота ала, ни өсөн Металл/CUDA өҙөлгән.
+  һәр хужа.
+- `AccelerationSettingsLoader` X (`IrohaSwift/Sources/IrohaSwift/AccelerationSettingsLoader.swift`,
+  `IrohaSwift/Tests/IrohaSwiftTests/AccelerationSettingsLoaderTests.swift` буйынса һынауҙар) хәҙер
+  хәл итеү операторы күренә, шул уҡ өҫтөнлөклө тәртиптә Norito демо: хөрмәт
+  `NORITO_ACCEL_CONFIG_PATH`, эҙләү `acceleration.{json,toml}` / `client.{json,toml}`,
+  һайланған сығанаҡты логин, һәм ғәҙәттәгесә кире төшөп. Ҡушымталар кәрәкмәй инде заказ буйынса тейәүселәргә
+  көҙгө Rust `iroha_config` өҫтө.
+- Яңыртыу өлгө ҡушымталар & README күрһәтеү өсөн переключатель һәм телеметрия интеграцияһы.
 
-### Telemetry (Dashboards + Exporters)
-- Parity feed (mobile_parity.json):
-  - `acceleration.metal/neon/strongbox` -> {enabled, parity, perf_delta_pct}.
-  - Accept `perf_delta_pct` baseline CPU vs GPU comparison.
-  - `acceleration.metal.disable_reason` mirrors `AccelerationBackendStatus.lastError`
-    so Swift automation can flag disabled GPUs with the same fidelity as the Rust
-    dashboards.
-- CI feed (mobile_ci.json):
-  - `acceleration_bench.metal_vs_cpu_merkle_ms` -> {cpu, metal}
-  - `acceleration_bench.neon_crc64_throughput_mb_s` -> Double.
-- Exporters must source metrics from Rust benchmarks or CI runs (e.g., run
-  Metal/CPU microbench as part of `ci/xcode-swift-parity`).
+### Телеметрия (Приборҙар таҡталары + Экспортерҙар)
+- Паритет ем (мобиль_парти.json):
+  - `acceleration.metal/neon/strongbox` -> {ҡуйылған, паритет, перф_дельта_пкт}.
+  - Ҡабул итеү `perf_delta_pct` башланғыс процессор vs GPU сағыштырыу.
+  - `acceleration.metal.disable_reason` X көҙгө `AccelerationBackendStatus.lastError`.
+    тимәк, Swift автоматлаштырыу инвалидтар инвалид GPUs менән шул уҡ тоғролоҡ менән рус.
+    приборҙар таҡтаһы.
+- CI ашатыу (мобиль_ци.json):
+  - `acceleration_bench.metal_vs_cpu_merkle_ms` -> {cpu, металл}
+  - `acceleration_bench.neon_crc64_throughput_mb_s` -> Икеләтә.
+- Экспортерҙар тейеш сығанаҡ метрикаһы Rust ориентирҙары йәки CI йүгерә (мәҫәлән, йүгерә
+  `ci/xcode-swift-parity` өлөшө булараҡ металл/ПУ микроэлендр).### Конфигурация ручкалары & ғәҙәттәгесә (WP6-C)
+- `AccelerationConfig` ғәҙәттәгесә: `enable_metal = true` macOS төҙөүҙәрендә, `enable_cuda = true` ҡасан CUDA функцияһы төҙөлә, `max_gpus = None` (крупка). Swift `AccelerationSettings` урау `connect_norito_set_acceleration_config` аша шул уҡ ғәҙәттән тыш хәлдәрҙе мираҫҡа ала.
+- Norito Меркл эвристикаһы (ГПУ vs процессоры): `merkle_min_leaves_gpu = 8192` ≥8192 япраҡтары булған ағастар өсөн GPU хеширование мөмкинлек бирә; фон өҫтөнлөктәре (`merkle_min_leaves_metal`, `merkle_min_leaves_cuda`) асыҡтан-асыҡ ҡуйылмаһа, шул уҡ сиккә тиклем ғәҙәттәгесә.
+- процессор өҫтөнлөк эвристикаһы (SHA2 ISA бар): ике Arch64 (ARMv8 SHA2) һәм x86/x86_64 (SHA-NI) процессор юлы өҫтөнлөк бирә тиклем `prefer_cpu_sha2_max_leaves_* = 32_768` япраҡтары; өҫтөндә, тип GPU сиге ҡағыла. Был ҡиммәттәр `AccelerationConfig` аша конфигурациялана һәм тик ориентирлы дәлилдәр менән генә көйләнергә тейеш.
 
-### Configuration knobs & defaults (WP6-C)
-- `AccelerationConfig` defaults: `enable_metal = true` on macOS builds, `enable_cuda = true` when the CUDA feature is compiled, `max_gpus = None` (no cap). The Swift `AccelerationSettings` wrapper inherits the same defaults through `connect_norito_set_acceleration_config`.
-- Norito Merkle heuristics (GPU vs CPU): `merkle_min_leaves_gpu = 8192` enables GPU hashing for trees with ≥8192 leaves; backend overrides (`merkle_min_leaves_metal`, `merkle_min_leaves_cuda`) default to the same threshold unless explicitly set.
-- CPU preference heuristics (SHA2 ISA present): on both AArch64 (ARMv8 SHA2) and x86/x86_64 (SHA-NI) the CPU path remains preferred up to `prefer_cpu_sha2_max_leaves_* = 32_768` leaves; above that the GPU threshold applies. These values are configurable via `AccelerationConfig` and should be adjusted only with benchmark evidence.
+## Һынау стратегияһы
 
-## Testing Strategy
+1. **Блок паритет һынауҙары (Rust)**: тәьмин итеү өсөн Металл ядролары тура килә процессор сығыштары өсөн .
+   детерминистик векторҙар; `cargo test -p ivm --features metal` буйынса йүгерә.
+   `crates/fastpq_prover/src/metal.rs` хәҙер macOS-тик паритет һынауҙары ташый, тип
+   күнекмәләр FFT/IFFT/LDE һәм Посейдон ҡаршы скаляр һылтанма.
+2. **Свифт төтөн йүгән**: IOS6 һынау йүгерсеһен оҙайтыу өсөн башҡарыу процессоры vs Metal .
+   кодлау (Меркл/CRC64) эмуляторҙар һәм StrongBox ҡоролмаларында ла; сағыштырырға
+   һөҙөмтәләре һәм лог паритет статусы.
+3. **CI**: яңыртыу `norito_bridge_ios.yml` (шул уҡ шылтыратыуҙар `make swift-ci`) этәрергә
+   артефакттарға тиҙләнеш метрикаһы; йүгереүҙе тәьмин итеүҙе раҫлай Buildkite
+   `ci/xcframework-smoke:<lane>:device_tag` метамағлүмәттәр йүгән үҙгәргәнсе,
+   һәм паритет/эталон дрейфында һыҙатты үтәмәй.
+4. **Приборҙар таҡтаһы**: яңы яландар хәҙер CLI сығышында рендер. Экспортерҙар етештереүҙе тәьмин итеү
+   мәғлүмәттәр алдынан flipping приборҙар панелдәре йәшәй.
 
-1. **Unit parity tests (Rust)**: ensure Metal kernels match CPU outputs for
-   deterministic vectors; run under `cargo test -p ivm --features metal`.
-   `crates/fastpq_prover/src/metal.rs` now ships macOS-only parity tests that
-   exercise FFT/IFFT/LDE and Poseidon against the scalar reference.
-2. **Swift smoke harness**: extend IOS6 test runner to execute CPU vs Metal
-   encoding (Merkle/CRC64) on both emulators and StrongBox devices; compare
-   results and log parity status.
-3. **CI**: update `norito_bridge_ios.yml` (already calls `make swift-ci`) to push
-   acceleration metrics to artifacts; ensure the run confirms Buildkite
-   `ci/xcframework-smoke:<lane>:device_tag` metadata before publishing harness changes,
-   and fail the lane on parity/benchmark drift.
-4. **Dashboards**: new fields now render in CLI output. Ensure exporters produce
-   data before flipping dashboards live.
+## WP2-А металл Шейдер планы (Позедон торбалары)
 
-## WP2-A Metal Shader Plan (Poseidon Pipelines)
+Беренсе WP2 осҡон ҡаплай планлаштырыу эштәре өсөн Посейдон металл ядролары .
+тип көҙгө CUDA тормошҡа ашырыу. План тырышлыҡты ядроларға бүлә,
+хост планлаштырыу, һәм уртаҡ даими стадиялау, шуға күрә һуңыраҡ эштәрҙе йүнәлтергә мөмкин, тик .
+тормошҡа ашырыу һәм һынау.
 
-The first WP2 milestone covers the planning work for the Poseidon Metal kernels
-that mirror the CUDA implementation. The plan splits the effort into kernels,
-host scheduling, and shared constant staging so later work can focus purely on
-implementation and testing.
+### Ядро Скапы
 
-### Kernel Scope
+. Һәр еп
+   `STATE_CHUNK` (4 штат) хужаһы һәм бөтә `TOTAL_ROUNDS` итерацион ҡулланыу ҡулланып эшләй.
+   диспетчер ваҡытында ҡуйылған түңәрәк түңәрәк константалар.
+2. `poseidon_hash_columns`: `PoseidonColumnSlice` каталогы һәм уҡый
+   башҡарыу Merkle-дуҫ хеширование һәр бағана (таплау процессоры’s .
+   `PoseidonColumnBatch` планировкаһы). Ул шул уҡ еп төркөмө даими буфер ҡуллана
+   тип аталған ядро ​​булараҡ, әммә `(states_per_lane * block_count)` өҫтөндә иллюзиялар
+   сығыштар шулай ядро ​​сират тапшырыуҙарҙы амортизациялай ала.
+.
+   бер генә пропускта. Ҡатнаш ядро ​​ҡулланыу `PoseidonFusedArgs` шулай хужа.
+   йәнәш булмаған төбәктәрҙе һәм `leaf_offset`/`parent_offset`, һәм
+   ул башҡа ядролар менән бөтә түңәрәк/МДС таблицалары менән уртаҡлаша.
 
-1. `poseidon_permute`: permutes `state_count` independent states. Each thread
-   owns a `STATE_CHUNK` (4 states) and runs all `TOTAL_ROUNDS` iterations using
-   threadgroup-shared round constants staged at dispatch time.
-2. `poseidon_hash_columns`: reads the sparse `PoseidonColumnSlice` catalogue and
-   performs Merkle-friendly hashing of every column (matching the CPU’s
-   `PoseidonColumnBatch` layout). It uses the same threadgroup constant buffer
-   as the permute kernel but loops over `(states_per_lane * block_count)`
-   outputs so the kernel can amortize queue submissions.
-3. `poseidon_trace_fused`: computes the parent/leaf digests for the trace table
-   in a single pass. The fused kernel consumes `PoseidonFusedArgs` so the host
-   can describe non-contiguous regions and a `leaf_offset`/`parent_offset`, and
-   it shares all round/MDS tables with the other kernels.
+### Команда планлаштырыу & Хост контракттар- Һәр ядро ​​диспетчерлығы `MetalPipelines::command_queue` аша үтә, ул
+  адаптив планлаштырыусы (маҡсат ~2 мс) һәм сират фан-комплекттарын үтәй
+  `FASTPQ_METAL_QUEUE_FANOUT` аша фашлана һәм
+  `FASTPQ_METAL_COLUMN_THRESHOLD`. `with_metal_state`-тағы йылытыу юлы
+  компиляция бөтә өс Посейдон ядролары өҫкә-алғы шулай беренсе диспетчер түгел
+  торба булдырыу өсөн штраф түләргә.
+- Тротгруппа размерлау көҙгөһө булған Metal FFT/LDE ғәҙәттәгесә: маҡсат булып тора
+  8,192 ептәр бер тапшырыу менән ҡаты ҡапҡас 256 еп бер төркөм. 1990 й.
+  хужаһы түбән ҡөҙрәтле ҡоролмалары өсөн `states_per_lane` 2012 йылға тиклем түбән ҡөҙрәтле ҡоролмалары өсөн түбән ҡөҙрәтен кәметергә мөмкин.
+  тирә-яҡ мөхитте йыйыу (`FASTPQ_METAL_POSEIDON_STATES_PER_BATCH`X
+  WP2-B-ла өҫтәргә) шейдер логикаһын үҙгәртмәйенсә.
+- Колонна стадияһы шул уҡ ике буферлы пулға эйәреп, инде FFT ҡулланылған.
+  торбалар. Посейдон ядролары сеймал күрһәткестәрен ҡабул итә, был сәхнәләштереү буферы
+  һәм бер ҡасан да ҡағылма глобаль өйөм бүленә, был хәтер-детерминизм һаҡлай
+  CUDA хост менән тура килтерелгән.
 
-### Command Scheduling & Host Contracts
+### Дөйөм константтар
 
-- Every kernel dispatch runs through `MetalPipelines::command_queue`, which
-  enforces the adaptive scheduler (target ~2 ms) and the queue fan-out controls
-  exposed via `FASTPQ_METAL_QUEUE_FANOUT` and
-  `FASTPQ_METAL_COLUMN_THRESHOLD`. The warm-up path in `with_metal_state`
-  compiles all three Poseidon kernels up-front so the first dispatch does not
-  pay a pipeline creation penalty.
-- Threadgroup sizing mirrors the existing Metal FFT/LDE defaults: the target is
-  8,192 threads per submission with a hard cap of 256 threads per group. The
-  host may downshift the `states_per_lane` multiplier for low-power devices by
-  dialing the environment overrides (`FASTPQ_METAL_POSEIDON_STATES_PER_BATCH`
-  to be added in WP2-B) without modifying the shader logic.
-- Column staging follows the same double-buffered pool already used by the FFT
-  pipelines. The Poseidon kernels accept raw pointers into that staging buffer
-  and never touch global heap allocations, which keeps memory-determinism
-  aligned with the CUDA host.
+- `PoseidonSnapshot` 1990 йылда һүрәтләнгән манифест .
+  `docs/source/fastpq/poseidon_metal_shared_constants.md` хәҙер канонлы
+  түңәрәк константалар һәм МДС матрицаһы өсөн сығанаҡ. Икеһе лә Металл (`poseidon2.metal` X)
+  һәм CUDA (`fastpq_cuda.cu`) ядролары ҡасан да булһа, ҡасан да булһа тергеҙелергә тейеш.
+  үҙгәрә.
+- WP2-B өҫтәйәсәк бәләкәй генә хост тейәүсе, тип уҡый манифест эшләй һәм
+  256-ны телеметрияға сығара (`acceleration.poseidon_constants_sha`) шулай
+  паритет приборҙар таҡталары раҫлай ала, тип шейдер константалары тура килә баҫылған
+  снимок.
+- Йылытыу ваҡытында беҙ `TOTAL_ROUNDS x STATE_WIDTH` константаларын күсерәсәкбеҙ.
+  `MTLBuffer` һәм уны бер тапҡыр бер ҡоролма тейәп. Һәр ядро ​​һуңынан мәғлүмәттәрҙе күсерә
+  үҙ өлөшөн эшкәрткәнсе еп төркөмө хәтеренә инә, детерминистик тәьмин итеү
+  заказ хатта ҡасан бер нисә команда буферҙары осоуҙа эшләй.
 
-### Shared Constants
+### Валидация ҡармаҡтары
 
-- The `PoseidonSnapshot` manifest described in
-  `docs/source/fastpq/poseidon_metal_shared_constants.md` is now the canonical
-  source for the round constants and MDS matrix. Both Metal (`poseidon2.metal`)
-  and CUDA (`fastpq_cuda.cu`) kernels must be regenerated whenever the manifest
-  changes.
-- WP2-B will add a tiny host loader that reads the manifest at runtime and
-  emits the SHA-256 into telemetry (`acceleration.poseidon_constants_sha`) so
-  parity dashboards can assert that the shader constants match the published
-  snapshot.
-- During warm-up we will copy the `TOTAL_ROUNDS x STATE_WIDTH` constants into a
-  `MTLBuffer` and upload it once per device. Each kernel then copies the data
-  into threadgroup memory before processing its chunk, ensuring deterministic
-  ordering even when multiple command buffers run in flight.
+- Блок һынауҙары (`cargo test -p fastpq_prover --features fastpq-gpu`) үҫәсәк
+  тип раҫлау, тип хеш встраиваемый шейдер константалары һәм уларҙы сағыштырыу менән
+  манифест’SHA башҡарыр алдынан GPU ҡоролмаһы люкс.
+- Ғәмәлдәге ядро ​​статистикаһы toggles (IVM,
+  `FASTPQ_METAL_QUEUE_FANOUT`, сират тәрәнлеге телеметрияһы) кәрәкле дәлилдәргә әйләнә
+  WP2 сығыу өсөн: һәр һынау йүгерә иҫбатларға тейеш, тип планлаштырыусы бер ҡасан да боҙа
+  конфигурацияланған фан-аут һәм был слитный эҙ ядроһы сират аҫтында тота.
+  адаптив тәҙрә.
+- Swift XCFramework төтөн йүгән һәм Rust ориентиры йүгерә башлай
+  экспортлау `acceleration.poseidon.permute_p90_ms{cpu,metal}` шулай WP2-D мөмкин диаграмма
+  Яңы телеметрия каналдарын яңынан уйлап сығармайынса, металл-vs-процессор дельталары.
 
-### Validation Hooks
-
-- Unit tests (`cargo test -p fastpq_prover --features fastpq-gpu`) will grow an
-  assertion that hashes the embedded shader constants and compares them with
-  the manifest’s SHA before executing the GPU fixture suite.
-- The existing kernel statistics toggles (`FASTPQ_METAL_TRACE_DISPATCH`,
-  `FASTPQ_METAL_QUEUE_FANOUT`, queue depth telemetry) become required evidence
-  for WP2 exit: every test run must prove that the scheduler never violates the
-  configured fan-out and that the fused trace kernel keeps the queue below the
-  adaptive window.
-- The Swift XCFramework smoke harness and the Rust benchmark runners will start
-  exporting `acceleration.poseidon.permute_p90_ms{cpu,metal}` so WP2-D can chart
-  Metal-vs-CPU deltas without reinventing new telemetry feeds.
-
-## WP2-B Poseidon Manifest Loader & Self-Test Parity
-
-- `fastpq_prover::poseidon_manifest()` now embeds and parses
-  `artifacts/offline_poseidon/constants.ron`, computes its SHA-256
-  (`poseidon_manifest_sha256()`), and validates the snapshot against the CPU
-  poseidon tables before any GPU work runs. `build_metal_context()` logs the
-  digest during warm-up so telemetry exporters can publish
+## WP2-B Посейдон манифест тейәү һәм үҙ-үҙеңде һынау паритеты- `fastpq_prover::poseidon_manifest()` хәҙер встраиваемый һәм анализдар
+  `artifacts/offline_poseidon/constants.ron` X, үҙ SHA-256 иҫәпләй
+  (`poseidon_manifest_sha256()`), һәм процессорға ҡаршы снимок раҫлай
+  посейдон таблицалары ниндәй ҙә булһа GPU эше йүгерә алдынан. `build_metal_context()` логин
+  разведка ваҡытында разминка шулай телеметрия экспортерҙар баҫтырып сығара ала
   `acceleration.poseidon_constants_sha`.
-- The manifest parser rejects mismatched width/rate/round-count tuples and
-  ensures the manifest MDS matrix equals the scalar implementation, preventing
-  silent drift when the canonical tables are regenerated.
-- Added `crates/fastpq_prover/tests/poseidon_manifest_consistency.rs`, which
-  parses the Poseidon tables embedded in `poseidon2.metal` and
-  `fastpq_cuda.cu` and asserts that both kernels serialize exactly the same
-  constants as the manifest. CI now fails if someone edits the shader/CUDA
-  files without regenerating the canonical manifest.
-- Future parity hooks (WP2-C/D) can reuse `poseidon_manifest()` to stage the
-  round constants into GPU buffers and to expose the digest via Norito
-  telemetry feeds.
+- Манифест анализаторы тап килмәгән киңлек/рейтинг/раунд-һанлы кортеждарҙы кире ҡаға һәм
+  манифест МДС матрицаһы скаляр тормошҡа ашырыуға тиң, иҫкәртергә тәьмин итә
+  канон таблицалары регенерацияланғанда өнһөҙ дрейф.
+- Өҫтәлгән `crates/fastpq_prover/tests/poseidon_manifest_consistency.rs`, был
+  18NI000000104X һәм
+  `fastpq_cuda.cu` һәм раҫлауынса, ике ядро ​​ла тап шул уҡ сериализациялана
+  константалары асыҡланғанса. CI хәҙер уңышһыҙлыҡҡа осрай, әгәр кемдер шейдер мөхәррирләй/CUDA .
+  канонлы манифестты регенерацияламайынса файлдар.
+- Киләсәктә паритет ҡармаҡтары (WP2-C/D) `poseidon_manifest()`X стадияһын яңынан ҡуллана ала.
+  түңәрәк константалар GPU буферҙарына һәм Norito аша һеңдереүҙе фашлау өсөн
+  телеметрия туҡлана.
 
-## WP2-C BN254 Metal Pipelines & Parity Tests
+## WP2-C BN254 металл торбалар & Паритет һынауҙары- **Сук һәм айырма:** Хужалар диспетчерҙары, паритет йүгәндәре, һәм `bn254_status()` йәшәй, һәм `crates/fastpq_prover/metal/kernels/bn254.metal` хәҙер Монтгомери примитивтары плюс еп-төркөм-синхронлаштырылған FFT/LDE иллюзияларын тормошҡа ашыра. Һәр диспетчер бер этаплы кәртәләр менән бер еплег эсендә тотош бағана эшләй, шуға күрә ядролар стадияла күнекмәләр параллель рәүештә күренә. Телеметрия хәҙер сымлы һәм планлаштырыусы өҫтөнлөктәре хөрмәтләнә, шуға күрә беҙ ҡапҡаға ҡапҡан-наретка менән шул уҡ дәлилдәр менән беҙ ҡулланабыҙ Goldilocks ядролары.
+- **Ядро талаптары:** ✅ стадияланған twiddle/cose манифестарын ҡабаттан ҡулланырға, инеүҙәрҙе/сығымдарҙы бер тапҡыр үҙгәртеп, һәм бөтә радикс-2 этаптарын башҡарыу өсөн пер-бағана еп төркөмө, шуға күрә беҙгә кәрәкмәй’т күп диспетчер синхронизация. Монтгомери ярҙамсылары FFT/LDE араһында уртаҡ ҡала, шуға күрә тик цикл геометрияһы ғына үҙгәрҙе.
+- **Host wiring:** ✅ `crates/fastpq_prover/src/metal.rs` stages canonical limbs, zero-fills the LDE buffer, selects a single threadgroup per column, and exposes `bn254_status()` for gating. Телеметрия өсөн өҫтәмә хужа үҙгәрештәре кәрәкмәй.
+- **Төҙөү һаҡсылары:** `norito::core::hardware_crc64` плиталы ядроларҙы ташый, шуға күрә CI һаман да тиҙ уңышһыҙлыҡҡа осрай, әгәр шейдер дрейфтары. Киләсәктә теләһә ниндәй оптимизациялар телеметрия/функция ҡапҡалары артында ҡала, ә компиляция-ваҡыт коммутаторҙары.
+- **Паритет ҡоролмалары:** ✅ `bn254_parity` һынауҙары процессор ҡоролмаларына ҡаршы GPU FFT/LDE сығыштарын сағыштырыуҙы дауам итә һәм хәҙер Металл аппаратураһында тура эфирҙа эшләй; әгәр яңы ядро ​​коды юлдары барлыҡҡа килһә, ҡамауҙа тотҡарланған һынауҙарҙы күҙ уңында тота.
+- **Телеметрия һәм ориентирҙар:** `fastpq_metal_bench` хәҙер сыға:
+  - `bn254_dispatch` блок дөйөмләштереү буйынса диспетчер еп төркөмө киңлектәре, логик еп һаны, һәм торба сиктәре өсөн FFT/LDE бер бағана; һәм
+  - `bn254_metrics` блок, ул `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` өсөн процессоры өсөн процессор база һыҙығы плюс ниндәй GPU бэкэнд эшләгән.
+  Эталон урау ике картаны күсерергә һәр уратып алынған артефакт шулай WP2-D приборҙар таҡталары ingest маркировкалы латентлыҡ/геометрия кире-инженерлыҡ сеймал операциялары массивы. `FASTPQ_METAL_THREADGROUP` хәҙер BN254 FFT/LDE диспетчерҙары ла ҡағыла, шулай уҡ, ручка өсөн ҡулланыу өсөн яраҡлы перф . 1448】【крат/фаспq_prover/src/bin/fastpq_metal_bench. 3155】【скрипт/тиҙп_техника.п:1037】
 
-- **Scope & gap:** Host dispatchers, parity harnesses, and `bn254_status()` are live, and `crates/fastpq_prover/metal/kernels/bn254.metal` now implements the Montgomery primitives plus threadgroup-synchronized FFT/LDE loops. Each dispatch runs an entire column inside a single threadgroup with per-stage barriers, so the kernels exercise the staged manifests in parallel. Telemetry is now wired and scheduler overrides are honored so we can gate the default-on rollout with the same evidence we use for the Goldilocks kernels.
-- **Kernel requirements:** ✅ reuse the staged twiddle/coset manifests, convert inputs/outputs once, and execute all radix-2 stages inside the per-column threadgroup so we don’t need multi-dispatch synchronisation. Montgomery helpers remain shared between FFT/LDE so only the loop geometry changed.
-- **Host wiring:** ✅ `crates/fastpq_prover/src/metal.rs` stages canonical limbs, zero-fills the LDE buffer, selects a single threadgroup per column, and exposes `bn254_status()` for gating. No extra host changes are required for telemetry.
-- **Build guards:** the `fastpq.metallib` ships the tiled kernels, so CI still fails fast if the shader drifts. Any future optimisations stay behind telemetry/feature gates rather than compile-time switches.
-- **Parity fixtures:** ✅ `bn254_parity` tests continue to compare GPU FFT/LDE outputs against CPU fixtures and now run live on Metal hardware; keep tampered-manifest tests in mind if new kernel code paths appear.
-- **Telemetry & benchmarks:** `fastpq_metal_bench` now emits:
-  - a `bn254_dispatch` block summarising per-dispatch threadgroup widths, logical thread counts, and pipeline limits for FFT/LDE single-column batches; and
-  - a `bn254_metrics` block that records `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` for the CPU baseline plus whichever GPU backend ran.
-  The benchmark wrapper copies both maps into every wrapped artefact so WP2-D dashboards ingest labelled latencies/geometry without reverse-engineering the raw operations array. `FASTPQ_METAL_THREADGROUP` now applies to BN254 FFT/LDE dispatches as well, making the knob usable for perf sweeps.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_benchmark.py:1037】
-
-## Open Questions (Resolved May 2027)
-
-1. **Metal resource cleanup:** `warm_up_metal()` reuses the thread-local
-   `OnceCell` and now has idempotence/regression tests
+## Асыҡ һорауҙар (2027 йылдың майында хәл ителә)1. **Металл ресурстарҙы таҙартыу:** `warm_up_metal()` еп-локаль ҡабаттан ҡулланыла
+   `OnceCell` һәм хәҙер идемпотенция/регрессия һынауҙары бар
    (`crates/ivm/src/vector.rs::warm_up_metal_reuses_cached_state` /
-   `warm_up_metal_is_noop_on_non_metal_targets`), so app lifecycle transitions
-   can safely call the warm-up path without leaking or double-initialising.
-2. **Benchmark baselines:** Metal lanes must remain within 20 % of the CPU
-   baseline for FFT/IFFT/LDE and within 15 % for Poseidon CRC/Merkle helpers;
-   alerting should fire when `acceleration.*_perf_delta_pct > 0.20` (or missing)
-   in the mobile parity feed. IFFT regressions observed in the 20 k trace bundle
-   are now gated by the queue override fix noted in WP2-D.
-3. **StrongBox fallback:** Swift follows the Android fallback playbook by
-   recording attestation failures in the support runbook
-   (`docs/source/sdk/swift/support_playbook.md`) and automatically switching to
-   the documented HKDF-backed software path with audit logging; parity vectors
-   stay shared via the existing OA fixtures.
-4. **Telemetry storage:** Acceleration captures and device pool proofs are
-   archived under `configs/swift/` (e.g.,
-   `configs/swift/xcframework_device_pool_snapshot.json`), and exporters
-   should mirror the same layout (`artifacts/swift/telemetry/acceleration/*.json`
-   or `.prom`) so Buildkite annotations and portal dashboards can ingest the
-   feeds without ad-hoc scraping.
+   `warm_up_metal_is_noop_on_non_metal_targets`), шуға күрә ҡушымта йәшәү циклы күсеүҙәре
+   имен-аман ағып йәки ике тапҡыр initializingһыҙ йылыныу юлын хәүефһеҙ тип атай ала.
+2. **Бенчмарк база һыҙыҡтары:** Металл һыҙаттары процессорҙан 20% эсендә ҡалырға тейеш.
+   FFT/IFFT/LDE өсөн башланғыс һыҙыҡ һәм 15% эсендә Посейдон CRC/Меркл ярҙамсылары өсөн;
+   иҫкәрткес ут тейеш, ҡасан `acceleration.*_perf_delta_pct > 0.20` (йәки юғалған)
+   күсмә паритет каналында. 20к эҙ өйөмөндә күҙәтелгән IFFT регрессиялары
+   хәҙер ҡапҡалы сират өҫтөндәге төҙәтеү төҙәтеү билдәләнгән WP2-D.
+3. **СтронгБокс fallback:** Свифт Android fallback playbook-ҡа эйәрә.
+   ярҙам runbook-та аттестация етешһеҙлектәрен теркәү
+   (`docs/source/sdk/swift/support_playbook.md`) һәм автоматик рәүештә күсеү.
+   документлаштырылған HKDF-ярҙамлы программа тәьминәте юлы менән аудит журналы; паритет векторҙары
+   ғәмәлдәге ОА ҡоролмалары аша уртаҡлашырға.
+4. **Телеметрия һаҡлау:** Тиҙләтеү тотоу һәм ҡоролма бассейн иҫбатлауҙары булып тора
+   архивланған `configs/swift/` (мәҫәлән,
+   `configs/swift/xcframework_device_pool_snapshot.json`), һәм экспортерҙар
+   тейеш көҙгө шул уҡ макет (`artifacts/swift/telemetry/acceleration/*.json`
+   йәки `.prom`) шулай итеп, Buildkite аннотациялар һәм порталь приборҙар таҡталары ingest of
+   ad-hoc ҡырҡмай туҡлана.
 
-## Next Steps (Feb 2026)
+## Киләһе аҙымдар (2026 йылдың февраль)
 
-- [x] Rust: land Metal host integration (`crates/fastpq_prover/src/metal.rs`) and
-      expose the kernel interface for Swift; doc hand-off tracked alongside the
-      Swift bridge notes.
-- [x] Swift: expose SDK-level acceleration settings (done Jan 2026).
-- [x] Telemetry: `scripts/acceleration/export_prometheus.py` now converts
-      `cargo xtask acceleration-state --format json` output into a Prometheus
-      textfile (with optional `--instance` label) so CI runs can attach GPU/CPU
-      enablement, thresholds, and parity/disable reasons directly to textfile
-      collectors without bespoke scraping.
-- [x] Swift QA: `scripts/acceleration/acceleration_matrix.py` aggregates multiple
-      acceleration-state captures into JSON or Markdown tables keyed by device
-      label, giving the smoke harness a deterministic “CPU vs Metal/CUDA” matrix
-      to upload alongside the sample-app smokes. The Markdown output mirrors the
-      Buildkite evidence format so dashboards can ingest the same artefact.
-- [x] Update status.md now that `irohad` ships the queue/zero-fill exporters and
-      the env/config validation tests cover the Metal queue overrides, so WP2-D
-      telemetry + bindings have live evidence attached.【crates/irohad/src/main.rs:2664】【crates/iroha_config/tests/fastpq_queue_overrides.rs:1】【status.md:1546】
+- [x] Туст: ер Металл хужаһы интеграцияһы (`crates/fastpq_prover/src/metal.rs`) һәм
+      Свифт өсөн ядро ​​интерфейсын фашлау; doc ҡулдан-офф менән бергә күҙәтелгән
+      Свифт күпер ноталары.
+- [x] Свифт: SDK кимәлендә тиҙләтеү параметрҙарын фашлай (2026 йылдың ғинуарында эшләгән).
+- [x] Телеметрия: `scripts/acceleration/export_prometheus.py` хәҙер үҙгәртә
+      `cargo xtask acceleration-state --format json` Prometheus
+      текст файлы (факультатив `--instance` ярлығы менән), шуға күрә CI йүгерә GPU/CPU беркетергә мөмкин
+      мөмкинлек, сик, һәм паритет/өҙөү сәбәптәре туранан-тура текстафалит
+      коллекционерҙар заказ буйынса ҡырҡып ташламай.
+- [x] Свифт QA: `scripts/acceleration/acceleration_matrix.py` агрегаттары бер нисә
+      тиҙләтеү-дәүләт JSON йәки Markdown таблицалар ҡоролмаһы keyded
+      ярлыҡ, төтөн йүгән биргән детерминистик “ПУ vs Metal/CUDA” матрицаһы
+      өлгө-ҡушымта төтөндәре менән бергә тейәү өсөн. Markdown сығыш көҙгө
+      Buildkite дәлилдәр форматында шулай приборҙар таҡталары шул уҡ артефактты ҡосаҡлай ала.
+- [x] Яңыртыу статусы.мд хәҙер, тип Norito сират/нуль-тулы экспортерҙар һәм
+      env/config валидация һынауҙары ҡаплай Металл сират өҫтөнлөк, шуға күрә WP2-D
+      телеметрия + бәйләүҙәр беркетелгән тере дәлилдәргә эйә.【крат/src/src/main.rs:2664】【краттар/ироха_конфиг/тестар/Fastpq_queue_verrides.1】【статус.мд:1546】
 
-Telemetry/export helper commands:
+Телеметрия/экспорт ярҙамсы командалары:
 
 ```bash
 # Prometheus textfile from a single capture
@@ -278,36 +267,34 @@ python3 scripts/acceleration/acceleration_matrix.py \
   --state sim-m3=artifacts/acceleration_state_sim_m3.json \
   --format markdown \
   --output artifacts/acceleration_matrix.md
-```
+``` X
 
-## WP2-D Release Benchmark & Binding Notes
+## WP2-D сығарыу эталон & бәйләү иҫкәрмәләр- **20к-рәт релиз тотоу:** Яңы Металл vs CPU эталон macOS14 яҙмаһы яҙма.
+  (arm64, һыҙат-баланслы параметрҙар, 32 768 рәт эҙ, ике колонна партияһы) һәм
+  тикшерҙе JSON өйөмө `fastpq_metal_bench_20k_release_macos14_arm64.json`.
+  Этаби
+  WP2-D яңы металл сират эвристикаһына бәйле GA-сифатлы артефакт бар. Башлыҡ.
+  дельта (тулы өҫтәл йәшәй IVM):
 
-- **20 k-row release capture:** Recorded a fresh Metal vs CPU benchmark on macOS 14
-  (arm64, lane-balanced parameters, padded 32,768-row trace, two column batches) and
-  checked the JSON bundle into `fastpq_metal_bench_20k_release_macos14_arm64.json`.
-  The benchmark exports per-operation timings plus Poseidon microbench evidence so
-  WP2-D has a GA-quality artefact tied to the new Metal queue heuristics. Headline
-  deltas (full table lives in `docs/source/benchmarks.md`):
+  | Операция | Процессор тигәнде аңлата (мс) | Металл уртаса (мс) | Тиҙлек |
+  |----------|--------------------------------|----------|
+  | ФФТ (32 768 индереү) | 12.741 | 10.963 | 1.16× |
+  | ИФФТ (32 768 индереү) | 17.499 | 25.688 | 0,68× *(регрессия: детерминизмды һаҡлау өсөн сират фанат-дроссель; кәрәк эҙмә-эҙлекле көйләү)* |
+  | LDE (262,144 индереү) | 68.389 | 65.701 | 1.04× |
+  | Посейдон хеш бағаналары (524 288 инеү) | 1728,835 | 1447.076 | 1.19× |
 
-  | Operation | CPU mean (ms) | Metal mean (ms) | Speedup |
-  |-----------|---------------|-----------------|---------|
-  | FFT (32,768 inputs) | 12.741 | 10.963 | 1.16× |
-  | IFFT (32,768 inputs) | 17.499 | 25.688 | 0.68× *(regression: queue fan-out throttled to keep determinism; needs follow-up tuning)* |
-  | LDE (262,144 inputs) | 68.389 | 65.701 | 1.04× |
-  | Poseidon hash columns (524,288 inputs) | 1,728.835 | 1,447.076 | 1.19× |
-
-  Each capture logs `zero_fill` timings (9.651 ms for 33,554,432 bytes) and
-  `poseidon_microbench` entries (default lane 596.229 ms vs scalar 656.251 ms,
-  1.10× speedup) so dashboard consumers can diff queue pressure alongside the
-  main operations.
-- **Bindings/docs cross-link:** `docs/source/benchmarks.md` now references the
-  release JSON and reproducer command, the Metal queue overrides are validated
-  via `iroha_config` env/manifest tests, and `irohad` publishes live
-  `fastpq_metal_queue_*` gauges so dashboards flag IFFT regressions without
-  ad-hoc log scraping. Swift’s `AccelerationSettings.runtimeState` exposes the
-  same telemetry payload shipped in the JSON bundle, closing the WP2-D
-  binding/doc gap with a reproducible acceptance baseline.【crates/iroha_config/tests/fastpq_queue_overrides.rs:1】【crates/irohad/src/main.rs:2664】
-- **IFFT queue fix:** Inverse FFT batches now skip multi-queue dispatch whenever
-  the workload barely meets the fan-out threshold (16 columns on the lane-balanced
-  profile), removing the Metal-vs-CPU regression called out above while keeping
-  large-column workloads on the multi-queue path for FFT/LDE/Poseidon.
+  Һәр тотоу `zero_fill` ваҡыттары (33 554 432 байт өсөн 9,651 мс) һәм
+  `poseidon_microbench` яҙмалары ( 596,229мс һыҙатлы һыҙатҡа ҡаршы скаляр 656,251мс,
+  1.10× тиҙлек) шулай приборҙар таҡтаһы ҡулланыусылар сират баҫымын айыра ала
+  төп операциялар.
+- **Бәйләнештәр/документтар һылтанма:** `docs/source/benchmarks.md` X хәҙер һылтанмалар
+  JSON һәм репродуктор командаһын сығарыу, металл сират өҫтөнлөктәре раҫлана
+  `iroha_config` аша env/манифест һынауҙары, һәм `irohad` тура эфирҙа баҫтыра
+  `fastpq_metal_queue_*` датчиктар шулай приборҙар таҡталары флагы IFFT регрессияларыһыҙ .
+  ad-hoc бүрәнә ҡырҡыу. Свифт’s `AccelerationSettings.runtimeState` фашлай
+  шул уҡ телеметрия файҙалы йөк JSON өйөмөнә ебәрелгән, WP2-D ябыла
+  ҡабул итеү ҡабул итеү башланғыс һыҙығы менән бәйләүсе/док-док айырма.【крат/ироха_конфиг/тестар/Fastpq_queue_verrides.1】【крет/ролахад/src/main.rs:2664】
+- **IFFT сиратын төҙәтеү:** Кире FFT партиялары хәҙер күп сиратлы диспетчерлыҡты үткәреп ебәрегеҙ.
+  эш нагрузкаһы тиҙ генә осраша вентилятор-аут сиге (16 бағана һыҙат-баланслы
+  профиле), Metal-vs-процессор регрессияһын алып ташлау өҫтәге ваҡытта саҡырылған.
+  ҙур бағана эш йөкләмәләре күп сират юлында FFT/LDE/Позиддон.

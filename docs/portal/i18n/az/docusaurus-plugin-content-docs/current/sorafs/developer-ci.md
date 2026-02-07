@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-# CI Recipes
+# CI tərifləri
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS boru kəmərləri deterministik parçalanma, manifest imzalanması və
+sübut yoxlanışı. `sorafs_cli` komanda səthi bu addımları portativ saxlayır
+CI provayderləri arasında. Bu səhifə kanonik reseptləri vurğulayır və onlara işarə edir
+istifadəyə hazır şablonlar.
 
-## GitHub Actions (keyless)
+## GitHub Fəaliyyətləri (açarsız)
 
 ```yaml
 name: sorafs-artifacts
@@ -93,11 +95,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+Əsas məqamlar:
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- Statik imzalama açarları saxlanılmır; OIDC tokenləri tələb əsasında alınır.
+- Artefaktlar (CAR, manifest, paket, sübut xülasələri) nəzərdən keçirmək üçün yüklənir.
+- İş istehsalat buraxılışlarında istifadə edilən eyni Norito sxemlərini təkrar istifadə edir.
 
 ## GitLab CI
 
@@ -133,15 +135,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- GitLab-ın iş yükünün şəxsiyyət federasiyası və ya
+  nəşr mərhələsini həyata keçirməzdən əvvəl möhürlənmiş sirr.
+- Hər hansı CLI addımının uğursuzluğu boru kəmərinin ardıcıllığını qoruyaraq dayanmasına səbəb olur
+  artefaktlar.
 
-## Additional resources
+## Əlavə resurslar
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- Başdan-ayağa şablonlar (Bash köməkçiləri, federasiya edilmiş şəxsiyyət konfiqurasiyası,
+  və təmizləmə addımları): `docs/examples/sorafs_ci.md`
+- Hər variantı əhatə edən CLI arayışı: `docs/source/sorafs_cli.md`
+- Təqdim etməzdən əvvəl idarəetmə/ləqəb tələbləri:
   `docs/source/sorafs/provider_admission_policy.md`

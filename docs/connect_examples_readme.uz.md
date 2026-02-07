@@ -7,57 +7,58 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a79487a5e7e8268f3a94580716a603580f17fd0d0223f10646ecda6aad2e2482
 source_last_modified: "2025-12-29T18:16:35.063907+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Examples (Rust App/Wallet)
+## Iroha ulanish misollari (Rust ilovasi/hamyon)
 
-Run the two Rust examples end‑to‑end with a Torii node.
+Ikkita Rust misolini Torii tugun bilan uchma-uch ishlating.
 
-Prerequisites
-- Torii node with `connect` enabled at `http://127.0.0.1:8080`.
-- Rust toolchain (stable).
-- Python 3.9+ with the `iroha-python` package installed (for the CLI helper below).
+Old shartlar
+- `http://127.0.0.1:8080` da yoqilgan `connect` bilan Torii tugun.
+- Rust asboblar zanjiri (barqaror).
+- `iroha-python` to'plami o'rnatilgan Python 3.9+ (quyida CLI yordamchisi uchun).
 
-Examples
-- App example: `crates/iroha_torii_shared/examples/connect_app.rs`
-- Wallet example: `crates/iroha_torii_shared/examples/connect_wallet.rs`
-- Python CLI helper: `python -m iroha_python.examples.connect_flow`
+Misollar
+- Ilova misoli: `crates/iroha_torii_shared/examples/connect_app.rs`
+- Hamyon misoli: `crates/iroha_torii_shared/examples/connect_wallet.rs`
+- Python CLI yordamchisi: `python -m iroha_python.examples.connect_flow`
 
-Order of startup
-1) Terminal A — App (prints sid + tokens, connects WS, sends SignRequestTx):
+Ishga tushirish tartibi
+1) A terminali - Ilova (sid + tokenlarni chop etadi, WS-ni ulaydi, SignRequestTx-ni yuboradi):
 
-    cargo run -p iroha_torii_shared --example connect_app -- --node http://127.0.0.1:8080 --role app
+    yuk tashish -p iroha_torii_shared --misol connect_app -- --tugun http://127.0.0.1:8080 --rol ilovasi
 
-   Sample output:
+   Chiqish namunasi:
 
     sid=Z4... token_app=KJ... token_wallet=K0...
-    WS connected
-    app: sent SignRequestTx
-    (waiting for reply)
+    WS ulangan
+    ilova: SignRequestTx yuborildi
+    (javob kutilmoqda)
 
-2) Terminal B — Wallet (connect with token_wallet, replies with SignResultOk):
+2) Terminal B — Wallet (token_wallet bilan ulaning, SignResultOk bilan javob beradi):
 
-    cargo run -p iroha_torii_shared --example connect_wallet -- --node http://127.0.0.1:8080 --sid Z4... --token K0...
+    yuk tashish -p iroha_torii_shared --misol connect_wallet -- --tugun http://127.0.0.1:8080 --sid Z4... --token K0...
 
-   Sample output:
+   Chiqish namunasi:
 
-    wallet: connected WS
-    wallet: SignRequestTx len=3 at seq 1
-    wallet: sent SignResultOk
+    hamyon: ulangan WS
+    hamyon: SignRequestTx len=3 1-qatorda
+    hamyon: SignResultOk yubordi
 
-3) App terminal prints the result:
+3) Ilova terminali natijani chop etadi:
 
-    app: got SignResultOk algo=ed25519 sig=deadbeef
+    ilova: SignResultOk algo=ed25519 sig=deadbeef oldi
 
-  Use the new `connect_norito_decode_envelope_sign_result_alg` helper (and the
-  Swift/Kotlin wrappers in this folder) to retrieve the algorithm string when
-  decoding the payload.
+  Yangi `connect_norito_decode_envelope_sign_result_alg` yordamchisidan foydalaning (va
+  Ushbu jilddagi Swift/Kotlin o'ramlari) algoritm qatorini olish uchun
+  foydali yukni dekodlash.
 
-Notes
-- Examples derive demo ephemerals from `sid` so app/wallet interoperate automatically. Do not use in production.
-- SDK enforces AEAD AAD binding and seq‑as‑nonce; post‑approval control frames should be encrypted.
-- For Swift clients, see `docs/connect_swift_integration.md` / `docs/connect_swift_ios.md` and validate with `make swift-ci` so dashboard telemetry stays aligned with Rust examples and Buildkite metadata (`ci/xcframework-smoke:<lane>:device_tag`) remains intact.
-- Python CLI helper usage:
+Eslatmalar
+- Misollar `sid` dan demo efemerlarni keltirib chiqaradi, shuning uchun ilova/hamyon avtomatik ravishda o'zaro ishlaydi. Ishlab chiqarishda foydalanmang.
+- SDK AEAD AAD ulanishini va ketma-ketlikni ta'minlaydi; Tasdiqdan keyin boshqaruv ramkalari shifrlangan bo'lishi kerak.
+- Swift mijozlari uchun `docs/connect_swift_integration.md` / `docs/connect_swift_ios.md` ga qarang va `make swift-ci` bilan tasdiqlang, shunda asboblar paneli telemetriyasi Rust misollari bilan mos keladi va Buildkite metamaʼlumotlari (`ci/xcframework-smoke:<lane>:device_tag`) oʻzgarmas qoladi.
+- Python CLI yordamchisidan foydalanish:
 
     ```bash
     python -m iroha_python.examples.connect_flow \
@@ -71,4 +72,4 @@ Notes
       --status-json-output connect-status.json
     ```
 
-  The CLI prints the typed session info, dumps the Connect status snapshot, and emits the Norito-encoded `ConnectControlOpen` frame. Pass `--send-open` to post the payload back to Torii, use `--frame-output-format binary` to write raw bytes, `--frame-json-output` for a base64-friendly JSON blob, and `--status-json-output` when you need a typed snapshot for automation. You can also load application metadata from a JSON file via `--app-metadata-file metadata.json` containing `name`, `url`, and `icon_hash` fields (see `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`). Generate a fresh template with `python -m iroha_python.examples.connect_flow --write-app-metadata-template app_metadata.json`. For telemetry-only runs, you can skip session creation entirely with `--status-only` and optionally dump JSON via `--status-json-output status.json`.
+  CLI terilgan seans ma'lumotlarini chop etadi, Ulanish holati suratini o'chiradi va Norito kodli `ConnectControlOpen` ramkasini chiqaradi. Foydali yukni Torii ga qaytarish uchun `--send-open` dan o'ting, xom baytlarni yozish uchun `--frame-output-format binary` dan, base64-ga mos keladigan JSON blobi uchun `--frame-json-output` dan foydalaning va sizga avtomatik ravishda yozib olish uchun I18NI00000025 dan foydalaning. `name`, `url` va `icon_hash` maydonlarini oʻz ichiga olgan `--app-metadata-file metadata.json` orqali JSON faylidan ilova metamaʼlumotlarini ham yuklashingiz mumkin (qarang: `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`). `python -m iroha_python.examples.connect_flow --write-app-metadata-template app_metadata.json` bilan yangi shablonni yarating. Faqat telemetriya bilan ishlash uchun siz `--status-only` bilan seans yaratishni butunlay o'tkazib yuborishingiz va ixtiyoriy ravishda `--status-json-output status.json` orqali JSONni o'chirib tashlashingiz mumkin.

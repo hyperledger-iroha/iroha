@@ -4,97 +4,99 @@ direction: rtl
 source: docs/portal/docs/devportal/security-hardening.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# تشديد الامن وقائمة فحص pen-test
+# تشديد الإجراءات وقائمة فحص القلم
 
 ## نظرة عامة
 
-عنصر خارطة الطريق **DOCS-1b** يتطلب تسجيل دخول OAuth device-code، وسياسات امن محتوى قوية،
-واختبارات اختراق قابلة للتكرار قبل ان يعمل بوابة المعاينة على شبكات خارج المختبر. يشرح هذا
-الملحق نموذج التهديدات، والضوابط المطبقة في المستودع، وقائمة go-live التي يجب على مراجعات
-البوابة تنفيذها.
+عنصر خارطة الطريق **DOCS-1b** يتطلب تسجيل دخول رمز جهاز OAuth، وسياسات أمنية شفافة،
+يختبر تسجيل الدخول للتكرار قبل أن يعمل بوابة فحص الميكروبات الموجودة في المختبر. يشرح هذا
+كوك النموذج، والضوابط المطبقة في المستودع، وقائمة البث المباشر التي يجب على مراجعاتها
+البوابة
 
-- **النطاق:** وكيل Try it، ولوحات Swagger/RapiDoc المضمنة، ووحدة Try it المخصصة المعروضة عبر
+- **النطاق:** وكيل Try it، ولوحات Swagger/RapiDoc المضمنة، ووحدة Try it لسبب ما عبر
   `docs/portal/src/components/TryItConsole.jsx`.
-- **خارج النطاق:** Torii نفسه (مغطى بمراجعات جاهزية Torii) ونشر SoraFS (مغطى بـ DOCS-3/7).
+- **خارج النطاق:** Torii نفسه (مغطى بمراجعات جاهزة Torii) ونشر SoraFS (مغطى بـ DOCS-3/7).
 
-## نموذج التهديدات
+##نموذج
 
-| الاصل | الخطر | التخفيف |
+| الاصل | خطر | لماذا |
 | --- | --- | --- |
-| رموز Torii bearer | السرقة او اعادة الاستخدام خارج sandbox للوثائق | تسجيل الدخول device-code (`DOCS_OAUTH_*`) يصدر رموزا قصيرة العمر، والوكيل ينقح headers، والكونسول تنهي صلاحية بيانات الاعتماد المخزنة تلقائيا. |
-| وكيل Try it | سوء الاستخدام كمرحّل مفتوح او تجاوز حدود Torii | `scripts/tryit-proxy*.mjs` يفرض قوائم السماح بالاصل، وrate limiting، وhealth probes، وتمرير `X-TryIt-Auth` بشكل صريح؛ لا يتم حفظ بيانات الاعتماد. |
-| زمن تشغيل البوابة | XSS او تضمينات خبيثة | `docusaurus.config.js` يحقن ترويسات Content-Security-Policy وTrusted Types وPermissions-Policy؛ يتم تقييد scripts inline على runtime الخاص بـ Docusaurus. |
-| بيانات المراقبة | غياب القياس عن بعد او العبث | `docs/portal/docs/devportal/observability.md` يوثق probes/dashboards؛ `scripts/portal-probe.mjs` يعمل في CI قبل النشر. |
+| رموز Torii حامل | سرقة او إعادة استخدام خارج صندوق الرمل للوثائق | تسجيل الدخول إلى كود الجهاز (`DOCS_OAUTH_*`) يصدر إخطارات قصيرة العمر، والوكيل ينقح الرؤوس، والكونسول تنهي صلاحية البيانات المخزنة مباشرة. |
+| وكيل جربه | سوء الاستخدام كمرحّل مفتوح او تجاوز حدود Torii | `scripts/tryit-proxy*.mjs` يفرض قوائم المسموح بها بالاصل، تحديد المعدل، ومسابير الصحة، وتمرير `X-TryIt-Auth` بشكل صريح؛ لا يتم حفظ البيانات المعتمدة. |
+| زمن تشغيل البوابة | XSS او تتضمنات خبيثة | `docusaurus.config.js` يحقن ترويسات سياسة أمان المحتوى والأنواع الموثوقة وسياسة الأذونات؛ يتم تشغيل البرامج النصية بشكل مضمن في وقت التشغيل الخاص بـ Docusaurus. |
+| بيانات المراقبة | غياب القياس عن بعد او العبث | `docs/portal/docs/devportal/observability.md` يوثق المجسات/لوحات المعلومات؛ `scripts/portal-probe.mjs` يعمل في CI قبل النشر. |
 
-تشمل الجهات المعادية مستخدمين فضوليين يشاهدون المعاينة العامة، ومهاجمين يجربون روابط مسروقة،
-ومتصفحات مخترقة تحاول استخراج بيانات اعتماد مخزنة. يجب ان تعمل كل الضوابط على متصفحات عادية
+تشمل فئات موادية مستخدمين فضوليين تويوتاون المعاينة العامة، ومهاجمين يجربون روابط مسروقة،
+ومتصفحات مخترقة تحاول الحصول على بيانات موثوقة ومعتمدة. يجب ان تعمل كل ما على المتصفحات
 دون شبكات موثوقة.
 
-## الضوابط المطلوبة
+## لغير المشمولة
 
-1. **OAuth device-code login**
+1. ** تسجيل الدخول برمز جهاز OAuth **
    - اضبط `DOCS_OAUTH_DEVICE_CODE_URL` و`DOCS_OAUTH_TOKEN_URL` و`DOCS_OAUTH_CLIENT_ID`
-     والاعدادات ذات الصلة في بيئة البناء.
-   - بطاقة Try it تعرض عنصر تسجيل الدخول (`OAuthDeviceLogin.jsx`) الذي يجلب device code
-     ويستطلع token endpoint ويمسح الرموز تلقائيا عند انتهاء صلاحيتها. تبقى overrides
-     اليدوية لـ Bearer متاحة كخيار طارئ.
-   - تفشل عمليات البناء الان عند غياب اعدادات OAuth او عند خروج TTLs الخاصة بالـ fallback
-     عن نافذة 300-900 s المطلوبة في DOCS-1b؛ اضبط `DOCS_OAUTH_ALLOW_INSECURE=1` فقط
-     للمعاينات المحلية المؤقتة.
-2. **حواجز وكيل البروكسي**
-   - `scripts/tryit-proxy.mjs` يفرض allowed origins وrate limits وقيود حجم الطلب
-     وupstream timeouts مع وسم الحركة بـ `X-TryIt-Client` وتنقيح الرموز من السجلات.
+     والاعدادات ذات الصلة بالبيئة الانشائية.
+   - بطاقة Try it تعرض عنصر تسجيل الدخول (`OAuthDeviceLogin.jsx`) الذي يأتي بكود الجهاز
+     ويستطلع رمز نهاية نقطة النهاية ويمسح الكتابة البيضاء عند انتهاء صلاحيتها. تجاوزات البقاء
+     مصنوع يدوياً لـ Bearer كخيار طارئ.
+   - فشل عمليات التنفيذ الان عند غياب اعدادات OAuth او عند خروج TTLs الخاصة بالـ Fallback
+     عن Windows 300-900s المطلوبة في DOCS-1b؛ اضبط `DOCS_OAUTH_ALLOW_INSECURE=1` فقط
+     للمعاينات المؤقتة.
+2. ** حواجز مانعة للالتصاق **
+   - `scripts/tryit-proxy.mjs` يفرض الأصول المسموح بها وحدود المعدل وقيود حجم الطلب
+     انتهاء مهلة المنبع مع إشارة بـ `X-TryIt-Client` وتسهيل الكتابة من الكتابة.
    - `scripts/tryit-proxy-probe.mjs` مع `docs/portal/docs/devportal/observability.md`
-     يحددان liveness probe وقواعد dashboard؛ نفذها قبل كل rollout.
-3. **CSP, Trusted Types, Permissions-Policy**
-   - `docusaurus.config.js` يصدر الان ترويسات امنية حتمية:
-     `Content-Security-Policy` (default-src self، قوائم صارمة لـ connect/img/script،
-     متطلبات Trusted Types)، و`Permissions-Policy` و`Referrer-Policy: no-referrer`.
-   - قائمة connect في CSP تضع endpoints الخاصة بـ OAuth device-code وtoken ضمن whitelist
-     (HTTPS فقط ما لم يتم ضبط `DOCS_SECURITY_ALLOW_INSECURE=1`) حتى يعمل device login
-     دون تخفيف sandbox لبقية الاصول.
-   - يتم تضمين الترويسات مباشرة في HTML المولد، لذلك لا تحتاج المضيفات الثابتة
-     الى اعدادات اضافية. ابق scripts inline ضمن bootstrap الخاص بـ Docusaurus.
-4. **Runbooks، observability، والرجوع**
-   - `docs/portal/docs/devportal/observability.md` يصف probes وdashboards التي تراقب
-     فشل تسجيل الدخول، واكواد استجابة البروكسي، وميزانيات الطلبات.
+     يحددان مسبار الحيوية وقواعد لوحة القيادة؛ ينفذها قبل كل الطرح.
+3. **CSP، الأنواع الموثوقة، سياسة الأذونات**
+   - `docusaurus.config.js` يصدر الان ترويسات أمنية حتمية:
+     `Content-Security-Policy` (default-src self، القائمة الكاملة لـconnect/img/script،
+     متطلبات الأنواع الموثوقة)، و`Permissions-Policy` و`Referrer-Policy: no-referrer`.
+   - قائمة الاتصال في CSP تضع نقاط النهاية الخاصة بـ OAuth جهاز-رمز ورمز ضمن القائمة البيضاء
+     (HTTPS فقط ما لم يتم ضبط `DOCS_SECURITY_ALLOW_INSECURE=1`) حتى يعمل تسجيل الدخول للجهاز
+     دون تخفيف رمل لبقية الاصول.
+   - يتم تضمين الترويسات مباشرة في مولد HTML، لذلك لا تحتاج إلى المكونات الثابتة
+     الى اعدادات الحماية. ابق scripts inline ضمن bootstrap الخاص بـ Docusaurus.
+4. **دفاتر التشغيل، إمكانية الملاحظة، والرجوع**
+   - `docs/portal/docs/devportal/observability.md` يصف مجسات ولوحات المعلومات التي تراقب
+     فشل تسجيل الدخول، واكواد البروكسي، وميزانيات الطلبات.
    - `docs/portal/docs/devportal/incident-runbooks.md` يغطي مسار التصعيد اذا تم
-     اساءة استخدام sandbox؛ اجمعه مع
-     `scripts/tryit-proxy-rollback.mjs` لتبديل endpoints بشكل امن.
+     إسالة استخدام رمل؛ اجمعه مع
+     `scripts/tryit-proxy-rollback.mjs` لتبديل نقاط النهاية بشكل آمن.
 
-## قائمة فحص pen-test والاصدار
+## فحص قائمة اختبار القلم والاصدار
 
-اكمل هذه القائمة لكل ترقية معاينة (ارفق النتائج بتذكرة الاصدار):
+اكمل هذه القائمة لكل الترقية (ارفق النتائج بتذكر الاصدار):
 
 1. **التحقق من توصيل OAuth**
-   - شغل `npm run start` محليا مع exports الخاصة بـ `DOCS_OAUTH_*` في الانتاج.
-   - من ملف تعريف متصفح نظيف، افتح كونسول Try it وتأكد ان تدفق device-code
-     يصدر رمزا، ويعد العمر، ويمسح الحقل بعد انتهاء الصلاحية او تسجيل الخروج.
+   - شغل `npm run start` محليا مع الصادرات الخاصة بـ `DOCS_OAUTH_*` في الانتاج.
+   - من ملف تعريف المتصفح النقي، حساب كونسول جربه وتأكد ان تدفق رمز الجهاز
+     ويأتي رمزا، ونتيجة لذلك العمر، ويمسح الحقل بعد انتهاء الصلاحية أو تسجيل الخروج.
 2. **اختبار البروكسي**
-   - شغل `npm run tryit-proxy` ضد Torii staging، ثم نفذ
-     `npm run probe:tryit-proxy` مع sample path المكون.
-   - تحقق من السجلات بحثا عن `authSource=override` وتأكد ان rate limiting
+   - الوظيفة `npm run tryit-proxy` مقابل Torii التدريج، ثم ينفذ
+     `npm run probe:tryit-proxy` مع نموذج المسار المكون.
+   - التحقق من تسجيلا بحثا عن `authSource=override` وتأكد ان تحديد المعدل
      يزيد العدادات عند تجاوز النافذة.
-3. **تاكيد CSP/Trusted Types**
-   - شغل `npm run build` وافتح `build/index.html`. تاكد ان وسم `<meta
-     http-equiv="Content-Security-Policy">` يطابق التوجيهات المتوقعة
-     وان DevTools لا يظهر مخالفات CSP عند تحميل المعاينة.
-   - استخدم `npm run probe:portal` (او curl) لجلب HTML المنشور؛ يفشل probe
+3. **تاكيد CSP/الأنواع الموثوقة**
+   - الوظيفة `npm run build` وافتح `build/index.html`. تأكد ان التحديد `<meta
+     http-equiv="Content-Security-Policy">` يطابق التوجيهات
+     وان DevTools لا تظهر مخالفات CSP عند تحميل المعاينة.
+   - استخدم `npm run probe:portal` (او تجعيد) لجلب منشور HTML؛ يفشل التحقيق
      الان عندما تكون وسوم `Content-Security-Policy` او `Permissions-Policy` او
-     `Referrer-Policy` مفقودة او مختلفة عن القيم المعلنة في
-     `docusaurus.config.js`، بحيث يمكن لمراجعي الحوكمة الاعتماد على exit
-     code بدلا من فحص خرج curl يدويا.
-4. **مراجعة observability**
-   - تحقق من ان لوحة Try it proxy خضراء (rate limits، error ratios، مقاييس health probe).
-   - نفذ تمرين الحوادث في `docs/portal/docs/devportal/incident-runbooks.md`
-     اذا تغير المضيف (نشر Netlify/SoraFS جديد).
+     `Referrer-Policy` مفقودة او مختلفة عن أسعار البيع
+     `docusaurus.config.js`، بحيث يمكن لمراجعة الاعتماد على الخروج
+     كود بديل لفحص الضفائر اليدوية.
+4. **مراجعة الملاحظة**
+   - تحقق من ان لوحة جربها بالبروكسي الأخضر (حدود المعدل، نسب الخطأ، معايير مسبار الصحة).
+   - ينفذ التالي في `docs/portal/docs/devportal/incident-runbooks.md`
+     اذا تغير الى (نشر Netlify/SoraFS جديد).
 5. **توثيق النتائج**
-   - ارفق لقطات الشاشة/السجلات بتذكرة الاصدار.
-   - سجل كل finding في قالب تقرير المعالجة
+   - ارفق لقطات الشاشة/السجلات بتذكر الاصدار.
+   - سجل كل النتائج في قالب تقرير المعالج
      ([`docs/examples/pentest_remediation_report_template.md`](../../../examples/pentest_remediation_report_template.md))
-     حتى يسهل تدقيق owners وSLAs وادلة retest لاحقا.
-   - اربط هذا checklist مرة اخرى حتى يبقى عنصر roadmap DOCS-1b قابلا للتدقيق.
+     حتى بناء تدقيق أصحاب وSLAs وبديل إعادة الاختبار لاحقًا.
+   - ربط هذه القائمة المرجعية أحيانًا أخرى حتى يبقى عنصر خريطة الطريق DOCS-1b قابلاً للتدقيق.
 
-اذا فشل اي خطوة، اوقف الترقية، وافتح issue مانعة، ودون خطة المعالجة في `status.md`.
+اذا فشلت اي خطوة، اوقف الترقية، وافتح قضية داعمة، وتخطط لخطة المعالجة في `status.md`.

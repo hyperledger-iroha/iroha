@@ -4,11 +4,13 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-host-exposure.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # پریویو ہوسٹ ایکسپوژر گائیڈ
 
-DOCS-SORA روڈ میپ کا تقاضا ہے کہ ہر عوامی پریویو وہی checksum-verified bundle استعمال کرے جو ریویورز لوکل طور پر چلاتے ہیں۔ ریویور آن بورڈنگ (اور invite منظوری ٹکٹ) مکمل ہونے کے بعد اس runbook کو استعمال کریں تاکہ بیٹا پریویو ہوسٹ آن لائن لایا جا سکے۔
+DOCS-SORA גרסה קודמת של חבילה מאומתת של חבילת מסמכים מאומתים. ریویورز لوکل طور پر چلاتے ہیں۔ ریویور آن بورڈنگ (اور invite منظوری ٹکٹ) مکمل ہونے کے بعد اس runbook کو استعمال کریں تاکہ بیٹا پریویو ہوسٹ آن لائن لایا جا سکے۔
 
 ## پیشگی شرائط
 
@@ -27,7 +29,7 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-verify اسکرپٹ checksum manifest کے غائب یا چھیڑ چھاڑ ہونے پر آگے بڑھنے سے انکار کرتا ہے، جس سے ہر پریویو آرٹیفیکٹ آڈٹ میں رہتا ہے۔
+בדוק את מניפסט סכום הבדיקה پریویو آرٹیفیکٹ آڈٹ میں رہتا ہے۔
 
 ## مرحلہ 2 - SoraFS artifacts پیک کریں
 
@@ -43,7 +45,7 @@ node scripts/generate-preview-descriptor.mjs       --manifest artifacts/checksum
 
 ## مرحلہ 3 - پریویو alias شائع کریں
 
-جب ہوسٹ ایکسپوز کرنے کے لئے تیار ہوں تو pin helper کو **بغیر** `--skip-submit` کے دوبارہ چلائیں۔ JSON config یا صریح CLI flags فراہم کریں:
+جب ہوسٹ ایکسپوز کرنے کے لئے تیار ہوں تو pin helper کو **بغیر** `--skip-submit` کے دوبارہ ‏ JSON config یا صریح CLI flags فراہم کریں:
 
 ```bash
 ./scripts/sorafs-pin-release.sh       --alias docs-preview.sora       --alias-namespace docs       --alias-name preview       --pin-label docs-preview       --config ~/secrets/sorafs_preview_publish.json
@@ -67,15 +69,15 @@ npm run probe:portal --       --base-url=https://docs-preview.sora.link       --
 
 probe جاری release tag، CSP headers، اور signature metadata کی تصدیق کرتا ہے۔ دو ریجنز سے کمانڈ دوبارہ چلائیں (یا curl output منسلک کریں) تاکہ آڈیٹرز دیکھ سکیں کہ edge cache گرم ہے۔
 
-## Evidence bundle
+## חבילת ראיות
 
-پریویو ویو ٹکٹ میں درج ذیل artifacts شامل کریں اور دعوتی ای میل میں ان کا حوالہ دیں:
+חפצי חפצים או חפצים עתיקים.
 
-| Artifact | مقصد |
-|----------|------|
+| חפץ | مقصد |
+|--------|------|
 | `build/checksums.sha256` | ثابت کرتا ہے کہ bundle CI build سے میل کھاتا ہے۔ |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | canonical SoraFS payload + manifest. |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | מטען קנוני SoraFS + מניפסט. |
 | `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | manifest submission اور alias binding کی کامیابی دکھاتا ہے۔ |
 | `artifacts/sorafs/portal.dns-cutover.json` | DNS metadata (ٹکٹ، ونڈو، رابطے)، route promotion (`Sora-Route-Binding`) کا خلاصہ، `route_plan` pointer (JSON پلان + header templates)، cache purge معلومات، اور Ops کے لئے rollback ہدایات۔ |
 | `artifacts/sorafs/preview-descriptor.json` | دستخط شدہ descriptor جو archive + checksum کو جوڑتا ہے۔ |
-| `probe` output | تصدیق کرتا ہے کہ لائیو ہوسٹ متوقع release tag دکھا رہا ہے۔ |
+| פלט `probe` | تصدیق کرتا ہے کہ لائیو ہوسٹ متوقع release tag دکھا رہا ہے۔ |

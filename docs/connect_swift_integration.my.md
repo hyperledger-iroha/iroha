@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8b937a75e50aa77c02fcab0a11dae1b1cc182f88c179d6f90aa69181afa80d1b
 source_last_modified: "2026-01-05T18:22:23.394597+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Integrating NoritoBridgeKit in an Xcode iOS Project
+## NoritoBridgeKit ကို Xcode iOS ပရောဂျက်တစ်ခုတွင် ပေါင်းစပ်ခြင်း။
 
-This guide shows how to integrate the Rust Norito bridge (XCFramework) and the Swift wrappers into an iOS app, then exchange Iroha Connect frames over WebSocket using the same Norito codecs as the Rust host.
+ဤလမ်းညွှန်ချက်တွင် Rust Norito တံတား (XCFramework) နှင့် Swift wrappers များကို iOS အက်ပ်တစ်ခုသို့ ပေါင်းစည်းရန်၊ ထို့နောက် Iroha Connect frames များကို Rust host အဖြစ် တူညီသော Norito ကိုအသုံးပြု၍ WebSocket ပေါ်ရှိ ဖရိန်များကို လဲလှယ်ပုံကို ပြသထားသည်။
 
-Prerequisites
-- A NoritoBridge.xcframework zip (built by CI workflow) and the Swift helper `NoritoBridgeKit.swift` (copy the version under `examples/ios/NoritoDemo/Sources` if you are not consuming the demo project directly).
-- Xcode 15+, iOS 13+ target.
+လိုအပ်ချက်များ
+- NoritoBridge.xcframework zip (CI workflow ဖြင့်တည်ဆောက်ထားသော) နှင့် Swift helper `NoritoBridgeKit.swift` (သရုပ်ပြပရောဂျက်ကို တိုက်ရိုက်မသုံးစွဲပါက `examples/ios/NoritoDemo/Sources` အောက်တွင် ဗားရှင်းကို ကူးယူပါ။
+- Xcode 15+၊ iOS 13+ ပစ်မှတ်။
 
-Option A: Swift Package Manager (recommended)
-1) Publish a binary SPM using the `Package.swift.template` in `crates/connect_norito_bridge/` (fill URL and checksum from CI).
-2) In Xcode: File → Add Packages… → Enter the SPM repo URL → Add the `NoritoBridge` product to your target.
-3) Add `NoritoBridgeKit.swift` to your app target (drag into your project, ensure “Copy if needed” is ticked).
+ရွေးချယ်စရာ A- Swift Package Manager (အကြံပြုထားသည်)
+1) `crates/connect_norito_bridge/` တွင် `Package.swift.template` ကို အသုံးပြု၍ Binary SPM ထုတ်ဝေပါ (URL ဖြည့်ပြီး CI မှ checksum)။
+2) Xcode တွင်- File → Add Packages… → SPM repo URL ကို ရိုက်ထည့်ပါ → `NoritoBridge` ထုတ်ကုန်ကို သင့်ပစ်မှတ်သို့ ထည့်ပါ။
+3) `NoritoBridgeKit.swift` ကို သင့်အက်ပ်ပစ်မှတ်သို့ ပေါင်းထည့်ပါ (သင့်ပရောဂျက်သို့ ဆွဲယူပါ၊ “လိုအပ်ပါက ကော်ပီ” ကို အမှတ်ခြစ်ထားကြောင်း သေချာပါစေ။
 
-Option B: CocoaPods
-1) Create a Podspec from `NoritoBridge.podspec.template` (fill the `s.source` zip URL).
-2) `pod trunk push NoritoBridge.podspec`.
-3) In your Podfile: `pod 'NoritoBridge'` → `pod install`.
-4) Add `NoritoBridgeKit.swift` to your app target.
+ရွေးချယ်မှု B- CocoaPods
+1) `NoritoBridge.podspec.template` မှ Podspec တစ်ခုဖန်တီးပါ (`s.source` ဇစ် URL ကိုဖြည့်ပါ)။
+2) `pod trunk push NoritoBridge.podspec`။
+3) သင်၏ Podfile တွင်- `pod 'NoritoBridge'` → `pod install`။
+4) `NoritoBridgeKit.swift` ကို သင့်အက်ပ်ပစ်မှတ်သို့ ထည့်ပါ။
 
-Imports
+သွင်းကုန်
 ```swift
 import Foundation
 import CryptoKit               // ChaChaPoly / HKDF
@@ -37,11 +38,11 @@ import NoritoBridge            // Clang module from the XCFramework
 // Ensure NoritoBridgeKit.swift is part of the target
 ```
 
-### Bootstrapping a Connect session
+### Connect session တစ်ခုကို Bootstrapping လုပ်ခြင်း။
 
-`ConnectClient` handles the WebSocket, while `ConnectSession` orchestrates control
-frames and ciphertext envelopes. The snippet below shows how a dApp would open a session,
-derive Connect keys, and wait for an approval response.
+`ConnectClient` သည် WebSocket ကို ကိုင်တွယ်ပြီး `ConnectSession` က ကြိုးကိုင်ပေးသည် ။
+ဘောင်များနှင့် စာဝှက်စာသား စာအိတ်များ။ အောက်ပါအတိုအထွာသည် dApp သည် စက်ရှင်တစ်ခုအား မည်သို့ဖွင့်မည်ကို ပြသသည်၊
+ချိတ်ဆက်ကီးများကို ရယူပြီး အတည်ပြုချက် တုံ့ပြန်ချက်ကို စောင့်ပါ။
 
 ```swift
 let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
@@ -76,10 +77,10 @@ Task {
 }
 ```
 
-### Sending ciphertext frames (sign requests, etc.)
+### စာဝှက်စာသားဘောင်များ ပေးပို့ခြင်း (လက်မှတ်ထိုးတောင်းဆိုမှုများ၊ စသည်ဖြင့်)
 
-When the dApp needs to request a signature it uses the Norito bridge helpers to encode
-an envelope, encrypts the payload with ChaChaPoly, and wraps it in a `ConnectFrame`.
+dApp သည် လက်မှတ်တစ်ခုတောင်းဆိုရန် လိုအပ်သောအခါတွင် ၎င်းသည် ကုဒ်ဝှက်ရန် Norito တံတားအကူများကို အသုံးပြုသည်။
+စာအိတ်တစ်ခုသည် ChaChaPoly ဖြင့် payload ကို စာဝှက်ပြီး `ConnectFrame` ဖြင့် ထုပ်ပိုးထားသည်။
 
 ```swift
 let bridge = NoritoBridgeKit()
@@ -101,9 +102,9 @@ let frame = ConnectFrame(sessionID: sessionID,
 try await connectClient.send(frame: frame)
 ```
 
-`ConnectAEAD.header` / `ConnectAEAD.nonce` are convenience helpers (see the snippet in
-`docs/connect_swift_ios.md`) built from the shared `connect:v1` header definition. They
-are easy to inline if you prefer not to add another utility:
+`ConnectAEAD.header` / `ConnectAEAD.nonce` များသည် အဆင်ပြေစေရန် ကူညီသူများဖြစ်သည် (အတိုအထွာကို တွင်ကြည့်ပါ
+`docs/connect_swift_ios.md`) မျှဝေထားသော `connect:v1` ခေါင်းစီးအဓိပ္ပါယ်မှ ဖန်တီးထားသည်။ သူတို
+အခြား utility ကိုမထည့်လိုပါက inline လုပ်ရန်လွယ်ကူသည်-
 
 ```swift
 enum ConnectAEAD {
@@ -127,11 +128,11 @@ enum ConnectAEAD {
 }
 ```
 
-### Receiving / decrypting frames
+### ဘောင်များကို လက်ခံခြင်း / စာဝှက်ခြင်း။
 
-`ConnectSession` already exposes `nextEnvelope()`, which decrypts payloads when direction
-keys are configured. If you need manual access (for example to match an existing decoder
-pipeline), you can call the lower-level helper:
+`ConnectSession` သည် `nextEnvelope()` ကို ဖော်ထုတ်ပြီးဖြစ်သည်၊
+သော့များကို စီစဉ်သတ်မှတ်ထားသည်။ သင်ကိုယ်တိုင်ဝင်ရောက်ခွင့် လိုအပ်ပါက (ဥပမာ၊ ရှိပြီးသား ဒီကုဒ်ဒါနှင့် ကိုက်ညီရန်
+ပိုက်လိုင်း)၊ အောက်ခြေအဆင့် အကူအညီကို ခေါ်ဆိုနိုင်သည်-
 
 ```swift
 func decryptFrame(_ frame: ConnectFrame,
@@ -150,24 +151,24 @@ func decryptFrame(_ frame: ConnectFrame,
 }
 ```
 
-`NoritoBridgeKit` also exposes helpers such as `decodeCiphertextFrame`, `decodeEnvelopeJson`,
-and `decodeSignResultAlgorithm` for debugging or interoperability testing. For production
-apps, rely on `ConnectSession` and `ConnectEnvelope` so behaviour matches the Rust and
-Android SDKs exactly.
+`NoritoBridgeKit` သည် `decodeCiphertextFrame`၊ `decodeEnvelopeJson`၊
+အမှားရှာပြင်ခြင်း သို့မဟုတ် အပြန်အလှန်လုပ်ဆောင်နိုင်စွမ်းစမ်းသပ်ခြင်းအတွက် `decodeSignResultAlgorithm`။ ထုတ်လုပ်မှုအတွက်
+အက်ပ်များ၊ `ConnectSession` နှင့် `ConnectEnvelope` ကို အားကိုးပါ၊ ထို့ကြောင့် အပြုအမူသည် Rust နှင့် ကိုက်ညီပါသည်။
+Android SDKs အတိအကျ။
 
-## CI validation
+## CI အတည်ပြုခြင်း။
 
-- Before publishing updated bridge artifacts or pushing Connect integrations, run:
+- အပ်ဒိတ်လုပ်ထားသော တံတားအရုပ်များကို မထုတ်ဝေမီ သို့မဟုတ် Connect ပေါင်းစည်းမှုများကို တွန်းအားပေးခြင်းမပြုမီ၊ လုပ်ဆောင်ပါ။
 
   ```bash
   make swift-ci
   ```
 
-  The target validates fixture parity, checks the dashboard feeds, and renders the CLI
-  summaries locally. In Buildkite the same workflow depends on metadata keys such as
-  `ci/xcframework-smoke:<lane>:device_tag`; confirm the metadata is present after editing
-  pipelines or agent tags so dashboards can attribute results to the correct simulator or
-  StrongBox lane.
-- If the command fails, follow the parity playbook (`docs/source/swift_parity_triage.md`)
-  and inspect the rendered `mobile_ci` output to identify which lane requires regeneration
-  or incident follow-up before retrying.
+  ပစ်မှတ်သည် fixture parity ကိုအတည်ပြုပြီး dashboard feeds ကိုစစ်ဆေးပြီး CLI ကိုပြန်ဆိုသည်
+  ဒေသအလိုက် အကျဉ်းချုပ်များ။ Buildkite တွင် တူညီသော အလုပ်အသွားအလာသည် ထိုကဲ့သို့သော မက်တာဒေတာကီးများပေါ်တွင် မူတည်သည်။
+  `ci/xcframework-smoke:<lane>:device_tag`; တည်းဖြတ်ပြီးနောက် မက်တာဒေတာ ရှိနေကြောင်း အတည်ပြုပါ။
+  ပိုက်လိုင်းများ သို့မဟုတ် အေးဂျင့်တက်ဂ်များ ဒိုင်ခွက်များသည် ရလဒ်များကို မှန်ကန်သော simulator သို့မဟုတ် မှန်ကန်သော အမှတ်အသားပြုနိုင်စေရန်
+  StrongBox လမ်းသွား။
+- အမိန့်မချပါက၊ parity playbook (`docs/source/swift_parity_triage.md`) ကို လိုက်နာပါ။
+  မည်သည့်လမ်းကြောကို ပြန်လည်ပြုပြင်ရန် လိုအပ်သည်ကို ခွဲခြားသိရှိနိုင်ရန် ပြန်ဆိုထားသော `mobile_ci` ထုတ်ပေးမှုကို စစ်ဆေးပါ။
+  သို့မဟုတ် ထပ်မစမ်းမီ အဖြစ်အပျက် နောက်ဆက်တွဲ။

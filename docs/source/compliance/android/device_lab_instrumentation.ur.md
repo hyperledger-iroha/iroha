@@ -6,40 +6,41 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 9d384e21d09f3c4f57b7fc5181d69dc0da739dd6ed4dcb89a57ea58fd29bb898
 source_last_modified: "2026-01-03T18:07:59.259775+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Instrumentation Hooks (AND6)
+# Android ڈیوائس لیب انسٹرومینٹیشن ہکس (and6)
 
-This reference closes the roadmap action “stage the remaining device-lab /
-instrumentation hooks ahead of AND6 kickoff”. It explains how every reserved
-device-lab slot must capture telemetry, queue, and attestation artefacts so the
-AND6 compliance checklist, evidence log, and governance packets share the same
-deterministic workflow. Pair this note with the reservation procedure
-(`device_lab_reservation.md`) and the failover runbook when planning rehearsals.
+یہ حوالہ روڈ میپ ایکشن کو بند کرتا ہے "باقی ڈیوائس لیب / اسٹیج
+اور 6 کک آف سے پہلے ہی آلہ سازی ہکس "۔ یہ بتاتا ہے کہ ہر محفوظ کیسے ہے
+ڈیوائس لیب سلاٹ میں ٹیلی میٹری ، قطار اور تصدیق کے نوادرات پر قبضہ کرنا ہوگا
+اور 6 تعمیل چیک لسٹ ، شواہد لاگ ، اور گورننس پیکٹ ایک ہی شریک ہیں
+ڈٹرمینسٹک ورک فلو۔ اس نوٹ کو بکنگ کے طریقہ کار کے ساتھ جوڑیں
+(`device_lab_reservation.md`) اور جب ریہرسل کی منصوبہ بندی کرتے ہیں تو فیل اوور رن بک۔
 
-## Goals & Scope
+## اہداف اور دائرہ کار
 
-- **Deterministic evidence** – all instrumentation outputs live under
-  `artifacts/android/device_lab/<slot-id>/` with SHA-256 manifests so auditors
-  can diff bundles without rerunning the probes.
-- **Script-first workflow** – reuse the existing helpers
-  (`ci/run_android_telemetry_chaos_prep.sh`,
-  `scripts/android_keystore_attestation.sh`, `scripts/android_override_tool.sh`)
-  instead of bespoke adb commands.
-- **Checklists stay in sync** – every run references this document from the
-  AND6 compliance checklist and appends the artefacts to
-  `docs/source/compliance/android/evidence_log.csv`.
+- ** عزم ثبوت ** - تمام آلات کے آؤٹ پٹ کے تحت زندہ رہتے ہیں
+  `artifacts/android/device_lab/<slot-id>/` SHA-256 کے ساتھ ظاہر ہوتا ہے تو آڈیٹرز
+  تحقیقات کو دوبارہ جاری کیے بغیر بنڈل کو مختلف کر سکتے ہیں۔
+- ** اسکرپٹ فرسٹ ورک فلو **- موجودہ مددگاروں کو دوبارہ استعمال کریں
+  (`ci/run_android_telemetry_chaos_prep.sh` ،
+  `scripts/android_keystore_attestation.sh` ، `scripts/android_override_tool.sh`)
+  اس کے بجائے بیسپوک ADB کے احکامات۔
+- ** چیک لسٹس مطابقت پذیری میں رہیں ** - ہر رن کا اس دستاویز کو اس دستاویز کا حوالہ دیا جاتا ہے
+  اور 6 تعمیل چیک لسٹ اور نوادرات کو شامل کرتا ہے
+  `docs/source/compliance/android/evidence_log.csv`۔
 
-## Artifact Layout
+## آرٹیکٹیکٹ لے آؤٹ
 
-1. Pick a unique slot identifier that matches the reservation ticket, e.g.
-   `2026-05-12-slot-a`.
-2. Seed the standard directories:
+1. ایک انوکھا سلاٹ شناخت کنندہ منتخب کریں جو ریزرویشن ٹکٹ سے مماثل ہو ، جیسے۔
+   `2026-05-12-slot-a`۔
+2. معیاری ڈائریکٹریز بیج:
 
    ```bash
    export ANDROID_DEVICE_LAB_SLOT=2026-05-12-slot-a
@@ -47,71 +48,69 @@ deterministic workflow. Pair this note with the reservation procedure
    mkdir -p "${ANDROID_DEVICE_LAB_ROOT}"/{telemetry,attestation,queue,logs}
    ```
 
-3. Save every command log inside the matching folder (e.g.
-   `telemetry/status.ndjson`, `attestation/pixel8pro.log`).
-4. Capture SHA-256 manifests once the slot closes:
+3. مماثل فولڈر کے اندر ہر کمانڈ لاگ کو بچائیں (جیسے۔
+   `telemetry/status.ndjson` ، `attestation/pixel8pro.log`)۔
+4. ایک بار سلاٹ بند ہونے کے بعد SHA-256 پر قبضہ کریں:
 
    ```bash
    find "${ANDROID_DEVICE_LAB_ROOT}" -type f -print0 | sort -z \
      | xargs -0 shasum -a 256 > "${ANDROID_DEVICE_LAB_ROOT}/sha256sum.txt"
    ```
 
-## Instrumentation Matrix
+## اوزار میٹرکس
 
-| Flow | Command(s) | Output location | Notes |
-|------|------------|-----------------|-------|
-| Telemetry redaction + status bundle | `scripts/telemetry/check_redaction_status.py --status-url <collector> --json-out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/status.ndjson` | `telemetry/status.ndjson`, `telemetry/status.log` | Run at the start and end of the slot; attach CLI stdout to `status.log`. |
-| Pending queue + chaos prep | `ANDROID_PENDING_QUEUE_EXPORTS="pixel8=${ANDROID_DEVICE_LAB_ROOT}/queue/pixel8.bin" ci/run_android_telemetry_chaos_prep.sh --status-only` | `queue/*.bin`, `queue/*.json`, `queue/*.sha256` | Mirrors Scenario D from `readiness/labs/telemetry_lab_01.md`; extend the env var for every device in the slot. |
-| Override ledger digest | `scripts/android_override_tool.sh digest --out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/override_digest.json` | `telemetry/override_digest.json` | Required even when no overrides are active; prove the zero state. |
-| StrongBox / TEE attestation | `scripts/android_keystore_attestation.sh --device pixel8pro-strongbox-a --out "${ANDROID_DEVICE_LAB_ROOT}/attestation/pixel8pro"` | `attestation/<device>/*.{json,zip,log}` | Repeat for each reserved device (match names in `android_strongbox_device_matrix.md`). |
-| CI harness attestation regression | `scripts/android_strongbox_attestation_ci.sh --output "${ANDROID_DEVICE_LAB_ROOT}/attestation/ci"` | `attestation/ci/*` | Captures the same evidence that CI uploads; include in manual runs for symmetry. |
-| Lint / dependency baseline | `ANDROID_LINT_SUMMARY_OUT="${ANDROID_DEVICE_LAB_ROOT}/logs/jdeps-summary.txt" make android-lint` | `logs/jdeps-summary.txt`, `logs/lint.log` | Run once per freeze window; cite the summary in compliance packets. |
+| بہاؤ | کمانڈ (زبانیں) | آؤٹ پٹ مقام | نوٹ |
+| ------ | -------------- | ----------------- | ------- |
+| ٹیلی میٹری ریڈیکشن + اسٹیٹس بنڈل | `scripts/telemetry/check_redaction_status.py --status-url <collector> --json-out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/status.ndjson` | `telemetry/status.ndjson` ، `telemetry/status.log` | سلاٹ کے آغاز اور اختتام پر چلائیں۔ `status.log` سے Cli stdout منسلک کریں۔ |
+| زیر التواء قطار + افراتفری پریپ | `ANDROID_PENDING_QUEUE_EXPORTS="pixel8=${ANDROID_DEVICE_LAB_ROOT}/queue/pixel8.bin" ci/run_android_telemetry_chaos_prep.sh --status-only` | `queue/*.bin` ، `queue/*.json` ، `queue/*.sha256` | `readiness/labs/telemetry_lab_01.md` سے آئینہ دار منظر نامہ ؛ سلاٹ میں ہر آلے کے لئے env var کو بڑھاؤ۔ |
+| اوور رائڈ لیجر ڈائجسٹ | `scripts/android_override_tool.sh digest --out ${ANDROID_DEVICE_LAB_ROOT}/telemetry/override_digest.json` | `telemetry/override_digest.json` | یہاں تک کہ جب کوئی اوور رائڈز فعال نہ ہوں تو بھی ضروری ہے۔ صفر ریاست کو ثابت کریں۔ |
+| مضبوط باکس / ٹی کی تصدیق | `scripts/android_keystore_attestation.sh --device pixel8pro-strongbox-a --out "${ANDROID_DEVICE_LAB_ROOT}/attestation/pixel8pro"` | `attestation/<device>/*.{json,zip,log}` | ہر محفوظ آلہ کے لئے دہرائیں (`android_strongbox_device_matrix.md` میں میچ کے نام)۔ |
+| CI کنٹرول کی تصدیق رجعت | `scripts/android_strongbox_attestation_ci.sh --output "${ANDROID_DEVICE_LAB_ROOT}/attestation/ci"` | `attestation/ci/*` | وہی ثبوت حاصل کرتا ہے جو CI اپ لوڈ کرتا ہے۔ توازن کے لئے دستی رنز میں شامل کریں۔ |
+| لنٹ / انحصار بیس لائن | `ANDROID_LINT_SUMMARY_OUT="${ANDROID_DEVICE_LAB_ROOT}/logs/jdeps-summary.txt" make android-lint` | `logs/jdeps-summary.txt` ، `logs/lint.log` | فی منجمد ونڈو میں ایک بار چلائیں ؛ تعمیل پیکٹوں میں خلاصہ پیش کریں۔ |
 
-## Standard Slot Procedure
+## معیاری سلاٹ کا طریقہ کار1. ** پری فلائٹ (T-24H) **-ریزرویشن ٹکٹ کے حوالہ جات کی تصدیق کریں
+   دستاویز ، ڈیوائس میٹرکس اندراج کو اپ ڈیٹ کریں ، اور نمونے کی جڑ کو بیج دیں۔
+2. ** سلاٹ کے دوران **
+   - پہلے ٹیلی میٹری بنڈل + قطار ایکسپورٹ کمانڈ چلائیں۔ پاس
+     `--note <ticket>` to `ci/run_android_telemetry_chaos_prep.sh` تو لاگ ان کریں
+     واقعہ کی شناخت کا حوالہ دیتا ہے۔
+   - فی آلہ کی تصدیق کے اسکرپٹ کو متحرک کریں۔ جب کنٹرول پیدا کرتا ہے a
+     `device_lab_reservation.md` ، اسے نوادرات کی جڑ میں کاپی کریں اور پرنٹ شدہ گٹ شا کو ریکارڈ کریں
+     اسکرپٹ کا اختتام۔
+   - `make android-lint` کو اوورراڈڈ سمری راہ کے ساتھ انجام دیں یہاں تک کہ اگر CI
+     پہلے ہی بھاگ گیا ؛ آڈیٹر فی سلاٹ لاگ کی توقع کرتے ہیں۔
+3. ** رنز کے بعد **
+   - سلاٹ کے اندر `sha256sum.txt` اور `README.md` (فری فارم نوٹ) بنائیں
+     فولڈر نے پھانسی والے کمانڈز کا خلاصہ کیا۔
+   - `docs/source/compliance/android/evidence_log.csv` میں ایک قطار کو شامل کریں
+     سلاٹ ID ، ہیش مینی فیسٹ راہ ، بلڈکائٹ حوالہ جات (اگر کوئی ہے) ، اور تازہ ترین
+     ریزرویشن کیلنڈر برآمد سے ڈیوائس لیب کی گنجائش فیصد۔
+   - `_android-device-lab` ٹکٹ ، اور 6 میں سلاٹ فولڈر کو لنک کریں
+     چیک لسٹ ، اور `docs/source/android_support_playbook.md` ریلیز رپورٹ۔
 
-1. **Pre-flight (T-24 h)** – Confirm the reservation ticket references this
-   document, update the device matrix entry, and seed the artifact root.
-2. **During the slot**
-   - Run the telemetry bundle + queue export commands first. Pass
-     `--note <ticket>` to `ci/run_android_telemetry_chaos_prep.sh` so the log
-     references the incident ID.
-   - Trigger the attestation scripts per device. When the harness produces a
-     `.zip`, copy it into the artefact root and record the Git SHA printed at
-     the end of the script.
-   - Execute `make android-lint` with the overridden summary path even if CI
-     already ran; auditors expect a per-slot log.
-3. **Post-run**
-   - Generate `sha256sum.txt` and `README.md` (free-form notes) inside the slot
-     folder summarising the executed commands.
-   - Append a row to `docs/source/compliance/android/evidence_log.csv` with the
-     slot ID, hash manifest path, Buildkite references (if any), and the latest
-     device-lab capacity percentage from the reservation calendar export.
-   - Link the slot folder in the `_android-device-lab` ticket, the AND6
-     checklist, and `docs/source/android_support_playbook.md` release report.
+## ناکامی سے نمٹنے اور بڑھتے ہوئے
 
-## Failure Handling & Escalation
-
-- If any command fails, capture the stderr output under `logs/` and follow the
-  escalation ladder in `device_lab_reservation.md` §6.
-- Queue or telemetry shortfalls should immediately note the override status in
-  `docs/source/sdk/android/telemetry_override_log.md` and reference the slot ID
-  so governance can trace the drill.
-- Attestation regressions must be recorded in
+- اگر کوئی کمانڈ ناکام ہوجاتا ہے تو ، `logs/` کے تحت stderr آؤٹ پٹ پر قبضہ کریں اور اس کی پیروی کریں
+  `device_lab_reservation.md` §6 میں اسکیلیشن سیڑھی۔
+- قطار یا ٹیلی میٹری کی کمی کو فوری طور پر اوور رائڈ کی حیثیت کو نوٹ کرنا چاہئے
+  `docs/source/sdk/android/telemetry_override_log.md` اور سلاٹ ID کا حوالہ دیں
+  لہذا گورننس ڈرل کا سراغ لگاسکتی ہے۔
+- تصدیق کے رجعتوں کو ریکارڈ کرنا ضروری ہے
   `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  with the failing device serials and the bundle paths recorded above.
+  ناکام ڈیوائس سیریلز اور مذکورہ بالا بنڈل راستوں کے ساتھ۔
 
-## Reporting Checklist
+## چیک لسٹ کی اطلاع دہندگی
 
-Before marking the slot complete, verify the following references are updated:
+سلاٹ کو مکمل نشان لگانے سے پہلے ، تصدیق کریں کہ مندرجہ ذیل حوالوں کو اپ ڈیٹ کیا گیا ہے:
 
-- `docs/source/compliance/android/and6_compliance_checklist.md` — mark the
-  instrumentation row complete and note the slot ID.
-- `docs/source/compliance/android/evidence_log.csv` — add/update the entry with
-  the slot hash and capacity reading.
-- `_android-device-lab` ticket — attach artefact links and Buildkite job IDs.
-- `status.md` — include a brief note in the next Android readiness digest so
-  roadmap readers know which slot produced the latest evidence.
+- `docs/source/compliance/android/and6_compliance_checklist.md` - نشان زد کریں
+  آلہ سازی کی قطار مکمل اور سلاٹ ID کو نوٹ کریں۔
+- `docs/source/compliance/android/evidence_log.csv` - اندراج کو شامل/اپ ڈیٹ کریں
+  سلاٹ ہیش اور صلاحیت پڑھنا۔
+- `_android-device-lab` ٹکٹ - آرٹ فیکٹ لنکس اور بلڈکائٹ جاب IDs منسلک کریں۔
+- `status.md` - اگلے Android تیاری میں ایک مختصر نوٹ شامل کریں
+  روڈ میپ کے قارئین جانتے ہیں کہ کس سلاٹ نے تازہ ترین ثبوت پیش کیے۔
 
-Following this process keeps AND6’s “device-lab + instrumentation hooks”
-milestone auditable and prevents manual divergence between booking, execution,
-and reporting.
+اس عمل کے بعد اور 6 کے "ڈیوائس لیب + انسٹرومینٹیشن ہکس" رہتا ہے
+سنگ میل کے قابل آڈٹ اور بکنگ ، عملدرآمد ، کے مابین دستی موڑ کو روکتا ہے
+اور رپورٹنگ

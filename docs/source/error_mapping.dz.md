@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cba8780bcec4ebf562dc9c5725f328b0ea2d9009517efa5b5a504e2fb6be81fe
 source_last_modified: "2026-01-11T04:52:11.136647+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Error Mapping Guide
+# འཛོལ་བའི་ས་ཁྲ་བཟོ་བའི་ལམ་སྟོན།
 
-Last updated: 2025-08-21
+མཐའ་མའི་དུས་མཐུན་བཟོ་ཡོདཔ།: ༢༠༢༥-༠༨-༢༡
 
-This guide maps common failure modes in Iroha to stable error categories surfaced by the data model. Use it to design tests and to make client error handling predictable.
+ལམ་སྟོན་འདི་གིས་ གནས་སྡུད་དཔེ་ཚད་ཀྱིས་ ཕྱིར་བཏོན་འབད་མི་ Iroha ནང་ལུ་ སྤྱིར་བཏང་གི་འཐུས་ཤོར་ཐབས་ལམ་ཚུ་ སབ་ཁྲ་བཟོཝ་ཨིན། བརྟག་དཔྱད་ཚུ་བཟོ་བཀོད་འབད་ནི་དང་ མཁོ་སྤྲོད་འབད་མི་འཛོལ་བ་ཚུ་ སྔོན་དཔག་འབད་བཏུབ་བཟོ་ནི་ལུ་ལག་ལེན་འཐབ།
 
-Principles
-- Instruction and query paths emit structured enums. Avoid panics; report a specific category wherever possible.
-- Categories are stable, messages may evolve. Clients should match on categories, not on free‑form strings.
+གཞི་རྩ་ཚུ།
+- བཀོད་རྒྱ་དང་འདྲི་དཔྱད་འགྲུལ་ལམ་ཚུ་གིས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ གྱངས་ཁ་ཚུ་ བཏོནམ་ཨིན། ཚ་རིམས་ཚུ་སྤང་དགོ། འབད་ཚུགས་ས་ལུ་ དམིགས་བསལ་གྱི་དབྱེ་རིམ་ཅིག་སྙན་ཞུ་འབད།
+- དབྱེ་རིམ་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་ཡོདཔ་ལས་ འཕྲིན་དོན་ཚུ་ གོང་འཕེལ་འགྱོ་འོང་། མཁོ་སྤྲོད་པ་ཚུ་ རང་དབང་འབྲི་ཤོག་ཚུ་གུ་མེན་པར་ དབྱེ་རིམ་ཚུ་གུ་མཐུན་སྒྲིག་འབད་དགོ།
 
-Categories
-- InstructionExecutionError::Find: Entity missing (asset, account, domain, NFT, role, trigger, permission, public key, block, transaction). Example: removing a non‑existent metadata key yields Find(MetadataKey).
-- InstructionExecutionError::Repetition: Duplicate registration or conflicting ID. Contains the instruction type and the repeated IdBox.
-- InstructionExecutionError::Mintability: Mintability invariant violated (`Once` exhausted twice, `Limited(n)` overdrawn, or attempts to disable `Infinitely`). Examples: minting an asset defined as `Once` twice yields `Mintability(MintUnmintable)`; configuring `Limited(0)` yields `Mintability(InvalidMintabilityTokens)`.
-- InstructionExecutionError::Math: Numeric domain errors (overflow, divide‑by‑zero, negative value, not enough quantity). Example: burning more than available amount yields Math(NotEnoughQuantity).
-- InstructionExecutionError::InvalidParameter: Invalid instruction parameter or configuration (e.g., time trigger in the past). Use for malformed contract payloads.
-- InstructionExecutionError::Evaluate: DSL/spec mismatch for instruction shape or types. Example: wrong numeric spec for an asset value yields Evaluate(Type(AssetNumericSpec(..))).
-- InstructionExecutionError::InvariantViolation: Violation of a system invariant that cannot be expressed in other categories. Example: attempting to remove the last signatory.
-- InstructionExecutionError::Query: Wrapping of QueryExecutionFail when a query fails during instruction execution.
+དབྱེ་ཁག་
+- བཀོད་རྒྱ་ལག་ལེན་འཛོལ་བ་::འཚོལ་: ངོ་བོ་མེདཔ་ (རྒྱུ་དངོས་, རྩིས་ཐོ་, མངའ་ཁོངས་ ཨེན་ཨེཕ་ཊི་ འགན་ཁུར་, གནང་བ་ གནང་བ་ མི་མང་ལྡེ་མིག་ བཀག་ཆ་ ཚོང་འབྲེལ།) དཔེར་ན་: གནས་ཏེ་མེད་པའི་མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ཐོན་འབྲས་ཅིག་བཏོན་གཏང་མི་འདི་གིས་ འཚོལ་ཞིབ་(MetadataKey).
+- བཀོད་རྒྱ་ལག་ལེན་འཛོལ་བ།:བསྐྱར་ལོག་: ཐོ་བཀོད་འདྲ་བཤུས་ཡང་ན་ འགལ་བ་ཡོད་པའི་ངོ་རྟགས་འདྲ་བཤུས་རྐྱབས། བཀོད་རྒྱ་དབྱེ་བ་དང་ བསྐྱར་ལོག་ཨའི་ཌི་བོགསི་ ཡོདཔ་ཨིན།
+- བཀོད་རྒྱ་ལག་ལེན་འཛོལ་བ།:བཟོ་བཀོད།: འགྱུར་ལྡོག་མེད་པའི་འགལ་འཛོལ་མེད་པའི་ (`Once` གཉིས་ ཚར་གཉིས་ བཤུབ་བཏང་ཡོདཔ་ཨིན་, `Limited(n)` མཐོ་རུ་བཏང་མི་ ཡང་ན་ `Infinitely` ལྕོགས་མིན་བཟོ་ནི་ལུ་ དཔའ་བཅམ་ཡོདཔ་ཨིན།) དཔེར་ན་ `Once` གིས་ ཚར་གཉིས་རེ་ ངེས་ཚིག་བཀོད་ཡོད་པའི་ རྒྱུ་དངོས་ཅིག་ བཏོན་ནི། `Mintability(MintUnmintable)`; `Limited(0)` རིམ་སྒྲིག་བྱས་པའི་ `Mintability(InvalidMintabilityTokens)` ཐོན་ཡོད།
+- བཀོད་རྒྱ་ལག་ལེན་འཛོལ་བ།:ཨང་རྩིས་: ཨང་གྲངས་མངའ་ཁོངས་འཛོལ་བ་ཚུ་ (མང་དྲགས་པའི་ཕོལོ་, བགོ་དཔྱ་ དཔེར་ན་ ལོག་པའི་གནས་གོང་ འབོར་ཚད་ལངམ་སྦེ་མེན)། དཔེར་ན་ འཐོབ་ཚུགས་པའི་ བསྡོམས་རྩིས་ལས་ མངམ་འཚིག་མི་འདི་གིས་ མེཐ་(NotEnoughQuantity) ཨིན།
+- བཀོད་རྒྱ་ལག་ལེན་འཛོལ་བ་::ནུས་མེད་ཚད་གཞི་: ནུས་མེད་བཀོད་རྒྱ་ཚད་བཟུང་ ཡང་ན་ རིམ་སྒྲིག་ (དཔེར་ན་ དུས་ཚོད་ཀྱི་འགོ་འཁྲིདཔ་)། གན་ཡིག་གི་ སྐྱོན་བརྗོད་ཚུ་ལག་ལེན་འཐབ།
+- བཀོད་རྒྱ་ལག་ལེན་འཛོལ་བ།::དབྱེ་ཞིབ་: བཀོད་རྒྱ་དབྱིབས་ཡང་ན་དབྱེ་བ་ཚུ་གི་དོན་ལུ་ ཌི་ཨེསི་ཨེལ་/སྤེཔ་མཐུན་སྒྲིག་མི་མཐུན། དཔེར་ན་: རྒྱུ་དངོས་གནས་གོང་ཅིག་གི་དོན་ལུ་ ཨང་གྲངས་ཀྱི་ཁྱད་ཚད་འཛོལ་བ་གིས་ བརྟག་ཞིབ་(Type(AssetNumericSpec(.))) འདི་འབྱུངམ་ཨིན།
+- བཀོད་རྒྱ་ལག་ལེན་འཛོལ་བ།::འགྱུར་ལྡོག་ཅན་གྱི་གནོད་འཚེ་: དབྱེ་རིམ་གཞན་ཚུ་ནང་བརྗོད་མ་ཚུགས་པའི་ འགྱུར་ལྡོག་མེད་པའི་རིམ་ལུགས་ཅིག་ལས་འགལ་བ། དཔེར་ན་: མཇུག་གི་མཚན་རྟགས་འདི་རྩ་བསྐྲད་གཏང་ནི་དཔའ་བཅམ་དོ།
+- བཀོད་རྒྱ་ལག་ལེན་འཛོལ་བ::དོ་ན: བཀོད་རྒྱ་ལག་ལེན་འཐབ་པའི་སྐབས་ འདྲི་དཔྱད་ཅིག་འཐུས་ཤོར་འབྱུང་པའི་སྐབས་ འདྲི་དཔྱད་ལག་ལེན་འཐབ།
 
-QueryExecutionFail
-- Find: Missing entity in query context.
-- Conversion: Wrong type expected by a query.
-- NotFound: Missing live query cursor.
-- CursorMismatch / CursorDone: Cursor protocol errors.
-- FetchSizeTooBig: Server‑enforced limit exceeded.
-- GasBudgetExceeded: Query execution exceeded the gas/materialization budget.
-- InvalidSingularParameters: Unsupported parameters for singular queries.
-- CapacityLimit: Live query store capacity reached.
+འདྲི་དཔྱད་ལག་ལེན་འཐབ་ཐངས།
+- འཚོལ།: འདྲི་དཔྱད་སྐབས་དོན་ནང་ ངོ་བོ་བརླག་སྟོན།
+- གཞི་བསྒྱུར་: འདྲི་དཔྱད་ཀྱིས་རེ་བ་བསྐྱེད་པའི་དབྱེ་བ་འཛོལ་བ་བཟོ།
+- NotFound: ཐད་རི་བ་རི་འདྲི་དཔྱད་ཀྱི་འོད་རྟགས་མེད་པ།
+- CursorMismat / CursorDone: ཀར་སོར་ མཐུན་སྒྲིག་འཛོལ་བ་ཚུ།
+- FetchSizeTooBig: སར་བར་བསྟར་སྤྱོད་འབད་མི་ཚད་ལས་བརྒལ་ཡོདཔ།
+- GasBudgetExeded: འདྲི་དཔྱད་བསད་ནི་འདི་ རླངས་རྫས་/རྒྱུ་ཆའི་འཆར་དངུལ་ལས་ལྷག་སྟེ་ཡོདཔ་ཨིན།
+- ཨིན་ཝ་ཌི་སིང་གཱལ་པེ་ར་མི་ཊར་ཚུ་: འདྲི་དཔྱད་རྐྱང་པའི་དོན་ལུ་ རྒྱབ་སྐྱོར་མ་འབད་བའི་ཚད་བཟུང་ཚུ།
+- ཀེ་ཀེ་ཊི་ལའིམ་: ལའིབ་འདྲི་དཔྱད་ཚོང་ཁང་གི་ཤོང་ཚད་ལུ་ལྷོད་ཡོདཔ།
 
-Testing Tips
-- Prefer unit tests close to the origin of an error. For example, asset numeric spec mismatch can be generated in data‑model tests.
-- Integration tests should cover end‑to‑end mapping for representative cases (e.g., duplicate register, missing key on remove, transfer without ownership).
-- Keep assertions resilient by matching enum variants instead of message substrings.
+བརྟག་དཔྱད་བསླབ་བྱ།
+- འཛོལ་བ་ཅིག་གི་འབྱུང་ཁུངས་དང་ཉེ་འདབས་ལུ་ཡོད་པའི་ དགའ་གདམ་ཅན་གྱི་ཆ་ཚན་བརྟག་དཔྱད་ཚུ། དཔེ་འབད་བ་ཅིན་ གནས་སྡུད་ཀྱི་དཔེ་ཚད་བརྟག་དཔྱད་ནང་ལུ་ བགོ་རྩིས་ཨང་གྲངས་ཀྱི་ ཁྱད་ཚད་མཐུན་སྒྲིག་འདི་ བཟོ་བཏོན་འབད་ཚུགས།
+- མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་གིས་ ངོ་ཚབ་ཀྱི་གནད་དོན་ཚུ་གི་དོན་ལུ་ མཇུག་བསྡུའི་སབ་ཁྲ་བཟོ་ནི་ ༼དཔེར་ན་ འདྲ་བཤུས་འདྲ་མཚུངས་ བཏོན་གཏང་ནིའི་ལྡེ་མིག་མེདཔ་ བདག་དབང་མེད་པར་ སྤོ་བཤུད་འབད་ནི་༽ ཚུ་ ཁྱབ་དགོ།
+- འཕྲིན་དོན་འོག་མ་ཚུ་གི་ཚབ་ལུ་ ཨེ་ནམ་འགྱུར་ཅན་ཚུ་མཐུན་སྒྲིག་འབད་ཐོག་ལས་ བདེན་བཤད་ཚུ་ བཟོད་བསྲན་འབད།

@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: Acuñar, transferir y quemar un NFT
-description: Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+スラグ: /norito/examples/nft-flow
+タイトル: アクーニャル、NFT の譲渡とケマル
+説明: NFT の極端な情報を記録します: 独自の知識、転送、メタデータと問題の知識。
+ソース: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
+NFT の極端な情報を記録します: 独自の情報、転送、メタデータと問題の知識。
 
-## Recorrido del libro mayor
+## 市長のレコリード
 
-- Asegúrate de que exista la definición del NFT (por ejemplo `n0#wonderland`) junto con las cuentas de propietario/receptor usadas en el fragmento (`ih58...`, `ih58...`).
-- Invoca el entrypoint `nft_issue_and_transfer` para acuñar el NFT, transferirlo de Alice a Bob y adjuntar una bandera de metadatos que describa la emisión.
-- Inspecciona el estado del libro mayor de NFT con `iroha_cli ledger nfts list --account <id>` o los equivalentes del SDK para verificar la transferencia, luego confirma que el activo se elimina una vez que se ejecuta la instrucción de quema.
+- NFT の定義を確認します (`n0#wonderland`) 断片化されたプロピエタリオ/受容体を使用する必要があります (`ih58...`、`ih58...`)。
+- エントリポイント `nft_issue_and_transfer` を NFT から呼び出し、アリスからボブへの転送、メタデータの説明の追加を行います。
+- `iroha_cli ledger nfts list --account <id>` の NFT 市長の図書館の検査は、転送された SDK の同等性を検証し、指示を解除するかどうかを確認します。
 
-## Guías de SDK relacionadas
+## SDK 関係に関する情報
 
-- [Quickstart del SDK de Rust](/sdks/rust)
-- [Quickstart del SDK de Python](/sdks/python)
-- [Quickstart del SDK de JavaScript](/sdks/javascript)
+- [SDK および Rust のクイックスタート](/sdks/rust)
+- [Python の SDK クイックスタート](/sdks/python)
+- [JavaScript の SDK のクイックスタート](/sdks/javascript)
 
-[Descarga la fuente de Kotodama](/norito-snippets/nft-flow.ko)
+[Kotodama](/norito-snippets/nft-flow.ko) をダウンロードしてください
 
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.

@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2025-12-29T18:16:35.978367+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# የተፅዕኖ ግምገማ መሳሪያ (MINFO-4b)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+የመንገድ ካርታ ማጣቀሻ፡ **MINFO‑4b — የተፅዕኖ ግምገማ መሳሪያ።**  
+ባለቤት፡ የአስተዳደር ምክር ቤት / ትንታኔ
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+ይህ ማስታወሻ አሁን የ `cargo xtask ministry-agenda impact` ትዕዛዝን ይመዘግባል።
+ለሪፈረንደም እሽጎች የሚያስፈልገውን አውቶሜትድ የሃሽ-ቤተሰብ ልዩነት ያዘጋጃል። የ
+መሳሪያ የተረጋገጠ የአጀንዳ ምክር ቤት ፕሮፖዛል፣ የተባዛ መዝገብ እና
+ገምጋሚዎች የትኛውን በትክክል ማየት እንዲችሉ የአማራጭ መካድ/የመመሪያ ቅጽበታዊ ገጽ እይታ
+የጣት አሻራዎች አዲስ ናቸው፣ ከነባሩ ፖሊሲ ጋር ይጋጫሉ፣ እና ስንት ግቤቶች
+እያንዳንዱ ሃሽ ቤተሰብ አስተዋፅዖ ያደርጋል።
 
-## Inputs
+## ግብዓቶች
 
-1. **Agenda proposals.** One or more files that follow
-   [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
+1. **የአጀንዳ ፕሮፖዛል።** አንድ ወይም ከዚያ በላይ የሆኑ ፋይሎች ይከተላሉ
+   [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md)።
+   በ `--proposal <path>` በግልፅ ያሳልፏቸው ወይም ትዕዛዙን በ ሀ
+   ማውጫ በ`--proposal-dir <dir>` እና በእያንዳንዱ የ`*.json` ፋይል በዚያ መንገድ
+   ተካቷል.
+2. ** የተባዛ መዝገብ (አማራጭ)።** የJSON ፋይል ተዛማጅ
+   `docs/examples/ministry/agenda_duplicate_registry.json`. ግጭቶች ናቸው።
+   በ `source = "duplicate_registry"` ስር ተዘግቧል.
+3. **የመመሪያ ቅጽበታዊ ገጽ እይታ (አማራጭ)።** ሁሉንም የሚዘረዝር ቀላል ክብደት ያለው መግለጫ
+   የጣት አሻራ አስቀድሞ በGAR/ሚኒስቴር ፖሊሲ ተፈጻሚ ነው። ጫኚው ይጠብቃል።
+   ከታች የሚታየው እቅድ (ተመልከት
    [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+   ለሙሉ ናሙና)
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+የ `hash_family:hash_hex` አሻራው ከፕሮፖዛል ኢላማ ጋር የሚዛመድ ማንኛውም ግቤት ነው።
+በ `source = "policy_snapshot"` በተጠቀሰው `policy_id` ተዘግቧል።
 
-## Usage
+##አጠቃቀም
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+ተጨማሪ ሀሳቦችን በተደጋገሙ `--proposal` ባንዲራዎች ወይም በ
+አጠቃላይ የሪፈረንደም ስብስብ የያዘ ማውጫ ማቅረብ፡-
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+ትዕዛዙ `--out` ሲቀር የፈጠረውን JSON ወደ stdout ያትማል።
 
-## Output
+## ውጤት
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+ሪፖርቱ የተፈረመበት ቅርስ ነው (በህዝበ ውሳኔ ፓኬት ስር ይቅዱት።
+`artifacts/ministry/impact/` ማውጫ) ከሚከተለው መዋቅር ጋር
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+ይህንን JSON ከገለልተኛ ማጠቃለያ ጋር ለእያንዳንዱ የሪፈረንደም ዶሴ ያያይዙት።
+ተወያዮች፣ ዳኞች እና የአስተዳደር ታዛቢዎች ትክክለኛውን ፍንዳታ ራዲየስ ማየት ይችላሉ።
+እያንዳንዱ ፕሮፖዛል. ውጤቱ የሚወስነው (በሃሽ ቤተሰብ የተደረደረ) እና ደህንነቱ የተጠበቀ ነው።
+በ CI / runbooks ውስጥ ያካትቱ; የተባዛው መዝገብ ቤት ወይም የፖሊሲ ቅጽበታዊ ገጽ እይታ ከተቀየረ፣
+ድምጹ ከመከፈቱ በፊት ትዕዛዙን እንደገና ያስጀምሩ እና የታደሰውን ቅርስ ያያይዙ።
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> ** ቀጣዩ ደረጃ፡** የተፈጠረውን የተፅዕኖ ሪፖርት ይመግቡ
+> [`cargo xtask ministry-panel packet`](referendum_packet.md) ስለዚህ
+> `ReferendumPacketV1` ዶሴ ሁለቱንም የሃሽ-ቤተሰብ መፈራረስ እና
+> እየተገመገመ ላለው ሀሳብ ዝርዝር የግጭት ዝርዝር።

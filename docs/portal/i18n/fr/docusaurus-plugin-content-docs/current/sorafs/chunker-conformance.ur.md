@@ -4,51 +4,51 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-conformance.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
-title: SoraFS chunker conformance guide
-sidebar_label: Chunker conformance
-description: Fixtures اور SDKs میں deterministic SF1 chunker profile کو برقرار رکھنے کے لیے requirements اور workflows۔
+identifiant : conformité du chunker
+titre : Guide de conformité du chunker SoraFS
+sidebar_label : conformité des fragments
+description : Accessoires pour les SDK et le profil déterministe SF1 chunker et les exigences en matière de flux de travail
 ---
 
 :::note مستند ماخذ
 :::
 
-یہ regeneration workflow، signing policy، اور verification steps بھی document کرتی ہے تاکہ SDKs میں fixture consumers sync میں رہیں۔
+Flux de travail de régénération, politique de signature et étapes de vérification du document, SDK et synchronisation des consommateurs d'appareils.
 
-## Canonical profile
+## Profil canonique
 
-- Input seed (hex): `0000000000dec0ded`
-- Target size: 262144 bytes (256 KiB)
-- Minimum size: 65536 bytes (64 KiB)
-- Maximum size: 524288 bytes (512 KiB)
-- Rolling polynomial: `0x3DA3358B4DC173`
-- Gear table seed: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- Graine d'entrée (hex) : `0000000000dec0ded`
+- Taille cible : 262 144 octets (256 Ko)
+- Taille minimale : 65 536 octets (64 Ko)
+- Taille maximale : 524 288 octets (512 Ko)
+- Polynôme roulant : `0x3DA3358B4DC173`
+- Graine de table d'engrenage : `sorafs-v1-gear`
+- Masque de rupture : `0x0000FFFF`
 
-Reference implementation: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-کسی بھی SIMD acceleration کو یکساں boundaries اور digests پیدا کرنے چاہئیں۔
+Implémentation de référence : `sorafs_chunker::chunk_bytes_with_digests_profile`.
+Il s'agit de l'accélération SIMD et des limites et des digestions de données.
 
-## Fixture bundle
+## Lot de luminaires
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` fixtures کو regenerate
-کرتا ہے اور درج ذیل فائلیں `fixtures/sorafs_chunker/` میں بناتا ہے:
+Appareils `cargo run --locked -p sorafs_chunker --bin export_vectors` et régénération
+Il s'agit d'un modèle `fixtures/sorafs_chunker/` pour votre compte :- `sf1_profile_v1.{json,rs,ts,go}` — Rust, TypeScript, et Go consumer pour les limites canoniques des morceaux ہر فائل
+  آتے ہیں (مثلاً `sorafs.sf1@1.0.0`, پھر `sorafs.sf1@1.0.0`)۔ یہ commande
+  `ensure_charter_compliance` کے ذریعے Ensure ہوتی ہے اور اسے تبدیل نہیں کیا جا سکتا۔
+- `manifest_blake3.json` — Manifeste vérifié par BLAKE3 et support de luminaire et couverture de support
+- `manifest_signatures.json` — résumé du manifeste پر signatures du conseil (Ed25519)۔
+- `sf1_profile_v1_backpressure.json` et `fuzz/` pour les corpus bruts —
+  scénarios de streaming déterministes et tests de contre-pression de chunker
 
-- `sf1_profile_v1.{json,rs,ts,go}` — Rust, TypeScript, اور Go consumers کے لیے canonical chunk boundaries۔ ہر فائل
-  آتے ہیں (مثلاً `sorafs.sf1@1.0.0`، پھر `sorafs.sf1@1.0.0`)۔ یہ ordering
-  `ensure_charter_compliance` کے ذریعے enforce ہوتی ہے اور اسے تبدیل نہیں کیا جا سکتا۔
-- `manifest_blake3.json` — BLAKE3-verified manifest جو ہر fixture فائل کو cover کرتا ہے۔
-- `manifest_signatures.json` — manifest digest پر council signatures (Ed25519)۔
-- `sf1_profile_v1_backpressure.json` اور `fuzz/` کے اندر raw corpora —
-  deterministic streaming scenarios جو chunker back-pressure tests میں استعمال ہوتے ہیں۔
+### Politique de signature
 
-### Signing policy
+Régénération des luminaires **لازم** طور پر signature valide du conseil شامل کرے۔ sortie non signée du générateur et rejet du générateur `--allow-unsigned` et rejet de celui-ci (صرف مقامی تجربات کے لیے)۔ Enveloppes de signature en annexe uniquement pour le signataire et pour la déduplication
 
-Fixture regeneration **لازم** طور پر valid council signature شامل کرے۔ generator unsigned output کو reject کرتا ہے جب تک `--allow-unsigned` واضح طور پر نہ دیا جائے (صرف مقامی تجربات کے لیے)۔ Signature envelopes append-only ہوتے ہیں اور signer کے لحاظ سے deduplicate ہوتے ہیں۔
-
-Council signature شامل کرنے کے لیے:
+Signature du Conseil شامل کرنے کے لیے :
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -56,32 +56,30 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verification
+## Vérification
 
-CI helper `ci/check_sorafs_fixtures.sh` generator کو `--locked` کے ساتھ دوبارہ چلاتا ہے۔
-اگر fixtures میں drift ہو یا signatures missing ہوں تو job fail ہو جاتا ہے۔ اس script کو
-nightly workflows میں اور fixtures changes submit کرنے سے پہلے استعمال کریں۔
+CI helper Générateur `ci/check_sorafs_fixtures.sh` et `--locked` pour le générateur d'aide
+Les matchs sont en dérive et les signatures sont manquantes ou le travail échoue. اس script کو
+workflows nocturnes pour les changements de calendrier soumettre
 
-Manual verification steps:
+Étapes de vérification manuelle :
 
 1. `cargo test -p sorafs_chunker` چلائیں۔
 2. `ci/check_sorafs_fixtures.sh` لوکل چلائیں۔
 3. تصدیق کریں کہ `git status -- fixtures/sorafs_chunker` صاف ہے۔
 
-## Upgrade playbook
+## Mettre à niveau le manuel de jeu
 
-نیا chunker profile propose کرتے وقت یا SF1 اپڈیٹ کرتے وقت:
+Ce profil de chunker propose des liens vers SF1:یہ بھی دیکھیں: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) تاکہ
+exigences en matière de métadonnées, modèles de proposition et listes de contrôle de validation
 
-یہ بھی دیکھیں: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) تاکہ
-metadata requirements، proposal templates اور validation checklists مل سکیں۔
-
-1. نئے parameters کے ساتھ `ChunkProfileUpgradeProposalV1` (RFC SF-1 دیکھیں) تیار کریں۔
-2. `export_vectors` کے ذریعے fixtures regenerate کریں اور نیا manifest digest ریکارڈ کریں۔
-3. مطلوبہ council quorum کے ساتھ manifest sign کریں۔ تمام signatures
+1. Paramètres des paramètres `ChunkProfileUpgradeProposalV1` (RFC SF-1) pour la version `ChunkProfileUpgradeProposalV1`
+2. `export_vectors` les luminaires régénèrent le résumé du manifeste et le contenu du manifeste
+3. مطلوبہ quorum du conseil کے ساتھ signe manifeste کریں۔ signatures
    `manifest_signatures.json` میں append ہونی چاہئیں۔
-4. متاثرہ SDK fixtures (Rust/Go/TS) اپڈیٹ کریں اور cross-runtime parity یقینی بنائیں۔
-5. اگر parameters بدلیں تو fuzz corpora regenerate کریں۔
-6. اس گائیڈ میں نیا profile handle، seeds، اور digest اپڈیٹ کریں۔
-7. تبدیلی کو اپڈیٹڈ tests اور roadmap updates کے ساتھ submit کریں۔
+4. Les appareils du SDK (Rust/Go/TS) sont dotés d'une parité d'exécution croisée et d'une parité d'exécution croisée.
+5. Paramètres de régénération des corps fuzz
+6. Il s'agit d'une poignée de profil, de graines, et d'un résumé de la poignée de profil.
+7. Les tests de test et les mises à jour de la feuille de route et les soumissions
 
-اگر اس عمل کے بغیر chunk boundaries یا digests تبدیل کیے جائیں تو وہ invalid ہیں اور merge نہیں ہونے چاہئیں۔
+Il s'agit d'une limite de bloc et d'un résumé d'un bloc non valide et d'une fusion non valide

@@ -4,90 +4,86 @@ direction: rtl
 source: docs/portal/docs/nexus/confidential-assets.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Ativos confidenciais e transferencias ZK
-description: Blueprint Phase C para circulacao blindada, registries e controles de operador.
-slug: /nexus/confidential-assets
+عنوان: خفیہ اثاثے اور زیڈ کے ٹرانسفر
+تفصیل: شیلڈڈ گردش ، رجسٹریشن اور آپریٹر کنٹرول کے لئے بلیو پرنٹ فیز سی۔
+سلگ: /گٹھ جوڑ /خفیہ اثاثہ
 ---
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
-# Design de ativos confidenciais e transferencias ZK
+# خفیہ اثاثوں اور زیڈ کے ٹرانسفر کا ڈیزائن
 
-## Motivacao
-- Entregar fluxos de ativos blindados opt-in para que dominios preservem privacidade transacional sem alterar a circulacao transparente.
-- Manter execucao determinista em hardware heterogeneo de validadores e preservar Norito/Kotodama ABI v1.
-- Fornecer a auditores e operadores controles de ciclo de vida (ativacao, rotacao, revogacao) para circuitos e parametros criptograficos.
+## حوصلہ افزائی
+- شفاف گردش میں ردوبدل کیے بغیر ٹرانزیکشنل پرائیویسی کو محفوظ رکھنے کے لئے ڈومینز کے لئے شیلڈڈ آپٹ ان اثاثہ بہاؤ کی فراہمی کریں۔
+- متضاد توثیق کرنے والے ہارڈویئر پر تعی .ن پسندانہ عمل کو برقرار رکھیں اور Norito/Kotodama ABI V1 کو محفوظ رکھیں۔
+- کریپٹوگرافک سرکٹس اور پیرامیٹرز کے لئے لائف سائیکل کنٹرول (ایکٹیویشن ، گردش ، منسوخی) کے ساتھ آڈیٹرز اور آپریٹرز کو فراہم کریں۔
 
-## Threat model
-- Validadores sao honest-but-curious: executam consenso fielmente mas tentam inspecionar ledger/state.
-- Observadores de rede veem dados de bloco e transacoes gossiped; nenhuma suposicao de canais privados de gossip.
-- Fora de escopo: analise de trafego off-ledger, adversarios quanticos (acompanhado no roadmap PQ), ataques de disponibilidade do ledger.
+## خطرہ ماڈل
+-توثیق کرنے والے ایماندار ہیں لیکن سخت ہیں: وہ اتفاق رائے سے وفاداری کے ساتھ عملدرآمد کرتے ہیں لیکن لیجر/ریاست کا معائنہ کرنے کی کوشش کرتے ہیں۔
+- نیٹ ورک کے مبصرین بلاک ڈیٹا اور گپ شپ کے لین دین کو دیکھتے ہیں۔ نجی گپ شپ چینلز کا کوئی اندازہ نہیں۔
+- دائرہ کار سے باہر: آف لیجر ٹریفک تجزیہ ، کوانٹم مخالفین (پی کیو روڈ میپ پر ٹریک کردہ) ، لیجر کی دستیابی کے حملے۔
 
-## Visao geral do design
-- Assets podem declarar um *shielded pool* alem dos balances transparentes existentes; a circulacao blindada e representada via commitments criptograficos.
-- Notes encapsulam `(asset_id, amount, recipient_view_key, blinding, rho)` com:
-  - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
-  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)`, independente da ordem das notes.
-  - Payload encriptado: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
-- Transacoes transportam payloads `ConfidentialTransfer` codificados em Norito contendo:
-  - Inputs publicos: Merkle anchor, nullifiers, novos commitments, asset id, versao de circuito.
-  - Payloads encriptados para recipients e auditores opcionais.
-  - Proof zero-knowledge que atesta conservacao de valor, ownership e autorizacao.
-- Verifying keys e conjuntos de parametros sao controlados via registries on-ledger com janelas de ativacao; nodes recusam validar proofs que referenciam entradas desconhecidas ou revogadas.
-- Headers de consenso comprometem o digest ativo de capacidade confidencial para que blocos so sejam aceitos quando o estado de registry e parametros coincide.
-- Construcao de proofs usa um stack Halo2 (Plonkish) sem trusted setup; Groth16 ou outras variantes SNARK sao intencionalmente nao suportadas em v1.
+## ڈیزائن کا جائزہ
+- اثاثے موجودہ شفاف توازن کے علاوہ * شیلڈڈ پول * کا اعلان کرسکتے ہیں۔ شیلڈڈ گردش کی نمائندگی کریپٹوگرافک وعدوں کے ذریعے کی جاتی ہے۔
+- نوٹ `(asset_id, amount, recipient_view_key, blinding, rho)` کے ساتھ
+  - عزم: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`۔
+  - nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)` ، قطع نظر نوٹوں کے حکم سے۔
+  - خفیہ کردہ پے لوڈ: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`۔
+- لین دین میں پے لوڈ `ConfidentialTransfer` کو Norito میں انکوڈ کیا جاتا ہے جس پر مشتمل ہے:
+  - عوامی آدانوں: مرکل اینکر ، نیلیفائرز ، نئے وعدے ، اثاثہ آئی ڈی ، سرکٹ ورژن۔
+  - اختیاری وصول کنندگان اور آڈیٹرز کے لئے خفیہ کردہ پے لوڈز۔
+  - ثبوت صفر علم جو تحفظ ، ملکیت اور اجازت کی قدر کی تصدیق کرتا ہے۔
+- چابیاں اور پیرامیٹر کے سیٹوں کی توثیق کرنا ایکٹیویشن ونڈوز کے ساتھ آن لیجر رجسٹریوں کے ذریعے کنٹرول کیا جاتا ہے۔ نوڈس ان ثبوتوں کی توثیق کرنے سے انکار کرتے ہیں جو نامعلوم یا منسوخ اندراجات کا حوالہ دیتے ہیں۔
+- اتفاق رائے ہیڈر خفیہ صلاحیت کے فعال عمل انہضام پر سمجھوتہ کرتے ہیں تاکہ جب رجسٹری ریاست اور پیرامیٹرز میچ ہوتے ہیں تو بلاکس کو صرف قبول کیا جاتا ہے۔
+- ثبوتوں کی تعمیر میں بغیر کسی قابل اعتماد سیٹ اپ کے ہال 2 (پلونکیش) اسٹیک کا استعمال ہوتا ہے۔ Groth16 یا دیگر Snark کی مختلف حالتوں کو V1 میں جان بوجھ کر تعاون نہیں کیا جاتا ہے۔
 
-### Fixtures deterministas
+### تعی .ن پسند فکسچر
 
-Envelopes de memo confidenciais agora enviam um fixture canonico em `fixtures/confidential/encrypted_payload_v1.json`. O dataset captura um envelope v1 positivo mais amostras negativas malformadas para que SDKs possam afirmar paridade de parsing. Os testes do data-model em Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) e a suite Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) carregam o fixture diretamente, garantindo que o encoding Norito, as superficies de erro e a cobertura de regressao permanecam alinhadas enquanto o codec evolui.
+خفیہ میمو لفافے اب `fixtures/confidential/encrypted_payload_v1.json` پر ایک کیننیکل فکسچر بھیجیں۔ ڈیٹاسیٹ نے ایک مثبت V1 لفافے کے علاوہ خراب شدہ منفی نمونوں کو اپنی گرفت میں لیا ہے تاکہ SDKs تجزیہ کرنے کی برابری پر زور دے سکے۔ مورچا (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) اور سوئفٹ سویٹ (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) میں ڈیٹا ماڈل ٹیسٹ براہ راست فکسچر کو لوڈ کرتے ہیں ، اس بات کو یقینی بناتے ہوئے کہ Norito انکوڈنگ ، غلطی کی سطحیں ، اور ریگریشن کوریج کوڈیک کے سامنے آنے کے ساتھ ہی منسلک ہے۔سوئفٹ ایس ڈی کے اب گلو کے بغیر شیلڈ ہدایات جاری کرسکتے ہیں JSON Bespoke: ایک بنائیں
+`ShieldRequest` 32 بائٹ عزم کے ساتھ ، خفیہ کردہ پے لوڈ اور ڈیبٹ میٹا ڈیٹا ،
+اور پھر دستخط کرنے اور آگے بھیجنے کے لئے `IrohaSDK.submit(shield:keypair:)` (یا `submitAndWait`) پر کال کریں
+`/v1/pipeline/transactions` کے ذریعے ٹرانزیکشن۔ مددگار عزم کی لمبائی کی توثیق کرتا ہے ،
+`ConfidentialEncryptedPayload` کو انکوڈر Norito میں داخل کرتا ہے ، اور لے آؤٹ `zk::Shield` کو آئینہ دیتا ہے
+ذیل میں بیان کیا گیا ہے تاکہ بٹوے زنگ کے ساتھ منسلک ہوں۔
 
-SDKs Swift agora podem emitir instrucoes shield sem glue JSON bespoke: construa um
-`ShieldRequest` com o commitment de 32 bytes, o payload encriptado e metadata de debito,
-e entao chame `IrohaSDK.submit(shield:keypair:)` (ou `submitAndWait`) para assinar e encaminhar a
-transacao via `/v1/pipeline/transactions`. O helper valida comprimentos de commitment,
-insere `ConfidentialEncryptedPayload` no encoder Norito, e espelha o layout `zk::Shield`
-descrito abaixo para que wallets fiquem alinhadas com Rust.
+## اتفاق رائے اور صلاحیت کا گیٹنگ
+- بلاک ہیڈر `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` کو بے نقاب کرتے ہیں۔ ڈائجسٹ اتفاق رائے میں حصہ لیتا ہے اور بلاک قبولیت کے ل reg رجسٹری کے مقامی نظریہ سے ملنا چاہئے۔
+- گورننس مستقبل `activation_height` کے ساتھ `next_conf_features` کے پروگرام کے ذریعے اپ گریڈ تیار کرسکتی ہے۔ اس وقت تک ، بلاک پروڈیوسروں کو لازمی طور پر سابقہ ​​ڈائجسٹ جاری کرنا جاری رکھنا چاہئے۔
+- ویلیویٹر نوڈس کو `confidential.enabled = true` اور `assume_valid = false` کے ساتھ کام کرنا چاہئے۔ اسٹارٹ اپ چیکوں نے توثیق کرنے والے سیٹ میں داخل ہونے سے انکار کردیا اگر کوئی شرط ناکام ہوجاتی ہے یا اگر مقامی `conf_features` کو تبدیل کرتا ہے۔
+- P2P ہینڈ شیک میٹا ڈیٹا میں اب `{ enabled, assume_valid, conf_features }` شامل ہے۔ ہم عمر افراد جو متضاد خصوصیات کا اعلان کرتے ہیں `HandshakeConfidentialMismatch` کے ساتھ مسترد کردیئے جاتے ہیں اور کبھی بھی اتفاق رائے کی گردش میں داخل نہیں ہوتے ہیں۔
+- [نوڈ کی اہلیت کے مذاکرات] (#node-capability-negotiation) میں ہینڈ شیک میٹرکس میں جائیدادوں ، مبصرین اور ساتھیوں کے مابین ہینڈ شیک آؤٹ پٹ پکڑے گئے ہیں۔ ہینڈ شیک کی ناکامیوں سے `HandshakeConfidentialMismatch` کو بے نقاب کیا جاتا ہے اور جب تک ڈائجسٹ میچ نہیں ہوتا ہے اس وقت تک ہم مرتبہ کو اتفاق رائے کی گردش سے دور رکھتا ہے۔
+- نان توثیق کرنے والے مبصرین `assume_valid = true` مرتب کرسکتے ہیں۔ وہ ثبوتوں کی جانچ کیے بغیر خفیہ ڈیلٹا کا اطلاق کرتے ہیں ، لیکن وہ اتفاق رائے کی حفاظت پر اثر انداز نہیں ہوتے ہیں۔## اثاثہ پالیسیاں
+- ہر اثاثہ کی تعریف ایک `AssetConfidentialPolicy` کی حامل ہے جو تخلیق کار کے ذریعہ یا گورننس کے ذریعہ بیان کی گئی ہے:
+  - `TransparentOnly`: پہلے سے طے شدہ وضع ؛ صرف شفاف ہدایات (`MintAsset` ، `TransferAsset` ، وغیرہ) کی اجازت ہے اور شیلڈڈ آپریشن مسترد کردیئے گئے ہیں۔
+  - `ShieldedOnly`: تمام اجراء اور منتقلی کو خفیہ ہدایات کا استعمال کرنا چاہئے۔ `RevealConfidential` ممنوع ہے لہذا بیلنس کبھی بھی عوامی طور پر ظاہر نہیں ہوتا ہے۔
+  - `Convertible`: ہولڈر ذیل میں/آف ریمپ ہدایات کا استعمال کرتے ہوئے شفاف اور شیلڈڈ نمائندگیوں کے مابین قدر کو منتقل کرسکتے ہیں۔
+- پالیسیاں پھنسے ہوئے فنڈز سے بچنے کے لئے سخت ایف ایس ایم کی پیروی کرتی ہیں:
+  - `TransparentOnly -> Convertible` (شیلڈڈ پول کی فوری طور پر چالو کرنا)۔
+  - `TransparentOnly -> ShieldedOnly` (زیر التواء منتقلی اور تبادلوں کی ونڈو کی ضرورت ہے)۔
+  - `Convertible -> ShieldedOnly` (کم سے کم لازمی تاخیر)
+  - `ShieldedOnly -> Convertible` (مہاجرین کا منصوبہ جو شیلڈڈ نوٹوں کے لئے قابل خرچ رہنے کے لئے درکار ہے)۔
+  - `ShieldedOnly -> TransparentOnly` ممنوع ہے جب تک کہ شیلڈڈ پول خالی نہ ہو یا گورننس کوڈ کسی ایسی منتقلی کا کوڈ بنائے جو غیر شیلڈز کے زیر التواء نوٹوں کو زیر التواء۔
+- گورننس ہدایات `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` کے ذریعے ISI `ScheduleConfidentialPolicyTransition` کی وضاحت کرتی ہیں اور `CancelConfidentialPolicyTransition` کے ساتھ پروگرام شدہ تبدیلیوں کو ختم کرسکتی ہیں۔ میمپول کی توثیق اس بات کو یقینی بناتی ہے کہ کوئی لین دین منتقلی کی اونچائی کو عبور نہیں کرتا ہے اور شمولیت فیصلہ کن طور پر ناکام ہوجاتی ہے اگر کوئی پالیسی چیک وسط بلاک کو تبدیل کردے گا۔
+- زیر التوا ٹرانزیشن خود بخود لاگو ہوجاتے ہیں جب ایک نیا بلاک کھلتا ہے: جب اونچائی تبادلوں کی ونڈو میں داخل ہوتی ہے (`ShieldedOnly` اپ گریڈ کے لئے) یا `effective_height` تک پہنچ جاتی ہے تو ، رن ٹائم اپ ڈیٹ `AssetConfidentialPolicy` ، `zk.policy` میٹاڈیٹا ، اور صاف ستھرا اندراج کرتا ہے۔ اگر شفاف سپلائی اس وقت باقی رہتی ہے جب ایک `ShieldedOnly` منتقلی کی پختگی ہوتی ہے تو ، رن ٹائم تبدیلی کو ختم کرتا ہے اور پچھلے موڈ کو برقرار رکھتے ہوئے انتباہ کو لاگ ان کرتا ہے۔
+- کنفگ نوبس `policy_transition_delay_blocks` اور `policy_transition_window_blocks` تبدیلی کے ارد گرد بٹوے کے تبادلوں کی اجازت دینے کے لئے کم سے کم انتباہ اور فضل کی مدت عائد کرتے ہیں۔
+- `pending_transition.transition_id` بھی آڈٹ ہینڈل کے طور پر کام کرتا ہے۔ ٹرانزیشن کو حتمی شکل دینے یا منسوخ کرتے وقت گورننس کو اس کا تذکرہ کرنا ہوگا تاکہ آپریٹرز/آف ریمپ رپورٹس سے وابستہ ہوسکیں۔
+- `policy_transition_window_blocks` 720 تک ڈیفالٹ (60 s کے بلاک ٹائم کے ساتھ ~ 12 گھنٹے)۔ نوڈس گورننس کی درخواستوں کو محدود کرتے ہیں جو کم نوٹس کی کوشش کرتے ہیں۔
+- پیدائش کا اظہار اور سی ایل آئی بہاؤ موجودہ اور زیر التواء پالیسیوں کو بے نقاب کرتا ہے۔ داخلے کی منطق رن ٹائم کے وقت پالیسی کو پڑھتی ہے تاکہ اس بات کی تصدیق کی جاسکے کہ ہر خفیہ ہدایات مجاز ہیں۔
+- ہجرت کی جانچ پڑتال کی فہرست - اسٹیج اپ گریڈ پلان کے لئے نیچے "ہجرت کی ترتیب" دیکھیں جس کے ساتھ سنگ میل M0 آتا ہے۔
 
-## Consensus commitments e capability gating
-- Headers de bloco expoem `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; o digest participa do hash de consenso e deve igualar a visao local do registry para aceitacao de bloco.
-- Governance pode preparar upgrades programando `next_conf_features` com um `activation_height` futuro; ate essa altura, produtores de bloco devem continuar emitindo o digest anterior.
-- Nodes validadores DEVEM operar com `confidential.enabled = true` e `assume_valid = false`. Checks de startup recusam entrar no set validador se qualquer condicao falhar ou se o `conf_features` local divergir.
-- A metadata do handshake P2P agora inclui `{ enabled, assume_valid, conf_features }`. Peers que anunciam features incompativeis sao rejeitados com `HandshakeConfidentialMismatch` e nunca entram em rotacao de consenso.
-- Outcomes de handshake entre validadores, observers e peers sao capturados na matriz de handshake em [Node Capability Negotiation](#node-capability-negotiation). Falhas de handshake expoem `HandshakeConfidentialMismatch` e mantem o peer fora da rotacao de consenso ate que o digest coincida.
-- Observers nao validadores podem definir `assume_valid = true`; aplicam deltas confidenciais sem verificar proofs, mas nao influenciam a seguranca do consenso.
+#### Torii کے ذریعے منتقلی کی نگرانیفعال `AssetConfidentialPolicy` کا معائنہ کرنے کے لئے بٹوے اور آڈیٹرز `GET /v1/confidential/assets/{definition_id}/transitions` سے استفسار کریں۔ JSON پے لوڈ میں ہمیشہ کیننیکل اثاثہ ID ، آخری مشاہدہ شدہ بلاک اونچائی ، پالیسی کی `current_mode` ، اس وقت موثر وضع (تبادلوں کی ونڈوز عارضی طور پر `Convertible` کی اطلاع دیتے ہیں) ، اور `vk_set_hash`/پوسیڈن/پیڈرسن کے متوقع شناخت کنندگان شامل ہیں۔ جب گورننس کی منتقلی زیر التوا ہے تو جواب میں یہ بھی شامل ہے:
 
-## Politicas de assets
-- Cada definicao de asset carrega um `AssetConfidentialPolicy` definido pelo criador ou via governance:
-  - `TransparentOnly`: modo default; apenas instrucoes transparentes (`MintAsset`, `TransferAsset`, etc.) sao permitidas e operacoes shielded sao rejeitadas.
-  - `ShieldedOnly`: toda emissao e transferencias devem usar instrucoes confidenciais; `RevealConfidential` e proibido para que balances nunca aparecam publicamente.
-  - `Convertible`: holders podem mover valor entre representacoes transparentes e shielded usando instrucoes de on/off-ramp abaixo.
-- Politicas seguem um FSM restrito para evitar fundos encalhados:
-  - `TransparentOnly -> Convertible` (habilitacao imediata do shielded pool).
-  - `TransparentOnly -> ShieldedOnly` (requer transicao pendente e janela de conversao).
-  - `Convertible -> ShieldedOnly` (delay minimo obrigatorio).
-  - `ShieldedOnly -> Convertible` (plano de migracao requerido para que notes blindadas continuem gastaveis).
-  - `ShieldedOnly -> TransparentOnly` e proibido a menos que o shielded pool esteja vazio ou governance codifique uma migracao que des-blinde notes pendentes.
-- Instrucoes de governance definem `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` via o ISI `ScheduleConfidentialPolicyTransition` e podem abortar mudancas programadas com `CancelConfidentialPolicyTransition`. A validacao do mempool garante que nenhuma transacao atravesse a altura de transicao e a inclusao falha deterministicamente se um check de politica mudaria no meio do bloco.
-- Transicoes pendentes sao aplicadas automaticamente quando um novo bloco abre: quando a altura entra na janela de conversao (para upgrades `ShieldedOnly`) ou atinge `effective_height`, o runtime atualiza `AssetConfidentialPolicy`, refresca a metadata `zk.policy` e limpa a entrada pendente. Se o supply transparente permanece quando uma transicao `ShieldedOnly` amadurece, o runtime aborta a mudanca e registra um aviso, mantendo o modo anterior.
-- Knobs de config `policy_transition_delay_blocks` e `policy_transition_window_blocks` impoem aviso minimo e periodos de tolerancia para permitir conversoes de wallet em torno da mudanca.
-- `pending_transition.transition_id` tambem funciona como handle de auditoria; governance deve cita-lo ao finalizar ou cancelar transicoes para que operadores correlacionem relatorios de on/off-ramp.
-- `policy_transition_window_blocks` default a 720 (~12 horas com block time de 60 s). Nodes limitam requests de governance que tentem aviso mais curto.
-- Genesis manifests e fluxos CLI expoem politicas atuais e pendentes. A logica de admission le a politica em tempo de execucao para confirmar que cada instrucao confidencial esta autorizada.
-- Checklist de migracao - ver "Migration sequencing" abaixo para o plano de upgrade em etapas que o Milestone M0 acompanha.
+- `transition_id` - آڈٹ ہینڈل `ScheduleConfidentialPolicyTransition` کے ذریعہ واپس آیا۔
+- `previous_mode`/`new_mode`۔
+- `effective_height`۔
+- `conversion_window` اور اخذ کردہ `window_open_height` (وہ بلاک جہاں بٹوے کو شیلڈڈونلی کٹ اوورز کے لئے تبادلوں کا آغاز کرنا چاہئے)۔
 
-#### Monitorando transicoes via Torii
-
-Wallets e auditores consultam `GET /v1/confidential/assets/{definition_id}/transitions` para inspecionar o `AssetConfidentialPolicy` ativo. O payload JSON sempre inclui o asset id canonico, a ultima altura de bloco observada, o `current_mode` da politica, o modo efetivo nessa altura (janelas de conversao reportam temporariamente `Convertible`), e os identificadores esperados de `vk_set_hash`/Poseidon/Pedersen. Quando uma transicao de governance esta pendente a resposta tambem embute:
-
-- `transition_id` - handle de auditoria retornado por `ScheduleConfidentialPolicyTransition`.
-- `previous_mode`/`new_mode`.
-- `effective_height`.
-- `conversion_window` e o `window_open_height` derivado (o bloco onde wallets devem comecar conversao para cut-overs ShieldedOnly).
-
-Exemplo de resposta:
+مثال کا جواب:
 
 ```json
 {
@@ -109,195 +105,173 @@ Exemplo de resposta:
 }
 ```
 
-Uma resposta `404` indica que nenhuma definicao de asset correspondente existe. Quando nao ha transicao agendada o campo `pending_transition` e `null`.
+ایک `404` ردعمل اس بات کی نشاندہی کرتا ہے کہ اثاثوں کی کوئی متعلقہ تعریف موجود نہیں ہے۔ جب کوئی منتقلی کا شیڈول نہیں ہوتا ہے تو ، فیلڈ `pending_transition` `null` ہے۔
 
-### Maquina de estados de politica
+### پالیسی اسٹیٹ مشین| موجودہ موڈ | اگلا موڈ | شرائط | موثر اونچائی کا علاج | نوٹ |
+| ------------------------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| شفافیت | بدلنے والا | گورننس نے چیکر/پیرامیٹر رجسٹری اندراجات کو فعال کیا۔ `effective_height >= current_height + policy_transition_delay_blocks` کے ساتھ `ScheduleConfidentialPolicyTransition` جمع کروائیں۔ | منتقلی بالکل `effective_height` پر چلتی ہے۔ شیلڈڈ پول فوری طور پر دستیاب ہے۔               | شفاف بہاؤ کو برقرار رکھتے ہوئے رازداری کو قابل بنانے کے لئے پہلے سے طے شدہ راستہ۔          |
+| شفافیت | شیلڈونلی | اسی طرح کے علاوہ `policy_transition_window_blocks >= 1`۔                                                         | رن ٹائم خود بخود `Convertible` میں `effective_height - policy_transition_window_blocks` میں داخل ہوجاتا ہے۔ `effective_height` میں `ShieldedOnly` میں تبدیلیاں۔ | شفاف ہدایات کو غیر فعال کرنے سے پہلے ڈٹرمینسٹک تبادلوں کی ونڈو فراہم کریں۔   |
+| بدلنے والا | شیلڈونلی | `effective_height >= current_height + policy_transition_delay_blocks` کے ساتھ منتقلی کا پروگرام۔ گورننس کو آڈٹ میٹا ڈیٹا کے ذریعے (`transparent_supply == 0`) کی تصدیق کرنی ہوگی۔ رن ٹائم اس کا اطلاق کٹ اوور پر ہوتا ہے۔ | ایک جیسی ونڈو سیمنٹکس۔ اگر `effective_height` پر شفاف فراہمی غیر صفر ہے تو ، منتقلی `PolicyTransitionPrerequisiteFailed` کے ساتھ ختم ہوجاتی ہے۔ | اثاثہ کو مکمل طور پر خفیہ طور پر گردش میں لاک کرتا ہے۔                                      |
+| شیلڈونلی | بدلنے والا | شیڈول منتقلی ؛ کوئی ہنگامی واپسی فعال نہیں (`withdraw_height` غیر متعینہ)۔                              | ریاست `effective_height` پر تبدیل ہوتی ہے۔ ریمپ کو دوبارہ کھولیں جبکہ شیلڈڈ نوٹ درست ہیں۔             | بحالی ونڈوز یا آڈیٹر کے جائزوں کے لئے استعمال کیا جاتا ہے۔                                |
+| شیلڈونلی | شفافیت | گورننس کو لازمی طور پر `shielded_supply == 0` ثابت کرنا چاہئے یا دستخط شدہ `EmergencyUnshield` پلان (آڈیٹر کے دستخطوں کی ضرورت ہے) تیار کریں۔ | رن ٹائم `effective_height` سے پہلے ونڈو `Convertible` کھولتا ہے۔ اس وقت ، خفیہ ہدایات سخت ناکام ہوجاتی ہیں اور اثاثہ صرف شفاف وضع میں واپس آجاتا ہے۔ | آخری حربے سے باہر نکلیں۔ اگر ونڈو کے دوران کوئی خفیہ نوٹ خرچ کیے جاتے ہیں تو منتقلی سیلف کینالیاں۔ |
+| کوئی | موجودہ کی طرح | `CancelConfidentialPolicyTransition` زیر التواء تبدیلی کو صاف کرتا ہے۔                                                    | `pending_transition` فوری طور پر ہٹا دیا گیا۔                                                                        | جمود کو برقرار رکھیں ؛ مکمل میں دکھایا گیا ہے۔                                             |گورننس جمع کرانے کے دوران مذکورہ ٹرانزیشن کو مسترد کردیا جاتا ہے۔ رن ٹائم شیڈول منتقلی کا اطلاق کرنے سے پہلے ہی شرائط کی جانچ پڑتال کرتا ہے۔ ناکامیوں نے اثاثہ کو پچھلے موڈ میں لوٹایا اور ٹیلی میٹری اور بلاک واقعات کے ذریعہ `PolicyTransitionPrerequisiteFailed` جاری کریں۔
 
-| Modo atual       | Proximo modo      | Prerrequisitos                                                                 | Tratamento de altura efetiva                                                                                         | Notas                                                                                     |
-|--------------------|------------------|-------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
-| TransparentOnly    | Convertible      | Governance ativou entradas de registry de verificador/parametros. Submeter `ScheduleConfidentialPolicyTransition` com `effective_height >= current_height + policy_transition_delay_blocks`. | A transicao executa exatamente em `effective_height`; o shielded pool fica disponivel imediatamente.               | Caminho default para habilitar confidencialidade mantendo fluxos transparentes.          |
-| TransparentOnly    | ShieldedOnly     | Mesmo acima, mais `policy_transition_window_blocks >= 1`.                                                         | O runtime entra automaticamente em `Convertible` em `effective_height - policy_transition_window_blocks`; muda para `ShieldedOnly` em `effective_height`. | Fornece janela de conversao determinista antes de desabilitar instrucoes transparentes.   |
-| Convertible        | ShieldedOnly     | Transicao programada com `effective_height >= current_height + policy_transition_delay_blocks`. Governance DEVE certificar (`transparent_supply == 0`) via metadata de auditoria; runtime aplica isso no cut-over. | Semantica de janela identica. Se o supply transparente for nao-zero em `effective_height`, a transicao aborta com `PolicyTransitionPrerequisiteFailed`. | Trava o asset em circulacao totalmente confidencial.                                      |
-| ShieldedOnly       | Convertible      | Transicao programada; sem emergency withdrawal ativo (`withdraw_height` indefinido).                              | O estado muda em `effective_height`; reveal ramps reabrem enquanto notes blindadas permanecem validas.             | Usado para janelas de manutencao ou revisoes de auditores.                                |
-| ShieldedOnly       | TransparentOnly  | Governance deve provar `shielded_supply == 0` ou preparar um plano `EmergencyUnshield` assinado (assinaturas de auditor requeridas). | O runtime abre uma janela `Convertible` antes de `effective_height`; na altura, instrucoes confidenciais falham duro e o asset retorna ao modo transparent-only. | Saida de ultimo recurso. A transicao se auto-cancela se qualquer note confidencial for gasta durante a janela. |
-| Any                | Same as current  | `CancelConfidentialPolicyTransition` limpa a mudanca pendente.                                                    | `pending_transition` removido imediatamente.                                                                        | Mantem o status quo; mostrado por completude.                                             |
+### منتقلی کی ترتیب
 
-Transicoes nao listadas acima sao rejeitadas durante submissao de governance. O runtime checa prerrequisitos logo antes de aplicar uma transicao programada; falhas devolvem o asset ao modo anterior e emitem `PolicyTransitionPrerequisiteFailed` via telemetria e eventos de bloco.
+1. ** رجسٹری تیار کریں: ** ہدف کی پالیسی کے ذریعہ حوالہ کردہ تمام چیکر اندراجات اور پیرامیٹرز کو چالو کریں۔ نوڈس نے ہم آہنگی کو ہم آہنگی کی جانچ پڑتال کے لئے نتیجے میں `conf_features` کا اعلان کیا۔
+2. ** منتقلی کا شیڈول: ** `effective_height` کے ساتھ `ScheduleConfidentialPolicyTransition` جمع کروائیں جو `policy_transition_delay_blocks` کا احترام کرتا ہے۔ جب `ShieldedOnly` میں جاتے ہو تو ، تبادلوں کی ونڈو (`window >= policy_transition_window_blocks`) کی وضاحت کریں۔
+3. ** آپریٹرز کے لئے ہدایت نامہ شائع کریں: ** ریکارڈ شدہ `transition_id` ریکارڈ کریں اور آن/آف ریمپ رن بک کو گردش کریں۔ ونڈو کھولنے کی اونچائی سیکھنے کے لئے بٹوے اور آڈیٹر `/v1/confidential/assets/{id}/transitions` پر دستخط کرتے ہیں۔
+4. ** ونڈو کا اطلاق کریں: ** جب ونڈو کھلتا ہے تو ، رن ٹائم پالیسی کو `Convertible` میں تبدیل کرتا ہے ، `PolicyTransitionWindowOpened { transition_id }` کو جاری کرتا ہے ، اور متضاد گورننس کی درخواستوں کو مسترد کرنا شروع کردیتا ہے۔
+5. ** ختم یا اسقاط: ** `effective_height` میں ، رن ٹائم شرائط کی جانچ پڑتال کرتا ہے (صفر شفاف سپلائی ، ہنگامی واپسی ، وغیرہ)۔ کامیابی پالیسی کو درخواست کردہ وضع میں تبدیل کرتی ہے۔ ناکامی کے مسائل `PolicyTransitionPrerequisiteFailed` ، زیر التواء منتقلی کو صاف کرتا ہے اور پالیسی کو کوئی تبدیلی نہیں کرتا ہے۔
+6. ** اسکیما اپ گریڈ: ** ایک کامیاب منتقلی کے بعد ، گورننس اثاثہ (جیسے `asset_definition.v2`) کے اسکیما ورژن میں اضافہ کرتا ہے اور CLI ٹولنگ کے لئے `confidential_policy` کی ضرورت ہوتی ہے جب مظہروں کو سیریلائز کرتے ہیں۔ جینیسیس اپ گریڈ دستاویزات آپریٹرز کو ہدایت کرتے ہیں کہ وہ توثیق کرنے والوں کو دوبارہ شروع کرنے سے پہلے پالیسی کی ترتیبات اور رجسٹری فنگر پرنٹ شامل کریں۔
 
-### Sequenciamento de migracao
+رازداری کے ساتھ شروع ہونے والے نئے نیٹ ورک مطلوبہ پالیسی کو براہ راست پیدائش میں انکوڈ کرتے ہیں۔ لانچ کے بعد کے طریقوں کو تبدیل کرتے وقت وہ اب بھی مذکورہ بالا چیک لسٹ کی پیروی کرتے ہیں تاکہ تبادلوں کی کھڑکیوں کو عین مطابق بنایا جاسکے اور بٹوے کو ایڈجسٹ کرنے کا وقت مل جائے۔
 
-1. **Preparar registries:** ativar todas as entradas de verificador e parametros referenciadas pela politica alvo. Nodes anunciam o `conf_features` resultante para que peers verifiquem coerencia.
-2. **Agendar a transicao:** submeter `ScheduleConfidentialPolicyTransition` com um `effective_height` que respeite `policy_transition_delay_blocks`. Ao mover para `ShieldedOnly`, especificar uma janela de conversao (`window >= policy_transition_window_blocks`).
-3. **Publicar guia para operadores:** registrar o `transition_id` retornado e circular um runbook on/off-ramp. Wallets e auditores assinam `/v1/confidential/assets/{id}/transitions` para aprender a altura de abertura da janela.
-4. **Aplicar janela:** quando a janela abre, o runtime muda a politica para `Convertible`, emite `PolicyTransitionWindowOpened { transition_id }`, e comeca a rejeitar requests de governance conflitantes.
-5. **Finalizar ou abortar:** em `effective_height`, o runtime verifica os prerrequisitos (supply transparente zero, sem retiradas de emergencia, etc.). Sucesso muda a politica para o modo solicitado; falha emite `PolicyTransitionPrerequisiteFailed`, limpa a transicao pendente e deixa a politica inalterada.
-6. **Upgrades de schema:** apos uma transicao bem-sucedida, governance aumenta a versao de schema do asset (por exemplo, `asset_definition.v2`) e tooling CLI exige `confidential_policy` ao serializar manifests. Docs de upgrade de genesis instruem operadores a adicionar settings de politica e fingerprints de registry antes de reiniciar validadores.
+### منشور Norito کی ورژن اور چالو کرنا- جینیسیس کے منشور میں کسٹم کلید `confidential_registry_root` کے لئے `SetParameter` شامل ہونا ضروری ہے۔ پے لوڈ Norito JSON ہے جو `ConfidentialRegistryMeta { vk_set_hash: Option<String> }` کے مساوی ہے: جب فیلڈ کو چھوڑیں (`null`) جب کوئی فعال انٹری نہیں ہوتا ہے ، یا 32-بائٹ ہیکس سٹرنگ (`0x...`) کو Sumeragi سے بھی بھیج دیا جاتا ہے۔ نوڈس شروع کرنے سے انکار کرتے ہیں اگر پیرامیٹر غائب ہے یا اگر ہیش انکوڈڈ رجسٹری لکھنے سے مختلف ہے۔
+- آن وائر `ConfidentialFeatureDigest::conf_rules_version` مینی فیسٹ کے لے آؤٹ ورژن کو سرایت کرتا ہے۔ V1 نیٹ ورکس کے لئے `Some(1)` اور `iroha_config::parameters::defaults::confidential::RULES_VERSION` کے برابر رہنا چاہئے۔ جب رولسیٹ تیار ہوتا ہے تو ، مستقل طور پر اضافہ کریں ، دوبارہ تخلیق کریں اور لاک مرحلے میں بائنریز رول آؤٹ کو عملی جامہ پہنائیں۔ اختلاطی ورژن کی وجہ سے توثیق کاروں کو `ConfidentialFeatureDigestMismatch` کے ساتھ بلاکس کو مسترد کرنے کا سبب بنتا ہے۔
+- ایکٹیویشن کے ظاہر ہونے کو گروپ رجسٹری کی تازہ کاریوں ، پیرامیٹر لائف سائیکل تبدیلیاں ، اور پالیسی کی منتقلی کو مستقل طور پر برقرار رکھنے کے ل. ہونا چاہئے:
+  1. ریاست کے ایک آف لائن نظارے میں منصوبہ بند رجسٹری اتپریورتنوں (`Publish*` ، `Set*Lifecycle`) کا اطلاق کریں اور `compute_confidential_feature_digest` کے ساتھ پوسٹ ایکٹیویشن ڈائجسٹ کا حساب لگائیں۔
+  2. جاری کریں `SetParameter::custom(confidential_registry_root, {"vk_set_hash": "0x..."})` حساب کتاب ہیش کا استعمال کرتے ہوئے تاکہ دیر سے ساتھی صحیح ڈائجسٹ کو بازیافت کریں یہاں تک کہ اگر وہ انٹرمیڈیٹ ہدایات سے محروم ہوجائیں۔
+  3. ہدایات `ScheduleConfidentialPolicyTransition` منسلک کریں۔ ہر ہدایت میں گورننس کے ذریعہ جاری کردہ `transition_id` کا حوالہ دینا ہوگا۔ یہ بھول جاتا ہے کہ یہ بھول جاتا ہے کہ اسے رن ٹائم کے ذریعہ مسترد کردیا جائے گا۔
+  4. ایکٹیویشن پلان میں استعمال ہونے والے مینی فیسٹ بائٹس ، ایک SHA-256 فنگر پرنٹ اور ڈائجسٹ کو برقرار رکھیں۔ پارٹیشنوں سے بچنے کے لئے آپریٹرز مینی فیسٹ پر ووٹ ڈالنے سے پہلے تینوں نمونے چیک کرتے ہیں۔
+- جب رول آؤٹ کو موخر کٹ اوور کی ضرورت ہوتی ہے تو ، کسی ساتھی کسٹم پیرامیٹر (جیسے `custom.confidential_upgrade_activation_height`) میں ہدف کی اونچائی کو ریکارڈ کریں۔ یہ آڈیٹرز کو Norito-انکوڈڈ ثبوت فراہم کرتا ہے کہ ڈائجسٹ کے اثر سے قبل توثیق کاروں نے انتباہی ونڈو کو اعزاز سے نوازا۔## تصدیق کرنے والوں اور پیرامیٹرز کا لائف سائیکل
+### زیڈ کے رجسٹری
+- لیجر اسٹورز `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` جہاں `proving_system` فی الحال `Halo2` پر طے کیا گیا ہے۔
+- `(circuit_id, version)` جوڑے عالمی سطح پر منفرد ہیں۔ رجسٹری سرکٹ میٹا ڈیٹا کی تلاش کے لئے ایک ثانوی انڈیکس برقرار رکھتی ہے۔ داخلے کے دوران ایک ڈپلیکیٹ جوڑی کو رجسٹر کرنے کی کوششوں کو مسترد کردیا جاتا ہے۔
+-`circuit_id` غیر خالی ہونا ضروری ہے اور `public_inputs_schema_hash` فراہم کرنا ضروری ہے (عام طور پر چیکر کے عوامی آدانوں کے کینونیکل انکوڈنگ کا ایک بلیک 2 بی -32 ہیش)۔ داخلہ ان ریکارڈوں کو مسترد کرتا ہے جو ان شعبوں کو چھوڑ دیتے ہیں۔
+- گورننس کی ہدایات میں شامل ہیں:
+  - `PUBLISH` صرف میٹا ڈیٹا کے ساتھ `Proposed` اندراج شامل کرنے کے لئے۔
+  - `ACTIVATE { vk_id, activation_height }` پروگرام کی ایکٹیویشن کے لئے ایپچ کی حد میں۔
+  - `DEPRECATE { vk_id, deprecation_height }` آخری اونچائی کو نشان زد کرنے کے لئے جہاں ثبوت ان پٹ کا حوالہ دے سکتے ہیں۔
+  - ایمرجنسی شٹ ڈاؤن کے لئے `WITHDRAW { vk_id, withdraw_height }` ؛ متاثرہ اثاثے اونچائی کو واپس لینے کے بعد خفیہ اخراجات کو منجمد کردیتے ہیں جب تک کہ نئی اندراجات متحرک نہ ہوں۔
+- جینیسس آٹو ای ایمٹ کو ایک کسٹم پیرامیٹر `confidential_registry_root` ظاہر کرتا ہے جس کا `vk_set_hash` فعال آدانوں سے میل کھاتا ہے۔ اس سے پہلے کہ نوڈ اتفاق رائے میں داخل ہونے سے پہلے توثیق رجسٹری کی مقامی حالت کے ساتھ اس ڈائجسٹ کو عبور کرتی ہے۔
+- کسی تصدیق کنندہ کو رجسٹر کرنے یا اپ ڈیٹ کرنے کے لئے `gas_schedule_id` کی ضرورت ہوتی ہے۔ توثیق کا تقاضا ہے کہ رجسٹری میں اندراج `Active` ہو ، جو انڈیکس `(circuit_id, version)` میں موجود ہے ، اور یہ کہ HALO2 ثبوت `OpenVerifyEnvelope` فراہم کرتے ہیں جس کا `circuit_id` ، `vk_hash` ، اور `public_inputs_schema_hash` سے میچ ہوتا ہے۔
 
-Redes novas que iniciam com confidencialidade habilitada codificam a politica desejada diretamente em genesis. Ainda assim seguem a checklist acima quando mudam modos pos-launch para que janelas de conversao sejam deterministas e wallets tenham tempo de ajustar.
+### چابیاں ثابت کرنا
+-ثابت کرنے والی چابیاں آف لیجر ہیں لیکن ان کا حوالہ دینے والے شناخت کنندگان (`pk_cid` ، `pk_hash` ، `pk_len`) کے ذریعہ تصدیق کنندہ میٹا ڈیٹا کے ساتھ شائع کیا گیا ہے۔
+- پرس ایس ڈی کے پی کے ڈیٹا کو بازیافت کرتے ہیں ، ہیشوں کو چیک کرتے ہیں ، اور مقامی کیچنگ کرتے ہیں۔
 
-### Versionamento e ativacao de manifest Norito
+### پیڈرسن اور پوسیڈن پیرامیٹرز
+۔
+- `params_id` کے ذریعہ وعدوں اور ہیشوں کو الگ الگ ڈومینز تاکہ پیرامیٹر کی گردش کبھی بھی فرسودہ سیٹوں سے بٹ پیٹرن کو دوبارہ استعمال نہ کرے۔ ID نوٹ کے وعدوں اور nullifier ڈومین ٹیگز میں سرایت کرتا ہے۔
+- سرکٹس چیک ٹائم پر ملٹی پیرامیٹر کے انتخاب کی حمایت کرتے ہیں۔ فرسودہ پیرامیٹر سیٹ `deprecation_height` تک قابل خرچ رہتے ہیں ، اور ریٹائرڈ سیٹوں کو `withdraw_height` پر بالکل مسترد کردیا جاتا ہے۔## عین مطابق ترتیب اور نیلیفائرز
+- ہر اثاثہ `next_leaf_index` کے ساتھ `CommitmentTree` کو برقرار رکھتا ہے۔ بلاکس عین مطابق ترتیب میں وعدوں کو شامل کرتے ہیں: بلاک ترتیب میں تکرار لین دین ؛ `output_idx` سیریلائزڈ چڑھائی کے ذریعہ ڈھالنے والے ہر لین دین میں تکرار آؤٹ پٹس۔
+- `note_position` درختوں کی آفسیٹس سے ماخوذ ہے لیکن ** ** نہیں ہے ** نیلیفائر کا حصہ ہے۔ یہ صرف پروف گواہ کے اندر ممبرشپ کے راستے کھلاتا ہے۔
+- ریورجز کے تحت نیلیفائر کے استحکام کی ضمانت PRF ڈیزائن کے ذریعہ کی گئی ہے۔ PRF ان پٹ `{ nk, note_preimage_hash, asset_id, chain_id, params_id }` کو پابند کرتا ہے ، اور اینکرز ریفرنس تاریخی مرکل کی جڑیں `max_anchor_age_blocks` کے پابند ہیں۔
 
-- Genesis manifests DEVEM incluir um `SetParameter` para a key custom `confidential_registry_root`. O payload e Norito JSON que corresponde a `ConfidentialRegistryMeta { vk_set_hash: Option<String> }`: omitir o campo (`null`) quando nao ha entradas ativas, ou fornecer um string hex de 32 bytes (`0x...`) igual ao hash produzido por `compute_vk_set_hash` sobre as instrucoes de verificador enviadas no manifest. Nodes recusam iniciar se o parametro faltar ou se o hash divergir das escritas de registry codificadas.
-- O on-wire `ConfidentialFeatureDigest::conf_rules_version` embute a versao de layout do manifest. Para redes v1 DEVE permanecer `Some(1)` e e igual a `iroha_config::parameters::defaults::confidential::RULES_VERSION`. Quando o ruleset evoluir, aumente a constante, regenere manifests e execute rollout de binarios em lock-step; misturar versoes faz validadores rejeitarem blocos com `ConfidentialFeatureDigestMismatch`.
-- Activation manifests DEVEM agrupar updates de registry, mudancas de ciclo de vida de parametros e transicoes de politica para manter o digest consistente:
-  1. Aplicar mutacoes de registry planejadas (`Publish*`, `Set*Lifecycle`) em uma view offline do estado e calcular o digest pos-ativacao com `compute_confidential_feature_digest`.
-  2. Emitir `SetParameter::custom(confidential_registry_root, {"vk_set_hash": "0x..."})` usando o hash calculado para que peers atrasados recuperem o digest correto mesmo se perderem instrucoes intermediarias.
-  3. Anexar instrucoes `ScheduleConfidentialPolicyTransition`. Cada instrucao deve citar o `transition_id` emitido por governance; manifests que o esquecem serao rejeitados pelo runtime.
-  4. Persistir os bytes do manifest, um fingerprint SHA-256 e o digest usado no plano de ativacao. Operadores verificam os tres artefatos antes de votar o manifest para evitar particoes.
-- Quando rollouts exigirem um cut-over diferido, registre a altura alvo em um parametro custom companheiro (por exemplo `custom.confidential_upgrade_activation_height`). Isso fornece aos auditores uma prova codificada em Norito de que validadores honraram a janela de aviso antes do digest entrar em efeito.
+## لیجر کا بہاؤ
+1.
+   - اثاثہ پالیسی `Convertible` یا `ShieldedOnly` کی ضرورت ہے۔ داخلہ چیک اثاثہ اتھارٹی ، موجودہ `params_id` ، نمونہ `rho` ، مسائل کی وابستگی ، مرکل کے درخت کو اپ ڈیٹ کرتا ہے۔
+   - آڈٹ ٹریلس کے لئے نئی وابستگی ، مرکل روٹ ڈیلٹا اور ٹرانزیکشن کال ہیش کے ساتھ `ConfidentialEvent::Shielded` جاری کریں۔
+2.
+   - رجسٹری کے اندراج کا استعمال کرتے ہوئے سیسکل VM ثبوت چیک کرتا ہے۔ میزبان غیر استعمال شدہ nullifiers ، عزم سے منسلک وعدوں اور حالیہ اینکر کی ضمانت دیتا ہے۔
+   - لیجر ریکارڈز `NullifierSet` اندراجات ، وصول کنندگان/آڈیٹرز کے لئے خفیہ کردہ پے لوڈ اسٹورز اور آؤٹ پٹ `ConfidentialEvent::Transferred` نے نیلیفائیرز ، ترتیب شدہ آؤٹ پٹ ، پروف ہیش اور مرکل کی جڑوں کا خلاصہ کیا ہے۔
+3.
+   - صرف اثاثوں کے لئے دستیاب `Convertible` ؛ ثبوت کی توثیق ہوتی ہے کہ نوٹ کی قدر انکشاف شدہ رقم کے برابر ہے ، لیجر شفاف توازن کا سہرا دیتا ہے اور ڈھال والے نوٹ کو جلا دیتا ہے ، جس سے نیلیفائر کو خرچ کے طور پر نشان زد کیا جاتا ہے۔
+   - عوامی رقم کے ساتھ `ConfidentialEvent::Unshielded` جاری کرتا ہے ، نیلیفائرز ، پروف شناخت کنندگان اور ٹرانزیکشن کال ہیش کے ساتھ۔## ڈیٹا ماڈل میں اضافے
+- `ConfidentialConfig` (نیا کنفیگ سیکشن) قابل پرچم ، `assume_valid` ، گیس/حدود نوبس ، اینکر ونڈو ، تصدیق کنندہ پسدید۔
+- `ConfidentialNote` ، `ConfidentialTransfer` ، اور `ConfidentialMint` اسکیماس Norito واضح ورژن بائٹ (`CONFIDENTIAL_ASSET_V1 = 0x01`) کے ساتھ۔
+- `ConfidentialEncryptedPayload` نے xchacha20-poly1305 لے آؤٹ کے لئے پہلے سے طے شدہ `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` کے ساتھ ، `{ version, ephemeral_pubkey, nonce, ciphertext }` کے ساتھ AEAD میمو بائٹس کو لپیٹ لیا۔
+- کیننیکل کلید-ڈائیویشن ویکٹر `docs/source/confidential_key_vectors.json` میں رہتے ہیں۔ دونوں CLI اور Torii اختتامی نقطہ ان فکسچر کے خلاف واپس آتے ہیں۔
+- `asset::AssetDefinition` نے `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }` جیت لیا۔
+- `ZkAssetState` `(backend, name, commitment)` منتقلی/غیر شیلڈ تصدیق کرنے والوں کے لئے پابند ہے۔ پھانسی نے ایسے ثبوتوں کو مسترد کردیا جن کا حوالہ یا ان لائن تصدیق کرنے والی کلید رجسٹرڈ عزم کے مطابق نہیں ہے۔
+- `CommitmentTree` (فرنٹیئر چوکیوں کے ساتھ ہر اثاثہ) ، `NullifierSet` کے ساتھ کلیدی `(chain_id, asset_id, nullifier)` ، `ZkVerifierEntry` ، `PedersenParams` ، `PoseidonParams` عالمی ریاست میں محفوظ ہے۔
+- میمپول ڈپلیکیٹ اور اینکر ایج چیکوں کی جلد پتہ لگانے کے لئے عارضی ڈھانچے `NullifierIndex` اور `AnchorIndex` کو برقرار رکھتا ہے۔
+- Norito اسکیما کی تازہ کاریوں میں عوامی آدانوں کے لئے کیننیکل آرڈرنگ شامل ہے۔ راؤنڈ ٹرپ ٹیسٹ انکوڈنگ کا تعی .ن کی ضمانت دیتا ہے۔
+- انکرپٹڈ پے لوڈ راؤنڈ ٹریپس یونٹ ٹیسٹ (`crates/iroha_data_model/src/confidential.rs`) کے ذریعے طے کی جاتی ہیں۔ ٹریکنگ والیٹ ویکٹر آڈیٹرز کے لئے کیننیکل AEAD ٹرانسکرپٹ سے منسلک ہوں گے۔ `norito.md` لفافے کے لئے آن وائر ہیڈر کو دستاویز کرتا ہے۔
 
-## Ciclo de vida de verifiers e parametros
-### ZK Registry
-- O ledger armazena `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` onde `proving_system` atualmente e fixo em `Halo2`.
-- Pares `(circuit_id, version)` sao globalmente unicos; o registry mantem um indice secundario para buscas por metadata de circuito. Tentativas de registrar um par duplicado sao rejeitadas durante admission.
-- `circuit_id` deve ser nao vazio e `public_inputs_schema_hash` deve ser fornecido (tipicamente um hash Blake2b-32 do encoding canonico de public inputs do verificador). Admission rejeita registros que omitem esses campos.
-- Instrucoes de governance incluem:
-  - `PUBLISH` para adicionar uma entrada `Proposed` apenas com metadata.
-  - `ACTIVATE { vk_id, activation_height }` para programar ativacao em limite de epoch.
-  - `DEPRECATE { vk_id, deprecation_height }` para marcar a altura final onde proofs podem referenciar a entrada.
-  - `WITHDRAW { vk_id, withdraw_height }` para desligamento de emergencia; assets afetados congelam gastos confidenciais apos withdraw height ate novas entradas ativarem.
-- Genesis manifests auto-emitem um parametro custom `confidential_registry_root` cujo `vk_set_hash` coincide com as entradas ativas; a validacao cruza esse digest com o estado local do registry antes que um node possa entrar no consenso.
-- Registrar ou atualizar um verifier requer `gas_schedule_id`; a verificacao exige que a entrada do registry esteja `Active`, presente no indice `(circuit_id, version)`, e que proofs Halo2 fornecam um `OpenVerifyEnvelope` cujo `circuit_id`, `vk_hash`, e `public_inputs_schema_hash` correspondam ao registro do registry.
+## IVM اور سیسکل انضمام
+- Syscall `VERIFY_CONFIDENTIAL_PROOF` قبول کرتے ہوئے درج کریں:
+  - `circuit_id` ، `version` ، `scheme` ، `public_inputs` ، `proof` ، اور اس کے نتیجے میں `ConfidentialStateDelta { asset_id, nullifiers, commitments, enc_payloads }`۔
+  - رجسٹری کی تصدیق کنندہ سے سیسکل بوجھ میٹا ڈیٹا ، سائز/وقت کی حدود کا اطلاق کرتا ہے ، ڈٹرمینسٹک گیس چارج کرتا ہے ، اور صرف اس صورت میں ڈیلٹا کا اطلاق ہوتا ہے جب ثبوت کامیاب ہو۔
+- میزبان مرکل روٹ اور نیلیفائر اسٹیٹ کے سنیپ شاٹس کو بازیافت کرنے کے لئے صرف پڑھنے والی خاصیت `ConfidentialLedger` کو بے نقاب کرتا ہے۔ Kotodama لائبریری گواہ اسمبلی اور اسکیما کی توثیق کرنے والے مددگار فراہم کرتی ہے۔
+- پروف بفر لے آؤٹ اور رجسٹری ہینڈلز کو واضح کرنے کے لئے پوائنٹر-اے بی آئی دستاویزات کو اپ ڈیٹ کیا گیا ہے۔
 
-### Proving Keys
-- Proving keys ficam off-ledger mas sao referenciadas por identificadores content-addressed (`pk_cid`, `pk_hash`, `pk_len`) publicados ao lado da metadata do verifier.
-- SDKs de wallet buscam dados de PK, verificam hashes e fazem cache local.
+## نوڈ صلاحیت کی بات چیت
+- ہینڈ شیک `feature_bits.confidential` کا اعلان `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` کے ساتھ کرتا ہے۔ درست کرنے والے کی شرکت کے لئے `confidential.enabled=true` ، `assume_valid=false` ، ایک جیسے تصدیق کنندہ بیکینڈ شناخت کاروں اور ڈائجسٹ کو جو میچ ملتے ہیں اس کی ضرورت ہوتی ہے۔ مماثلت `HandshakeConfidentialMismatch` کے ساتھ مصافحہ میں ناکام ہوجاتی ہے۔
+- تشکیل صرف مبصرین کے لئے `assume_valid` کی حمایت کرتا ہے: جب معذور ہوتا ہے تو ، خفیہ ہدایات تلاش کرنے سے بغیر کسی خوف و ہراس کے `UnsupportedInstruction` کو گھبراہٹ کا سامنا کرنا پڑتا ہے۔ فعال ہونے پر ، مبصرین ثبوت کی جانچ کیے بغیر اعلان کردہ ڈیلٹا کا اطلاق کرتے ہیں۔
+- میمپول نے خفیہ لین دین کو مسترد کردیا اگر مقامی صلاحیت غیر فعال ہو۔ گپ شپ فلٹرز متضاد ساتھیوں کو ڈھال والے لین دین بھیجنے سے گریز کرتے ہیں جبکہ سائز کی حدود میں نامعلوم تصدیق کنندہ IDs کو آنکھیں بند کر کے آگے بھیج دیتے ہیں۔
 
-### Parametros Pedersen e Poseidon
-- Registries separados (`PedersenParams`, `PoseidonParams`) espelham controles de ciclo de vida de verifiers, cada um com `params_id`, hashes de geradores/constantes, ativacao, deprecacao e withdraw heights.
-- Commitments e hashes separam dominios por `params_id` para que a rotacao de parametros nunca reutilize padroes de bits de sets deprecados; o ID e embutido em commitments de note e tags de dominio de nullifier.
-- Circuitos suportam selecao multi-parametro em tempo de verificacao; sets de parametros deprecados permanecem spendable ate `deprecation_height`, e sets retirados sao rejeitados exatamente em `withdraw_height`.
+### ہینڈ شیک میٹرکس| ریموٹ ایڈورٹائزنگ | توثیق کرنے والے نوڈس کے لئے نتیجہ | آپریٹر نوٹ |
+| ------------------------ | ------------------------------------ | ------------------ |
+| `enabled=true` ، `assume_valid=false` ، پسدید میچ ، ڈائجسٹ میچ | میں قبول کرتا ہوں | ہم مرتبہ ریاست `Ready` تک پہنچ جاتا ہے اور تجویز ، ووٹ اور آر بی سی کے پرستار آؤٹ میں حصہ لیتا ہے۔ کسی دستی کارروائی کی ضرورت نہیں ہے۔ |
+| `enabled=true` ، `assume_valid=false` ، پسدید میچ ، ڈائجسٹ باسی یا لاپتہ | مسترد (`HandshakeConfidentialMismatch`) | ریموٹ کو لازمی طور پر زیر التوا رجسٹری/پیرامیٹر ایکٹیویشنز کا اطلاق کرنا چاہئے یا پروگرام شدہ `activation_height` کا انتظار کرنا ہوگا۔ درست ہونے تک ، نوڈ قابل دریافت رہتا ہے لیکن اتفاق رائے کی گردش میں کبھی داخل نہیں ہوتا ہے۔ |
+| `enabled=true` ، `assume_valid=true` | مسترد (`HandshakeConfidentialMismatch`) | تصدیق کرنے والوں کو ثبوتوں کی توثیق کی ضرورت ہوتی ہے۔ Torii صرف داخلہ کے ساتھ ایک مبصر کے طور پر ریموٹ کو تشکیل دیں یا مکمل توثیق کو چالو کرنے کے بعد `assume_valid=false` تبدیل کریں۔ |
+| `enabled=false` ، فیلڈز کو چھوڑ دیا گیا (پرانی تعمیر) ، یا مختلف تصدیق کنندہ بیکینڈ | مسترد (`HandshakeConfidentialMismatch`) | فرسودہ یا جزوی طور پر اپ ڈیٹ ہونے والے ساتھی اتفاق رائے سے نیٹ ورک میں شامل نہیں ہوسکتے ہیں۔ موجودہ ریلیز کو اپ ڈیٹ کریں اور دوبارہ رابطہ قائم کرنے سے پہلے بیکینڈ + ڈائجسٹ ٹیوپل میچوں کو یقینی بنائیں۔ |
 
-## Ordenacao determinista e nullifiers
-- Cada asset mantem um `CommitmentTree` com `next_leaf_index`; blocos acrescentam commitments em ordem determinista: iterar transacoes na ordem do bloco; dentro de cada transacao iterar outputs shielded por `output_idx` serializado ascendente.
-- `note_position` e derivado dos offsets da arvore mas **nao** faz parte do nullifier; ele so alimenta paths de membership dentro do witness da proof.
-- A estabilidade do nullifier sob reorgs e garantida pelo design PRF; o input PRF vincula `{ nk, note_preimage_hash, asset_id, chain_id, params_id }`, e anchors referenciam roots Merkle historicos limitados por `max_anchor_age_blocks`.
+مبصرین جو جان بوجھ کر پروف کی توثیق کو چھوڑ دیتے ہیں انہیں صلاحیت کے دروازوں کے ساتھ توثیق کرنے والوں کے خلاف اتفاق رائے سے رابطے نہیں کھولنا چاہئے۔ وہ اب بھی Torii یا فائل APIs کے ذریعے بلاکس کھا سکتے ہیں ، لیکن اتفاق رائے نیٹ ورک ان کو مسترد کرتا ہے جب تک کہ وہ ہم آہنگ صلاحیتوں کا اعلان نہ کریں۔
 
-## Fluxo do ledger
-1. **MintConfidential { asset_id, amount, recipient_hint }**
-   - Requer politica de asset `Convertible` ou `ShieldedOnly`; admission checa autoridade do asset, recupera `params_id` atual, amostra `rho`, emite commitment, atualiza a arvore Merkle.
-   - Emite `ConfidentialEvent::Shielded` com o novo commitment, delta de Merkle root e hash de chamada da transacao para audit trails.
-2. **TransferConfidential { asset_id, proof, circuit_id, version, nullifiers, new_commitments, enc_payloads, anchor_root, memo }**
-   - Syscall VM verifica proof usando a entrada do registry; o host garante nullifiers nao usados, commitments anexados deterministicamente e anchor recente.
-   - O ledger registra entradas `NullifierSet`, armazena payloads encriptados para recipients/auditores e emite `ConfidentialEvent::Transferred` resumindo nullifiers, outputs ordenados, hash de proof e Merkle roots.
-3. **RevealConfidential { asset_id, proof, circuit_id, version, nullifier, amount, recipient_account, anchor_root }**
-   - Disponivel apenas para assets `Convertible`; a proof valida que o valor da note iguala o montante revelado, o ledger credita balance transparente e queima a note shielded marcando o nullifier como gasto.
-   - Emite `ConfidentialEvent::Unshielded` com o montante publico, nullifiers consumidos, identificadores de proof e hash de chamada da transacao.
+### کٹائی اور نیلیفائر برقرار رکھنے کی پالیسی کا انکشاف کریں
 
-## Adicoes ao data model
-- `ConfidentialConfig` (nova secao de config) com flag de habilitacao, `assume_valid`, knobs de gas/limites, janela de anchor, backend de verifier.
-- `ConfidentialNote`, `ConfidentialTransfer`, e `ConfidentialMint` schemas Norito com byte de versao explicito (`CONFIDENTIAL_ASSET_V1 = 0x01`).
-- `ConfidentialEncryptedPayload` envolve bytes de memo AEAD com `{ version, ephemeral_pubkey, nonce, ciphertext }`, com default `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` para o layout XChaCha20-Poly1305.
-- Vectores canonicos de key-derivation vivem em `docs/source/confidential_key_vectors.json`; tanto o CLI quanto o endpoint Torii regressam contra esses fixtures.
-- `asset::AssetDefinition` ganha `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`.
-- `ZkAssetState` persiste o binding `(backend, name, commitment)` para verifiers de transfer/unshield; a execucao rejeita proofs cujo verifying key referenciado ou inline nao corresponde ao commitment registrado.
-- `CommitmentTree` (por asset com frontier checkpoints), `NullifierSet` com chave `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` armazenados em world state.
-- Mempool mantem estruturas transitorias `NullifierIndex` e `AnchorIndex` para deteccao precoce de duplicados e checks de idade de anchor.
-- Updates de schema Norito incluem ordering canonico para public inputs; tests de round-trip garantem determinismo de encoding.
-- Roundtrips de encrypted payload ficam fixados via unit tests (`crates/iroha_data_model/src/confidential.rs`). Vectores de wallet de acompanhamento vao anexar transcripts AEAD canonicos para auditores. `norito.md` documenta o header on-wire para o envelope.
+خفیہ لیجرز کو لازمی طور پر نوٹوں کی تازگی ثابت کرنے اور گورننس آڈٹ کو دوبارہ پیش کرنے کے لئے کافی تاریخ برقرار رکھنی ہوگی۔ پہلے سے طے شدہ پالیسی ، جس کا اطلاق `ConfidentialLedger` کے ذریعہ کیا جاتا ہے ، یہ ہے:۔ آپریٹرز ونڈو کو `confidential.retention.nullifier_days` کے ذریعے بڑھا سکتے ہیں۔ آڈیٹرز کے لئے ڈبل خرچ کی عدم موجودگی کو ثابت کرنے کے لئے ونڈو سے کم عمر نیلیفائرز کو Torii کے ذریعے قابل استفسار کرنا چاہئے۔
+۔ `ConfidentialEvent::Unshielded` واقعات عوامی رقم ، وصول کنندہ اور پروف ہیش کو ریکارڈ کرتے ہیں تاکہ تاریخی انکشافات کی تشکیل نو کے لئے کٹے ہوئے ciphertext کی ضرورت نہ ہو۔
+۔ نوڈس کومپیکٹ پرانی چوکیوں کے بعد ہی رینج کی میعاد ختم ہونے کے تمام نیلیفائر کے بعد۔
+۔ نیٹ ورک میں دوبارہ شامل ہونے سے پہلے وقت سے پہلے کٹے ہوئے نیلیفائرز کو کولڈ اسٹوریج سے بحال کیا جانا چاہئے۔
 
-## Integracao IVM e syscall
-- Introduzir syscall `VERIFY_CONFIDENTIAL_PROOF` aceitando:
-  - `circuit_id`, `version`, `scheme`, `public_inputs`, `proof`, e o `ConfidentialStateDelta { asset_id, nullifiers, commitments, enc_payloads }` resultante.
-  - O syscall carrega metadata do verifier do registry, aplica limites de tamanho/tempo, cobra gas determinista, e so aplica o delta se a proof tiver sucesso.
-- O host expoe o trait read-only `ConfidentialLedger` para recuperar snapshots de Merkle root e estado de nullifier; a biblioteca Kotodama fornece helpers de assembly de witness e validacao de schema.
-- Docs de pointer-ABI foram atualizados para esclarecer layout do buffer de proof e handles de registry.
+آپریشنز رن بک میں مقامی اوور رائڈس دستاویز ؛ گورننس پالیسیاں جو برقرار رکھنے والی ونڈو کو بڑھا دیتی ہیں ان کو لاک اسٹپ میں نوڈ کنفیگریشن اور فائل اسٹوریج کے منصوبوں کو اپ ڈیٹ کرنا ہوگا۔
 
-## Negociacao de capacidades de node
-- O handshake anuncia `feature_bits.confidential` junto com `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`. Participacao de validadores requer `confidential.enabled=true`, `assume_valid=false`, identificadores de backend do verifier identicos e digests que correspondem; mismatches falham o handshake com `HandshakeConfidentialMismatch`.
-- Config suporta `assume_valid` apenas para observers: quando desabilitado, encontrar instrucoes confidenciais gera `UnsupportedInstruction` determinista sem panic; quando habilitado, observers aplicam deltas declarados sem verificar proofs.
-- Mempool rejeita transacoes confidenciais se a capacidade local estiver desabilitada. Filtros de gossip evitam enviar transacoes shielded para peers incompativeis enquanto encaminham cegamente IDs de verifier desconhecidos dentro de limites de tamanho.
+### بے دخل اور بازیابی کا بہاؤ
 
-### Matriz de handshake
+1. ڈائل کے دوران ، `IrohaNetwork` اشتہار کی صلاحیتوں کا موازنہ کرتا ہے۔ کوئی بھی مماثلت `HandshakeConfidentialMismatch` میں اضافہ کرتی ہے۔ کنکشن بند ہے اور ہم مرتبہ `Ready` میں ترقی دیئے بغیر دریافت کی قطار میں رہتا ہے۔
+2. ناکامی نیٹ ورک سروس لاگ میں ظاہر ہوتی ہے (ریموٹ ڈائجسٹ اور بیکینڈ بھی شامل ہے) ، اور Sumeragi کبھی بھی تجویز یا ووٹ کے لئے ہم مرتبہ کا شیڈول نہیں کرتا ہے۔
+3. آپریٹرز اس کا تدارک تصدیق کنندگان اور پیرامیٹر سیٹ (`vk_set_hash` ، `pedersen_params_id` ، `poseidon_params_id`) یا پروگرامنگ `next_conf_features` کے ساتھ ایک متفقہ `activation_height` کے ساتھ کرتے ہیں۔ ایک بار جب ہضم میچ ہوجاتا ہے تو ، اگلی مصافحہ خود بخود کامیاب ہوجاتی ہے۔
+4. اگر ایک باسی ہم مرتبہ کسی بلاک کو نشر کرنے کا انتظام کرتا ہے (جیسے فائل ری پلے کے ذریعے) ، توثیق کاروں نے اس کو پورے نیٹ ورک میں مستقل طور پر `BlockRejectionReason::ConfidentialFeatureDigestMismatch` کے ساتھ مسترد کردیا۔
 
-| Anuncio remoto | Resultado para nodes validadores | Notas de operador |
-|----------------------|-----------------------------|----------------|
-| `enabled=true`, `assume_valid=false`, backend match, digest match | Aceito | O peer chega ao estado `Ready` e participa de proposta, voto e RBC fan-out. Nenhuma acao manual requerida. |
-| `enabled=true`, `assume_valid=false`, backend match, digest stale ou ausente | Rejeitado (`HandshakeConfidentialMismatch`) | O remoto deve aplicar ativacoes pendentes de registry/parametros ou aguardar o `activation_height` programado. Ate corrigir, o node segue descobrivel mas nunca entra na rotacao de consenso. |
-| `enabled=true`, `assume_valid=true` | Rejeitado (`HandshakeConfidentialMismatch`) | Validadores requerem verificacao de proofs; configure o remoto como observer com Torii-only ingress ou mude `assume_valid=false` apos habilitar verificacao completa. |
-| `enabled=false`, campos omitidos (build desatualizado), ou backend de verifier diferente | Rejeitado (`HandshakeConfidentialMismatch`) | Peers desatualizados ou parcialmente atualizados nao podem entrar na rede de consenso. Atualize para o release atual e garanta que o tuple backend + digest corresponde antes de reconectar. |
+### ری پلے سیف ہینڈ شیک فلو1. ہر آؤٹ باؤنڈ کوشش نیا شور/x25519 کلیدی مواد مختص کرتی ہے۔ دستخط شدہ ہینڈ شیک پے لوڈ (`handshake_signature_payload`) مقامی اور دور دراز فریمل پبلک کیز کو ہم آہنگ کرتا ہے ، Norito میں انکوڈ کردہ مشتہر ساکٹ ایڈریس ، اور ، جب `handshake_chain_id` کے ساتھ مرتب کیا جاتا ہے ، تو چین کی شناخت۔ نوڈ چھوڑنے سے پہلے پیغام کو AEAD کے ساتھ خفیہ کیا گیا ہے۔
+2. جواب دہندہ الٹ پیر/لوکل کلیدی آرڈر کے ساتھ پے لوڈ کی بازیافت کرتا ہے اور `HandshakeHelloV1` میں سرایت شدہ ED25519 دستخط کی تصدیق کرتا ہے۔ چونکہ دونوں ہی فریمل کیز اور مشتہر ایڈریس دستخط کرنے والے ڈومین کا حصہ ہیں ، لہذا کسی دوسرے ہم مرتبہ کے خلاف گرفتاری والے پیغام کو دوبارہ چلانے یا باسی کنکشن کی بازیافت کرنے سے قطعی طور پر ناکام ہوجاتا ہے۔
+3. خفیہ صلاحیت کے جھنڈے اور `ConfidentialFeatureDigest` `HandshakeConfidentialMeta` کے اندر سفر۔ وصول کنندہ `{ enabled, assume_valid, verifier_backend, digest }` TUPLE کو اپنے مقامی `ConfidentialHandshakeCaps` کے ساتھ موازنہ کرتا ہے۔ `Ready` میں ٹرانسپورٹ ٹرانزیشن سے پہلے `HandshakeConfidentialMismatch` کے ساتھ جلدی سے کوئی مماثلت ختم ہوجاتی ہے۔
+4. آپریٹرز کو لازمی طور پر ڈائجسٹ (`compute_confidential_feature_digest` کے ذریعے) کو دوبارہ تشکیل دینا ہوگا اور دوبارہ رابطہ قائم کرنے سے پہلے اپ ڈیٹ شدہ رجسٹریوں/پالیسیوں کے ساتھ نوڈس کو دوبارہ شروع کرنا ہوگا۔ پرانے ڈائجسٹوں کا اعلان کرنے والے ساتھی مصافحہ کو ناکام بناتے رہتے ہیں ، جس سے باسی ریاست کو توثیق کرنے والے سیٹ کو دوبارہ داخل کرنے سے روکتا ہے۔
+5. ہینڈ شیک کی کامیابیوں اور ناکامیوں کو اپ ڈیٹ معیاری کاؤنٹرز `iroha_p2p::peer` (`handshake_failure_count` ، غلطی کی درجہ بندی کے مددگار) اور ریموٹ پیر ID اور ہضم فنگر پرنٹ کے ساتھ آؤٹ پٹ ساختہ لاگز۔ رول آؤٹ کے دوران ری پلے یا غلط کنفیگریشنوں کا پتہ لگانے کے لئے ان اشارے کی نگرانی کریں۔
 
-Observers que intencionalmente pulam verificacao de proofs nao devem abrir conexoes de consenso contra validadores com capability gates. Eles ainda podem ingerir blocos via Torii ou APIs de arquivo, mas a rede de consenso os rejeita ate anunciarem capacidades compativeis.
+## کلیدی انتظام اور پے لوڈز
+- اکاؤنٹ کے ذریعہ مشتق درجہ بندی:
+  - `sk_spend` -> `nk` (nullifier KEY) ، `ivk` (آنے والی دیکھنے کی کلید) ، `ovk` (سبکدوش ہونے والی دیکھنے کی کلید) ، `fvk`۔
+- خفیہ کردہ نوٹوں کے پے لوڈ ECDH کے ذریعہ اخذ کردہ مشترکہ چابیاں کے ساتھ AEAD استعمال کرتے ہیں۔ دیکھیں اختیاری آڈیٹر کی چابیاں اثاثہ پالیسی کے مطابق آؤٹ پٹ کے ساتھ منسلک کی جاسکتی ہیں۔
+- CLI میں اضافے: `confidential create-keys` ، `confidential send` ، `confidential export-view-key` ، میمو کو ڈکرپ کرنے کے لئے آڈیٹر ٹولنگ ، اور Norito آف لائن Norito لفافے تیار کرنے/معائنہ کرنے کے لئے `iroha app zk envelope` مددگار۔ Torii ایک ہی مشتق بہاؤ کو `POST /v1/confidential/derive-keyset` کے ذریعے بے نقاب کرتا ہے ، بٹوے کے لئے ہیکس اور بیس 64 فارموں کو کلیدی درجہ بندی کو پروگرام میں تلاش کرنے کے لئے واپس کرتا ہے۔## گیس ، حدود اور ڈاس کنٹرولز
+- گیس کا تعی .ن شیڈول:
+  - ہالو 2 (پلونکیش): بیس `250_000` گیس + `2_000` گیس عوامی ان پٹ کے ذریعہ۔
+  - `5` گیس فی پروف بائٹ ، نیز چارجز فی nullifier (`300`) اور فی عہد (`500`)۔
+  - آپریٹرز نوڈ کنفیگریشن (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`) کے ذریعے ان مستقلوں کو اوور رائٹ کرسکتے ہیں۔ تبدیلیاں کنفیگ پرت کے اسٹارٹ اپ یا ہاٹ ریولوڈ پر پھیلتی ہیں اور کلسٹر کے پار عزم انداز میں اس کا اطلاق ہوتی ہیں۔
+- سخت حدود (ترتیب دینے والے پہلے سے طے شدہ):
+- `max_proof_size_bytes = 262_144`۔
+- `max_nullifiers_per_tx = 8` ، `max_commitments_per_tx = 8` ، `max_confidential_ops_per_block = 256`۔
+- `verify_timeout_ms = 750` ، `max_anchor_age_blocks = 10_000`۔ `verify_timeout_ms` سے تجاوز کرنے والے ثبوت ہدایت کو طے شدہ طور پر اسقاط حمل کرتے ہیں (گورننس بالز جاری کرتا ہے `proof verification exceeded timeout` ، `VerifyProof` غلطی کی واپسی)۔
+- اضافی کوٹے گارنٹی رواں دواں: `max_proof_bytes_block` ، `max_verify_calls_per_tx` ، `max_verify_calls_per_block` ، اور `max_public_inputs` حد بلڈ بلڈرز ؛ `reorg_depth_bound` (> = `max_anchor_age_blocks`) بارڈر چوکیوں کو برقرار رکھنے پر حکومت کرتا ہے۔
+- رن ٹائم پھانسی اب ان لین دین کو مسترد کرتی ہے جو ان حدود کو فی ٹرانزیکشن یا فی بلاک سے تجاوز کرتی ہے ، جس سے ڈٹرمینسٹک `InvalidParameter` غلطیاں جاری ہوتی ہیں اور لیجر اسٹیٹ کو کوئی تبدیلی نہیں ہوتی ہیں۔
+- میمپول پریفیلٹرز `vk_id` ، پروف سائز اور اینکر ایج کے ذریعہ خفیہ لین دین ، ​​وسائل کے استعمال کو محدود رکھنے کے لئے تصدیق کنندہ کی درخواست کرنے سے پہلے۔
+- چیک ٹائم آؤٹ یا حد کی خلاف ورزی پر عزم کے ساتھ رک جاتا ہے۔ لین دین واضح غلطیوں کے ساتھ ناکام ہوجاتا ہے۔ سم ڈی بیک اینڈ اختیاری ہیں لیکن گیس اکاؤنٹنگ کو تبدیل نہ کریں۔
 
-### Politica de pruning de reveal e retencao de nullifier
+### انشانکن بیس لائنز اور قبولیت کے دروازے
+- ** حوالہ پلیٹ فارم۔ ** انشانکن راؤنڈز کو ذیل میں تین پروفائلز کا احاطہ کرنا چاہئے۔ جائزہ میں تمام پروفائلز کے بغیر راؤنڈ مسترد کردیئے گئے ہیں۔
 
-Ledgers confidenciais devem reter historico suficiente para provar frescor de notes e reproduzir auditorias de governance. A politica default, aplicada por `ConfidentialLedger`, e:
-
-- **Retencao de nullifiers:** manter nullifiers gastos por um *minimo* de `730` dias (24 meses) apos a altura de gasto, ou a janela regulatoria obrigatoria se for maior. Operadores podem estender a janela via `confidential.retention.nullifier_days`. Nullifiers mais novos que a janela DEVEM permanecer consultaveis via Torii para que auditores provem ausencia de double-spend.
-- **Pruning de reveals:** reveals transparentes (`RevealConfidential`) podam commitments associados imediatamente apos o bloco finalizar, mas o nullifier consumido continua sujeito a regra de retencao acima. Eventos `ConfidentialEvent::Unshielded` registram o montante publico, recipient e hash de proof para que reconstruir reveals historicos nao exija o ciphertext podado.
-- **Frontier checkpoints:** frontiers de commitment mantem checkpoints rolling cobrindo o maior entre `max_anchor_age_blocks` e a janela de retencao. Nodes compactam checkpoints antigos apenas depois que todos os nullifiers no intervalo expiram.
-- **Remediacao de digest stale:** se `HandshakeConfidentialMismatch` ocorrer por drift de digest, operadores devem (1) verificar que as janelas de retencao de nullifiers estao alinhadas no cluster, (2) rodar `iroha_cli app confidential verify-ledger` para regenerar o digest contra o conjunto de nullifiers retidos, e (3) redeployar o manifest atualizado. Nullifiers podados prematuramente devem ser restaurados do cold storage antes de reingressar na rede.
-
-Documente overrides locais no runbook de operacoes; politicas de governance que estendem a janela de retencao devem atualizar configuracao de node e planos de storage de arquivo em lockstep.
-
-### Fluxo de eviction e recovery
-
-1. Durante o dial, `IrohaNetwork` compara as capacidades anunciadas. Qualquer mismatch levanta `HandshakeConfidentialMismatch`; a conexao e fechada e o peer permanece na fila de discovery sem ser promovido a `Ready`.
-2. A falha aparece no log do servico de rede (inclui digest remoto e backend), e Sumeragi nunca agenda o peer para proposta ou voto.
-3. Operadores remediam alinhando registries de verifier e conjuntos de parametros (`vk_set_hash`, `pedersen_params_id`, `poseidon_params_id`) ou programando `next_conf_features` com um `activation_height` acordado. Uma vez que o digest coincide, o proximo handshake tem sucesso automaticamente.
-4. Se um peer stale consegue difundir um bloco (por exemplo, via replay de arquivo), validadores o rejeitam deterministicamente com `BlockRejectionReason::ConfidentialFeatureDigestMismatch`, mantendo o estado do ledger consistente na rede.
-
-### Fluxo de handshake seguro contra replay
-
-1. Cada tentativa outbound aloca material de chave Noise/X25519 novo. O payload de handshake assinado (`handshake_signature_payload`) concatena as chaves publicas efemeras local e remota, o endereco de socket anunciado codificado em Norito e, quando compilado com `handshake_chain_id`, o identificador de chain. A mensagem e encriptada com AEAD antes de sair do node.
-2. O responder recomputa o payload com a ordem de chaves peer/local invertida e verifica a assinatura Ed25519 embutida em `HandshakeHelloV1`. Como ambas as chaves efemeras e o endereco anunciado fazem parte do dominio de assinatura, replay de uma mensagem capturada contra outro peer ou recuperar uma conexao stale falha deterministicamente.
-3. Flags de capacidade confidencial e o `ConfidentialFeatureDigest` viajam dentro de `HandshakeConfidentialMeta`. O receptor compara o tuple `{ enabled, assume_valid, verifier_backend, digest }` com seu `ConfidentialHandshakeCaps` local; qualquer mismatch sai cedo com `HandshakeConfidentialMismatch` antes de o transporte transitar para `Ready`.
-4. Operadores DEVEM recomputar o digest (via `compute_confidential_feature_digest`) e reiniciar nodes com registries/politicas atualizadas antes de reconectar. Peers anunciando digests antigos continuam falhando o handshake, evitando que estado stale reentre no set validador.
-5. Sucessos e falhas de handshake atualizam contadores padrao `iroha_p2p::peer` (`handshake_failure_count`, helpers de taxonomia de erros) e emitem logs estruturados com o peer ID remoto e o fingerprint do digest. Monitore esses indicadores para detectar replays ou misconfiguracoes durante o rollout.
-
-## Key management e payloads
-- Hierarquia de derivacao por account:
-  - `sk_spend` -> `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
-- Payloads de notes encriptadas usam AEAD com shared keys derivadas por ECDH; view keys de auditor opcionais podem ser anexadas a outputs conforme a politica do asset.
-- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling de auditor para descriptografar memos, e o helper `iroha app zk envelope` para produzir/inspecionar envelopes Norito offline. Torii expoe o mesmo fluxo de derivacao via `POST /v1/confidential/derive-keyset`, retornando formas hex e base64 para que wallets busquem hierarquias de chave programaticamente.
-
-## Gas, limites e controles DoS
-- Schedule de gas determinista:
-  - Halo2 (Plonkish): base `250_000` gas + `2_000` gas por public input.
-  - `5` gas por proof byte, mais cargos por nullifier (`300`) e por commitment (`500`).
-  - Operadores podem sobrescrever essas constantes via configuracao do node (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`); mudancas propagam no startup ou no hot-reload da camada de config e sao aplicadas deterministicamente no cluster.
-- Limites duros (defaults configuraveis):
-- `max_proof_size_bytes = 262_144`.
-- `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Proofs que excedem `verify_timeout_ms` abortam a instrucao deterministicamente (ballots de governance emitem `proof verification exceeded timeout`, `VerifyProof` retorna erro).
-- Quotas adicionais garantem liveness: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, e `max_public_inputs` limitam block builders; `reorg_depth_bound` (>= `max_anchor_age_blocks`) governa a retencao de frontier checkpoints.
-- A execucao runtime agora rejeita transacoes que excedem esses limites por transacao ou por bloco, emitindo erros `InvalidParameter` deterministas e mantendo o estado do ledger inalterado.
-- Mempool prefiltra transacoes confidenciais por `vk_id`, tamanho de proof e idade de anchor antes de invocar o verifier para manter uso de recursos limitado.
-- A verificacao para deterministicamente em timeout ou violacao de limite; transacoes falham com erros explicitos. Backends SIMD sao opcionais mas nao alteram o accounting de gas.
-
-### Baselines de calibracao e gates de aceitacao
-- **Plataformas de referencia.** Rodadas de calibracao DEVEM cobrir os tres perfis abaixo. Rodadas sem todos os perfis sao rejeitadas na review.
-
-  | Perfil | Arquitetura | CPU / Instancia | Flags de compilador | Proposito |
+  | پروفائل | فن تعمیر | سی پی یو / مثال | مرتب کے جھنڈے | مقصد |
   | --- | --- | --- | --- | --- |
-  | `baseline-simd-neutral` | `x86_64` | AMD EPYC 7B12 (32c) ou Intel Xeon Gold 6430 (24c) | `RUSTFLAGS="-C target-feature=-avx,-avx2,-fma"` | Estabelece valores piso sem intrinsics vetoriais; usado para ajustar tabelas de custo fallback. |
-  | `baseline-avx2` | `x86_64` | Intel Xeon Gold 6430 (24c) | release default | Valida o path AVX2; checa se os ganhos SIMD ficam dentro da tolerancia do gas neutral. |
-  | `baseline-neon` | `aarch64` | AWS Graviton3 (c7g.4xlarge) | release default | Garante que o backend NEON permanece determinista e alinhado aos schedules x86. |
+  | `baseline-simd-neutral` | `x86_64` | AMD EPYC 7B12 (32C) یا انٹیل زیون گولڈ 6430 (24C) | `RUSTFLAGS="-C target-feature=-avx,-avx2,-fma"` | ویکٹر کے اندرونی حصول کے بغیر فرش کی اقدار قائم کرتا ہے۔ فال بیک لاگت ٹیبلز کو ایڈجسٹ کرنے کے لئے استعمال کیا جاتا ہے۔ |
+  | `baseline-avx2` | `x86_64` | انٹیل زیون گولڈ 6430 (24C) | ڈیفالٹ ریلیز | اے وی ایکس 2 راستے کی توثیق کرتا ہے۔ چیک کرتا ہے کہ آیا سم ڈی فوائد غیر جانبدار گیس رواداری کے اندر ہیں۔ |
+  | `baseline-neon` | `aarch64` | AWS Criviton3 (C7G.4xlarge) | ڈیفالٹ ریلیز | اس بات کو یقینی بناتا ہے کہ نیین پسدید عکاسی کرتا ہے اور X86 کے نظام الاوقات کے مطابق ہے۔ |
 
-- **Benchmark harness.** Todos os relatorios de calibracao de gas DEVEM ser produzidos com:
+- ** بینچ مارک کنٹرول۔ ** گیس انشانکن کی تمام رپورٹس کے ساتھ تیار کی جانی چاہئے:
   - `CRITERION_HOME=target/criterion cargo bench -p iroha_core isi_gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>`
-  - `cargo test -p iroha_core bench_repro -- --ignored` para confirmar o fixture determinista.
-  - `CRITERION_HOME=target/criterion cargo bench -p ivm gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>` sempre que custos de opcode do VM mudarem.
+  - `cargo test -p iroha_core bench_repro -- --ignored` عزم بخش حقیقت کی تصدیق کرنے کے لئے۔
+  - `CRITERION_HOME=target/criterion cargo bench -p ivm gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>` جب بھی VM اوپکوڈ کے اخراجات میں تبدیلی آتی ہے۔
 
-- **Randomness fixa.** Exporte `IROHA_CONF_GAS_SEED=conf-gas-seed-2026Q1` antes de rodar benches para que `iroha_test_samples::gen_account_in` mude para o caminho determinista `KeyPair::from_seed`. O harness imprime `IROHA_CONF_GAS_SEED_ACTIVE=...` uma vez; se a variavel faltar, a review DEVE falhar. Qualquer utilidade nova de calibracao deve continuar honrando esta env var ao introduzir randomness auxiliar.
+- ** فکسڈ بے ترتیب کنٹرول ایک بار `IROHA_CONF_GAS_SEED_ACTIVE=...` پرنٹ کرتا ہے۔ اگر متغیر غائب ہے تو ، جائزہ ناکام ہونا چاہئے۔ کسی بھی نئی انشانکن افادیت کو معاون بے ترتیب پن کو متعارف کرواتے وقت اس var var کا احترام کرنا جاری رکھنا چاہئے۔- ** نتائج کی گرفتاری۔ **
+  - ریلیز نمونے میں ہر پروفائل کے لئے کسوٹی کے خلاصے (`target/criterion/**/raw.csv`) اپ لوڈ کریں۔
+  - اسٹور سے ماخوذ میٹرکس (`ns/op` ، `gas/op` ، `ns/gas`) GIT کمٹ اور استعمال شدہ کمپلر ورژن کے ساتھ [خفیہ گیس انشانکن لیجر] (./confidential-gas-calibration) میں)۔
+  - فی پروفائل میں آخری دو بیس لائنوں کو برقرار رکھیں۔ ایک بار جب تازہ ترین رپورٹ کی توثیق ہوجائے تو پرانے اسنیپ شاٹس کو حذف کریں۔
 
-- **Captura de resultados.**
-  - Upload de summaries Criterion (`target/criterion/**/raw.csv`) para cada perfil no artefato de release.
-  - Armazenar metricas derivadas (`ns/op`, `gas/op`, `ns/gas`) no [Confidential Gas Calibration ledger](./confidential-gas-calibration) junto com o commit git e a versao de compilador usada.
-  - Manter os dois ultimos baselines por perfil; apagar snapshots mais antigos uma vez validado o relatorio mais novo.
+- ** قبولیت رواداری۔ **
+  - `baseline-simd-neutral` اور `baseline-avx2` کے درمیان گیس ڈیلٹا کو <= +/- 1.5 ٪ رہنا چاہئے۔
+  - `baseline-simd-neutral` اور `baseline-neon` کے درمیان گیس ڈیلٹا <= +/- 2.0 ٪ رہنا چاہئے۔
+  - انشانکن کی تجاویز جو ان حد سے تجاوز کرتی ہیں ان میں شیڈول ایڈجسٹمنٹ یا کسی آر ایف سی کی ضرورت ہوتی ہے جس میں تضاد اور تخفیف کی وضاحت ہوتی ہے۔
 
-- **Tolerancias de aceitacao.**
-  - Deltas de gas entre `baseline-simd-neutral` e `baseline-avx2` DEVEM permanecer <= +/-1.5%.
-  - Deltas de gas entre `baseline-simd-neutral` e `baseline-neon` DEVEM permanecer <= +/-2.0%.
-  - Propostas de calibracao que excedem esses thresholds requerem ajustes de schedule ou um RFC explicando a discrepancia e a mitigacao.
+- ** جائزہ چیک لسٹ۔ ** جمع کروانے والے ذمہ دار ہیں:
+  - `uname -a` ، `/proc/cpuinfo` (ماڈل ، اسٹیپنگ) سے اقتباسات ، اور انشانکن لاگ میں `rustc -Vv` شامل کریں۔
+  - چیک کریں کہ `IROHA_CONF_GAS_SEED` بینچ آؤٹ پٹ میں ظاہر ہوتا ہے (بنچ فعال بیج پرنٹ کریں)۔
+  - اس بات کو یقینی بنائیں کہ پیسمیکر اور خفیہ تصدیق کنندہ کی خصوصیت کے جھنڈے آئینے کی پیداوار (`--features confidential,telemetry` جب ٹیلی میٹری کے ساتھ بنچ چلاتے ہیں)۔
 
-- **Checklist de review.** Submitters sao responsaveis por:
-  - Incluir `uname -a`, trechos de `/proc/cpuinfo` (model, stepping), e `rustc -Vv` no log de calibracao.
-  - Verificar que `IROHA_CONF_GAS_SEED` aparece na saida do bench (as benches imprimem a seed ativa).
-  - Garantir que feature flags do pacemaker e do verifier confidencial espelhem producao (`--features confidential,telemetry` ao rodar benches com Telemetry).
-
-## Config e operacoes
-- `iroha_config` adiciona a secao `[confidential]`:
+## تشکیل اور آپریشنز
+- `iroha_config` سیکشن `[confidential]` شامل کرتا ہے:
   ```toml
   [confidential]
   enabled = true
@@ -322,61 +296,57 @@ Documente overrides locais no runbook de operacoes; politicas de governance que 
   registry_max_params_entries = 32
   registry_max_delta_per_block = 4
   ```
-- Telemetria emite metricas agregadas: `confidential_proof_verified`, `confidential_verifier_latency_ms`, `confidential_proof_bytes_total`, `confidential_nullifier_spent`, `confidential_commitments_appended`, `confidential_mempool_rejected_total{reason}`, e `confidential_policy_transitions_total`, sem expor dados em claro.
-- Superficies RPC:
+- ٹیلی میٹری آؤٹ پٹس مجموعی میٹرکس: `confidential_proof_verified` ، `confidential_verifier_latency_ms` ، `confidential_proof_bytes_total` ، Kotodama ، `confidential_commitments_appended` ، `confidential_mempool_rejected_total{reason}` ، اور `confidential_policy_transitions_total` ، بغیر ایکسپوزنگ۔
+- آر پی سی سطحیں:
   - `GET /confidential/capabilities`
   - `GET /confidential/zk_registry`
   - `GET /confidential/params`
 
-## Estrategia de testes
-- Determinismo: randomizacao de transacoes dentro de blocos gera Merkle roots e sets de nullifier identicos.
-- Resiliencia a reorg: simular reorgs multi-bloco com anchors; nullifiers permanecem estaveis e anchors stale sao rejeitados.
-- Invariantes de gas: verificar uso de gas identico entre nodes com e sem aceleracao SIMD.
-- Boundary testing: proofs no teto de tamanho/gas, max in/out counts, enforcement de timeout.
-- Lifecycle: operacoes de governance para ativacao/deprecacao de verifier e parametros, tests de gasto apos rotacao.
-- Policy FSM: transicoes permitidas/negadas, delays de transicao pendente e rejeicao de mempool perto de alturas efetivas.
-- Emergencias de registry: emergency withdrawal congela assets afetados em `withdraw_height` e rejeita proofs depois.
-- Capability gating: validadores com `conf_features` divergentes rejeitam blocos; observers com `assume_valid=true` acompanham sem afetar consenso.
-- Equivalencia de estado: nodes validator/full/observer produzem roots de estado identicos na cadeia canonica.
-- Fuzzing negativo: proofs malformadas, payloads superdimensionados e colisoes de nullifier sao rejeitados deterministicamente.
+## جانچ کی حکمت عملی
+- تعی .ن: بلاکس کے اندر لین دین کا بے ترتیب ہونا ایک جیسے مرکل کی جڑیں اور نیلیفائر سیٹ پیدا کرتا ہے۔
+- ریورگ لچک: اینکرز کے ساتھ ملٹی بلاک ریورجز کی نقالی کریں۔ نیلیفائرز مستحکم رہتے ہیں اور باسی اینکرز کو مسترد کردیا جاتا ہے۔
+- گیس حملہ آور: سم ڈی ایکسلریشن کے ساتھ اور اس کے بغیر نوڈس کے مابین گیس کے ایک جیسے استعمال کی جانچ کریں۔
+- باؤنڈری ٹیسٹنگ: سائز/گیس کی چھت پر ثبوت ، زیادہ سے زیادہ/آؤٹ گنتی ، ٹائم آؤٹ انفورسمنٹ۔
+- لائف سائیکل: تصدیق کنندہ اور پیرامیٹرز کو چالو کرنے/فرسودگی کے لئے گورننس آپریشنز ، گردش کے بعد اخراجات کے ٹیسٹ۔
+- پالیسی ایف ایس ایم: موثر اونچائیوں کے قریب منتقلی میں تاخیر اور میمپول مسترد ہونے کی اجازت/تردید کی گئی۔
+- رجسٹری ہنگامی صورتحال: ایمرجنسی انخلاء سے متاثرہ اثاثوں کو `withdraw_height` پر جم جاتا ہے اور اس کے بعد ثبوتوں کو مسترد کردیا جاتا ہے۔
+- صلاحیت گیٹنگ: مختلف `conf_features` کے ساتھ توثیق کرنے والے بلاکس کو مسترد کرتے ہیں۔ `assume_valid=true` کے ساتھ مبصرین اتفاق رائے کو متاثر کیے بغیر پیروی کرتے ہیں۔
+- ریاست کے مساوات: جائز/مکمل/مبصرین نوڈس کیننیکل چین میں ایک جیسی ریاست کی جڑیں تیار کرتے ہیں۔
+- منفی مبہم: خراب شدہ ثبوت ، بڑے پے لوڈ اور نیلیفائر تصادم کو عزم سے مسترد کردیا جاتا ہے۔## ہجرت
+- فیچر پرچم کے ساتھ رول آؤٹ: فیز سی 3 ختم ہونے تک ، `enabled` `false` پر ڈیفالٹس ؛ نوڈس توثیق کار کے سیٹ میں داخل ہونے سے پہلے صلاحیتوں کا اعلان کرتے ہیں۔
+- شفاف اثاثے متاثر نہیں ہوتے ہیں۔ خفیہ ہدایات میں رجسٹری اندراجات اور صلاحیتوں کے مذاکرات کی ضرورت ہوتی ہے۔
+- خفیہ تعاون کے بغیر مرتب کردہ نوڈس متعلقہ بلاکس کو عزم سے مسترد کرتے ہیں۔ وہ توثیق کنندہ سیٹ میں داخل نہیں ہوسکتے ہیں لیکن `assume_valid=true` کے ساتھ مبصرین کی حیثیت سے کام کرسکتے ہیں۔
+- جینیسیس کے ظاہر ہونے میں ابتدائی رجسٹری اندراجات ، پیرامیٹر سیٹ ، اثاثوں کے لئے خفیہ پالیسیاں ، اور اختیاری آڈیٹر کیز شامل ہیں۔
+- آپریٹرز نے رجسٹری کی گردش ، پالیسی ٹرانزیشن ، اور ہنگامی واپسی کے لئے اشاعت شدہ رن بوکس کی پیروی کی تاکہ عصبی اپ گریڈ کو برقرار رکھا جاسکے۔
 
-## Migracao
-- Rollout com feature flag: ate Phase C3 terminar, `enabled` default a `false`; nodes anunciam capacidades antes de entrar no set validador.
-- Assets transparentes nao sao afetados; instrucoes confidenciais requerem entradas de registry e negociacao de capacidades.
-- Nodes compilados sem suporte confidencial rejeitam blocos relevantes deterministicamente; nao podem entrar no set validador mas podem operar como observers com `assume_valid=true`.
-- Genesis manifests incluem entradas iniciais de registry, sets de parametros, politicas confidenciais para assets e keys de auditor opcionais.
-- Operadores seguem runbooks publicados para rotacao de registry, transicoes de politica e emergency withdrawal para manter upgrades deterministas.
+## کام زیر التواء
+- بینچ مارک ہالو 2 پیرامیٹرز (سرکٹ سائز ، تلاش کی حکمت عملی) اور انشانکن پلے بوک میں ریکارڈ کے نتائج تاکہ `confidential_assets_calibration.md` کی اگلی ریفریش کے ساتھ گیس/ٹائم آؤٹ ڈیفالٹس کو اپ ڈیٹ کیا جاسکے۔
+- آڈیٹر کے انکشاف کی پالیسیاں اور اس سے وابستہ سلیکٹیو ویونگ APIs کو حتمی شکل دیں ، جیسے ہی گورننس ڈرافٹ پر دستخط ہونے کے ساتھ ہی Torii میں منظور شدہ ورک فلو کو مربوط کریں۔
+- ایس ڈی کے کے نفاذ کاروں کے لفافے کی شکل کو دستاویزی شکل دیتے ہوئے ، کثیر الجہتی نتائج اور بیچ میمو کو کور کرنے کے لئے گواہ خفیہ کاری اسکیم میں توسیع کریں۔
+- سرکٹس ، رجسٹروں اور پیرامیٹر گردش کے طریقہ کار کا بیرونی سلامتی جائزہ اور داخلی آڈٹ رپورٹس کے ساتھ ساتھ نتائج کو محفوظ شدہ دستاویزات کریں۔
+- آڈیٹرز کے لئے خرچ کرنے والے مفاہمت کے APIs کی وضاحت کریں اور اسی طرح کی علامتوں کو نافذ کرنے کے لئے بٹوے کے دکانداروں کے لئے ویو کلیدی اسکوپ گائیڈ شائع کریں۔## عمل درآمد مرحلہ وار
+1. ** فیز M0 - اسٹاپ شپ سختی **
+   ۔
+   ۔
+   ۔
+   - [x] خفیہ عملدرآمد کے راستوں میں گھبراہٹ کو ہٹا دیں اور متضاد نوڈس کے لئے رول گیٹنگ شامل کریں۔
+   - [] فرنٹیئر چوکیوں پر تصدیق کنندہ ٹائم آؤٹ بجٹ اور ریورج گہرائی کی حدوں کا اطلاق کریں۔
+     - [x] توثیق کے ٹائم آؤٹ بجٹ کا اطلاق ؛ ایسے ثبوت جو `verify_timeout_ms` سے زیادہ ہیں اب عزم سے ناکام ہوجاتے ہیں۔
+     ۔
+   - `AssetConfidentialPolicy` ، FSM پالیسی اور ٹکسال/منتقلی/انکشاف ہدایات کے لئے نفاذ کے دروازے متعارف کروائیں۔
+   - جب رجسٹری/پیرامیٹر ہضم ہوتا ہے تو بلاک ہیڈر میں `conf_features` کا ارتکاب کریں اور توثیق کرنے والے کی شرکت سے انکار کریں۔
+2. ** فیز M1 - رجسٹر اور پیرامیٹرز **
+   - `ZkVerifierEntry` ، `PedersenParams` ، اور `PoseidonParams` ریکارڈز گورننس ، جینیس اینکرنگ ، اور کیشے کے انتظام کے اختیارات کے ساتھ ریکارڈ کریں۔
+   - رجسٹری کی تلاش ، گیس کے شیڈول آئی ڈی ، اسکیما ہیشنگ ، اور سائز کی جانچ پڑتال کی ضرورت کے لئے سیسکل سے رابطہ کریں۔
+   - خفیہ کلیدی انتظام کے لئے V1 انکرپٹڈ پے لوڈ فارمیٹ ، کلیدی مشتق ویکٹر پرس کو ، اور سی ایل آئی سپورٹ بھیجیں۔
+3. ** فیز M2 - گیس اور کارکردگی **
+   - جینیاتی گیس کے نظام الاوقات کو نافذ کریں ، ٹیلی میٹری (توثیق میں تاخیر ، پروف سائز ، میمپول کی ردعمل) کے ساتھ فی بلاک اور بینچ مارک ہارنس کے کاؤنٹرز۔
+   - ملٹی ایسٹ ورک بوجھ کے لئے ہارڈن کمٹمنٹ ٹری چوکیاں ، ایل آر یو بوجھ اور نیلیفائر انڈیکس۔
+4. ** فیز M3 - بٹوے کی گردش اور ٹولنگ **
+   -ملٹی پیرامیٹر اور ملٹی ورژن کے ثبوتوں کی قبولیت کو قابل بنائیں۔ منتقلی رن بکس کے ساتھ گورننس سے چلنے والی ایکٹیویشن/فرسودگی کی حمایت کریں۔
+   - ایس ڈی کے/سی ایل آئی ہجرت کے بہاؤ ، آڈیٹر اسکین ورک فلوز اور اسسٹیٹنس مصالحتی ٹولنگ کی فراہمی کریں۔
+5. ** فیز M4 - آڈٹ اور اوپس **
+   - آڈیٹر کو کلیدی ورک فلوز ، انتخابی انکشافی APIs ، اور آپریشنل رن بوکس فراہم کریں۔
+   - بیرونی خفیہ کاری/سیکیورٹی کا جائزہ لیں اور `status.md` پر پوسٹ کے نتائج۔
 
-## Trabalho pendente
-- Benchmark de parametros Halo2 (tamanho de circuito, estrategia de lookup) e registrar resultados no playbook de calibracao para que defaults de gas/timeout sejam atualizados junto ao proximo refresh de `confidential_assets_calibration.md`.
-- Finalizar politicas de disclosure de auditor e APIs de selective-viewing associadas, conectando o workflow aprovado em Torii assim que o draft de governance for assinado.
-- Estender o esquema de witness encryption para cobrir outputs multi-recipient e memos em batch, documentando o formato do envelope para implementadores de SDK.
-- Comissionar uma revisao de seguranca externa de circuitos, registries e procedimentos de rotacao de parametros e arquivar os achados ao lado dos relatorios internos de auditoria.
-- Especificar APIs de reconciliacao de spentness para auditores e publicar guia de escopo de view-key para que vendors de wallet implementem as mesmas semanticas de atestacao.
-
-## Phasing de implementacao
-1. **Phase M0 - Stop-Ship Hardening**
-   - [x] Derivacao de nullifier segue o design Poseidon PRF (`nk`, `rho`, `asset_id`, `chain_id`) com ordering determinista de commitments aplicado nas atualizacoes do ledger.
-   - [x] Execucao aplica limites de tamanho de proof e quotas confidenciais por transacao/por bloco, rejeitando transacoes fora de budget com erros deterministas.
-   - [x] Handshake P2P anuncia `ConfidentialFeatureDigest` (backend digest + fingerprints de registry) e falha mismatches deterministicamente via `HandshakeConfidentialMismatch`.
-   - [x] Remover panics em paths de execucao confidencial e adicionar role gating para nodes incompativeis.
-   - [ ] Aplicar budgets de timeout do verifier e limites de profundidade de reorg para frontier checkpoints.
-     - [x] Budgets de timeout de verificacao aplicados; proofs que excedem `verify_timeout_ms` agora falham deterministicamente.
-     - [x] Frontier checkpoints agora respeitam `reorg_depth_bound`, podando checkpoints mais antigos que a janela configurada e mantendo snapshots deterministas.
-   - Introduzir `AssetConfidentialPolicy`, policy FSM e gates de enforcement para instrucoes mint/transfer/reveal.
-   - Commit `conf_features` nos headers de bloco e recusar participacao de validadores quando digests de registry/parametros divergem.
-2. **Phase M1 - Registries e parametros**
-   - Entregar registries `ZkVerifierEntry`, `PedersenParams`, e `PoseidonParams` com ops de governance, ancoragem de genesis e gestao de cache.
-   - Conectar syscall para exigir lookups de registry, gas schedule IDs, schema hashing, e checks de tamanho.
-   - Enviar formato de payload encriptado v1, vetores de derivacao de keys para wallet, e suporte CLI para gestao de chaves confidenciais.
-3. **Phase M2 - Gas e performance**
-   - Implementar schedule de gas determinista, contadores por bloco e harnesses de benchmark com telemetria (latencia de verificacao, tamanhos de proof, rejeicoes de mempool).
-   - Endurecer CommitmentTree checkpoints, carga LRU e indices de nullifier para workloads multi-asset.
-4. **Phase M3 - Rotacao e tooling de wallet**
-   - Habilitar aceitacao de proofs multi-parametro e multi-versao; suportar ativacao/deprecacao guiada por governance com runbooks de transicao.
-   - Entregar fluxos de migracao SDK/CLI, workflows de scan de auditor e tooling de reconciliacao de spentness.
-5. **Phase M4 - Audit e ops**
-   - Fornecer workflows de keys de auditor, APIs de selective disclosure, e runbooks operacionais.
-   - Agendar revisao externa de criptografia/seguranca e publicar achados em `status.md`.
-
-Cada phase atualiza milestones do roadmap e tests associados para manter garantias de execucao determinista na rede blockchain.
+ہر مرحلے میں روڈ میپ سنگ میل اور اس سے وابستہ ٹیسٹوں کو اپ ڈیٹ کیا جاتا ہے تاکہ بلاکچین نیٹ ورک پر تعی .ن پر عمل درآمد کی ضمانتیں برقرار رہیں۔

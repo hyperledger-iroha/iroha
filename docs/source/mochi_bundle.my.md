@@ -7,47 +7,48 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f2dd292b7d15b449f3cec1b79343387a8c23beef3a163367bd5fa8ced8593aae
 source_last_modified: "2025-12-29T18:16:35.986892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # MOCHI Bundle Tooling
 
-MOCHI ships with a lightweight packaging workflow so developers can produce a
-portable desktop bundle without wiring bespoke CI scripts. The `xtask`
-subcommand handles compilation, layout, hashing, and (optionally) archive
-creation in one shot.
+MOCHI သည် ပေါ့ပါးသော ထုပ်ပိုးမှုလုပ်ငန်းအသွားအလာဖြင့် ပို့ဆောင်ပေးသောကြောင့် developer များက ထုတ်လုပ်နိုင်သည်။
+CI scripts များကို ကြိုးသွယ်ခြင်းမရှိဘဲ သယ်ဆောင်ရလွယ်ကူသော desktop အတွဲ။ `xtask`
+subcommand သည် compilation၊ layout၊ hashing နှင့် (optionally) archive ကို ကိုင်တွယ်သည်။
+တစ်ချက်တည်းနဲ့ ဖန်တီးမှု။
 
-## Generating a bundle
+## အစုအဝေးတစ်ခု ဖန်တီးခြင်း။
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default the command builds release binaries, assembles the bundle under
-`target/mochi-bundle/`, and emits a `mochi-<os>-<arch>-release.tar.gz` archive
-alongside a deterministic `manifest.json`. The manifest lists every file with
-its size and SHA-256 hash so CI pipelines can re-run verification or publish
-attestations. The helper ensures both the `mochi` desktop shell and the
-workspace `kagami` binary are present so genesis generation works out of the
-box.
+default အနေဖြင့် command သည် release binaries ကိုတည်ဆောက်သည်၊ အောက်တွင် bundle ကိုစုဝေးစေသည်။
+`target/mochi-bundle/` နှင့် `mochi-<os>-<arch>-release.tar.gz` မှတ်တမ်းကို ထုတ်လွှတ်သည်
+အဆုံးအဖြတ်ပေးသော `manifest.json` နှင့်အတူ။ မန်နီးဖက်စ်တွင် ဖိုင်တိုင်းကို စာရင်းပြုစုထားသည်။
+၎င်း၏အရွယ်အစားနှင့် SHA-256 hash ဖြစ်သောကြောင့် CI ပိုက်လိုင်းများ ပြန်လည်စစ်ဆေးခြင်း သို့မဟုတ် ထုတ်ဝေနိုင်သည်။
+သက်သေခံချက်များ။ အကူအညီပေးသူက `mochi` ဒက်စ်တော့ရှဲလ်နှင့် နှစ်ခုလုံးကို သေချာစေသည်။
+workspace `kagami` binary သည် ရှိနေသောကြောင့် ဥပါဒ် မျိုးဆက်သည် ပြင်ပမှ အလုပ်လုပ်ပါသည်။
+သေတ္တာ။
 
-### Flags
+### အလံများ
 
-| Flag                | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `--out <dir>`       | Override the output directory (defaults to `target/mochi-bundle`).         |
-| `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for tests).              |
-| `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
-| `--kagami <path>`   | Use an explicit `kagami` binary instead of building `iroha_kagami`.         |
-| `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Run `mochi --help` from the packaged bundle as a basic execution gate.      |
-| `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+| အလံ | ဖော်ပြချက် |
+|--------------------------------------------------------------------------------------------------------------------|
+| `--out <dir>` | အထွက်လမ်းကြောင်းကို အစားထိုးပါ (ပုံသေ `target/mochi-bundle`)။         |
+| `--profile <name>` | သီးခြား Cargo ပရိုဖိုင် (ဥပမာ၊ စမ်းသပ်မှုများအတွက် `debug`) ဖြင့် တည်ဆောက်ပါ။              |
+| `--no-archive` | `.tar.gz` မော်ကွန်းတိုက်ကို ကျော်ပြီး ပြင်ဆင်ထားသည့်ဖိုင်တွဲကိုသာ ချန်ထားပါ။               |
+| `--kagami <path>` | `iroha_kagami` ကို တည်ဆောက်မည့်အစား တိကျပြတ်သားသော `kagami` ကို အသုံးပြုပါ။         |
+| `--matrix <path>` | CI provenance ခြေရာခံခြင်းအတွက် အတွဲလိုက် မက်တာဒေတာကို JSON matrix တွင် ပေါင်းထည့်ပါ။         |
+| `--smoke` | အခြေခံလုပ်ဆောင်မှုတံခါးအဖြစ် ထုပ်ပိုးထားသောအတွဲမှ `mochi --help` ကိုဖွင့်ပါ။      |
+| `--stage <dir>` | ပြီးသွားသောအစုအဝေး (နှင့် မော်ကွန်းတင်သည့်အခါ) ကို အဆင့်မြှင့်တင်သည့်ဖိုင်တွဲတစ်ခုသို့ ကူးယူပါ။ |
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+`--stage` သည် တည်ဆောက်သူ အေးဂျင့်တစ်ဦးစီက ၎င်းကို အပ်လုဒ်လုပ်သည့် CI ပိုက်လိုင်းများအတွက် ရည်ရွယ်သည်
+မျှဝေထားသော တည်နေရာအတွက် အနုပညာပစ္စည်းများ။ အကူအညီပေးသူက အတွဲလိုက်လမ်းညွှန်ကို ပြန်လည်ဖန်တီးပေးပြီး
+ထုတ်ပေးထားသော archive ကို staging directory ထဲသို့ ကူးယူကာ အလုပ်များကို ထုတ်ဝေနိုင်ပါသည်။
+shell scripting မပါဘဲ platform-specific output များကိုစုဆောင်းပါ။
 
-The layout inside the bundle is intentionally simple:
+အစုအဝေးအတွင်း အပြင်အဆင်သည် ရည်ရွယ်ချက်ရှိရှိ ရိုးရှင်းသည်-
 
 ```
 bin/mochi              # egui desktop executable
@@ -58,11 +59,11 @@ LICENSE                # repository licence
 manifest.json          # generated file manifest with SHA-256 digests
 ```
 
-### Runtime overrides
+### Runtime သည် overrides ဖြစ်သည်။
 
-The packaged `mochi` executable accepts command-line overrides for the most
-common supervisor settings. Use these flags instead of editing
-`config/local.toml` when experimenting:
+ထုပ်ပိုးထားသော `mochi` သည် အများစုအတွက် command-line overrides ကိုလက်ခံသည်
+သာမန်ကြီးကြပ်ရေးမှူး ဆက်တင်များ။ တည်းဖြတ်ခြင်းအစား ဤအလံများကို အသုံးပြုပါ။
+စမ်းသပ်သောအခါ `config/local.toml`
 
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
@@ -70,16 +71,16 @@ common supervisor settings. Use these flags instead of editing
     --irohad /path/to/irohad --kagami /path/to/kagami
 ```
 
-Any CLI value takes precedence over `config/local.toml` entries and environment
-variables.
+မည်သည့် CLI တန်ဖိုးသည် `config/local.toml` ထည့်သွင်းမှုများနှင့် ပတ်ဝန်းကျင်ထက် ဦးစားပေးပါသည်။
+ကိန်းရှင်များ။
 
-## Snapshot automation
+## လျှပ်တစ်ပြက်အလိုအလျောက်စနစ်
 
-`manifest.json` records the generation timestamp, target triple, Cargo profile,
-and the complete file inventory. Pipelines can diff the manifest to detect when
-new artefacts appear, upload the JSON alongside release assets, or audit the
-hashes before promoting a bundle to operators.
+`manifest.json` သည် မျိုးဆက်အချိန်တံဆိပ်၊ ပစ်မှတ်သုံးဆ၊ ကုန်စည်ပရိုဖိုင်၊
+ပြီးပြည့်စုံသော ဖိုင်စာရင်း။ ပိုက်လိုင်းများသည် မည်သည့်အချိန်တွင် သိရှိနိုင်သည်ကို သိရှိရန် ကွဲပြားနိုင်သည်။
+အသစ်ထွက်ရှိထားသော ပစ္စည်းများနှင့် အတူ JSON ကို အပ်လုဒ်လုပ်ပါ၊ သို့မဟုတ် စစ်ဆေးပါ။
+အော်ပရေတာများသို့ အစုအစည်းတစ်ခုအား မကြော်ငြာမီ hashes။
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+အကူအညီပေးသူက အရည်အချင်းမရှိပါ- အမိန့်ကို ပြန်လည်လုပ်ဆောင်ခြင်းသည် မန်နီးဖက်စ်ကို အပ်ဒိတ်လုပ်ကာ၊
+`target/mochi-bundle/` ကို တစ်ခုတည်းအဖြစ်ထားကာ ယခင် archive ကို ထပ်ရေးသည်
+လက်ရှိစက်ရှိ နောက်ဆုံးထွက်အတွဲအတွက် အမှန်တရားအရင်းအမြစ်။

@@ -4,13 +4,15 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-ci.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: developer-ci
-title: Рецепты CI для SoraFS
+כותרת: Рецепты CI ל-SoraFS
 sidebar_label: Рецепты CI
-description: Запускайте CLI SoraFS в пайплайнах GitHub и GitLab с бесключевой подписью.
+תיאור: Запускайте CLI SoraFS в пайплайнах GitHub и GitLab с бесключевой подписью.
 ---
 
 :::note Канонический источник
@@ -18,11 +20,11 @@ description: Запускайте CLI SoraFS в пайплайнах GitHub и G
 
 # Рецепты CI
 
-Пайплайны SoraFS выигрывают от детерминированного chunking, подписи manifest и проверки proofs.
+Пайплайны SoraFS выигрывают от детерминированного chunking, הצגת מניפסט והוכחות проверки.
 Поверхность команд `sorafs_cli` делает эти шаги переносимыми между CI провайдерами. Эта страница
 подчеркивает канонические рецепты и указывает на готовые к использованию шаблоны.
 
-## GitHub Actions (keyless)
+## פעולות GitHub (ללא מפתח)
 
 ```yaml
 name: sorafs-artifacts
@@ -98,7 +100,7 @@ jobs:
 Ключевые моменты:
 
 - Статические ключи подписи не хранятся; токены OIDC запрашиваются по требованию.
-- Артефакты (CAR, manifest, bundle, сводки proofs) загружаются для ревью.
+- Артефакты (מכונית, מניפסט, צרור, הוכחות сводки) загружаются для ревью.
 - Job повторно использует те же схемы Norito, что и в продакшен-роллаутах.
 
 ## GitLab CI
@@ -135,12 +137,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Подготовьте `SIGSTORE_ID_TOKEN` через workload identity federation GitLab или sealed secret до запуска стадии publish.
-- Сбой любого шага CLI останавливает pipeline, сохраняя согласованные артефакты.
+- פרסם את `SIGSTORE_ID_TOKEN` עם פדרציית זהות עומס העבודה GitLab או סוד אטום לפרסום ספייס.
+- Сбой любого шага CLI останавливает צינור, сохраняя согласованные артефакты.
 
 ## Дополнительные ресурсы
 
-- End-to-end шаблоны (включают Bash helpers, конфигурацию федеративной идентичности и шаги очистки): `docs/examples/sorafs_ci.md`
-- Справочник CLI, покрывающий все опции: `docs/source/sorafs_cli.md`
-- Требования governance/alias перед отправкой:
+- מקצה לקצה шаблоны (включают Bash helpers, конфигурацию федеративной идентичности и шаги очистки): Norito
+- ספרי CLI, אופציות שונות: `docs/source/sorafs_cli.md`
+- Требования ממשל/כינוי перед отправкой:
   `docs/source/sorafs/provider_admission_policy.md`

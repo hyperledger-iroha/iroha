@@ -6,21 +6,22 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 061304711d940567ec3c15a75c388085e65aafc6962abc2da6e943fa9a9903fa
 source_last_modified: "2026-01-27T18:39:03.379028+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kagami Iroha3 Profiles
+# Kagami IROHA3 پروفائلز
 
-Kagami ships presets for Iroha 3 networks so operators can stamp deterministic
-genesis manifests without juggling per-network knobs.
+Kagami جہاز Iroha 3 نیٹ ورکس کے لئے پریسیٹس تاکہ آپریٹرز ڈٹرمینسٹک پر مہر لگاسکیں
+جینیسیس فی نیٹ ورک نوبس کے بغیر جگائے بغیر ظاہر ہوتی ہے۔
 
-- Profiles: `iroha3-dev` (chain `iroha3-dev.local`, collectors k=1 r=1, VRF seed derived from the chain id when NPoS is selected), `iroha3-testus` (chain `iroha3-testus`, collectors k=3 r=3, requires `--vrf-seed-hex` when NPoS is selected), `iroha3-nexus` (chain `iroha3-nexus`, collectors k=5 r=3, requires `--vrf-seed-hex` when NPoS is selected).
-- Consensus: Sora profile networks (Nexus + dataspaces) require NPoS and disallow staged cutovers; permissioned Iroha3 deployments must run without a Sora profile.
-- Generation: `cargo run -p iroha_kagami -- genesis generate --profile <profile> --ivm-dir . --genesis-public-key <pk> --consensus-mode <npos|permissioned> [--vrf-seed-hex <hex>]`. Use `--consensus-mode npos` for Nexus; `--vrf-seed-hex` is only valid for NPoS (required for testus/nexus). Kagami pins DA/RBC on the Iroha3 line and emits a summary (chain, collectors, DA/RBC, VRF seed, fingerprint).
-- Verification: `cargo run -p iroha_kagami -- verify --profile <profile> --genesis <path> [--vrf-seed-hex <hex>]` replays profile expectations (chain id, DA/RBC, collectors, PoP coverage, consensus fingerprint). Supply `--vrf-seed-hex` only when verifying an NPoS manifest for testus/nexus.
-- Sample bundles: pre-generated bundles live under `defaults/kagami/iroha3-{dev,testus,nexus}/` (genesis.json, config.toml, docker-compose.yml, verify.txt, README). Regenerate with `cargo xtask kagami-profiles [--profile <name>|all] [--out <dir>] [--kagami <bin>]`.
-- Mochi: `mochi`/`mochi-genesis` accept `--genesis-profile <profile>` and `--vrf-seed-hex <hex>` (NPoS only), forward them to Kagami, and print the same Kagami summary to stdout/stderr when a profile is used.
+- پروفائلز: `iroha3-dev` (چین `iroha3-dev.local` ، جمع کرنے والے K = 1 R = 1 ، جب NPOS منتخب کیا جاتا ہے تو چین ID سے اخذ کردہ VRF بیج) ، `iroha3-testus` ، جب NPOS ، 000012x ، جمع کرنے والوں کے K = 3 R = 3 کی ضرورت ہوتی ہے۔ `iroha3-nexus` (چین `iroha3-nexus` ، جمع کرنے والے K = 5 R = 3 ، جب NPOS منتخب کیا جاتا ہے تو `--vrf-seed-hex` کی ضرورت ہوتی ہے)۔
+۔ اجازت شدہ IROHA3 تعیناتیوں کو بغیر SORA پروفائل کے چلانا چاہئے۔
+- جنریشن: `cargo run -p iroha_kagami -- genesis generate --profile <profile> --ivm-dir . --genesis-public-key <pk> --consensus-mode <npos|permissioned> [--vrf-seed-hex <hex>]`۔ Nexus کے لئے `--consensus-mode npos` استعمال کریں ؛ `--vrf-seed-hex` صرف NPOs کے لئے موزوں ہے (ٹیسٹوس/گٹھ جوڑ کے لئے ضروری ہے)۔ Kagami پنوں DA/RBC IROHA3 لائن پر اور ایک سمری (چین ، جمع کرنے والے ، DA/RBC ، VRF بیج ، فنگر پرنٹ) خارج کرتا ہے۔
+- توثیق: `cargo run -p iroha_kagami -- verify --profile <profile> --genesis <path> [--vrf-seed-hex <hex>]` دوبارہ عمل کی توقعات (چین ID ، DA/RBC ، جمع کرنے والے ، پاپ کوریج ، اتفاق رائے فنگر پرنٹ)۔ سپلائی `--vrf-seed-hex` صرف اس وقت جب کسی NPOs کی تصدیق کی جائے تو Testuss/Nexus کے لئے ظاہر ہوتا ہے۔
+-نمونہ بنڈل: پہلے سے تیار کردہ بنڈل `defaults/kagami/iroha3-{dev,testus,nexus}/` (جینیسس.جسن ، config.toml ، docker-compose.yml ، تصدیق. txt ، Readme) کے تحت رہتے ہیں۔ `cargo xtask kagami-profiles [--profile <name>|all] [--out <dir>] [--kagami <bin>]` کے ساتھ دوبارہ تخلیق کریں۔
+- موچی: `mochi`/`mochi-genesis` `--genesis-profile <profile>` اور `--vrf-seed-hex <hex>` (صرف NPOS) کو قبول کریں ، انہیں Kagami پر بھیجیں ، اور اسی طرح Kagami کا استعمال STDOUT/STDER پر کریں۔
 
-The bundles embed BLS PoPs alongside topology entries so `kagami verify` succeeds
-out of the box; adjust the trusted peers/ports in the configs as needed for local
-smoke runs.
+ٹوپولوجی اندراجات کے ساتھ ساتھ بنڈل ایمبیڈ بی ایل ایس پاپس ہیں لہذا `kagami verify` کامیاب ہوتا ہے
+باکس سے باہر ؛ قابل اعتماد ساتھیوں/بندرگاہوں کو ترتیب میں ایڈجسٹ کریں جیسا کہ مقامی کے لئے ضرورت ہے
+دھواں چلتا ہے۔

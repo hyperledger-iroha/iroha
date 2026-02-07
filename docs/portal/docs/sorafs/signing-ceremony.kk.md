@@ -11,61 +11,62 @@ id: signing-ceremony
 title: Signing Ceremony Replacement
 description: How the Sora Parliament approves and distributes SoraFS chunker fixtures (SF-1b).
 sidebar_label: Signing Ceremony
+translator: machine-google-reviewed
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> Жол картасы: **SF-1b — Сора Парламентінің бекітуі.**
 
-The manual signing ritual used for SoraFS chunker fixtures is retired. All
-approvals now flow through the **Sora Parliament**, the sortition-based DAO that
-governs Nexus. Parliament members bond XOR to gain citizenship, rotate across
-panels, and cast on-chain votes that approve, reject, or roll back fixture
-releases. This guide explains the process and developer tooling.
+SoraFS chunker құрылғылары үшін қолданылатын қолмен қол қою рәсімі жойылды. Барлығы
+Енді мақұлдаулар **Сора Парламенті** арқылы, сұрыптауға негізделген DAO арқылы өтеді
+Nexus басқарады. Парламент мүшелері азаматтық алу үшін XOR байланыстырады, ротацияланады
+панельдер және бекітуді мақұлдайтын, қабылдамайтын немесе кері қайтаратын тізбектегі дауыстарды береді
+шығарылымдар. Бұл нұсқаулық процесті және әзірлеуші ​​құралын түсіндіреді.
 
-## Parliament overview
+## Парламентке шолу
 
-- **Citizenship** — Operators bond the required XOR to enrol as citizens and
-  become eligible for sortition.
-- **Panels** — Responsibilities are split across rotating panels (Infrastructure,
-  Moderation, Treasury, …). The Infrastructure Panel owns SoraFS fixture
-  approvals.
-- **Sortition & rotation** — Panel seats are re-drawn at the cadence specified in
-  the Parliament constitution so no single group monopolises approvals.
+- **Азаматтық** — Операторлар азамат ретінде тіркелу үшін қажетті XOR құжатын бекітеді
+  сұрыптауға құқылы болады.
+- **Панельдер** — Жауапкершіліктер айналмалы панельдерге бөлінген (Инфрақұрылым,
+  Модерация, қазынашылық, ...). Инфрақұрылымдық панельде SoraFS қондырғысы бар
+  бекітулер.
+- **Сұрыптау және айналдыру** — Панельдік орындар тармағында көрсетілген каданцияда қайта тартылады
+  Парламент конституциясы, сондықтан бірде-бір топ монополистерді бекітпейді.
 
-## Fixture approval flow
+## Бекітуді бекіту ағыны
 
-1. **Proposal submission**
-   - The Tooling WG uploads the candidate `manifest_blake3.json` bundle plus
-     fixture diff to the on-chain registry via `sorafs.fixtureProposal`.
-   - The proposal records the BLAKE3 digest, semantic version, and change notes.
-2. **Review & voting**
-   - The Infrastructure Panel receives the assignment through the Parliament task
-     queue.
-   - Panel members inspect CI artefacts, run parity tests, and cast weighted
-     votes on-chain.
-3. **Finalisation**
-   - Once quorum is met, the runtime emits an approval event that includes the
-     canonical manifest digest and Merkle commitment to the fixture payload.
-   - The event is mirrored into the SoraFS registry so clients can fetch the
-     latest Parliament-approved manifest.
-4. **Distribution**
-   - CLI helpers (`cargo xtask sorafs-fetch-fixture`) pull the approved manifest
-     from Nexus RPC. The repository’s JSON/TS/Go constants stay in sync by
-     re-running `export_vectors` and validating the digest against the on-chain
-     record.
+1. **Ұсынысты жіберу**
+   - Құрал-саймандық жұмыс тобы кандидат `manifest_blake3.json` қосымша пакетін жүктеп салады
+     арматура `sorafs.fixtureProposal` арқылы тізбектегі тізілімнен ерекшеленеді.
+   - Ұсыныс BLAKE3 дайджестін, семантикалық нұсқасын және өзгерту жазбаларын жазады.
+2. **Шолу және дауыс беру**
+   - Инфрақұрылымдық комиссия тапсырманы Парламент тапсырмасы арқылы алады
+     кезек.
+   - Панель мүшелері CI артефактілерін тексереді, паритеттік сынақтарды жүргізеді және салмақты құйылады
+     тізбек бойынша дауыс беру.
+3. **Қорытындылау**
+   - Кворум орындалғаннан кейін орындау уақыты мынаны қамтитын бекіту оқиғасын шығарады
+     канондық манифест дайджесті және қондырғының пайдалы жүктемесіне Merkle міндеттемесі.
+   - Оқиға SoraFS тізілімінде бейнеленген, осылайша клиенттер
+     Парламент мақұлдаған соңғы манифест.
+4. **Тарату**
+   - CLI көмекшілері (`cargo xtask sorafs-fetch-fixture`) бекітілген манифестті тартады
+     Nexus RPC бастап. Репозиторийдің JSON/TS/Go тұрақтылары синхрондалады
+     `export_vectors` қайта іске қосу және тізбектегі дайджестті тексеру
+     жазба.
 
-## Developer workflow
+## Әзірлеушінің жұмыс процесі
 
-- Regenerate fixtures with:
+- Арматураларды қалпына келтіріңіз:
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Use the Parliament fetch helper to download the approved envelope, verify
-  signatures, and refresh local fixtures. Point `--signatures` at the
-  Parliament-published envelope; the helper resolves the accompanying manifest,
-  recomputes the BLAKE3 digest, and enforces the canonical
-  `sorafs.sf1@1.0.0` profile.
+- Бекітілген конвертті жүктеп алу, тексеру үшін Парламентті алу көмекшісін пайдаланыңыз
+  қол қою және жергілікті құрылғыларды жаңарту. `--signatures` нүктесі
+  Парламент шығарған конверт; көмекші ілеспе манифестті шешеді,
+  BLAKE3 дайджестін қайта есептейді және канондықты орындайды
+  `sorafs.sf1@1.0.0` профилі.
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
@@ -73,11 +74,11 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+Манифест басқа URL мекенжайында болса, `--manifest` өтіңіз. Қол қойылмаған конверттер
+жергілікті түтін шығару үшін `--allow-unsigned` орнатылмаса, бас тартылады.
 
-- When validating a manifest through a staging gateway, target Torii instead of
-  local payloads:
+- Кезеңдік шлюз арқылы манифестті тексеру кезінде, орнына Torii мақсат қойыңыз
+  Жергілікті пайдалы жүктемелер:
 
 ```bash
 sorafs-fetch \
@@ -88,31 +89,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Local CI no longer requires a `signer.json` roster.
-  `ci/check_sorafs_fixtures.sh` compares the repo state against the latest
-  on-chain commitment and fails when they diverge.
+- Жергілікті CI енді `signer.json` тізімін қажет етпейді.
+  `ci/check_sorafs_fixtures.sh` репо күйін соңғысымен салыстырады
+  тізбектегі міндеттеме және олар бір-бірінен алшақ болған кезде сәтсіздікке ұшырайды.
 
-## Governance notes
+## Басқару туралы ескертулер
 
-- The Parliament constitution governs quorum, rotation, and escalation—no
-  crate-level configuration is needed.
-- Emergency rollbacks are handled through the Parliament moderation panel. The
-  Infrastructure Panel files a revert proposal referencing the prior manifest
-  digest, which replaces the release once approved.
-- Historical approvals remain available in the SoraFS registry for forensic
-  replay.
+- Парламент конституциясы кворум, ротация және эскалацияны реттейді — жоқ
+  жәшік деңгейіндегі конфигурация қажет.
+- Төтенше жағдайды кері қайтару Парламенттің модерация панелі арқылы өңделеді. The
+  Инфрақұрылым тақтасы алдыңғы манифестке сілтеме жасай отырып, қайтару ұсынысын жібереді
+  дайджест, ол бекітілгеннен кейін шығарылымды ауыстырады.
+- Тарихи мақұлдаулар сот сараптамасы үшін SoraFS тізілімінде қолжетімді болып қалады.
+  қайта ойнату.
 
-## FAQ
+## Жиі қойылатын сұрақтар
 
-- **Where did `signer.json` go?**  
-  It was removed. All signer attribution lives on-chain; `manifest_signatures.json`
-  in the repository is only a developer fixture that must match the latest
-  approval event.
+- **`signer.json` қайда кетті?**  
+  Ол жойылды. Барлық қол қоюшы атрибуты тізбекте өмір сүреді; `manifest_signatures.json`
+  репозиторийде тек соңғысына сәйкес келетін әзірлеуші құрылғысы бар
+  бекіту оқиғасы.
 
-- **Do we still require local Ed25519 signatures?**  
-  No. Parliament approvals are stored as on-chain artefacts. Local fixtures exist
-  for reproducibility but are validated against the Parliament digest.
+- **Бізге әлі де жергілікті Ed25519 қолтаңбалары қажет пе?**  
+  Жоқ. Парламент мақұлдаулары тізбектегі артефактілер ретінде сақталады. Жергілікті қондырғылар бар
+  қайталануы үшін, бірақ Парламент дайджестіне қарсы расталған.
 
-- **How do teams monitor approvals?**  
-  Subscribe to the `ParliamentFixtureApproved` event or query the registry via
-  Nexus RPC to retrieve the current manifest digest and panel roll call.
+- **Топтар бекітулерді қалай бақылайды?**  
+  `ParliamentFixtureApproved` оқиғасына жазылыңыз немесе арқылы тізілімнен сұраңыз
+  Nexus RPC ағымдағы манифест дайджестін және панельді шақыруды алу үшін.

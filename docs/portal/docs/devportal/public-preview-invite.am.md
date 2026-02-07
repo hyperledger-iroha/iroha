@@ -11,69 +11,70 @@ id: public-preview-invite
 title: Public preview invite playbook
 sidebar_label: Preview invite playbook
 description: Checklist for announcing the docs portal preview to external reviewers.
+translator: machine-google-reviewed
 ---
 
-## Program goals
+## የፕሮግራም ግቦች
 
-This playbook explains how to announce and run the public preview once the
-reviewer onboarding workflow is live. It keeps the DOCS-SORA roadmap honest by
-ensuring every invite ships with verifiable artefacts, security guidance, and a
-clear feedback path.
+ይህ የመጫወቻ ደብተር አንዴ ይፋዊ እይታን እንዴት ማስታወቅ እና ማስኬድ እንደሚቻል ያብራራል።
+ገምጋሚ የቦርዲንግ የስራ ፍሰት ቀጥታ ነው። የ DOCS-SORA የመንገድ ካርታ በታማኝነት ይጠብቃል።
+እያንዳንዱ የግብዣ መርከቦችን ሊረጋገጡ በሚችሉ ቅርሶች፣ የደህንነት መመሪያ እና ሀ
+ግልጽ የግብረመልስ መንገድ.
 
-- **Audience:** curated list of community members, partners, and maintainers who
-  signed the preview acceptable-use policy.
-- **Ceilings:** default wave size ≤ 25 reviewers, 14-day access window, incident
-  response within 24h.
+- **ታዳሚዎች፡** የተመረጡ የማህበረሰብ አባላት፣ አጋሮች እና ጠባቂዎች ዝርዝር
+  ተቀባይነት ያለው የአጠቃቀም መመሪያውን በቅድመ-እይታ ላይ ፈርመዋል።
+- ** ጣሪያዎች:** ነባሪ የሞገድ መጠን ≤ 25 ገምጋሚዎች፣ የ14-ቀን መዳረሻ መስኮት፣ ክስተት
+  በ 24h ውስጥ ምላሽ.
 
-## Launch gating checklist
+## የጌቲንግ ዝርዝርን አስጀምር
 
-Complete these tasks before sending any invitation:
+ማንኛውንም ግብዣ ከመላክዎ በፊት እነዚህን ተግባራት ያጠናቅቁ፡
 
-1. Latest preview artefacts uploaded in CI (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle).
-2. `npm run --prefix docs/portal serve` (checksum-gated) tested on the same tag.
-3. Reviewer onboarding tickets approved and linked to the invite wave.
-4. Security, observability, and incident docs validated
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-5. Feedback form or issue template prepared (include fields for severity,
-   reproduction steps, screenshots, and environment info).
-6. Announcement copy reviewed by Docs/DevRel + Governance.
+1. በCI ውስጥ የተሰቀሉ የቅርብ ጊዜ ቅድመ እይታ ቅርሶች (`docs-portal-preview`፣
+   የቼክሰም መግለጫ፣ ገላጭ፣ SoraFS ጥቅል)።
+2. `npm run --prefix docs/portal serve` (checksum-gated) በተመሳሳይ መለያ ላይ ተፈትኗል።
+3. ገምጋሚ ​​የመሳፈሪያ ትኬቶች ጸድቀው ከግብዣ ሞገድ ጋር ተገናኝተዋል።
+4. ደህንነት፣ ታዛቢነት እና የአደጋ ሰነዶች ተረጋግጠዋል
+   ([`security-hardening`](I18NU0000009X)፣
+   [`observability`](./observability.md)፣
+   [`incident-runbooks`](./incident-runbooks.md))።
+5. የግብረመልስ ቅጽ ወይም የተዘጋጀ አብነት (ለከባድነት መስኮችን ያካትቱ)
+   የማባዛት ደረጃዎች፣ ቅጽበታዊ ገጽ እይታዎች እና የአካባቢ መረጃ)።
+6. የማስታወቂያ ቅጂ በDocs/DevRel + Governance የተገመገመ።
 
-## Invite package
+## የጥቅል ግብዣ
 
-Every invite must include:
+እያንዳንዱ ግብዣ የሚከተሉትን ማካተት አለበት:
 
-1. **Verified artefacts** — Provide the SoraFS manifest/plan or GitHub artefact
-   links plus the checksum manifest and descriptor. Reference the verification
-   command explicitly so reviewers can run it before launching the site.
-2. **Serve instructions** — Include the checksum-gated preview command:
+1. **የተረጋገጡ ቅርሶች** — የSoraFS አንጸባራቂ/ዕቅድ ወይም GitHub artefact ያቅርቡ
+   አገናኞች እና የቼክሰም መግለጫ እና ገላጭ። ማረጋገጫውን ያጣቅሱ
+   ገምጋሚዎች ጣቢያውን ከመክፈትዎ በፊት እንዲያሄዱት በግልፅ ማዘዝ።
+2. **መመሪያዎችን ያቅርቡ *** - በቼክሰም-የተዘጋ ቅድመ እይታ ትዕዛዝ ያካትቱ፡
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Security reminders** — Call out that tokens expire automatically, links
-   must not be shared, and incidents should be reported immediately.
-4. **Feedback channel** — Link to the issue template/form and clarify response
-   time expectations.
-5. **Program dates** — Provide start/end dates, office hours or sync meetings,
-   and the next refresh window.
+3. **የደህንነት አስታዋሾች** - ቶከኖች በራስ-ሰር እንደሚያልቁ ይደውሉ
+   መጋራት የለበትም፣ እና ክስተቶች ወዲያውኑ ሪፖርት መደረግ አለባቸው።
+4. ** የግብረመልስ ሰርጥ *** - ከጉዳዩ አብነት/ቅፅ ጋር ያገናኙ እና ምላሹን ያብራሩ
+   ጊዜ የሚጠበቁ.
+5. **የፕሮግራም ቀኖች** — የመጀመሪያ/የማጠናቀቂያ ቀናትን፣የስራ ሰአቶችን ወይም የማመሳሰል ስብሰባዎችን ያቅርቡ፣
+   እና የሚቀጥለው የማደስ መስኮት.
 
-The sample email in
+የናሙና ኢሜይል ወደ ውስጥ
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-covers these requirements. Update the placeholders (dates, URLs, contacts)
-before sending.
+እነዚህን መስፈርቶች ይሸፍናል. ቦታ ያዢዎቹን ያዘምኑ (ቀኖች፣ ዩአርኤሎች፣ አድራሻዎች)
+ከመላኩ በፊት.
 
-## Expose the preview host
+## የቅድመ እይታ አስተናጋጁን ያጋልጡ
 
-Only promote the preview host once onboarding is complete and the change ticket
-is approved. See the [preview host exposure guide](./preview-host-exposure.md)
-for the end-to-end build/publish/verify steps used in this section.
+የመሳፈሪያው ሂደት እንደተጠናቀቀ እና ትኬቱን ለመቀየር የቅድመ እይታ አስተናጋጁን ብቻ ያስተዋውቁ
+ይፀድቃል። [የቅድመ እይታ የአስተናጋጅ መጋለጥ መመሪያን ይመልከቱ](./preview-host-exposure.md)
+በዚህ ክፍል ውስጥ ጥቅም ላይ የዋለውን ከጫፍ እስከ ጫፍ ግንባታ/ማተም/ማረጋገጫ ደረጃዎች።
 
-1. **Build and package:** Stamp the release tag and produce deterministic
-   artefacts.
+1. ** ይገንቡ እና ያሽጉ: *** የመልቀቂያ መለያውን ማህተም ያድርጉ እና ቆራጥነትን ያመርቱ
+   ቅርሶች.
 
    ```bash
    cd docs/portal
@@ -92,18 +93,18 @@ for the end-to-end build/publish/verify steps used in this section.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   The pin script writes `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   and `portal.dns-cutover.json` under `artifacts/sorafs/`. Attach those files to the
-   invite wave so every reviewer can verify the same bits.
+   የፒን ስክሪፕቱ `portal.car`፣ `portal.manifest.*`፣ `portal.pin.proposal.json`፣
+   እና `portal.dns-cutover.json` በ I18NI0000028X ስር። እነዚያን ፋይሎች ከ
+   እያንዳንዱ ገምጋሚ ተመሳሳዩን ቢት ማረጋገጥ እንዲችል የጋብዝ ሞገድ።
 
-2. **Publish the preview alias:** Rerun the command without `--skip-submit`
-   (supply `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, and the
-   governance-issued alias proof). The script will bind the manifest to
-   `docs-preview.sora` and emit `portal.manifest.submit.summary.json` plus
-   `portal.pin.report.json` for the evidence bundle.
+2. **የቅድመ እይታ ተለዋጭ ስም ያትሙ፡** ያለ `--skip-submit` ትዕዛዙን እንደገና ያሂዱ።
+   (አቅርቦት `TORII_URL`፣ `AUTHORITY`፣ `PRIVATE_KEY[_FILE]`፣ እና
+   በአስተዳደር የተሰጠ ተለዋጭ ማስረጃ)። ስክሪፕቱ አንጸባራቂውን ያስራል።
+   `docs-preview.sora` እና `portal.manifest.submit.summary.json` ፕላስ ልቀት
+   `portal.pin.report.json` ለማስረጃ ጥቅል።
 
-3. **Probe the deployment:** Confirm the alias resolves and the checksum matches
-   the tag before sending invites.
+3. **ስምረቱን መርምር፡** ተለዋጭ ስም ፍቺዎችን እና የቼክሱም ግጥሚያዎችን ያረጋግጡ።
+   ግብዣዎችን ከመላክዎ በፊት መለያው ።
 
    ```bash
    npm run probe:portal -- \
@@ -111,26 +112,26 @@ for the end-to-end build/publish/verify steps used in this section.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Keep `npm run serve` (`scripts/serve-verified-preview.mjs`) handy as a
-   fallback so reviewers can spin up a local copy if the preview edge blips.
+   እንደ
+   ገምጋሚዎች የቅድመ ዕይታ ጫፉ ቢነፋ የአካባቢያዊ ቅጂ ማሽከርከር እንዲችሉ ወደኋላ መመለስ።
 
-## Communications timeline
+## የግንኙነት ጊዜ
 
-| Day | Action | Owner |
+| ቀን | ድርጊት | ባለቤት |
 | --- | --- | --- |
-| D-3 | Finalise invite copy, refresh artefacts, dry-run verification | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
-| D-1 | Send invites using the template, update tracker with recipient list | Docs/DevRel |
-| D | Kickoff call / office hours, monitor telemetry dashboards | Docs/DevRel + On-call |
-| D+7 | Midpoint feedback digest, triage blocking issues | Docs/DevRel |
-| D+14 | Close wave, revoke temporary access, publish summary in `status.md` | Docs/DevRel |
+| D-3 | የግብዣ ቅጂን ያጠናቅቁ ፣ ቅርሶችን ያድሱ ፣ የደረቀ ማረጋገጫ | ሰነዶች/DevRel |
+| D-2 | የአስተዳደር መቋረጥ + ትኬት ለውጥ | ሰነዶች/DevRel + አስተዳደር |
+| D-1 | አብነት በመጠቀም ግብዣዎችን ይላኩ ፣ መከታተያ በተቀባይ ዝርዝር ያዘምኑ | ሰነዶች/DevRel |
+| መ | የመክፈቻ ጥሪ/የቢሮ ሰዓት፣የቴሌሜትሪ ዳሽቦርዶችን ይቆጣጠሩ | ሰነዶች/DevRel + ጥሪ ላይ |
+| D+7 | የመሃል ነጥብ ግብረ መልስ መፍጨት፣ የመለየት እገዳ ጉዳዮች | ሰነዶች/DevRel |
+| D+14 | ማዕበልን ዝጋ፣ ጊዜያዊ መዳረሻን ሰርዝ፣ ማጠቃለያ በI18NI0000038X | ሰነዶች/DevRel |
 
-## Access tracking & telemetry
+## የመዳረሻ ክትትል እና ቴሌሜትሪ
 
-1. Record every recipient, invite timestamp, and revocation date with the
-   preview feedback logger (see
-   [`preview-feedback-log`](./preview-feedback-log)) so every wave shares the
-   same evidence trail:
+1. እያንዳንዱን ተቀባይ ይመዝግቡ፣ የጊዜ ማህተም ይጋብዙ እና የተሻረ ቀን በ
+   የግብረ መልስ ምዝግብ ማስታወሻን አስቀድመው ይመልከቱ (ይመልከቱ
+   [`preview-feedback-log`](./preview-feedback-log)) ስለዚህ እያንዳንዱ ሞገድ ያጋራል
+   ተመሳሳይ ማስረጃ;
 
    ```bash
    # Append a new invite event to artifacts/docs_portal_preview/feedback_log.json
@@ -141,41 +142,41 @@ for the end-to-end build/publish/verify steps used in this section.
      --notes "wave-01 seed"
    ```
 
-   Supported events are `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, and `access-revoked`. The log lives at
-   `artifacts/docs_portal_preview/feedback_log.json` by default; attach it to
-   the invite wave ticket together with consent forms. Use the summary helper
-   to produce an auditable roll-up before the close-out note:
+   የሚደገፉ ዝግጅቶች I18NI0000040X፣ `acknowledged`፣
+   `feedback-submitted`፣ `issue-opened`፣ እና `access-revoked`። ሎግ የሚኖረው በ
+   `artifacts/docs_portal_preview/feedback_log.json` በነባሪ; ጋር አያይዘው
+   የግብዣ ሞገድ ትኬት ከስምምነት ቅጾች ጋር። የማጠቃለያ ረዳትን ተጠቀም
+   ከመዝጊያው ማስታወሻ በፊት ኦዲት ሊደረግ የሚችል ጥቅል ለማዘጋጀት፡-
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   The JSON summary enumerates invites per wave, open recipients, feedback
-   counts, and the timestamp of the most recent event. The helper is backed by
-   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   so the same workflow can run locally or in CI. Use the digest template in
+   የJSON ማጠቃለያ ግብዣዎችን በየማዕበል፣ ክፍት ተቀባዮችን፣ ግብረመልስን ይዘረዝራል።
+   ይቆጥራል፣ እና የቅርቡ ክስተት የጊዜ ማህተም። ረዳቱ የተደገፈ ነው።
+   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs)፣
+   ስለዚህ ተመሳሳይ የስራ ሂደት በአካባቢው ወይም በ CI ውስጥ ሊሰራ ይችላል. ውስጥ የመፍጨት አብነት ተጠቀም
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   when publishing the wave recap.
-2. Tag telemetry dashboards with the `DOCS_RELEASE_TAG` used for the wave so
-   spikes can be correlated with invite cohorts.
-3. Run `npm run probe:portal -- --expect-release=<tag>` after the deploy to
-   confirm the preview environment advertises the correct release metadata.
-4. Capture any incidents in the runbook template and link them to the cohort.
+   የማዕበል ዳግመኛ ሲታተም.
+2. ለሞገድ የሚያገለግሉ የቴሌሜትሪ ዳሽቦርዶችን ከ `DOCS_RELEASE_TAG` ጋር መለያ ያድርጉ።
+   ስፒሎች ከግብዣ ቡድኖች ጋር ሊጣመሩ ይችላሉ።
+3. ወደ ማሰማራት በኋላ I18NI0000049X አሂድ
+   የቅድመ እይታ አካባቢ ትክክለኛውን የልቀት ዲበ ውሂብ እንደሚያስተዋውቅ ያረጋግጡ።
+4. በ runbook አብነት ውስጥ ያሉ ማንኛቸውም ክስተቶችን ያንሱ እና ከተሰበሰበው ቡድን ጋር ያገናኙዋቸው።
 
-## Feedback & close-out
+## ግብረ መልስ እና ቅርብ-ውጭ
 
-1. Aggregate feedback in a shared doc or issue board. Label items with
-   `docs-preview/<wave>` so roadmap owners can query them easily.
-2. Use the preview logger’s summary output to populate the wave report, then
-   summarise the cohort in `status.md` (participants, major findings, planned
-   fixes) and update `roadmap.md` if the DOCS-SORA milestone changed.
-3. Follow the offboarding steps from
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoke access, archive
-   requests, and thank participants.
-4. Prepare the next wave by refreshing artefacts, re-running the checksum gates,
-   and updating the invite template with new dates.
+1. አስተያየቶችን በጋራ ሰነድ ወይም እትም ቦርድ ውስጥ ያዋህዱ። ንጥሎቹን በ ሰይፉ
+   የመንገድ ካርታ ባለቤቶች በቀላሉ መጠየቅ እንዲችሉ `docs-preview/<wave>`።
+2. የሞገድ ሪፖርቱን ለመሙላት የቅድመ እይታ ሎገር ማጠቃለያ ውፅዓትን ተጠቀም፣ በመቀጠል
+   በ `status.md` (ተሳታፊዎች ፣ ዋና ግኝቶች ፣ የታቀዱ) ስብስቦችን ማጠቃለል
+   ጥገናዎች) እና የ DOCS-SORA ምእራፍ ከተለወጠ I18NI0000052X ያዘምኑ።
+3. ከቦርዲንግ ውጪ ያሉትን ደረጃዎች ይከተሉ
+   [`reviewer-onboarding`](./reviewer-onboarding.md)፡ መዳረሻን ሰርዝ፣ ማህደር
+   ጥያቄዎች እና ተሳታፊዎችን አመሰግናለሁ።
+4. የሚቀጥለውን ሞገድ በማደስ ቅርሶችን ማዘጋጀት፣ የቼክ በሮችን እንደገና በማካሄድ፣
+   እና የግብዣውን አብነት በአዲስ ቀናት ማዘመን።
 
-Consistently applying this playbook keeps the preview program auditable and
-gives Docs/DevRel a repeatable way to scale invites as the portal approaches GA.
+ይህንን የመጫወቻ ደብተር በቋሚነት መተግበር የቅድመ እይታ ፕሮግራሙን ኦዲት ያደርገዋል እና ያቆያል
+ፖርታሉ ወደ GA ሲቃረብ ግብዣዎችን ለመለካት Docs/DevRel ተደጋጋሚ መንገድ ይሰጣል።

@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cb67b304bae01fa4a50d25dc9f086811dabfbcb24239b3ec9679338248e18be6
 source_last_modified: "2025-12-29T18:16:35.985892+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# MOCHI Troubleshooting Guide
+# MOCHI 故障排除指南
 
-Use this runbook when local MOCHI clusters refuse to start, get wedged in a
-restart loop, or stop streaming block/event/status updates. It extends the
-roadmap item “Documentation & rollout” by turning the supervisor behaviours in
-`mochi-core` into concrete recovery steps.
+當本地 MOCHI 集群拒絕啟動、陷入困境時，請使用此 Runbook
+重新啟動循環，或停止流式傳輸塊/事件/狀態更新。它擴展了
+通過轉變主管行為來製定路線圖項目“文檔和部署”
+`mochi-core` 進入具體恢復步驟。
 
-## 1. First responder checklist
+## 1. 急救人員清單
 
-1. Capture the data root that MOCHI is using. The default follows
-   `$TMPDIR/mochi/<profile-slug>`; custom paths appear in the UI title bar and
-   via `cargo run -p mochi-ui-egui -- --data-root ...`.
-2. Run `./ci/check_mochi.sh` from the workspace root. This validates the core,
-   UI, and integration crates before you begin modifying configs.
-3. Note the preset (`single-peer` or `four-peer-bft`). The generated topology
-   determines how many peer folders/logs you should expect under the data root.
+1. 捕獲 MOCHI 正在使用的數據根。默認如下
+   `$TMPDIR/mochi/<profile-slug>`；自定義路徑出現在 UI 標題欄中，並且
+   通過 `cargo run -p mochi-ui-egui -- --data-root ...`。
+2. 從工作區根目錄運行 `./ci/check_mochi.sh`。這驗證了核心，
+   在開始修改配置之前，先了解 UI 和集成箱。
+3. 記下預設（`single-peer` 或 `four-peer-bft`）。生成的拓撲
+   確定數據根下應有多少對等文件夾/日誌。
 
-## 2. Collect logs & telemetry evidence
+## 2.收集日誌和遙測證據
 
-`NetworkPaths::ensure` (see `mochi/mochi-core/src/config.rs`) creates a stable
-layout:
+`NetworkPaths::ensure`（參見 `mochi/mochi-core/src/config.rs`）創建了一個穩定的
+佈局：
 
 ```
 <data_root>/<profile>/
@@ -43,28 +44,28 @@ layout:
   snapshots/
 ```
 
-Follow these steps before making changes:
+進行更改之前請按照以下步驟操作：
 
-- Use the **Logs** tab or open `logs/<alias>.log` directly to capture the last
-  200 lines for each peer. The supervisor tails stdout/stderr/system channels
-  via `PeerLogStream`, so these files match the UI output.
-- Export a snapshot via **Maintenance → Export snapshot** (or call
-  `Supervisor::export_snapshot`). The snapshot bundles storage, configs, and
-  logs into `snapshots/<timestamp>-<label>/`.
-- If the issue involves stream widgets, copy the `ManagedBlockStream`,
-  `ManagedEventStream`, and `ManagedStatusStream` health indicators from the
-  Dashboard. The UI surfaces the last reconnect attempt and error reason; grab
-  a screenshot for the incident record.
+- 使用 **Logs** 選項卡或直接打開 `logs/<alias>.log` 捕獲最後一個
+  每個對等點 200 行。主管尾部標準輸出/標準錯誤/系統通道
+  通過 `PeerLogStream`，因此這些文件與 UI 輸出匹配。
+- 通過**維護→導出快照**導出快照（或調用
+  `Supervisor::export_snapshot`）。快照捆綁了存儲、配置和
+  登錄 `snapshots/<timestamp>-<label>/`。
+- 如果問題涉及流小部件，請複制 `ManagedBlockStream`，
+  `ManagedEventStream` 和 `ManagedStatusStream` 運行狀況指標
+  儀表板。 UI 顯示上次重新連接嘗試和錯誤原因；搶
+  事件記錄的屏幕截圖。
 
-## 3. Resolving peer startup issues
+## 3. 解決對等啟動問題
 
-Most peer launch failures fall into three buckets:
+大多數對等啟動失敗分為三類：
 
-### Missing binaries or bad overrides
+### 缺少二進製文件或錯誤覆蓋
 
-`SupervisorBuilder` shells out to `irohad`, `kagami`, and (future) `iroha_cli`.
-If the UI reports “failed to spawn process” or “permission denied”, point MOCHI
-at known-good binaries:
+`SupervisorBuilder` 外殼為 `irohad`、`kagami` 和（未來）`iroha_cli`。
+如果 UI 報告“無法生成進程”或“權限被拒絕”，請點 MOCHI
+在已知良好的二進製文件中：
 
 ```bash
 cargo run -p mochi-ui-egui -- \
@@ -73,96 +74,92 @@ cargo run -p mochi-ui-egui -- \
   --iroha-cli /path/to/iroha_cli
 ```
 
-You can set `MOCHI_IROHAD`, `MOCHI_KAGAMI`, and `MOCHI_IROHA_CLI` to avoid
-typing the flags repeatedly. When debugging bundle builds, compare the
-`BundleConfig` in `mochi/mochi-ui-egui/src/config/` against the paths in
-`target/mochi-bundle`.
+您可以設置 `MOCHI_IROHAD`、`MOCHI_KAGAMI` 和 `MOCHI_IROHA_CLI` 以避免
+重複輸入標誌。調試捆綁包構建時，比較
+`mochi/mochi-ui-egui/src/config/` 中的 `BundleConfig` 與
+`target/mochi-bundle`。
 
-### Port collisions
+### 端口衝突
 
-`PortAllocator` probes the loopback interface before writing configs. If you see
-`failed to allocate Torii port` or `failed to allocate P2P port`, another
-process is already listening on the default range (8080/1337). Relaunch MOCHI
-with explicit bases:
+`PortAllocator` 在寫入配置之前探測環回接口。如果你看到
+`failed to allocate Torii port` 或 `failed to allocate P2P port`，另一個
+進程已在默認範圍 (8080/1337) 上偵聽。重新啟動MOCHI
+具有明確的基礎：
 
 ```bash
 cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
 ```
 
-The builder will fan out sequential ports from those bases, so reserve a range
-sized for your preset (`peer_count` peers → `peer_count` ports per transport).
+構建器將從這些基地扇出連續端口，因此保留一個範圍
+根據您的預設調整大小（`peer_count` 對等體→ `peer_count` 每個傳輸端口）。
 
-### Genesis and storage corruption
+### 創世和存儲損壞如果 Kagami 在發出清單之前退出，對等點將立即崩潰。檢查
+數據根內的 `genesis/*.json`/`.toml`。重新運行
+`--kagami /path/to/kagami` 或將 **設置** 對話框指向右側的二進製文件。
+對於存儲損壞，請使用維護部分的**擦除和重新生成**
+按鈕（如下所示），而不是手動刪除文件夾；它重新創建了
+重新啟動進程之前的對等目錄和快照根。
 
-If Kagami exits before emitting a manifest, peers will crash immediately. Check
-`genesis/*.json`/`.toml` inside the data root. Re-run with
-`--kagami /path/to/kagami` or point the **Settings** dialog at the right binary.
-For storage corruption, use the Maintenance section’s **Wipe & re-genesis**
-button (covered below) instead of deleting folders by hand; it recreates the
-peer directories and snapshot roots before restarting processes.
+### 調整自動重啟
 
-### Tuning automatic restarts
+`config/local.toml` 中的 `[supervisor.restart]` （或 CLI 標誌
+`--restart-mode`、`--restart-max`、`--restart-backoff-ms`) 控制頻率
+主管重試失敗的對等點。當需要UI時設置`mode = "never"`
+立即出現第一個故障，或縮短 `max_restarts`/`backoff_ms`
+收緊必須快速失敗的 CI 作業的重試窗口。
 
-`[supervisor.restart]` in `config/local.toml` (or the CLI flags
-`--restart-mode`, `--restart-max`, `--restart-backoff-ms`) control how often the
-supervisor retries failed peers. Set `mode = "never"` when you need the UI to
-surface the first failure immediately, or shorten `max_restarts`/`backoff_ms`
-to tighten the retry window for CI jobs that must fail fast.
+## 4. 安全重置對等點
 
-## 4. Resetting peers safely
-
-1. Stop the affected peers from the Dashboard or quit the UI. The supervisor
-   refuses to wipe storage while a peer is running (`PeerHandle::wipe_storage`
-   returns `PeerStillRunning`).
-2. Navigate to **Maintenance → Wipe & re-genesis**. MOCHI will:
-   - delete `peers/<alias>/storage`;
-   - rerun Kagami to rebuild configs/genesis under `genesis/`; and
-   - restart peers with the preserved CLI/environment overrides.
-3. If you must do this manually:
+1. 從儀表板停止受影響的對等點或退出 UI。主管
+   拒絕在對等方運行時擦除存儲（`PeerHandle::wipe_storage`
+   返回 `PeerStillRunning`)。
+2. 導航至**維護 → 擦除和重新生成**。莫奇將：
+   -刪除`peers/<alias>/storage`；
+   - 重新運行 Kagami 以在 `genesis/` 下重建配置/創世；和
+   - 使用保留的 CLI/環境覆蓋重新啟動對等點。
+3. 如果您必須手動執行此操作：
    ```bash
    cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```
-   Afterwards, restart MOCHI so `NetworkPaths::ensure` recreates the tree.
+   然後，重新啟動 MOCHI，以便 `NetworkPaths::ensure` 重新創建樹。
 
-Always archive the `snapshots/<timestamp>` folder before wiping, even in local
-development—those bundles capture the precise `irohad` logs and configs needed
-to reproduce bugs.
+擦除之前務必存檔 `snapshots/<timestamp>` 文件夾，即使在本地也是如此
+開發 - 這些捆綁包捕獲所需的精確 `irohad` 日誌和配置
+重現錯誤。
 
-### 4.1 Restoring from snapshots
+### 4.1 從快照恢復
 
-When an experiment corrupts storage or you need to replay a known-good state, use the Maintenance
-dialog’s **Restore snapshot** button (or call `Supervisor::restore_snapshot`) instead of copying
-directories manually. Provide either an absolute path to the bundle or the sanitised folder name
-under `snapshots/`. The supervisor will:
+當實驗損壞存儲或者您需要重播已知良好的狀態時，請使用維護
+對話框的 **恢復快照** 按鈕（或調用 `Supervisor::restore_snapshot`）而不是複制
+手動目錄。提供捆綁包的絕對路徑或經過清理的文件夾名稱
+在 `snapshots/` 下。主管將：
 
-1. stop any running peers;
-2. verify that the snapshot’s `metadata.json` matches the current `chain_id` and peer count;
-3. copy `peers/<alias>/{storage,snapshot,config.toml,latest.log}` back into the active profile; and
-4. restore `genesis/genesis.json` before restarting peers if they were running beforehand.
+1. 停止任何正在運行的節點；
+2. 驗證快照的 `metadata.json` 是否與當前 `chain_id` 和對等計數匹配；
+3. 將 `peers/<alias>/{storage,snapshot,config.toml,latest.log}` 複製回活動配置文件中；和
+4. 如果對等點之前正在運行，請在重新啟動對等點之前恢復 `genesis/genesis.json`。
 
-If the snapshot was created for a different preset or chain identifier the restore call returns a
-`SupervisorError::Config` so you can grab a matching bundle instead of silently mixing artefacts.
-Keep at least one fresh snapshot per preset to accelerate recovery drills.
+如果快照是為不同的預設或鏈標識符創建的，則恢復調用將返回
+`SupervisorError::Config`，這樣您就可以獲取匹配的捆綁包，而不是默默地混合人工製品。
+每個預設至少保留一個新快照，以加速恢復演練。
 
-## 5. Repairing block/event/status streams
+## 5. 修復塊/事件/狀態流- **流停滯但對等體健康。 **檢查**事件**/**塊**面板
+  用於紅色狀態欄。單擊“停止”，然後單擊“啟動”以強制託管流
+  重新訂閱；主管記錄每次重新連接嘗試（使用對等別名和
+  錯誤），以便您可以確認退避階段。
+- **狀態覆蓋已過時。 ** `ManagedStatusStream` 每隔一次輪詢 `/status`
+  兩秒並在“STATUS_POLL_INTERVAL *”之後標記數據過時
+  STATUS_STALE_MULTIPLIER`（默認六秒）。如果徽章保持紅色，請驗證
+  對等配置中的 `torii_status_url` 並確保網關或 VPN 不是
+  阻止環回連接。
+- **事件解碼失敗。 ** UI 打印解碼階段（原始字節、
+  `BlockSummary` 或 Norito 解碼）和違規交易哈希。出口
+  通過剪貼板按鈕事件，以便您可以在測試中重現解碼
+  （`mochi-core` 公開了輔助構造函數
+  `mochi/mochi-core/src/torii.rs`）。
 
-- **Stream stalled but peers healthy.** Check the **Events**/**Blocks** panels
-  for red status bars. Click “Stop” then “Start” to force the managed stream to
-  resubscribe; the supervisor logs every reconnect attempt (with peer alias and
-  error) so you can confirm backoff stages.
-- **Status overlay out of date.** `ManagedStatusStream` polls `/status` every
-  two seconds and marks data stale after `STATUS_POLL_INTERVAL *
-  STATUS_STALE_MULTIPLIER` (default six seconds). If the badge stays red, verify
-  `torii_status_url` in the peer config and ensure the gateway or VPN is not
-  blocking loopback connections.
-- **Event decoding failures.** The UI prints the decode stage (raw bytes,
-  `BlockSummary`, or Norito decode) and the offending transaction hash. Export
-  the event via the clipboard button so you can reproduce the decode in tests
-  (`mochi-core` exposes helper constructors under
-  `mochi/mochi-core/src/torii.rs`).
-
-When streams repeatedly crash, update the issue with the exact peer alias and
-error string (`ToriiErrorKind`) so the roadmap telemetry milestones stay tied
-to concrete evidence.
+當流反复崩潰時，使用確切的對等別名更新問題並
+錯誤字符串 (`ToriiErrorKind`)，因此路線圖遙測里程碑保持聯繫
+到具體的證據。

@@ -11,54 +11,55 @@ id: preview-feedback-w0-summary
 title: W0 midpoint feedback digest
 sidebar_label: W0 feedback (midpoint)
 description: Midpoint checkpoints, findings, and action items for the core-maintainer preview wave.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| རྣམ་གྲངས་ | ཁ་གསལ་ |
 | --- | --- |
-| Wave | W0 — Core maintainers |
-| Digest date | 2025‑03‑27 |
-| Review window | 2025‑03‑25 → 2025‑04‑08 |
-| Participants | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Artefact tag | `preview-2025-03-24` |
+| རླབས་ | W0 — གཙོ་བོའི་བདག་འཛིན་པ་ |
+| བཞུ་བའི་ཚེས་གྲངས་ | ༢༠༢༥‐༠༣‐༢༧ |
+| བསྐྱར་ཞིབ་སྒོ་སྒྲིག་ | ༢༠༢༥‐༠༣‐༢༥ → ༢༠༢༥‐༠༤‐༠༨ |
+| བཅའ་མར་གཏོགས་མི་ཚུ་ | docs-core-01, sdk-rust-01, sdk-js-01, སོ་རཕ་-ཨོཔ་-༠༡, བལྟ་རྟོག་འབད་ཚུགསཔ་-༠༡ |
+| ཅ་རྙིང་ངོ་རྟགས། | I18NI0000006X |
 
-## Highlights
+## གཙོ་བསྟེན།
 
-1. **Checksum workflow** — All reviewers confirmed `scripts/preview_verify.sh`
-   succeeded against the shared descriptor/archive pair. No manual overrides
-   required.
-2. **Navigation feedback** — Two minor sidebar ordering issues were filed
-   (`docs-preview/w0 #1–#2`). Both are routed to Docs/DevRel and do not block the
-   wave.
-3. **SoraFS runbook parity** — sorafs-ops-01 requested clearer cross-links
-   between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. Follow-up
-   issue filed; to be addressed before W1.
-4. **Telemetry review** — observability-01 confirmed `docs.preview.integrity`,
-   `TryItProxyErrors`, and Try-it proxy logs stayed green; no alerts fired.
+1. **ཅེག་སམ་ལཱ་གི་རྒྱུན་རིམ་** བསྐྱར་ཞིབ་པ་ཆ་མཉམ་གྱིས་ `scripts/preview_verify.sh` ངེས་གཏན་བཟོ་ཡོདཔ་ཨིན།
+   བགོ་བཤའ་རྐྱབ་མི་ འགྲེལ་བཤད་/གཏན་མཛོད་ཆ་གཅིག་ལུ་ མཐར་འཁྱོལ་ཡོདཔ། ལག་དེབ་བཀག་མེད།
+   དགོས་མཁོ།
+2. **འགྲུལ་བསྐྱོད་ཀྱི་བསམ་འཆར།** — ཟུར་ཕྲ་རིང་གོ་རིམ་གྱི་གནད་དོན་ཆུང་བ་གཉིས་བཙུགས་ཡོད།
+   (I 18NI0000008X). གཉིས་ཆ་ར་ ཌོཀསི་/ཌི་ཝི་རེལ་ལུ་འགྲུལ་བསྐྱོད་འབད་ཡོདཔ་དང་ འདི་བཀག་མི་བཞག།
+   རྦ་རླབས།
+3.*SoraFS རན་བུཀ་ ཆ་སྙོམས་** — sorafs-ops-01 གིས་ ཕར་ཚུར་གྱི་འབྲེལ་ལམ་གསལ་ཏོག་ཏོ་སྦེ་ཞུ་བ་འབད་ཡོདཔ།
+   བར་ན་ `sorafs/orchestrator-ops` དང་ `sorafs/multi-source-rollout`. འཕྲོ་མཐུད
+   གནད་དོན་ཚུ་བཙུགས་ཡོདཔ། W1 གི་ཧེ་མ་ ཁ་བྱང་བཀོད་ནི།
+4. **Telemetry བསྐྱར་ཞིབ།** — བལྟ་རྟོག་འབད་ཚུགསཔ་-༠༡ བདེན་དཔང་འབད་ཡོདཔ། I18NI000000011X,
+   I18NI000000012X དང་ དེ་ལས་ ཚོད་བལྟ་འབད་ཞིནམ་ལས་ ངོ་ཚབ་དྲན་ཐོ་ཚུ་ ལྗང་ཁུ་སྦེ་སྡོད་ནུག། ཉེན་བརྡ་མ་བཏང་།
 
-## Action items
+## བྱ་བ་རྣམ་གྲངས།
 
-| ID | Description | Owner | Status |
+| ID | འགྲེལ་བཤད་ | ཇོ་བདག་ | གནས་ཚད་ |
 | --- | --- | --- | --- |
-| W0-A1 | Reorder devportal sidebar entries to surface reviewer-focused docs (`preview-invite-*` group together). | Docs-core-01 | ✅ Completed — sidebar now lists the reviewer docs contiguously (`docs/portal/sidebars.js`). |
-| W0-A2 | Add explicit cross-link between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. | Sorafs-ops-01 | ✅ Completed — each runbook now links to the other so operators see both guides during rollouts. |
-| W0-A3 | Share telemetry snapshots + query bundle with governance tracker. | Observability-01 | ✅ Completed — bundle attached to `DOCS-SORA-Preview-W0`. |
+| W0-A1 | བསྐྱར་ཞིབ་འབད་མི་གིས་གཙོ་བོར་བསྟེན་མི་ ཌོཀ་ (`preview-invite-*` སྡེ་ཚན་) ཁ་ཐོག་ལུ་ devportal ཟུར་ཁའི་ཐོ་བཀོད་ཚུ་ བསྐྱར་སྒྲིག་འབད། | ཡིག་ཆ་-ཀོར་-༠༡ | ✅ མཇུག་བསྡུ་ — ཟུར་ཁའི་ཕྲ་རིང་གིས་ ད་ལྟོ་ བསྐྱར་ཞིབ་འབད་མི་ ཡིག་ཆ་ཚུ་ མཐུད་དེ་ (`docs/portal/sidebars.js`) ཐོ་བཀོད་འབདཝ་ཨིན། |
+| W0-A2 | `sorafs/orchestrator-ops` དང་ `sorafs/multi-source-rollout` གི་བར་ན་ གསལ་རི་རི་སྦེ་ ཕར་ཚུར་འབྲེལ་ལམ་ཁ་སྐོང་འབད། | སོ་རཕ་སི་-ཨོཔ་-༠༡ | ✅ མཇུག་བསྡུ་ — ད་ལྟོ་ རན་ཀི་དེབ་རེ་རེ་གིས་ གཞན་མི་ཚུ་དང་འབྲེལ་མཐུད་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བསྐོར་ར་རྐྱབ་པའི་སྐབས་ ལམ་སྟོན་གཉིས་ཆ་ར་ མཐོངམ་ཨིན། |
+| W0-A3 | གཞུང་སྐྱོང་རྗེས་འདེད་དང་མཉམ་དུ་བརྗེ་སོར་གྱི་བརྡ་འཕྲིན་ + འདྲི་དཔྱད་བང་སྒྲིལ། | བལྟ་རྟོག་འབད་ཚུགསཔ་-༠༡ | ✅ མཇུག་བསྡུ་ — `DOCS-SORA-Preview-W0` ལུ་མཐུད་ཡོད་པའི་ བང་རིམ་ཚུ། |
 
-## Exit summary (2025-04-08)
+## བཅུད་བསྡུས་ (༢༠༢༥-༠༤-༠༨)
 
-- All five reviewers confirmed completion, purged local builds, and exited the
-  preview window; access revocations recorded in `DOCS-SORA-Preview-W0`.
-- No incidents or alerts fired during the wave; telemetry dashboards stayed
-  green for the full period.
-- Navigation + cross-link actions (W0-A1/A2) are implemented and reflected in
-  the docs above; telemetry evidence (W0-A3) is attached to the tracker.
-- Evidence bundle archived: telemetry screenshots, invite acknowledgements, and
-  this digest are linked from the tracker issue.
+- བསྐྱར་ཞིབ་པ་ལྔ་ཆ་ར་གིས་ མཇུག་བསྡུ་ཡོདཔ་སྦེ་ ངེས་གཏན་བཟོ་སྟེ་ ས་གནས་ཀྱི་བཟོ་བསྐྲུན་ཚུ་ གཙང་མ་བཟོ་ཞིནམ་ལས་ ཕྱིར་ཐོན་འབད་ཡོདཔ་ཨིན།
+  སྔོན་ལྟ་སྒོ་སྒྲིག་; `DOCS-SORA-Preview-W0` ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ འཛུལ་སྤྱོད་ཆ་མེད་ཚུ།
+- རྦ་རླབས་སྐབས་ བྱུང་རྐྱེན་དང་ ཉེན་བརྡ་ཚུ་ མ་བཏབ། telemetry dashboard ཚུ་སྡོད་ཡོདཔ།
+  དུས་ཡུན་ཆ་ཚང་གི་དོན་ལུ་ ལྗང་ཁུ།
+- འགྲུལ་བསྐྱོད་ + ཕར་ཚུར་འབྲེལ་ལམ་བྱ་བ་ (W0-A1/A2) ཚུ་ ལག་ལེན་འཐབ་སྟེ་ ནང་གསལ་བཏོན་འབདཝ་ཨིན།
+  གོང་གསལ་ཡིག་ཆ་ཚུ། བརྡ་འཕྲིན་སྒྲུབ་བྱེད་ (W0-A3) འདི་ འཚོལ་ཞིབ་པ་ལུ་ མཐུད་ཡོདཔ་ཨིན།
+- བདེན་དཔང་བང་མཛོད་ཡིག་མཛོད་: བརྒྱུད་འཕྲིན་གསལ་གཞི་པར་རིས།, ངོས་ལེན་འབོད་བརྡ་, དང་།
+  འདི་ ཌའི་སའིཊི་ཚུ་ འཚོལ་ཞིབ་ཀྱི་གནད་དོན་ལས་ འབྲེལ་མཐུད་འབད་ཡོདཔ་ཨིན།
 
-## Next steps
+## ཤུལ་མམ་གྱི་གོམ་པ།
 
-- Implement W0 action items before opening W1.
-- Obtain legal approval and proxy staging slot, then follow the partner-wave
-  preflight steps outlined in the [preview invite flow](../../preview-invite-flow.md).
+- W1 ཁ་ཕྱེ་བའི་ཧེ་མ་ W0 བྱ་བའི་རྣམ་གྲངས་ཚུ་ལག་ལེན་འཐབ།
+- ཁྲིམས་མཐུན་གྱི་གནང་བ་དང་ ངོ་ཚབ་ཀྱི་ གནས་རིམ་གྱི་ ས་སྒོ་ཚུ་ ཐོབ་ཞིནམ་ལས་ དེ་ལས་ མཉམ་འབྲེལ་རླབས་འདི་ རྗེས་སུ་འཇུག་དགོ།
+  [preview wint wint flow](I18NU0000004X) ནང་ སྔོན་ལྟ་འཕུར་འགྲན་གྱི་གོམ་པ་ཚུ།
 
-_This digest is linked from the [preview invite tracker](../../preview-invite-tracker.md) to
-keep the DOCS-SORA roadmap traceable._
+_འདི་ ཌའི་སའིཌ་འདི་ [སྔོན་ལྟའི་མགྲོན་བརྡ་འཚོལ་ཞིབ་པ་](I18NU0000005X) ལས་འབྲེལ་མཐུད་འབད་ཡོདཔ་ཨིན།
+DOCS-I1NT00000003X ལམ་སྟོན་འཚོལ་ཞིབ་འབད་བཏུབ་སྦེ་བཞག་དགོ།

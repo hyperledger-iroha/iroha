@@ -4,29 +4,31 @@ direction: ltr
 source: docs/portal/docs/sorafs/orchestrator-ops.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-ops
-title: Runbook de operaciones del orquestador de SoraFS
-sidebar_label: Runbook del orquestador
-description: Guía operativa paso a paso para desplegar, supervisar y revertir el orquestador multi-origen.
+identifiant : orchestrator-ops
+titre : Runbook des opérations de l'orchestre de SoraFS
+sidebar_label : Runbook de l'orchestre
+description : Guide opérationnel pas à pas pour désemplir, superviser et rétablir l'orquestador multi-origen.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Mantén ambas copias sincronizadas hasta que el conjunto de documentación Sphinx heredado se haya migrado por completo.
+:::note Source canonique
+Cette page reflète `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Il s'agit de copies synchronisées jusqu'à ce que le ensemble de documents Sphinx hérité soit migré complètement.
 :::
 
-Este runbook guía a los SRE en la preparación, el despliegue y la operación del orquestador de fetch multi-origen. Complementa la guía de desarrollo con procedimientos ajustados a despliegues de producción, incluida la habilitación por etapas y el bloqueo de peers.
+Ce runbook guide le SRE pour la préparation, le déroulement et l'opération de l'explorateur de récupération multi-origine. Complète le guide de développement avec des procédures ajustées pour les tâches de production, y compris l'habilitation pour les étapes et le blocage des pairs.
 
-> **Ver también:** El [Runbook de despliegue multi-origen](./multi-source-rollout.md) se centra en oleadas de despliegue a nivel de flota y en la denegación de proveedores en emergencias. Consúltalo para la coordinación de gobernanza / staging mientras usas este documento para las operaciones diarias del orquestador.
+> **Voir aussi :** Le [Runbook de despliegue multi-origen](./multi-source-rollout.md) est centré sur les oleadas de despliegue au niveau de flottaison et sur la dénégation des fournisseurs en urgence. Conseiller pour la coordination de la gouvernance / de la mise en scène pendant que nous utilisons ce document pour les opérations du journal de l'orchestre.
 
-## 1. Lista de verificación previa
+## 1. Liste de vérification préalable
 
-1. **Recopilar entradas de proveedores**
-   - Los últimos anuncios de proveedores (`ProviderAdvertV1`) y la instantánea de telemetría de la flota objetivo.
-   - El plan de payload (`plan.json`) derivado del manifiesto bajo prueba.
-2. **Generar un scoreboard determinista**
+1. **Recopilar entradas de provenedores**
+   - Les dernières annonces des fournisseurs (`ProviderAdvertV1`) et la télémétrie instantanée de la flottaison objet.
+   - Le plan de charge utile (`plan.json`) dérivé du manifeste en bas de l'essai.
+2. **Générer un tableau de bord déterministe**
 
    ```bash
    sorafs_fetch \
@@ -39,30 +41,28 @@ Este runbook guía a los SRE en la preparación, el despliegue y la operación d
      --json-out artifacts/session.summary.json
    ```
 
-   - Valida que `artifacts/scoreboard.json` liste a cada proveedor de producción como `eligible`.
-   - Archiva el JSON de resumen junto al scoreboard; los auditores se apoyan en los contadores de reintentos de chunks al certificar la solicitud de cambio.
-3. **Dry-run con fixtures** — Ejecuta el mismo comando contra los fixtures públicos en `docs/examples/sorafs_ci_sample/` para garantizar que el binario del orquestador coincide con la versión esperada antes de tocar payloads de producción.
+   - Valida que `artifacts/scoreboard.json` liste chaque fournisseur de production comme `eligible`.
+   - Archivage du JSON de reprise avec le tableau de bord ; les auditeurs sont apoyan par les contadores de reintentos de chunks al certificar la sollicitud de change.
+3. **Dry-run con luminaires** — Effectuez la même commande contre les luminaires publics en `docs/examples/sorafs_ci_sample/` pour garantir que le binaire de l'explorateur coïncide avec la version attendue avant de charger les charges utiles de production.
 
-## 2. Procedimiento de despliegue por etapas
+## 2. Procédure d'exécution par étape
 
-1. **Etapa canaria (≤2 proveedores)**
-   - Reconstruye el scoreboard y ejecuta con `--max-peers=2` para limitar el orquestador a un subconjunto pequeño.
-   - Supervisa:
-     - `sorafs_orchestrator_active_fetches`
-     - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
-     - `sorafs_orchestrator_retries_total`
-   - Continúa cuando las tasas de reintentos se mantengan por debajo del 1% para un fetch completo del manifiesto y ningún proveedor acumule fallos.
-2. **Etapa de rampa (50% de proveedores)**
-   - Incrementa `--max-peers` y vuelve a ejecutar con una instantánea de telemetría reciente.
-   - Persiste cada ejecución con `--provider-metrics-out` y `--chunk-receipts-out`. Conserva los artefactos durante ≥7 días.
-3. **Despliegue completo**
-   - Elimina `--max-peers` (o configúralo al recuento completo de elegibles).
-   - Habilita el modo orquestador en los despliegues cliente: distribuye el scoreboard persistido y el JSON de configuración mediante tu sistema de gestión de configuración.
-   - Actualiza los dashboards para mostrar `sorafs_orchestrator_fetch_duration_ms` p95/p99 y los histogramas de reintentos por región.
+1. **Etapa canaria (≤2 fournisseurs)**
+   - Reconstruire le tableau de bord et exécuter avec `--max-peers=2` pour limiter l'orchestre à un sous-ensemble petit.
+   - Supervise :
+     -`sorafs_orchestrator_active_fetches`
+     -`sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
+     -`sorafs_orchestrator_retries_total`
+   - Continuez lorsque les poches de réintention se maintiennent en bajo du 1% pour une récupération complète du manifeste et n'importe quel fournisseur cumule les chutes.
+2. **Etapa de rampa (50% des fournisseurs)**
+   - Incrémentez `--max-peers` et vuelve à exécuter avec une télémétrie instantanée récente.
+   - Continuer chaque exécution avec `--provider-metrics-out` et `--chunk-receipts-out`. Conserver les objets pendant ≥7 jours.
+3. **Despligue completo**
+   - Elimina `--max-peers` (la configuration du dossier complet des éléments éligibles).
+   - Habiliter le mode explorateur chez les clients clients : distribuer le tableau de bord persistant et le JSON de configuration à travers votre système de gestion de configuration.
+   - Actualiser les tableaux de bord pour afficher `sorafs_orchestrator_fetch_duration_ms` p95/p99 et les histogrammes de réintention par région.
 
-## 3. Bloqueo y refuerzo de peers
-
-Usa las anulaciones de la política de puntuación del CLI para clasificar proveedores no saludables sin esperar actualizaciones de gobernanza.
+## 3. Blocage et renvoi des pairsUtilisez les annonces politiques de pointage de la CLI pour classifier les fournisseurs non saludables sans attendre les mises à jour du gouvernement.
 
 ```bash
 sorafs_fetch \
@@ -76,34 +76,34 @@ sorafs_fetch \
   --json-out artifacts/override.summary.json
 ```
 
-- `--deny-provider` elimina el alias indicado de la consideración en la sesión actual.
-- `--boost-provider=<alias>=<weight>` aumenta el peso del planificador del proveedor. Los valores se suman al peso normalizado del scoreboard y solo se aplican a la ejecución local.
-- Registra las anulaciones en el ticket de incidente y adjunta las salidas JSON para que el equipo responsable pueda reconciliar el estado una vez que se corrija el problema subyacente.
+- `--deny-provider` supprimer l'alias indiqué pour la considération dans la session actuelle.
+- `--boost-provider=<alias>=<weight>` augmente le poids du planificateur du fournisseur. Les valeurs sont exprimées en poids normalisé du tableau de bord et s'appliquent uniquement à l'exécution locale.
+- Enregistrez les annonces sur le ticket d'incident et ajoutez les sorties JSON pour que l'équipe responsable puisse concilier l'état une fois qu'il corrija le problème subyacente.
 
-Para cambios permanentes, modifica la telemetría de origen (marca al infractor como penalizado) o actualiza el anuncio con presupuestos de flujo actualizados antes de limpiar las anulaciones del CLI.
+Pour des changements permanents, modifiez la télémétrie d'origine (marque du contrevenant comme pénalisé) ou actualisez l'annonce avec des présupposés de flux actualisés avant de nettoyer les annonces de la CLI.
 
-## 4. Diagnóstico de fallos
+## 4. Diagnostic des erreurs
 
-Cuando un fetch falla:
+Lorsque vous récupérez l'erreur :
 
-1. Captura los siguientes artefactos antes de volver a ejecutar:
-   - `scoreboard.json`
-   - `session.summary.json`
-   - `chunk_receipts.json`
-   - `provider_metrics.json`
-2. Inspecciona `session.summary.json` para ver la cadena de error legible:
-   - `no providers were supplied` → verifica las rutas de los proveedores y los anuncios.
-   - `retry budget exhausted ...` → incrementa `--retry-budget` o elimina peers inestables.
-   - `no compatible providers available ...` → audita la metainformación de capacidad de rango del proveedor infractor.
-3. Correlaciona el nombre del proveedor con `sorafs_orchestrator_provider_failures_total` y crea un ticket de seguimiento si la métrica se dispara.
-4. Reproduce la obtención sin conexión con `--scoreboard-json` y la telemetría capturada para reproducir el fallo de forma determinista.
+1. Capturez les objets suivants avant de retourner à l'exécution :
+   -`scoreboard.json`
+   -`session.summary.json`
+   -`chunk_receipts.json`
+   -`provider_metrics.json`
+2. Inspecciona `session.summary.json` pour voir la chaîne d'erreur lisible :
+   - `no providers were supplied` → vérifier les itinéraires des fournisseurs et les annonces.
+   - `retry budget exhausted ...` → incrémenta `--retry-budget` ou élimination des pairs inestables.
+   - `no compatible providers available ...` → audita la metainformación de capacidad de rango del provenor infractor.
+3. Corrélez le numéro du fournisseur avec `sorafs_orchestrator_provider_failures_total` et créez un ticket de suivi si la métrique disparaît.
+4. Reproduire l'obtención sans connexion avec `--scoreboard-json` et la télémétrie capturée pour reproduire la chute de forme déterministe.
 
-## 5. Reversión
+## 5. Réversion
 
-Para revertir un despliegue del orquestador:
+Pour revenir à un jeu de l'orchestre :
 
-1. Distribuye una configuración que establezca `--max-peers=1` (deshabilita de hecho la planificación multi-origen) o vuelve a los clientes a la ruta de fetch heredada de un solo origen.
-2. Elimina cualquier anulación `--boost-provider` para que el scoreboard vuelva a un peso neutral.
-3. Continúa recolectando las métricas del orquestador durante al menos un día para confirmar que no queden fetches en vuelo.
+1. Distribuez une configuration établie par `--max-peers=1` (déshabilitation de la planification multi-origine) ou vuelve aux clients sur la route de récupération héritée d'une seule origine.
+2. Éliminez toute annulation `--boost-provider` pour que le tableau de bord donne un poids neutre.
+3. Continuez à recueillir les données de l'orchestre au cours de la journée pour confirmer que rien n'est récupéré en vue.
 
-Mantener una captura disciplinada de artefactos y despliegues por etapas garantiza que el orquestador multi-origen pueda operarse de forma segura en flotas heterogéneas de proveedores mientras se mantienen los requisitos de observabilidad y auditoría.
+Maintenir une capture disciplinée d'artefacts et d'expéditions pendant des périodes garantit que l'orquesteur multi-origine pourra opérer de manière sûre sur des flottes hétérogènes de fournisseurs pendant qu'il maintient les exigences d'observation et d'auditoire.

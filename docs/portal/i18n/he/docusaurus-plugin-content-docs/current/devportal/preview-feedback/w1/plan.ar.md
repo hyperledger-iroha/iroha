@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w1/plan.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -31,10 +33,10 @@ description: مهام، مالكون، وقائمة ادلة لمجموعة مع
 
 | المعرف | المهمة | المالك | الاستحقاق | الحالة | ملاحظات |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | الحصول على موافقة قانونية على ملحق شروط المعاينة | Docs/DevRel lead -> Legal | 2025-04-05 | ✅ مكتمل | تمت الموافقة على التذكرة القانونية `DOCS-SORA-Preview-W1-Legal` في 2025-04-05؛ ملف PDF مرفق بالمتتبع. |
+| W1-P1 | الحصول على موافقة قانونية على ملحق شروط المعاينة | Docs/DevRel lead -> משפטי | 2025-04-05 | ✅ مكتمل | تمت الموافقة على التذكرة القانونية `DOCS-SORA-Preview-W1-Legal` في 2025-04-05؛ ملف PDF مرفق بالمتتبع. |
 | W1-P2 | حجز نافذة staging لوكيل Try it (2025-04-10) والتحقق من صحة الوكيل | Docs/DevRel + Ops | 2025-04-06 | ✅ مكتمل | تم تنفيذ `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` في 2025-04-06؛ تم ارشفة سجل CLI و `.env.tryit-proxy.bak`. |
-| W1-P3 | بناء اثر المعاينة (`preview-2025-04-12`)، تشغيل `scripts/preview_verify.sh` + `npm run probe:portal`، وارشفة descriptor/checksums | Portal TL | 2025-04-08 | ✅ مكتمل | تم حفظ الاثر وسجلات التحقق تحت `artifacts/docs_preview/W1/preview-2025-04-12/`؛ مخرجات probe مرفقة بالمتتبع. |
-| W1-P4 | مراجعة نماذج intake للشركاء (`DOCS-SORA-Preview-REQ-P01...P08`)، وتاكيد جهات الاتصال و NDAs | Governance liaison | 2025-04-07 | ✅ مكتمل | تمت الموافقة على الطلبات الثمانية (اخر طلبين في 2025-04-11)؛ الروابط موجودة في المتتبع. |
+| W1-P3 | بناء اثر المعاينة (`preview-2025-04-12`)، تشغيل `scripts/preview_verify.sh` + `npm run probe:portal`، وارشفة descriptor/checksums | פורטל TL | 2025-04-08 | ✅ مكتمل | تم حفظ الاثر وسجلات التحقق تحت `artifacts/docs_preview/W1/preview-2025-04-12/`؛ مخرجات probe مرفقة بالمتتبع. |
+| W1-P4 | مراجعة نماذج intake للشركاء (`DOCS-SORA-Preview-REQ-P01...P08`)، وتاكيد جهات الاتصال و NDAs | קשר ממשל | 2025-04-07 | ✅ مكتمل | تمت الموافقة على الطلبات الثمانية (اخر طلبين في 2025-04-11)؛ الروابط موجودة في المتتبع. |
 | W1-P5 | صياغة دعوة (مبنية على `docs/examples/docs_preview_invite_template.md`)، وضبط `<preview_tag>` و `<request_ticket>` لكل شريك | Docs/DevRel lead | 2025-04-08 | ✅ مكتمل | ارسلت مسودة الدعوة في 2025-04-12 15:00 UTC مع روابط الاثر. |
 
 ## قائمة التحقق قبل الاطلاق
@@ -56,12 +58,10 @@ description: مهام، مالكون، وقائمة ادلة لمجموعة مع
 - [x] جدول roster للدعوات مع حقول `invite_sent_at` معبأة (راجع سجل W1 في المتتبع).
 - [x] اثار التغذية الراجعة منعكسة في [`preview-feedback/w1/log.md`](./log.md) مع صف لكل شريك (تم تحديثه 2025-04-26 ببيانات roster/telemetria/issues).
 
-حدّث هذه الخطة كلما تقدمت المهام؛ يشير اليها المتتبع للحفاظ على قابلية تدقيق خارطة الطريق.
-
-## سير عمل التغذية الراجعة
+حدّث هذه الخطة كلما تقدمت المهام؛ يشير اليها المتتبع للحفاظ على قابلية تدقيق خارطة الطريق.## سير عمل التغذية الراجعة
 
 1. لكل مراجع، انسخ القالب في
-   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md)،
+   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
    املأ البيانات الوصفية، واحفظ النسخة المكتملة تحت
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
 2. لخص الدعوات ونقاط القياس والمسائل المفتوحة داخل السجل الحي في

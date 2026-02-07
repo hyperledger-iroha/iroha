@@ -4,29 +4,31 @@ direction: rtl
 source: docs/portal/docs/soranet/pq-primitives.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-primitives
-title: Primitivos pos-quanticos do SoraNet
-sidebar_label: Primitivos PQ
-description: Visao geral do crate `soranet_pq` e de como o handshake do SoraNet consome helpers ML-KEM/ML-DSA.
+ID: PQ-primitives
+عنوان: سورانیٹ پوسٹ کوانٹم قدیم
+سائڈبار_لیبل: پی کیو قدیم
+تفصیل: `soranet_pq` کریٹ کا جائزہ اور کس طرح سورانیٹ ہینڈ شیک ML-KEM/ML-DSA مددگار استعمال کرتا ہے۔
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/soranet/pq_primitives.md`. Mantenha ambas as copias sincronizadas.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/soranet/pq_primitives.md` کا آئینہ دار ہے۔ دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
-O crate `soranet_pq` contem os blocos pos-quanticos nos quais todo relay, client e componente de tooling do SoraNet confia. Ele envolve as suites Kyber (ML-KEM) e Dilithium (ML-DSA) suportadas por PQClean e adiciona helpers de HKDF e RNG hedged amigaveis ao protocolo para que todas as superficies compartilhem implementacoes identicas.
+`soranet_pq` کریٹ میں پوسٹ کوانٹم بلاکس پر مشتمل ہے جس پر ہر سورنیٹ ریلے ، کلائنٹ اور ٹولنگ جزو پر انحصار کرتا ہے۔ یہ پی کیو کلین کے تعاون سے کیبر (ایم ایل کے ای ایم) اور دلیتھیم (ایم ایل-ڈی ایس اے) سوٹ کو لپیٹتا ہے اور صارف دوست HKDF اور ہیجڈ RNG مددگاروں کو پروٹوکول میں شامل کرتا ہے تاکہ تمام سطحیں ایک جیسی نفاذ کا اشتراک کریں۔
 
-## O que vem em `soranet_pq`
+## `soranet_pq` میں کیا آتا ہے
 
-- **ML-KEM-512/768/1024:** geracao deterministica de chaves, helpers de encapsulation e decapsulation com propagacao de erros em tempo constante.
-- **ML-DSA-44/65/87:** assinatura/verificacao separadas para transcricoes com separacao de dominio.
-- **HKDF com rotulo:** `derive_labeled_hkdf` adiciona namespace a cada derivacao com o estagio do handshake (`DH/es`, `KEM/1`, ...) para que transcricoes hibridas fiquem sem colisao.
-- **Aleatoriedade hedged:** `hedged_chacha20_rng` mistura seeds deterministicas com entropia do SO e zera o estado intermediario ao descartar.
+۔
+-** ML-DSA-44/65/87: ** ڈومین سے الگ شدہ نقلوں کے لئے الگ الگ دستخط/توثیق۔
+۔
+۔
 
-Todos os segredos ficam dentro de contenedores `Zeroizing` e a CI exercita os bindings PQClean em todas as plataformas suportadas.
+تمام راز `Zeroizing` کنٹینرز کے اندر ہیں اور CI تمام تائید شدہ پلیٹ فارمز پر PQClean پابندیوں کی مشق کرتا ہے۔
 
 ```rust
 use soranet_pq::{
@@ -49,19 +51,19 @@ let okm = derive_labeled_hkdf(
 ).unwrap();
 ```
 
-## Como consumir
+## کس طرح استعمال کریں
 
-1. **Adicione a dependencia** a crates fora da raiz do workspace:
+1. ** انحصار ** کو ورک اسپیس روٹ سے باہر کریٹوں میں شامل کریں:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **Selecione a suite correta** nos pontos de chamada. Para o trabalho inicial do handshake hibrido, use `MlKemSuite::MlKem768` e `MlDsaSuite::MlDsa65`.
+2. ** کال پوائنٹس پر صحیح سویٹ ** منتخب کریں۔ ابتدائی ہائبرڈ ہینڈ شیک کام کے لئے ، `MlKemSuite::MlKem768` اور `MlDsaSuite::MlDsa65` استعمال کریں۔
 
-3. **Derive chaves com rotulos.** Use `HkdfDomain::soranet("KEM/1")` (e similares) para que o encadeamento de transcricoes fique deterministico entre nodes.
+3. ** لیبلوں کے ساتھ چابیاں اخذ کریں۔
 
-4. **Use o RNG hedged** ao amostrar segredos de fallback:
+4. ** فال بیک بیک راز کے نمونے لینے پر ہیجڈ آر این جی ** استعمال کریں:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -69,11 +71,11 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-O handshake central do SoraNet e os helpers de blinding de CID (`iroha_crypto::soranet`) puxam essas utilidades diretamente, o que significa que crates downstream herdam as mesmas implementacoes sem linkar bindings PQClean por conta propria.
+سورانیٹ کے بنیادی مصافحہ اور سی آئی ڈی بلائنڈنگ مددگار (`iroha_crypto::soranet`) ان افادیت کو براہ راست کھینچیں ، اس کا مطلب یہ ہے کہ بہاو کریٹ پی کیو کلین پابندیوں کو اپنے ہی جوڑنے کے بغیر ایک ہی عمل درآمد کا وارث ہیں۔
 
-## Checklist de validacao
+## توثیق چیک لسٹ
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`
-- Audite os exemplos de uso no README (`crates/soranet_pq/README.md`)
-- Atualize o documento de design do handshake do SoraNet quando os hybrids chegarem
+- README (`crates/soranet_pq/README.md`) میں استعمال کی مثالوں کا آڈٹ کریں
+- جب ہائبرڈ پہنچیں تو سورانیٹ ہینڈ شیک ڈیزائن دستاویز کو اپ ڈیٹ کریں

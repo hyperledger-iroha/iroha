@@ -6,30 +6,32 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Agenda Council Workflow
 description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import CodeBlock from '@theme/CodeBlock';
-import sortitionSummary from '@site/docs/examples/ministry/agenda_sortition_summary_example.json';
+იმპორტი CodeBlock '@theme/CodeBlock'-დან;
+იმპორტი sortitionSummary from '@site/docs/examples/ministry/agenda_sortition_summary_example.json';
 
 const summary = sortitionSummary;
 
-function SortitionSummaryTable({rows}) {
-  return (
-    <table>
-      <thead>
+ფუნქცია SortitionSummaryTable({სტრიქონები}) {
+  დაბრუნება (
+    <მაგიდა>
+      <თავი>
         <tr>
-          <th>Slot</th>
-          <th>Member</th>
-          <th>Role</th>
-          <th>Org</th>
-          <th>Weight</th>
-          <th>Entropy (truncated)</th>
+          <th>სლოტი</th>
+          <th>წევრი</th>
+          <th>როლი</th>
+          <th>ორგ</th>
+          <th>წონა</th>
+          <th>ენტროპია (შეკვეცილი)</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((row, index) => (
-          <tr key={`${row.member_id}-${row.draw_position}`}>
-            <td>{index + 1}</td>
+        {rows.map((სტრიქონი, ინდექსი) => (
+          <tr გასაღები={`${row.member_id}-${row.draw_position}`}>
+            <td>{ინდექსი + 1}</td>
             <td><code>{row.member_id}</code></td>
             <td>{row.role}</td>
             <td>{row.organization}</td>
@@ -42,47 +44,47 @@ function SortitionSummaryTable({rows}) {
   );
 }
 
-## Overview
+## მიმოხილვა
 
-Roadmap item **MINFO-2** requires a deterministic path from proposal linting to
-public sortition evidence so anyone can confirm how a case reached the agenda
-council. This page wires the previously landed CLI helpers directly into the
-developer portal so proposers, auditors, and platform teams can follow the same
-checklist without spelunking the mono-repo.
+საგზაო რუკის პუნქტი **MINFO-2** მოითხოვს განმსაზღვრელ გზას წინადადების ლინკიდან
+საჯარო დახარისხების მტკიცებულებები, რათა ნებისმიერს შეეძლოს დაადასტუროს, როგორ მიაღწია საქმეს დღის წესრიგში
+საბჭო. ეს გვერდი პირდაპირ აერთებს ადრე ჩამოსული CLI დამხმარეებს
+დეველოპერის პორტალი, ასე რომ შემოთავაზებულებს, აუდიტორებს და პლატფორმის გუნდებს შეუძლიათ იგივე მიბაძონ
+საკონტროლო სია მონო-რეპოს მართლწერის გარეშე.
 
-The workflow covers three repeatable steps:
+სამუშაო პროცესი მოიცავს სამ განმეორებად ნაბიჯს:
 
-1. Validate `AgendaProposalV1` payloads locally and reject duplicate hashes
-   before the submission reaches the moderation queue.
-2. Publish duplicate-registry hits alongside the proposal so council staff can
-   trace earlier cases without losing determinism.
-3. Run the sortition helper, capture the Merkle proof bundle, and surface the
-   selected roster inside the portal so citizens can replay the draw.
+1. დაადასტურეთ `AgendaProposalV1` დატვირთვა ლოკალურად და უარყოთ დუბლიკატი ჰეშები
+   სანამ წარდგენა მიაღწევს მოდერაციის რიგს.
+2. გამოაქვეყნეთ რეესტრის დუბლიკატი ჰიტები წინადადებასთან ერთად, რათა საბჭოს თანამშრომლებმა შეძლონ
+   ადრეული შემთხვევების კვალი დეტერმინიზმის დაკარგვის გარეშე.
+3. გაუშვით დახარისხების დამხმარე, აიღეთ Merkle-ის მტკიცებულების ნაკრები და მოაყარეთ ზედაპირი
+   შერჩეული სია პორტალში, რათა მოქალაქეებმა შეძლონ გათამაშების ხელახლა თამაში.
 
-All helpers live in `cargo xtask ministry-agenda`; the Norito schema is
-documented under `docs/source/ministry/agenda_council_proposal.md`.
+ყველა დამხმარე ცხოვრობს `cargo xtask ministry-agenda`-ში; Norito სქემა არის
+დოკუმენტირებულია `docs/source/ministry/agenda_council_proposal.md`-ით.
 
-## 1. Validate proposals locally
+## 1. დაადასტურეთ წინადადებები ადგილობრივად
 
-Use the CLI to lint JSON payloads and assert that required evidence (hash
-families, digest lengths, language tag, submitter contact) is present. The
-validator shares code with the Torii ingestion path, so a proposal that passes
-here will also pass when uploaded through the portal.
+გამოიყენეთ CLI JSON დატვირთვის დასამაგრებლად და საჭირო მტკიცებულებების დასამტკიცებლად (ჰეშ
+ოჯახები, დაიჯესტის სიგრძე, ენის ტეგი, გამომგზავნის კონტაქტი) არსებობს. The
+ვალიდატორი აზიარებს კოდს Torii გადატანის გზასთან, ასე რომ, წინადადება გაივლის
+აქაც გაივლის პორტალზე ატვირთვისას.
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda validate \\
+<CodeBlock language="bash">{`cargo xtask ministry-agenda დადასტურება \\
   --proposal docs/examples/ministry/agenda_proposal_example.json \\
   --registry docs/examples/ministry/agenda_duplicate_registry.json`}</CodeBlock>
 
-- Add `--allow-registry-conflicts` when triaging historical payloads; new
-  submissions should fail fast when a fingerprint already exists.
-- The examples directory ships the reference proposal and registry so SDKs can
-  adopt the format without hard-coding private payloads.
+- დაამატეთ `--allow-registry-conflicts` ისტორიული დატვირთვების ტრიაჟისას; ახალი
+  წარდგენები სწრაფად უნდა ჩავარდეს, როდესაც თითის ანაბეჭდი უკვე არსებობს.
+- მაგალითების დირექტორიაში გაგზავნილია საცნობარო წინადადება და რეესტრი, რათა SDK-ებმა შეძლონ
+  მიიღეთ ფორმატი მყარი კოდირების პირადი დატვირთვის გარეშე.
 
-## 2. Publish duplicate-registry context
+## 2. გამოაქვეყნეთ დუბლიკატი რეესტრის კონტექსტი
 
-Every accepted proposal includes the registry digest that was consulted before
-ingest. Capture the SoraFS CID or Torii manifest path for that registry and add
-it to your submission metadata so council reviewers can verify the same JSON.
+ყველა მიღებული წინადადება მოიცავს რეესტრის დაიჯესტს, რომელიც ადრე იყო კონსულტირებული
+ჩაყლაპავს. გადაიღეთ SoraFS CID ან Torii მანიფესტის გზა ამ რეესტრისთვის და დაამატეთ
+ეს თქვენს წარდგენის მეტამონაცემებზე, რათა საბჭოს მიმომხილველებმა შეძლონ იგივე JSON-ის გადამოწმება.
 
 ```json title="Duplicate registry (excerpt)"
 {
@@ -97,63 +99,61 @@ it to your submission metadata so council reviewers can verify the same JSON.
 }
 ```
 
-When the CLI reports a collision, the portal shows the linked proposal IDs so
-operators can merge or reject resubmissions deterministically.
+როდესაც CLI იტყობინება შეჯახების შესახებ, პორტალი აჩვენებს დაკავშირებულ შეთავაზების ID-ებს
+ოპერატორებს შეუძლიათ გაერთიანდნენ ან უარყონ ხელახალი გაგზავნა დეტერმინისტულად.
 
-## 3. Run and publish the sortition summary
+## 3. გაუშვით და გამოაქვეყნეთ დახარისხების შეჯამება
 
-Once a docket is ready, run the deterministic sortition helper. It consumes the
-roster JSON, seed, and target slot count, then emits a Merkle-proof-backed
-summary. The summary JSON is what the portal renders in the **Council draw**
-panel.
+მას შემდეგ რაც დოკეტი მზად იქნება, გაუშვით დეტერმინისტული დახარისხების დამხმარე. ის მოიხმარს
+სია JSON, თესლის და სამიზნე სლოტების რაოდენობა, შემდეგ გამოსცემს Merkle-proof მხარდაჭერილს
+შეჯამება. JSON-ის შეჯამება არის ის, რასაც პორტალი იძლევა **საბჭოს გათამაშებაში**
+პანელი.
 
 <CodeBlock language="bash">{`cargo xtask ministry-agenda sortition \\
-  --roster docs/examples/ministry/agenda_council_roster.json \\
-  --slots 3 \\
+  -- ჩამონათვალი docs/examples/ministry/agenda_council_roster.json \\
+  --სლოტები 3 \\
   --seed 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
   --output artifacts/ministry/sortition/2026-03-12.json`}</CodeBlock>
 
-Store the resulting JSON on SoraFS (or alongside the signed agenda packet) and
-link the CID in the proposal tracker. The developer portal consumes the same
-JSON structure; the example below renders the bundled
+შეინახეთ მიღებული JSON SoraFS-ზე (ან ხელმოწერილი დღის წესრიგის პაკეტთან ერთად) და
+დააკავშირეთ CID წინადადების ტრეკერში. დეველოპერის პორტალი იგივეს მოიხმარს
+JSON სტრუქტურა; ქვემოთ მოყვანილი მაგალითი ასახავს შეფუთულს
 `agenda_sortition_summary_example.json`.
 
-### Example council draw
-
-<table>
-  <thead>
+### საბჭოს გათამაშების მაგალითი<მაგიდა>
+  <თავი>
     <tr>
-      <th>Field</th>
-      <th>Value</th>
+      <th>ველი</th>
+      <th>მნიშვნელობა</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td>Algorithm</td>
+      <td>ალგორითმი</td>
       <td><code>{summary.algorithm}</code></td>
     </tr>
     <tr>
-      <td>Roster digest (BLAKE3)</td>
+      <td>როსტერის შეჯამება (BLAKE3)</td>
       <td><code>{summary.roster_digest.blake3_hex}</code></td>
     </tr>
     <tr>
-      <td>Roster digest (SHA-256)</td>
+      <td>დაჯესტი (SHA-256)</td>
       <td><code>{summary.roster_digest.sha256_hex}</code></td>
     </tr>
     <tr>
-      <td>Seed</td>
+      <td>თესლი</td>
       <td><code>{summary.seed_hex}</code></td>
     </tr>
     <tr>
-      <td>Slots</td>
+      <td>სლოტები</td>
       <td>{summary.slots}</td>
     </tr>
     <tr>
-      <td>Eligible members</td>
+      <td>შესაბამისი წევრები</td>
       <td>{summary.eligible_members}</td>
     </tr>
     <tr>
-      <td>Merkle root</td>
+      <td>მერკლეს ფესვი</td>
       <td><code>{summary.merkle_root_hex}</code></td>
     </tr>
   </tbody>
@@ -161,17 +161,17 @@ JSON structure; the example below renders the bundled
 
 <SortitionSummaryTable rows={summary.selected} />
 
-Each selected member includes:
+თითოეული არჩეული წევრი მოიცავს:
 
-- `draw_entropy_hex` (32 BLAKE3 bytes) so anyone can recompute the RNG output.
-- `eligible_index` and `original_index` so auditors can prove that opt-outs were
-  honored.
-- A Merkle proof covering the roster leaf; reproducing the tree confirms the
-  roster published inside the packet matches the draw.
+- `draw_entropy_hex` (32 BLAKE3 ბაიტი), რათა ნებისმიერს შეეძლოს RNG გამომავალი ხელახლა გამოთვლა.
+- `eligible_index` და `original_index`, რათა აუდიტორებმა დაამტკიცონ, რომ უარის თქმა იყო
+  პატივი მიაგო.
+- Merkle მტკიცებულება, რომელიც ფარავს სიას ფოთოლს; ხის გამრავლება ადასტურებს
+  პაკეტში გამოქვეყნებული სია ემთხვევა გათამაშებას.
 
-### Decision log
+### გადაწყვეტილების ჟურნალი
 
-When the council votes on a proposal, attach the decision memo and the
-sortition summary CID to the governance action (Torii `/v1/gov/*` entry). Portal
-pages link the memo, the vote tally, and the JSON shown above so every action
-contains the full evidence chain required by **MINFO-2**.
+როდესაც საბჭო წინადადებას უყრის კენჭს, დაურთოს გადაწყვეტილების მემორანდუმი და
+დახარისხების შეჯამება CID მმართველობის მოქმედებისთვის (Torii `/v1/gov/*` ჩანაწერი). პორტალი
+გვერდები აკავშირებს შენიშვნას, ხმების რაოდენობას და JSON-ს, რომელიც ზემოთ არის ნაჩვენები ყველა ქმედებაზე
+შეიცავს **MINFO-2**-ის მიერ მოთხოვნილ მტკიცებულებების სრულ ჯაჭვს.

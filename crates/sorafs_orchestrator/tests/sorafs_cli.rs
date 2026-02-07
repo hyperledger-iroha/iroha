@@ -2370,8 +2370,8 @@ fn ci_sample_fixtures_are_consistent() {
         proof_value
             .get("payload_digest_hex")
             .and_then(Value::as_str),
-        Some(chunk_digest_hex),
-        "proof summary should embed chunk BLAKE3 digest"
+        Some(payload_digest_hex.as_str()),
+        "proof summary should embed payload BLAKE3 digest"
     );
     assert_eq!(
         proof_value.get("car_digest_hex").and_then(Value::as_str),

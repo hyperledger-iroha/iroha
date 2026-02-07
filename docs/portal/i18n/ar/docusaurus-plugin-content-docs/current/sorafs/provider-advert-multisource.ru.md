@@ -4,103 +4,99 @@ direction: rtl
 source: docs/portal/docs/sorafs/provider-advert-multisource.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Мульти-источниковые объявления провайдеров и планирование
+# توفير وتخطيط متعدد التخصصات
 
-Эта страница сводит каноническую спецификацию в
+هذا الجزء هو المواصفات القانونية في
 [`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md).
-Используйте этот документ для дословных схем Norito и changelog; версия портала
-держит рядом операционные инструкции, заметки SDK и ссылки на телеметрию для остального
-набора runbooks SoraFS.
+استخدم هذا المستند لنظام الملحقات Norito وسجل التغيير؛ بوابة النسخة
+بعد تعليمات التشغيل السهلة، وحزم SDK وإرشادات القياس عن بعد للأخير
+أفضل دفاتر التشغيل SoraFS.
 
-## Дополнения к схеме Norito
+## إضافة المخطط Norito
 
-### Диапазонная возможность (`CapabilityType::ChunkRangeFetch`)
-- `max_chunk_span` – максимальный непрерывный интервал (байты) на запрос, `>= 1`.
-- `min_granularity` – разрешение seek, `1 <= значение <= max_chunk_span`.
-- `supports_sparse_offsets` – допускает несмежные offsets в одном запросе.
-- `requires_alignment` – если true, offsets должны выравниваться по `min_granularity`.
-- `supports_merkle_proof` – указывает поддержку свидетельств PoR.
+### القدرة على التحمل (`CapabilityType::ChunkRangeFetch`)
+- `max_chunk_span` – الحد الأقصى للفاصل الزمني غير المحدود (البيانات) للخلف، `>= 1`.
+- `min_granularity` – البحث عن التباين, `1 <= значение <= max_chunk_span`.
+- `supports_sparse_offsets` – توفير إزاحات غير محددة في عملية واحدة.
+- `requires_alignment` – إذا كان صحيحًا، سيتم تفعيل الإزاحات الإضافية إلى `min_granularity`.
+- `supports_merkle_proof` – يدعم دعم свидетельств PoR.
 
-`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` обеспечивают каноническое
-кодирование, чтобы payloads gossip оставались детерминированными.
+`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` مطلوب قانونيًا
+الترميز الذي يسمح بتحديد الحمولات النافعة.
 
-### `StreamBudgetV1`
-- Поля: `max_in_flight`, `max_bytes_per_sec`, опциональный `burst_bytes`.
-- Правила валидации (`StreamBudgetV1::validate`):
-  - `max_in_flight >= 1`, `max_bytes_per_sec > 0`.
-  - `burst_bytes`, если задан, должен быть `> 0` и `<= max_bytes_per_sec`.
+###`StreamBudgetV1`
+- بول: `max_in_flight`، `max_bytes_per_sec`، اختياري `burst_bytes`.
+- التحقق من الصحة (`StreamBudgetV1::validate`):
+  - `max_in_flight >= 1`، `max_bytes_per_sec > 0`.
+  - `burst_bytes`، إذا كان الأمر كذلك، فيجب أن يكون `> 0` و`<= max_bytes_per_sec`.
 
-### `TransportHintV1`
-- Поля: `protocol: TransportProtocol`, `priority: u8` (окно 0-15 контролируется
+###`TransportHintV1`
+-اللون: `protocol: TransportProtocol`, `priority: u8` (أوكنو 0-15 التحكم)
   `TransportHintV1::validate`).
-- Известные протоколы: `torii_http_range`, `quic_stream`, `soranet_relay`,
+- البروتوكولات المعروفة: `torii_http_range`، `quic_stream`، `soranet_relay`،
   `vendor_reserved`.
-- Дублирующиеся записи протоколов на провайдера отклоняются.
+- إخلاء المسؤولية عن بروتوكول إلغاء الاشتراك.### الإضافة إلى `ProviderAdvertBodyV1`
+- اختياري `stream_budget: Option<StreamBudgetV1>`.
+- اختياري `transport_hints: Option<Vec<TransportHintV1>>`.
+- قم بالتمرير عبر `ProviderAdmissionProposalV1`، مظاريف الإدارة،
+  تركيبات CLI وJSON القياس عن بعد.
 
-### Дополнения к `ProviderAdvertBodyV1`
-- Опциональный `stream_budget: Option<StreamBudgetV1>`.
-- Опциональный `transport_hints: Option<Vec<TransportHintV1>>`.
-- Оба поля проходят через `ProviderAdmissionProposalV1`, governance envelopes,
-  CLI fixtures и телеметрический JSON.
+## التحقق من الصحة ومنحها للحوكمة
 
-## Валидация и привязка к governance
+`ProviderAdvertBodyV1::validate` و`ProviderAdmissionProposalV1::validate`
+إلغاء النسخ المتماثل:
 
-`ProviderAdvertBodyV1::validate` и `ProviderAdmissionProposalV1::validate`
-отклоняют поврежденные метаданные:
+- القدرة على فك التشفير الصحيح والالتزام بالحدود
+  غشائي/حبيبي.
+- تيار الميزانيات / تلميحات النقل مطلوب TLV `CapabilityType::ChunkRangeFetch`
+  وتلميحات غير واضحة.
+- تحديد بروتوكولات النقل والأولويات غير الصحيحة
+  التحقق من صحة الإعلانات القيل والقال.
+- مظاريف القبول تلخص الاقتراح/الإعلانات عبر الإنترنت
+  `compare_core_fields`، لإلغاء حجب الحمولات النافعة للقيل والقال.
 
-- Диапазонные возможности должны корректно декодироваться и соблюдать лимиты
-  диапазона/гранулярности.
-- Stream budgets / transport hints требуют TLV `CapabilityType::ChunkRangeFetch`
-  и непустого списка hints.
-- Дублирующиеся транспортные протоколы и некорректные приоритеты вызывают ошибки
-  валидации до gossip рассылки adverts.
-- Admission envelopes сравнивают proposal/adverts по диапазонным метаданным через
-  `compare_core_fields`, чтобы несовпадающие gossip payloads отклонялись заранее.
-
-Регрессионное покрытие находится в
+الانحدار يحدث في الغلق
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
-## Инструменты и fixtures
+## الأدوات والتركيبات- تتضمن الحمولات الصافية التي يوفرها مقدمو الطلبات `range_capability`، `stream_budget`
+  و `transport_hints`. تحقق من خلال الإجابات `/v1/sorafs/providers` وتركيبات القبول؛
+  تشتمل متطلبات السيرة الذاتية لـ JSON على إمكانات واسعة النطاق وميزانية التدفق وتلميحات ضخمة
+  لاستيعاب القياس عن بعد.
+- `cargo xtask sorafs-admission-fixtures` يعرض ميزانيات البث وتلميحات النقل
+  في عناصر JSON الخاصة بها، لتتمكن لوحات المعلومات من التحكم في وظيفة الاتصال.
+- تشمل التركيبات في `fixtures/sorafs_manifest/provider_admission/`:
+  - الإعلانات القانونية المتعددة الاستخدامات،
+  - `multi_fetch_plan.json`، يمكن لمجموعات SDK أن تساعد في تحديد المحددات
+    خطة جلب متعددة الأقران.
 
-- Payloads объявлений провайдеров должны включать `range_capability`, `stream_budget`
-  и `transport_hints`. Проверяйте через ответы `/v1/sorafs/providers` и admission fixtures;
-  JSON-резюме должны включать разобранную capability, stream budget и массивы hints
-  для телеметрического ingest.
-- `cargo xtask sorafs-admission-fixtures` выводит stream budgets и transport hints
-  в своих JSON artefacts, чтобы dashboards отслеживали внедрение функций.
-- Fixtures в `fixtures/sorafs_manifest/provider_admission/` теперь включают:
-  - канонические мульти-источниковые adverts,
-  - `multi_fetch_plan.json`, чтобы SDK наборы могли воспроизводить детерминированный
-    multi-peer fetch план.
+## التكامل مع الأوركسترا وTorii
 
-## Интеграция с оркестратором и Torii
+- Torii `/v1/sorafs/providers` يوفر إمكانات تبادلية واسعة النطاق
+  هنا مع `stream_budget` و`transport_hints`. يجب أن يتم تخفيض الاقتراح المسبق عندما
+  يقدم الموردون طرقًا بديلة جديدة، حيث يتم تعزيزها من خلال نقاط نهاية النطاق
+  للعملاء المميزين.
+- أوركسترا متعدد الاستخدامات (`sorafs_car::multi_fetch`) يخفض حدود الانطلاق،
+  تمكين الإمكانيات وتدفق الميزانيات من خلال الأعمال المجدولة. تم الانتهاء من اختبارات الوحدة
+  случаи сличком бользит чан, разregенногоза и خنق.
+- `sorafs_car::multi_fetch` يسمح بإرجاع الإشارات إلى إصدار أقدم (تحديث تلقائي،
+  اختناقات) ، بحيث يمكن للمشغلين التعامل مع مزودي الخرسانة بشكل أفضل
+  تم اقتراحه من خلال التخطيط.
 
-- Torii `/v1/sorafs/providers` возвращает разобранные метаданные диапазонных возможностей
-  вместе с `stream_budget` и `transport_hints`. Предупреждения downgrade срабатывают, когда
-  провайдеры пропускают новые метаданные, а range endpoints шлюза применяют те же ограничения
-  для прямых клиентов.
-- Мульти-источниковый оркестратор (`sorafs_car::multi_fetch`) теперь применяет лимиты диапазона,
-  выравнивание возможностей и stream budgets при распределении работы. Unit-тесты покрывают
-  случаи слишком больших chunk, разреженного seek и throttling.
-- `sorafs_car::multi_fetch` передает сигналы downgrade (ошибки выравнивания,
-  throttled запросы), чтобы операторы могли понимать, почему конкретные провайдеры
-  были пропущены при планировании.
-
-## Справочник телеметрии
-
-Инструментация range fetch в Torii питает Grafana dashboard **SoraFS Fetch Observability**
-(`dashboards/grafana/sorafs_fetch_observability.json`) и соответствующие правила алертов
+## أجهزة قياس عن بعد لاسلكيةجلب نطاق الأداة في Torii في Grafana لوحة القيادة **SoraFS Fetch Observability**
+(`dashboards/grafana/sorafs_fetch_observability.json`) والتنبيهات المناسبة
 (`dashboards/alerts/sorafs_fetch_rules.yml`).
 
-| Метрика | Тип | Метки | Описание |
+| متريكا | النوع | ميتكي | الوصف |
 |---------|-----|-------|----------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Провайдеры, объявляющие функции диапазонной возможности. |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Попытки range fetch с throttling, сгруппированные по политике. |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | Активные защищенные потоки, потребляющие общий бюджет конкуренции. |
+| `torii_sorafs_provider_range_capability_total` | مقياس | `feature` (`providers`، `supports_sparse_offsets`، `requires_alignment`، `supports_merkle_proof`، `stream_budget`، `transport_hints`) | مزودو الخدمة بوظائف قابلة للتخصيص. |
+| `torii_sorafs_range_fetch_throttle_events_total` | عداد | `reason` (`quota`، `concurrency`، `byte_rate`) | نطاق الجلب يتم من خلال الاختناق والتجميع السياسي. |
+| `torii_sorafs_range_fetch_concurrency_current` | مقياس | — | نقاط الحماية النشطة، توافقات الميزانية المحتملة. |
 
-Примеры PromQL:
+الأمثلة الأولية PromQL:
 
 ```promql
 sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)
@@ -108,6 +104,6 @@ max(torii_sorafs_range_fetch_concurrency_current)
 torii_sorafs_provider_range_capability_total
 ```
 
-Используйте счетчик throttling, чтобы подтвердить применение квот перед включением
-дефолтов мульти-источникового оркестратора, и поднимайте алерты, когда конкуренция
-приближается к максимальным значениям stream budget по вашей флотилии.
+استخدم التحكم الذكي لتأكيد الإرشادات التي سبقت الإضافة
+عازفو أوركسترا متعددو الأطوار، ويستجيبون للتنبيهات عند التوافق
+يمكنك الاستفادة من الحد الأقصى لميزانية التدفق الخاصة بأسطولك.

@@ -7,184 +7,176 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 3a0c22a213e04a6a8fef94ded6ec0017531737ffd4b9418ec94286bb6759ff8a
 source_last_modified: "2026-01-08T09:53:05.148398+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# FASTPQ Rollout Playbook (Stage 7-3)
+# FastPQ ဖြန့်ချိသည့် Playbook (Stage7-3)
 
-This playbook implements the Stage 7-3 roadmap requirement: every fleet upgrade
-that enables FASTPQ GPU execution must attach a reproducible benchmark manifest,
-paired Grafana evidence, and a documented rollback drill. It complements
-`docs/source/fastpq_plan.md` (targets/architecture) and
-`docs/source/fastpq_migration_guide.md` (node-level upgrade steps) by focusing
-on the operator-facing rollout checklist.
+ဤပြခန်းစာအုပ်သည် Stage7-3 လမ်းပြမြေပုံလိုအပ်ချက်ကို အကောင်အထည်ဖော်သည်- ရေယာဉ်စုတိုင်း အဆင့်မြှင့်တင်ခြင်း။
+FASTPQ GPU လုပ်ဆောင်ချက်ကို အသုံးပြုနိုင်စေမည့် ပြန်လည်ထုတ်လုပ်နိုင်သော စံသတ်မှတ်ချက်တစ်ခု ပူးတွဲပါရှိရမည်၊
+Grafana အထောက်အထားများနှင့် မှတ်တမ်းတင်ထားသော နောက်ကြောင်းပြန်လေ့ကျင့်ခန်းကို တွဲထားသည်။ ဖြည့်ပေးတယ်။
+`docs/source/fastpq_plan.md` (ပစ်မှတ်/ဗိသုကာ) နှင့်
+`docs/source/fastpq_migration_guide.md` (node-level အဆင့်မြှင့်တင်မှု အဆင့်များ) ကို အာရုံစိုက်ပါ။
+အော်ပရေတာ-ရင်ဆိုင်နေရသော ဖြန့်ချိမှုစစ်ဆေးစာရင်းတွင်။
 
-## Scope & Roles
+## နယ်ပယ်နှင့် အခန်းကဏ္ဍ
 
-- **Release Engineering / SRE:** own benchmark captures, manifest signing, and
-  dashboard exports prior to rollout approval.
-- **Ops Guild:** runs staged rollouts, records rollback rehearsals, and stores
-  the artefact bundle under `artifacts/fastpq_rollouts/<timestamp>/`.
-- **Governance / Compliance:** verifies that evidence accompanies every change
-  request before the FASTPQ default is toggled for a fleet.
+- ** ဖြန့်ချိရေး အင်ဂျင်နီယာချုပ် / SRE:** ကိုယ်ပိုင်စံနှုန်းများ ဖမ်းယူမှုများ၊ ထင်ရှားစွာ လက်မှတ်ရေးထိုးခြင်းနှင့်
+  စတင်ခွင့်ပြုခြင်းမပြုမီ ဒက်ရှ်ဘုတ် တင်ပို့မှုများ။
+- ** Ops Guild-** သည် အဆင့်လိုက်ထွက်ခြင်းများ၊ ပြန်လည်လေ့ကျင့်မှုများ မှတ်တမ်းတင်ခြင်းနှင့် စတိုးဆိုင်များကို လုပ်ဆောင်သည်
+  `artifacts/fastpq_rollouts/<timestamp>/` အောက်တွင် artefact အတွဲ။
+- **အုပ်ချုပ်မှု/လိုက်နာမှု-** ပြောင်းလဲမှုတိုင်းနှင့်အတူ ပါ၀င်ကြောင်း အထောက်အထားများကို အတည်ပြုသည်။
+  FASTPQ ပုံသေသည် သင်္ဘောတစ်စီးအတွက် ခလုတ်မဖွင့်မီ တောင်းဆိုချက်။
 
-## Evidence Bundle Requirements
+## အထောက်အထား အစုအဝေး လိုအပ်ချက်များ
 
-Every rollout submission must contain the following artefacts. Attach all files
-to the release/upgrade ticket and keep the bundle in
-`artifacts/fastpq_rollouts/<YYYYMMDD>/<fleet>/<lane>/`.
+တင်သွင်းမှုတိုင်းတွင် အောက်ပါအရာများ ပါဝင်ရပါမည်။ ဖိုင်အားလုံးကို ပူးတွဲပါ။
+ထုတ်ဝေမှု/ အဆင့်မြှင့်တင်မှု လက်မှတ်သို့ အစုအဝေးတွင် ထားရှိပါ။
+`artifacts/fastpq_rollouts/<YYYYMMDD>/<fleet>/<lane>/`။| Artefact | ရည်ရွယ်ချက် | ထုတ်လုပ်နည်း |
+|----------|---------------------|----------------|
+| `fastpq_bench_manifest.json` | Canonical 20000-row workload သည် `<1 s` LDE မျက်နှာကျက်အောက်တွင် ရှိနေကြောင်း သက်သေပြပြီး ထုပ်ထားသော စံနှုန်းတိုင်းအတွက် hashe များကို မှတ်တမ်းတင်ပါသည်။| သတ္တုကိုဖမ်းယူပါ/CUDA ပြေးပါ၊ ၎င်းတို့ကို ထုပ်ပြီး ပြေးပါ-`cargo xtask fastpq-bench-manifest \``  --bench metal=artifacts/fastpq_benchmarks/<metal>.json \``  --bench cuda=artifacts/fastpq_benchmarks/<cuda>.json \``  --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json \``  --bench metal=artifacts/fastpq_benchmarks/<metal>.json \``  --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json \`Prometheus
+| စံနှုန်းများ (`fastpq_metal_bench_*.json`၊ `fastpq_cuda_bench_*.json`) | လက်ခံသူ မက်တာဒေတာ၊ အတန်းအသုံးပြုမှု အထောက်အထား၊ သုည-ဖြည့်စွက်ဟော့စပေါ့များ၊ Poseidon microbench အနှစ်ချုပ်များနှင့် ဒက်ရှ်ဘုတ်များ/သတိပေးချက်များမှ အသုံးပြုသည့် kernel စာရင်းအင်းများကို ဖမ်းယူပါ။| `fastpq_metal_bench` / `fastpq_cuda_bench` ကိုဖွင့်ပါ၊ ထို့နောက် JSON အကြမ်းကိုခြုံပါ-`python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 \``  --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json \``  --poseidon-metrics artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom \``python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 \``  --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json \``  --poseidon-metrics artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom \`Prometheus သက်ဆိုင်ရာသက်သေ/ခြစ်ဖိုင်များတွင် `--row-usage` နှင့် `--poseidon-metrics`)။ အကူအညီပေးသူက စစ်ထုတ်ထားသော `fastpq_poseidon_pipeline_total`/`fastpq_execution_mode_total` နမူနာများကို မြှုပ်နှံထားသောကြောင့် WP2-E.6 အထောက်အထားများသည် Metal နှင့် CUDA တို့တွင် တူညီပါသည်။ သီးသန့် Poseidon microbench အနှစ်ချုပ် (ထုပ်ပိုးထားသော သို့မဟုတ် ကုန်ကြမ်းထည့်သွင်းမှုများကို ပံ့ပိုးထားသည်) လိုအပ်သောအခါတွင် `scripts/fastpq/export_poseidon_microbench.py --bundle <bundle>` ကို အသုံးပြုပါ။ |
+|  |  | **Stage7 အညွှန်းလိုအပ်ချက်-** `wrap_benchmark.py` သည် ရလဒ် `metadata.labels` အပိုင်းတွင် `device_class` နှင့် `gpu_kind` နှစ်ခုလုံးပါ၀င်ခြင်းမရှိပါက ယခုပျက်သွားသည်။ အလိုအလျောက် ထောက်လှမ်းခြင်း သည် ၎င်းတို့ကို ရည်ညွှန်းခြင်း မပြုနိုင်သောအခါ (ဥပမာ၊ ခွဲထုတ်ထားသော CI node တွင် ပတ်ထားသည့်အခါ)၊ `--label device_class=xeon-rtx-sm80 --label gpu_kind=discrete` ကဲ့သို့သော ပြတ်ပြတ်သားသား အစားထိုးမှုများကို ကျော်ဖြတ်ပါ။ |
+|  |  | **အရှိန်မြှင့်သော တယ်လီမီတာ-** ထုပ်ပိုးမှုတွင် ပုံသေအနေဖြင့် `cargo xtask acceleration-state --format json` ကိုလည်း ဖမ်းယူထားပြီး `<bundle>.accel.json` နှင့် `<bundle>.accel.prom` တို့ကို ထုပ်ပိုးထားသော စံညွှန်းဘေးတွင် (`--accel-*` အလံများ သို့မဟုတ် I180NI560) ဖြင့်ရေးထားသည်။ ဖမ်းယူမှုမက်ထရစ်သည် ရေယာဉ်ဒက်ရှ်ဘုတ်များအတွက် `acceleration_matrix.{json,md}` တည်ဆောက်ရန် ဤဖိုင်များကို အသုံးပြုသည်။ |
+| Grafana တင်ပို့ခြင်း | စတင်ခြင်းဝင်းဒိုးအတွက် မွေးစားခြင်းဆိုင်ရာ တယ်လီမီတာနှင့် သတိပေးချက် မှတ်ချက်များကို သက်သေပြသည်။| `fastpq-acceleration` ဒက်ရှ်ဘုတ်ကို ထုတ်ယူပါ-`curl -s -H "Authorization: Bearer $GRAFANA_TOKEN" \``  "$GRAFANA_URL/api/dashboards/uid/fastpq-acceleration" \``  | jq '.dashboard' \``  > artifacts/fastpq_rollouts/<stamp>/grafana_fastpq_acceleration.json`ထုတ်ရန် အချိန်များ မစတင်မီ ဘုတ်အဖွဲ့အား မှတ်ချက်ချပါ။ ထုတ်လွှတ်သည့် ပိုက်လိုင်းသည် `scripts/run_release_pipeline.py --export-fastpq-grafana --grafana-url <URL>` (`GRAFANA_TOKEN` မှတဆင့် ပံ့ပိုးပေးသော တိုကင်) မှတစ်ဆင့် ၎င်းကို အလိုအလျောက် လုပ်ဆောင်နိုင်သည်။ |
+| လျှပ်တစ်ပြက် သတိပေးချက် | ဖြန့်ချိမှုကို ကာကွယ်သည့် သတိပေးချက်စည်းမျဉ်းများကို ဖမ်းယူသည်။| သုံးသပ်သူများသည် `dashboards/alerts/fastpq_acceleration_rules.yml` (နှင့် `tests/` အတွဲ) သို့ ကူးယူ၍ `promtool test rules …` ကို ပြန်လည်အသုံးပြုနိုင်ပါသည်။ |
+| Rollback drill မှတ်တမ်း | အော်ပရေတာများသည် အတင်းအကြပ် CPU ဆုတ်ယုတ်မှုနှင့် တယ်လီမီတာ အသိအမှတ်ပြုချက်များကို ပြန်လည်လေ့ကျင့်ပေးကြောင်း သရုပ်ပြသည်။| [Rollback Drills](#rollback-drills) နှင့် ကွန်ဆိုးလ်မှတ်တမ်းများ (`rollback_drill.log`) နှင့် ရလဒ် Prometheus ခြစ်ခြင်း (`metrics_rollback.prom`) တွင် လုပ်ထုံးလုပ်နည်းကို အသုံးပြုပါ။ || `row_usage/fastpq_row_usage_<date>.json` | TF-5 သည် CI နှင့် ဒိုင်ခွက်များတွင် ခြေရာခံသည့် ExecWitness FASTPQ အတန်းခွဲဝေမှုကို မှတ်တမ်းတင်သည်။| Torii မှ အသစ်သောသက်သေကို ဒေါင်းလုဒ်လုပ်ပါ၊ ၎င်းကို `iroha_cli audit witness --decode exec.witness` မှတစ်ဆင့် ကုဒ်ကုဒ်လုပ်ပါ (မျှော်မှန်းထားသော ကန့်သတ်ဘောင်များကို အတည်ပြုရန် `--fastpq-parameter fastpq-lane-balanced` ကို ထည့်သွင်းပါ၊ FASTPQ အတွဲများကို ပုံသေအားဖြင့် ထုတ်လွှတ်သည်) နှင့် `row_usage`8NI0700X သို့ ကူးယူပါ။ ဖိုင်အမည်များကို အချိန်တံဆိပ်တုံးထားပါက ပြန်လည်သုံးသပ်သူများသည် ၎င်းတို့ကို ထုတ်ဝေခွင့်လက်မှတ်နှင့် ဆက်စပ်စေပြီး `python3 scripts/fastpq/validate_row_usage_snapshot.py row_usage/*.json` (သို့မဟုတ် `make check-fastpq-rollout`) ကို run နိုင်သောကြောင့် Stage7-3 ဂိတ်သည် အသုတ်တိုင်းတွင် ရွေးချယ်သူရေတွက်ပြီး `transfer_ratio = transfer_rows / total_rows` ကို အထောက်အထားမထည့်သွင်းမီ အတည်ပြုပါသည်။ |
 
-| Artefact | Purpose | How to produce |
-|----------|---------|----------------|
-| `fastpq_bench_manifest.json` | Proves that the canonical 20 000-row workload stays under the `<1 s` LDE ceiling and records hashes for every wrapped benchmark.| Capture Metal/CUDA runs, wrap them, then run:<br>`cargo xtask fastpq-bench-manifest \`<br>`  --bench metal=artifacts/fastpq_benchmarks/<metal>.json \`<br>`  --bench cuda=artifacts/fastpq_benchmarks/<cuda>.json \`<br>`  --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json \`<br>`  --signing-key secrets/fastpq_bench.ed25519 \`<br>`  --out artifacts/fastpq_rollouts/<stamp>/fastpq_bench_manifest.json` |
-| Wrapped benchmarks (`fastpq_metal_bench_*.json`, `fastpq_cuda_bench_*.json`) | Capture host metadata, row-usage evidence, zero-fill hotspots, Poseidon microbench summaries, and kernel statistics used by dashboards/alerts.| Run `fastpq_metal_bench` / `fastpq_cuda_bench`, then wrap the raw JSON:<br>`python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 \`<br>`  --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json \`<br>`  --poseidon-metrics artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom \`<br>`  fastpq_metal_bench.json artifacts/fastpq_benchmarks/<metal>.json --sign-output`<br>Repeat for CUDA captures (point `--row-usage` and `--poseidon-metrics` at the relevant witness/scrape files). The helper embeds the filtered `fastpq_poseidon_pipeline_total`/`fastpq_execution_mode_total` samples so WP2-E.6 evidence is identical across Metal and CUDA. Use `scripts/fastpq/export_poseidon_microbench.py --bundle <bundle>` when you need a standalone Poseidon microbench summary (wrapped or raw inputs supported). |
-|  |  | **Stage7 label requirement:** `wrap_benchmark.py` now fails unless the resulting `metadata.labels` section contains both `device_class` and `gpu_kind`. When automatic detection cannot infer them (for example, when wrapping on a detached CI node), pass explicit overrides such as `--label device_class=xeon-rtx-sm80 --label gpu_kind=discrete`. |
-|  |  | **Acceleration telemetry:** the wrapper also captures `cargo xtask acceleration-state --format json` by default, writing `<bundle>.accel.json` and `<bundle>.accel.prom` next to the wrapped benchmark (override with `--accel-*` flags or `--skip-acceleration-state`). The capture matrix uses these files to build `acceleration_matrix.{json,md}` for fleet dashboards. |
-| Grafana export | Proves adoption telemetry and alert annotations for the rollout window.| Export the `fastpq-acceleration` dashboard:<br>`curl -s -H "Authorization: Bearer $GRAFANA_TOKEN" \`<br>`  "$GRAFANA_URL/api/dashboards/uid/fastpq-acceleration" \`<br>`  | jq '.dashboard' \`<br>`  > artifacts/fastpq_rollouts/<stamp>/grafana_fastpq_acceleration.json`<br>Annotate the board with rollout start/stop times before exporting. The release pipeline can do this automatically via `scripts/run_release_pipeline.py --export-fastpq-grafana --grafana-url <URL>` (token supplied via `GRAFANA_TOKEN`). |
-| Alert snapshot | Captures the alert rules that guarded the rollout.| Copy `dashboards/alerts/fastpq_acceleration_rules.yml` (and the `tests/` fixture) into the bundle so reviewers can re-run `promtool test rules …`. |
-| Rollback drill log | Demonstrates that operators rehearsed the forced CPU fallback and telemetry acknowledgements.| Use the procedure in [Rollback Drills](#rollback-drills) and store console logs (`rollback_drill.log`) plus the resulting Prometheus scrape (`metrics_rollback.prom`). |
-| `row_usage/fastpq_row_usage_<date>.json` | Records the ExecWitness FASTPQ row allocation that TF-5 tracks in CI and dashboards.| Download a fresh witness from Torii, decode it via `iroha_cli audit witness --decode exec.witness` (optionally add `--fastpq-parameter fastpq-lane-balanced` to assert the expected parameter set; FASTPQ batches emit by default), and copy the `row_usage` JSON into `artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/row_usage/`. Keep filenames timestamped so reviewers can correlate them with the rollout ticket, and run `python3 scripts/fastpq/validate_row_usage_snapshot.py row_usage/*.json` (or `make check-fastpq-rollout`) so the Stage 7-3 gate verifies that every batch advertises the selector counts and `transfer_ratio = transfer_rows / total_rows` invariant before attaching the evidence. |
+> ** အကြံပြုချက်-** `artifacts/fastpq_rollouts/README.md` သည် နှစ်သက်ရာ အမည်အမည်ကို မှတ်တမ်းတင်ထားသည်။
+> အစီအစဉ် (`<stamp>/<fleet>/<lane>`) နှင့် လိုအပ်သော အထောက်အထားဖိုင်များ။ ဟိ
+> `<stamp>` ဖိုဒါသည် `YYYYMMDDThhmmZ` ကို ကုဒ်လုပ်ထားရပါမည်၊ ထို့ကြောင့် အနုပညာပစ္စည်းများကို စီထားနိုင်သည်
+> လက်မှတ်မပါဘဲ။
 
-> **Tip:** `artifacts/fastpq_rollouts/README.md` documents the preferred naming
-> scheme (`<stamp>/<fleet>/<lane>`) and the required evidence files. The
-> `<stamp>` folder must encode `YYYYMMDDThhmmZ` so artefacts stay sortable
-> without consulting tickets.
+## အထောက်အထား မျိုးဆက်စစ်ဆေးစာရင်း1. ** GPU စံနှုန်းများကို ဖမ်းယူပါ။**
+   - canonical workload (20000 logical rows, 32768 padded rows) ကိုမှတဆင့် run
+     `cargo run -p fastpq_prover --bin fastpq_metal_bench -- --rows 20000 --pretty`။
+   - `--row-usage <decoded witness>` ကို အသုံးပြု၍ `scripts/fastpq/wrap_benchmark.py` ဖြင့် ရလဒ်ကို ထုပ်ပိုးထားသောကြောင့် အစုအဝေးသည် GPU telemetry နှင့်အတူ gadget အထောက်အထားများကို သယ်ဆောင်ပါသည်။ `--require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --sign-output` ကို ဖြတ်ပါ ထို့ကြောင့် အရှိန်မြှင့်ကိရိယာသည် ပစ်မှတ်ထက်ကျော်လွန်သွားပါက သို့မဟုတ် Poseidon တန်းစီခြင်း/ပရိုဖိုင်တယ်လီမီတာ ပျောက်ဆုံးနေပါက ထုပ်ပိုးမှုမှာ လျင်မြန်စွာ ပျက်ကွက်သွားပါသည်။
+   - CUDA host တွင် ပြန်လုပ်ပါ မန်နီးဖက်စ်တွင် GPU မိသားစုနှစ်ခုလုံးပါရှိသည်။
+   - `benchmarks.metal_dispatch_queue` သို့မဟုတ် **မလုပ်ပါနှင့်
+     ပတ်ထားသော JSON မှ `benchmarks.zero_fill_hotspots` ဘလောက်များ။ CI ဂိတ်
+     (`ci/check_fastpq_rollout.sh`) ယခု အဆိုပါအကွက်များကို ဖတ်ပြီး တန်းစီသည့်အခါ မအောင်မြင်ပါ။
+     headroom သည် အပေါက်တစ်ခုအောက်သို့ ကျဆင်းသွားသည် သို့မဟုတ် LDE ဟော့စပေါ့တစ်ခုမှ `mean_ms>> အစီရင်ခံသောအခါ
+     0.40ms`၊ Stage7 တယ်လီမီတာ အစောင့်ကို အလိုအလျောက် ပြဋ္ဌာန်းသည်။
+2. **မန်နီးဖက်စ်ကို ဖန်တီးပါ။** `cargo xtask fastpq-bench-manifest …` ကို အသုံးပြုပါ
+   ဇယားတွင်ပြသထားသည်။ ဖြန့်ချိမှုအစုအဝေးတွင် `fastpq_bench_manifest.json` ကို သိမ်းဆည်းပါ။
+3. **Grafana ကို တင်ပို့ခြင်း။**
+   - ဖြန့်ချိသည့်ဝင်းဒိုးဖြင့် `FASTPQ Acceleration Overview` ဘုတ်အား မှတ်သားပါ၊
+     သက်ဆိုင်ရာ Grafana panel IDs များသို့ ချိတ်ဆက်ခြင်း။
+   - Grafana API (အထက်အမိန့်စာ) မှတဆင့် ဒက်ရှ်ဘုတ် JSON ကို ထုတ်ယူပြီး ပါဝင်ပါ
+     `annotations` ကဏ္ဍသည် ပြန်လည်သုံးသပ်သူများသည် မွေးစားခြင်းဆိုင်ရာ မျဉ်းကွေးများနှင့် ကိုက်ညီနိုင်ပါသည်။
+     အဆင့်လိုက် ဖြန့်ချိသည်။
+4. **လျှပ်တစ်ပြက်သတိပေးချက်များ။** အသုံးပြုထားသော အတိအကျသတိပေးစည်းမျဉ်းများ (`dashboards/alerts/…`) ကို ကူးယူပါ။
+   အစုအဝေးထဲသို့ rollout အားဖြင့်။ Prometheus စည်းမျဥ်းစည်းကမ်းများကို ဖျက်မည်ဆိုပါက ပါဝင်ပါ။
+   override ကွာခြားမှု။
+5. **Prometheus/OTEL ခြစ်ပါ။** တစ်ခုစီမှ `fastpq_execution_mode_total{device_class="<matrix>"}` ကို ရိုက်ပါ။
+   အိမ်ရှင် (စင်မြင့်ရှေ့နှင့်နောက်) နှင့် OTEL ကောင်တာ
+   `fastpq.execution_mode_resolutions_total` နှင့် တွဲထားသည်။
+   `telemetry::fastpq.execution_mode` မှတ်တမ်းများ။ ဤအရာများက သက်သေပြနေသည်။
+   GPU မွေးစားခြင်းသည် တည်ငြိမ်ပြီး CPU ဖိအားပေးမှုများသည် တယ်လီမီတာကို ထုတ်လွှတ်နေဆဲဖြစ်သည်။
+6. ** အတန်းအသုံးပြုမှု တယ်လီမီတာကို သိမ်းဆည်းပါ။** ExecWitness လည်ပတ်မှုကို ကုဒ်ဖျက်ပြီးနောက်၊
+   စတင်ထုတ်ပါ၊ အစုအဝေးတွင် `row_usage/` အောက်တွင် ထွက်ပေါ်လာသော JSON ကို ချလိုက်ပါ။ CI
+   အကူအညီပေးသူ (`ci/check_fastpq_row_usage.sh`) သည် ဤလျှပ်တစ်ပြက်ရိုက်ချက်များနှင့် နှိုင်းယှဉ်သည်။
+   canonical baselines နှင့် `ci/check_fastpq_rollout.sh` သည် ယခုတိုင်း လိုအပ်ပါသည်။
+   TF-5 အထောက်အထားများ ပူးတွဲထားရှိရန် အနည်းဆုံး `row_usage` ဖိုင်တစ်ခု တင်ပို့ရန် အတွဲလိုက်
+   ထုတ်ဝေခွင့်လက်မှတ်ဆီသို့။
 
-## Evidence Generation Checklist
+## အဆင့်မြှင့်တင်မှု စီးဆင်းမှု
 
-1. **Capture GPU benchmarks.**
-   - Run the canonical workload (20 000 logical rows, 32 768 padded rows) via
-     `cargo run -p fastpq_prover --bin fastpq_metal_bench -- --rows 20000 --pretty`.
-   - Wrap the result with `scripts/fastpq/wrap_benchmark.py` using `--row-usage <decoded witness>` so the bundle carries the gadget evidence alongside the GPU telemetry. Pass `--require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --sign-output` so the wrapper fails fast if either accelerator exceeds the target or if the Poseidon queue/profile telemetry is missing, and to generate the detached signature.
-   - Repeat on the CUDA host so the manifest contains both GPU families.
-   - Do **not** strip the `benchmarks.metal_dispatch_queue` or
-     `benchmarks.zero_fill_hotspots` blocks from the wrapped JSON. The CI gate
-     (`ci/check_fastpq_rollout.sh`) now reads those fields and fails when queue
-     headroom drops below one slot or when any LDE hotspot reports `mean_ms >
-     0.40 ms`, enforcing the Stage 7 telemetry guard automatically.
-2. **Generate the manifest.** Use `cargo xtask fastpq-bench-manifest …` as
-   shown in the table. Store `fastpq_bench_manifest.json` in the rollout bundle.
-3. **Export Grafana.**
-   - Annotate the `FASTPQ Acceleration Overview` board with the rollout window,
-     linking to the relevant Grafana panel IDs.
-   - Export the dashboard JSON via the Grafana API (command above) and include
-     the `annotations` section so reviewers can match adoption curves to the
-     staged rollout.
-4. **Snapshot alerts.** Copy the exact alert rules (`dashboards/alerts/…`) used
-   by the rollout into the bundle. If Prometheus rules were overridden, include
-   the override diff.
-5. **Prometheus/OTEL scrape.** Capture `fastpq_execution_mode_total{device_class="<matrix>"}` from each
-   host (before and after the stage) plus the OTEL counter
-   `fastpq.execution_mode_resolutions_total` and the paired
-   `telemetry::fastpq.execution_mode` log entries. These artefacts prove that
-   GPU adoption is stable and that forced CPU fallbacks still emit telemetry.
-6. **Archive row-usage telemetry.** After decoding the ExecWitness run for the
-   rollout, drop the resulting JSON under `row_usage/` in the bundle. The CI
-   helper (`ci/check_fastpq_row_usage.sh`) compares these snapshots against the
-   canonical baselines, and `ci/check_fastpq_rollout.sh` now requires every
-   bundle to ship at least one `row_usage` file to keep TF-5 evidence attached
-   to the release ticket.
+သင်္ဘောတိုင်းအတွက် အဆုံးအဖြတ်ပေးသည့် အဆင့်သုံးဆင့်ကို အသုံးပြုပါ။ ထွက်ပေါက်ပြီးမှသာ ရှေ့တိုးပါ။
+အဆင့်တစ်ခုစီရှိ စံနှုန်းများကို ကျေနပ်ပြီး အထောက်အထားအစုအဝေးတွင် မှတ်တမ်းတင်ထားသည်။| အဆင့် | နယ်ပယ် | သတ်မှတ်ချက် | ထွက်ရန် တွယ်တာမှု |
+|--------|------|----------------|-------------|
+| လေယာဉ်မှူး (P1) | ထိန်းချုပ်-လေယာဉ် 1 ခု + ဒေသတစ်ခုလျှင် ဒေတာ-လေယာဉ် node 1 ခု | 48 နာရီအတွက် `fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}` ≥90%၊ သတိပေးချက်မန်နေးဂျာ အဖြစ်အပျက်များ နှင့် လွန်သွားသော နောက်ပြန်လှည့်မှုလေ့ကျင့်ခန်း။ | host နှစ်ခုလုံးမှ အတွဲလိုက် (ခုံတန်းလျား JSONs၊ Grafana ပိုင်းလော့မှတ်ချက်၊ ပြန်လှည့်မှတ်တမ်းများ)။ |
+| ချဉ်းကပ်လမ်း (P2) | အတည်ပြုသူများ၏ ≥50% နှင့် အစုအဖွဲ့တစ်ခုလျှင် အနည်းဆုံး မှတ်တမ်းလမ်းသွားတစ်ခု GPU လုပ်ဆောင်ချက်သည် 5 ရက်ကြာတည်တံ့သည်၊ 1 အဆင့်နှိမ့်ချမှု > 10min ထက်မပိုဘဲ၊ နှင့် Prometheus ကောင်တာများသည် 60s အတွင်း မှားယွင်းမှုများသတိပေးချက်ကို သက်သေပြပါသည်။ | မွမ်းမံထားသော Grafana ပို့ကုန်၊ ချဉ်းကပ်လမ်းမှတ်စာ၊ Prometheus ခြစ်ရာကွဲပြားမှုများ၊ Alertmanager ဖန်သားပြင်ဓာတ်ပုံ/မှတ်တမ်းကို ပြသထားသည်။ |
+| ပုံသေ (P3) | ကျန်ရှိသော ဆုံမှတ်များ FASTPQ ကို `iroha_config` | တွင် ပုံသေသတ်မှတ်ထားသည်။ လက်မှတ်ထိုးထားသော ခုံတန်းလျား မန်နီးဖက်စ် + Grafana နောက်ဆုံးမွေးစားခြင်းမျဉ်းကွေးကို ရည်ညွှန်းကာ တင်ပို့ခြင်းနှင့် config toggle ကိုသရုပ်ပြသည့် မှတ်တမ်းပြုထားသော နောက်ပြန်လှည့်လေ့ကျင့်ခန်း။ | နောက်ဆုံး မန်နီးဖက်စ်၊ Grafana JSON၊ နောက်ပြန်လှည့်မှု မှတ်တမ်း၊ ပြင်ဆင်သတ်မှတ်ပြောင်းလဲမှု ပြန်လည်သုံးသပ်ခြင်းအတွက် လက်မှတ်ကိုးကား။ |
 
-## Staged Rollout Flow
+ပရိုမိုးရှင်းအဆင့်တစ်ခုစီကို စတင်ရောင်းချရန် လက်မှတ်တွင် စာရွက်စာတမ်းနှင့် တိုက်ရိုက်ချိတ်ဆက်ပါ။
+`grafana_fastpq_acceleration.json` မှတ်ချက်များ သည် ပြန်လည်သုံးသပ်သူများ ဆက်စပ်နိုင်စေရန်
+အထောက်အထားနှင့်အတူ အချိန်ဇယား။
 
-Use three deterministic phases for every fleet. Advance only after the exit
-criteria in each phase are satisfied and documented in the evidence bundle.
+## နောက်ပြန်လှည့်လေ့ကျင့်မှုများ
 
-| Phase | Scope | Exit Criteria | Attachments |
-|-------|-------|---------------|-------------|
-| Pilot (P1) | 1 control-plane + 1 data-plane node per region | `fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}` ≥90% for 48 h, zero Alertmanager incidents, and a passing rollback drill. | Bundle from both hosts (bench JSONs, Grafana export with pilot annotation, rollback logs). |
-| Ramp (P2) | ≥50% of validators plus at least one archival lane per cluster | GPU execution sustained for 5 days, no more than 1 downgrade spike >10 min, and Prometheus counters prove fallbacks alert within 60 s. | Updated Grafana export showing the ramp annotation, Prometheus scrape diffs, Alertmanager screenshot/log. |
-| Default (P3) | Remaining nodes; FASTPQ marked default in `iroha_config` | Signed bench manifest + Grafana export referencing the final adoption curve, and documented rollback drill demonstrating the config toggle. | Final manifest, Grafana JSON, rollback log, ticket reference to config change review. |
+ထုတ်လွှင့်သည့် အဆင့်တိုင်းတွင် ပြန်လည်အစမ်းလေ့ကျင့်မှု ပါဝင်ရမည်-
 
-Document each promotion step in the rollout ticket and link directly to the
-`grafana_fastpq_acceleration.json` annotations so reviewers can correlate the
-timeline with the evidence.
-
-## Rollback Drills
-
-Every rollout stage must include a rollback rehearsal:
-
-1. Pick one node per cluster and record the current metrics:
+1. အစုအဝေးတစ်ခုစီကို ရွေးပြီး လက်ရှိမက်ထရစ်များကို မှတ်တမ်းတင်ပါ-
    ```bash
    curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'
    ```
-2. Force CPU mode for 10 minutes using either the config knob
-   (`zk.fastpq.execution_mode = "cpu"`) or the environment override:
+2. config knob ကို အသုံးပြု၍ CPU မုဒ်ကို 10 မိနစ်ကြာ တွန်းအားပေးပါ။
+   (`zk.fastpq.execution_mode = "cpu"`) သို့မဟုတ် ပတ်ဝန်းကျင်ကို အစားထိုးခြင်း-
    ```bash
    FASTPQ_GPU=cpu irohad --config <path> --genesis-manifest-json <path>
    ```
-3. Confirm the downgrade log
-   (`telemetry::fastpq.execution_mode resolved="cpu" requested="gpu"`) and scrape
-   the Prometheus endpoint again to show the counter increments.
-4. Restore GPU mode, verify that `telemetry::fastpq.execution_mode` now reports
-   `resolved="metal"` (or `resolved="cuda"/"opencl"` for non-Metal lanes),
-   confirm the Prometheus scrape contains both the CPU and GPU samples in
-   `fastpq_execution_mode_total{backend=…}`, and log the elapsed time to
-   detection/cleanup.
-5. Store shell transcripts, metrics, and operator acknowledgements as
-   `rollback_drill.log` and `metrics_rollback.prom` in the rollout bundle. These
-   files must illustrate the full downgrade + restore cycle because
-   `ci/check_fastpq_rollout.sh` now fails whenever the log lacks the GPU
-   recovery line or the metrics snapshot omits either the CPU or GPU counters.
+3. အဆင့်နှိမ့်ချမှုမှတ်တမ်းကို အတည်ပြုပါ။
+   (`telemetry::fastpq.execution_mode resolved="cpu" requested="gpu"`) နဲ့ ခြစ်ပါ။
+   တန်ပြန်တိုးနှုန်းများကိုပြသရန် ထပ်မံ၍ Prometheus အဆုံးမှတ်။
+4. GPU မုဒ်ကို ပြန်ယူပါ၊ `telemetry::fastpq.execution_mode` မှ ယခုတင်ပြထားသည်ကို အတည်ပြုပါ။
+   `resolved="metal"` (သို့မဟုတ် သတ္တုမဟုတ်သောလမ်းများအတွက် `resolved="cuda"/"opencl"`)၊
+   Prometheus ခြစ်ရာတွင် CPU နှင့် GPU နမူနာများပါ၀င်ကြောင်း အတည်ပြုပါ။
+   `fastpq_execution_mode_total{backend=…}`၊ ပြီးသွားသောအချိန်ကို မှတ်တမ်းတင်ပါ။
+   ထောက်လှမ်း/ရှင်းလင်းရေး။
+5. shell စာသားမှတ်တမ်းများ၊ မက်ထရစ်များနှင့် အော်ပရေတာအသိအမှတ်ပြုချက်များကို သိမ်းဆည်းပါ။
+   ဖြန့်ချိသည့်အတွဲတွင် `rollback_drill.log` နှင့် `metrics_rollback.prom`။ ဒါတွေ
+   ဖိုင်များသည် အဆင့်နှိမ့်ချခြင်း + ပြန်လည်ရယူခြင်း သံသရာ အပြည့်အစုံကို သရုပ်ဖော်ရမည်ဖြစ်သောကြောင့် ဖြစ်သည်။
+   မှတ်တမ်းတွင် GPU မရှိသည့်အခါ `ci/check_fastpq_rollout.sh` ယခုပျက်သွားသည်။
+   ပြန်လည်ရယူရေးလိုင်း သို့မဟုတ် တိုင်းတာမှုလျှပ်တစ်ပြက်ရိုက်ချက်သည် CPU သို့မဟုတ် GPU ကောင်တာများကို ချန်လှပ်ထားသည်။
 
-These logs prove that every cluster can degrade gracefully and that SRE teams
-know how to fall back deterministically if GPU drivers or kernels regress.
+ဤမှတ်တမ်းများသည် အစုအဝေးတိုင်းနှင့် SRE အဖွဲ့များကို ကောင်းမွန်စွာ ဆုတ်ယုတ်သွားစေနိုင်ကြောင်း သက်သေပြပါသည်။
+GPU ဒရိုက်ဘာများ သို့မဟုတ် kernels များ နောက်ပြန်ဆုတ်သွားပါက မည်ကဲ့သို့ နောက်ပြန်ဆုတ်ရမည်ကို အတိအကျသိပါ။
 
-## Mixed-mode fallback evidence (WP2-E.6)
+## ရောနှော-မုဒ် အတုအယောင် အထောက်အထား (WP2-E.6)
 
-Whenever a host needs GPU FFT/LDE but CPU Poseidon hashing (per the Stage 7 <900 ms
-requirement), bundle the following artefacts alongside the standard rollback logs:
-
-1. **Config diff.** Check in (or attach) the host-local override that sets
-   `zk.fastpq.poseidon_mode = "cpu"` (`FASTPQ_POSEIDON_MODE=cpu`) while leaving
-   `zk.fastpq.execution_mode` untouched. Name the patch
-   `artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/poseidon_fallback.patch`.
-2. **Poseidon counter scrape.**
+host တစ်ခုသည် GPU FFT/LDE လိုအပ်သည့်အခါတိုင်း၊ CPU Poseidon hashing (Stage7 <900ms နှုန်းဖြင့်
+လိုအပ်ချက်)၊ စံ rollback မှတ်တမ်းများနှင့်အတူ အောက်ဖော်ပြပါ ပစ္စည်းများကို စုစည်းပါ-1. **Config diff.** သတ်မှတ်ပေးထားသည့် host-local override ကို check in (သို့မဟုတ် attach) လုပ်ပါ။
+   ထွက်ခွာနေစဉ် `zk.fastpq.poseidon_mode = "cpu"` (`FASTPQ_POSEIDON_MODE=cpu`)
+   `zk.fastpq.execution_mode` မထိရသေးပါ။ Patch ကို အမည်ပေးပါ။
+   `artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/poseidon_fallback.patch`။
+2. **Poseidon ကောင်တာခြစ်။**
    ```bash
    curl -s http://<host>:8180/metrics \
      | rg 'fastpq_poseidon_pipeline_total{.*device_class="<label>"' \
      > artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>/metrics_poseidon.prom
    ```
-   The capture must show `path="cpu_forced"` incrementing in lock-step with the
-   GPU FFT/LDE counter for that device-class. Take a second scrape after reverting
-   back to GPU mode so reviewers can see the `path="gpu"` row resume.
+   ဖမ်းယူမှုသည် `path="cpu_forced"` ကို လော့ခ်ချသည့်အဆင့်တွင် တိုးလာကြောင်း ပြသရမည်၊
+   ထိုစက်ပစ္စည်းအတန်းအစားအတွက် GPU FFT/LDE ကောင်တာ။ ပြန်ပြောင်းပြီးနောက် ဒုတိယအခြစ်ကို ယူပါ။
+   GPU မုဒ်သို့ ပြန်သွားရန်၊ ပြန်လည်သုံးသပ်သူများသည် `path="gpu"` အတန်း၏ကိုယ်ရေးမှတ်တမ်းကို ကြည့်ရှုနိုင်မည်ဖြစ်သည်။
 
-   Pass the resulting file to `wrap_benchmark.py --poseidon-metrics …` so the wrapped benchmark records the same counters inside its `poseidon_metrics` section; this keeps Metal and CUDA rollouts on the identical workflow and makes the fallback evidence auditable without opening separate scrape files.
-3. **Log excerpt.** Copy the `telemetry::fastpq.poseidon` entries that prove the
-   resolver flipped to CPU (`cpu_forced`) into
-   `poseidon_fallback.log`, keeping timestamps so Alertmanager timelines can be
-   correlated with the config change.
+   ရရှိလာသောဖိုင်ကို `wrap_benchmark.py --poseidon-metrics …` သို့ ကူးသွားပါရန်၊ သို့မှသာ ထုပ်ပိုးထားသော စံသတ်မှတ်ချက်များသည် ၎င်း၏ `poseidon_metrics` အပိုင်းအတွင်း တူညီသောကောင်တာများကို မှတ်တမ်းတင်ပါသည်။ ၎င်းသည် Metal နှင့် CUDA မိတ်ဆက်မှုများကို တူညီသောလုပ်ငန်းအသွားအလာတွင် ထိန်းသိမ်းထားပြီး သီးခြားခြစ်ဖိုင်များကိုဖွင့်စရာမလိုဘဲ နောက်ပြန်အထောက်အပံများကို စစ်ဆေးနိုင်စေသည်။
+3. **မှတ်စု ကောက်နုတ်ချက်** ကို သက်သေပြသော `telemetry::fastpq.poseidon` ထည့်သွင်းမှုများကို ကူးယူပါ။
+   ဖြေရှင်းသူသည် CPU (`cpu_forced`) သို့ ပြောင်းသွားသည်။
+   `poseidon_fallback.log`၊ အချိန်တံဆိပ်များကို သိမ်းဆည်းထားသောကြောင့် Alertmanager အချိန်ဇယားများ ဖြစ်နိုင်သည်
+   config အပြောင်းအလဲနှင့်ဆက်စပ်။
 
-CI enforces the queue/zero-fill checks today; once the mixed-mode gate lands,
-`ci/check_fastpq_rollout.sh` will also insist that any bundle containing
-`poseidon_fallback.patch` ships the matching `metrics_poseidon.prom` snapshot.
-Following this workflow keeps the WP2-E.6 fallback policy auditable and tied to
-the same evidence collectors used during the default-on rollout.
+CI သည် တန်းစီခြင်း/သုည-ဖြည့်စွက်စစ်ဆေးမှုများကို ယနေ့တွင် ပြဋ္ဌာန်းထားသည်။ Mixed-mode gate သည် တစ်ကြိမ်၊
+`ci/check_fastpq_rollout.sh` တွင်ပါရှိသော မည်သည့်အတွဲကိုမဆို အခိုင်အမာတောင်းဆိုပါမည်။
+`poseidon_fallback.patch` သည် ကိုက်ညီသော `metrics_poseidon.prom` လျှပ်တစ်ပြက်ရိုက်ချက် ပေးပို့သည်။
+ဤလုပ်ငန်းအသွားအလာကို လိုက်နာခြင်းဖြင့် WP2-E.6 လှည့်စားမှုမူဝါဒကို စာရင်းစစ်ပြီး ချိတ်ဆက်ထားသည်။
+ပုံသေဖွင့်ချိန်အတွင်း အသုံးပြုသည့် တူညီသောအထောက်အထားစုဆောင်းသူများ။
 
-## Reporting & Automation
+## အစီရင်ခံခြင်းနှင့် အလိုအလျောက်လုပ်ဆောင်ခြင်း။
 
-- Attach the entire `artifacts/fastpq_rollouts/<stamp>/` directory to the
-  release ticket and reference it from `status.md` once the rollout closes.
-- Run `dashboards/alerts/tests/fastpq_acceleration_rules.test.yml` (via
-  `promtool`) inside CI to ensure alert bundles bundled with the rollout still
-  compile.
-- Validate the bundle with `ci/check_fastpq_rollout.sh` (or
-  `make check-fastpq-rollout`) and pass `FASTPQ_ROLLOUT_BUNDLE=<path>` when you
-  want to target a single rollout. CI invokes the same script via
-  `.github/workflows/fastpq-rollout.yml`, so missing artefacts fail fast before a
-  release ticket can close. The release pipeline can archive validated bundles
-  alongside the signed manifests by passing
-  `--fastpq-rollout-bundle artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>` to
-  `scripts/run_release_pipeline.py`; the helper reruns
-  `ci/check_fastpq_rollout.sh` (unless `--skip-fastpq-rollout-check` is set) and
-  copies the directory tree into `artifacts/releases/<version>/fastpq_rollouts/…`.
-  As part of this gate the script enforces the Stage 7 queue-depth and zero-fill
-  budgets by reading `benchmarks.metal_dispatch_queue` and
-  `benchmarks.zero_fill_hotspots` out of each `metal` bench JSON.
+- `artifacts/fastpq_rollouts/<stamp>/` လမ်းညွှန်တစ်ခုလုံးကို အဆိုပါသို့ ပူးတွဲပါ။
+  ထုတ်ဝေမှုပိတ်သည်နှင့် လက်မှတ်ကိုထုတ်ပြီး `status.md` မှ ကိုးကားပါ။
+- `dashboards/alerts/tests/fastpq_acceleration_rules.test.yml` (မှတဆင့်
+  စတင်ထွက်ရှိဆဲနှင့်အတူ ထုပ်ပိုးထားသော သတိပေးချက်အစုအဝေးများကို သေချာစေရန် CI အတွင်း `promtool`)
+  compile လုပ်ပါ။
+- `ci/check_fastpq_rollout.sh` (သို့မဟုတ်
+  `make check-fastpq-rollout`) နှင့် `FASTPQ_ROLLOUT_BUNDLE=<path>` ကို သင်ရသောအခါ၊
+  တစ်ခုတည်းကို ပစ်မှတ်ထားချင်သည်။ CI သည် တူညီသော script ကို ခေါ်ဆိုသည်။
+  `.github/workflows/fastpq-rollout.yml`၊ ထို့ကြောင့် ပျောက်ဆုံးနေသော ရှေးဟောင်းပစ္စည်းများသည် လျင်မြန်စွာ ပျက်ကွက်ပါသည်။
+  လက်မှတ်ပိတ်နိုင်သည်။ ပိုက်လိုင်းသည် အတည်ပြုထားသော အစုအဝေးများကို သိမ်းဆည်းနိုင်သည်။
+  ဖြတ်သန်းခြင်းတို့ဖြင့် ထင်ရှားစွာ ရေးထိုးထားသည်။
+  `--fastpq-rollout-bundle artifacts/fastpq_rollouts/<stamp>/<fleet>/<lane>` မှ
+  `scripts/run_release_pipeline.py`; အကူအညီပေးသူက ပြန်ပြေးသည်။
+  `ci/check_fastpq_rollout.sh` (`--skip-fastpq-rollout-check` ကို သတ်မှတ်မထားပါက) နှင့်
+  လမ်းညွှန်သစ်ပင်ကို `artifacts/releases/<version>/fastpq_rollouts/…` သို့ ကူးယူသည်။
+  ဤဂိတ်ပေါက်၏ တစ်စိတ်တစ်ပိုင်းအနေဖြင့် ဇာတ်ညွှန်းသည် Stage7 တန်းစီအတိမ်အနက်နှင့် သုည-ဖြည့်စွက်မှုကို တွန်းအားပေးသည်။
+  `benchmarks.metal_dispatch_queue` နှင့် ဘတ်ဂျတ်များ
+  `benchmarks.zero_fill_hotspots` တစ်ခုစီထဲက `metal` ခုံတန်းလျား JSON။
 
-By following this playbook we can demonstrate deterministic adoption, provide a
-single evidence bundle per rollout, and keep rollback drills audited alongside
-the signed benchmark manifests.
+ဤပြခန်းစာအုပ်ကို လိုက်နာခြင်းဖြင့် ကျွန်ုပ်တို့သည် တိကျသေချာသော မွေးစားခြင်းကို သရုပ်ပြနိုင်သည်၊
+ဖြန့်ချိမှုတစ်ခုလျှင် အထောက်အထားအစုအဝေးတစ်ခု၊ နှင့် နောက်ကြောင်းပြန်လေ့ကျင့်ခန်းများကို တွဲလျက်စာရင်းစစ်ထားပါ။
+လက်မှတ်ရေးထိုးထားသော စံနှုန်းသည် ထင်ရှားသည်။

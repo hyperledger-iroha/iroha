@@ -6,63 +6,64 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 44f1c681730f1c94d9d00e8f829a0134374ce6cb29f21727a27685e096f0da40
 source_last_modified: "2026-01-18T05:31:56.955438+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Merge Ledger Design — Lane Finality and Global Reduction
+# انضمام لیجر ڈیزائن - لین فائنلٹی اور عالمی کمی
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+یہ نوٹ سنگ میل 5 کے لئے انضمام کے لجر ڈیزائن کو حتمی شکل دیتا ہے۔ یہ اس کی وضاحت کرتا ہے
+غیر خالی بلاک پالیسی ، کراس لین کیو سی مرج سیمنٹکس ، اور فائنلٹی ورک فلو
+جو عالمی سطح پر پھانسی کو عالمی سطح پر عالمی سطح پر پھانسی پر پابند کرتا ہے۔
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+ڈیزائن `nexus.md` میں بیان کردہ Nexus فن تعمیر میں توسیع کرتا ہے۔ شرائط جیسے
+"لین بلاک" ، "لین کیو سی" ، "انضمام اشارہ" ، اور "انضمام لیجر" ان کے وارث ہوں
+اس دستاویز سے تعریف ؛ یہ نوٹ طرز عمل کے قواعد اور پر مرکوز ہے
+عمل درآمد کی رہنمائی جو رن ٹائم ، اسٹوریج ، اور ڈبلیو ایس وی کے ذریعہ نافذ کی جانی چاہئے
+پرتیں
 
-## 1. Non-Empty Block Policy
+## 1. غیر خالی بلاک پالیسی
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+** قاعدہ (لازمی): ** ایک لین تجویز کنندہ صرف اس وقت بلاک جاری کرتا ہے جب بلاک پر مشتمل ہو
+کم از کم ایک پھانسی شدہ ٹرانزیکشن ٹکڑا ، وقت پر مبنی ٹرگر ، یا تعصب پسند
+نمونے کی تازہ کاری (جیسے ، ڈی اے آرٹیکٹیکٹ رول اپ)۔ خالی بلاکس ممنوع ہیں۔
 
-**Implications:**
+** مضمرات: **
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+- سلاٹ کو برقرار رکھنے کے لئے: جب کوئی لین دین اس کے عین مطابق کمٹ ونڈو سے نہیں ملتا ہے ،
+لین کوئی بلاک کا اخراج نہیں کرتی ہے اور صرف اگلے سلاٹ میں پیش قدمی کرتی ہے۔ انضمام لیجر
+اس لین کے لئے پچھلی نوک پر رہتا ہے۔
+- ٹرگر بیچنگ: پس منظر کے محرکات جو ریاستی منتقلی پیدا نہیں کرتے ہیں (جیسے ،
+کرون جو حملہ آوروں کی تصدیق کرتا ہے) کو خالی سمجھا جاتا ہے اور اسے چھوڑنا ضروری ہے یا
+بلاک تیار کرنے سے پہلے دوسرے کام کے ساتھ بنڈل۔
+- ٹیلی میٹری: `pipeline_detached_merged` اور فالو اپ میٹرکس ٹریٹ چھوڑ دیا گیا
+سلاٹ واضح طور پر - آپریٹرز "پائپ لائن رکے ہوئے" سے "کوئی کام نہیں" ممتاز کرسکتے ہیں۔
+- ری پلے: بلاک اسٹوریج مصنوعی خالی جگہ ہولڈرز داخل نہیں کرتا ہے۔ کورا
+ری پلے لوپ صرف ایک ہی والدین کی ہیش کا مشاہدہ کرتا ہے اگر نہیں اگر نہیں تو
+بلاک خارج ہوا تھا۔
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+** کیننیکل چیک: ** بلاک تجویز اور توثیق کے دوران ، `ValidBlock::commit`
+اس بات پر زور دیتا ہے کہ متعلقہ `StateBlock` کم از کم ایک پرعزم اوورلی لے جاتا ہے
+(ڈیلٹا ، نمونے ، ٹرگر) یہ `StateBlock::is_empty` گارڈ کے ساتھ سیدھ میں ہے
+یہ پہلے ہی یقینی بناتا ہے کہ کوئی اوپٹ لکھنے والی تحریریں بھی شامل ہیں۔ نفاذ سے پہلے ہوتا ہے
+دستخطوں کی درخواست کی جاتی ہے لہذا کمیٹیاں کبھی بھی خالی پے لوڈ پر ووٹ نہیں دیتی ہیں۔
 
-## 2. Cross-Lane QC Merge Semantics
+## 2. کراس لین کیو سی کو مرجائیں سیمنٹکس
 
-Each lane block `B_i` finalised by its committee produces:
+ہر لین بلاک `B_i` اپنی کمیٹی کے ذریعہ حتمی شکل دیتا ہے:
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
-"iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
-  execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+-`lane_state_root_i`: poseidon2-SMT کا عزم فی-ڈی ایس ریاست کی جڑوں کو چھو لیا گیا
+بلاک میں
+- `merge_hint_root_i`: انضمام لیجر کے لئے امیدوار رولنگ امیدوار (`ٹیگ =
+"اروہہ: انضمام: امیدوار: v1 \ 0" `)۔
+- `lane_qc_i`: لین کمیٹی کے مجموعی دستخطوں پر
+  عملدرآمد-ووٹ پریمیج (بلاک ہیش ، `parent_state_root` ،
+  `post_state_root` ، اونچائی/ویو/ایپوچ ، چین_ایڈ ، اور موڈ ٹیگ)۔
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+انضمام نوڈس کے لئے تازہ ترین نکات `{(B_i, lane_qc_i, merge_hint_root_i)}` جمع کریں
+تمام لین `i ∈ [0, K)`۔
 
-**Merge Entry (MUST):**
+** انضمام اندراج (لازمی): **
 
 ```
 MergeLedgerEntry {
@@ -72,23 +73,21 @@ MergeLedgerEntry {
     global_state_root: Hash32,
     merge_qc: QuorumCertificate,
 }
-```
+```- `lane_tips[i]` لین کے لن بلاک کا ہیش ہے لین کے لئے انضمام انٹری سیل
+  `i`۔ اگر کسی لین نے پچھلے انضمام کے اندراج کے بعد سے کوئی بلاک خارج نہیں کیا ہے تو ، یہ قیمت ہے
+  دہرایا
+- `merge_hint_root[i]` متعلقہ لین سے `merge_hint_root` ہے
+  بلاک. جب `lane_tips[i]` دہراتا ہے تو یہ دہرایا جاتا ہے۔
+- `global_state_root` کے برابر `ReduceMergeHints(merge_hint_root[0..K-1])` ، a
+  ڈومین علیحدگی کے ٹیگ کے ساتھ پوسیڈون 2 فولڈ
+  `"iroha:merge:reduce:v1\0"`۔ کمی عیاں ہے اور لازمی ہے
+  ساتھیوں میں ایک ہی قدر کی تشکیل نو.
+- `merge_qc` انضمام کمیٹی کا ایک BFT کورم سرٹیفکیٹ ہے
+  سیریلائزڈ اندراج۔
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+** QC پے لوڈ کو ضم کریں (لازمی): **
 
-**Merge QC Payload (MUST):**
-
-Merge committee members sign a deterministic digest:
+انضمام کمیٹی کے ممبران ایک ڈٹرمینسٹک ڈائجسٹ پر دستخط کرتے ہیں:
 
 ```
 merge_qc_digest = blake2b32(
@@ -104,110 +103,106 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+- `view` انضمام کمیٹی کا نظریہ ہے جو لین کے اشارے سے اخذ کیا گیا ہے (زیادہ سے زیادہ
+  `view_change_index` لین کے ہیڈروں کے اس پار اندراج کے ذریعہ مہر لگا ہوا ہے)۔
+- `chain_id` تشکیل شدہ چین شناخت کنندہ اسٹرنگ (UTF-8 بائٹس) ہے۔
+- پے لوڈ میں Norito انکوڈنگ کا استعمال اوپر دکھائے گئے فیلڈ آرڈر کے ساتھ ہوتا ہے۔
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+نتیجے میں ڈائجسٹ `merge_qc.message_digest` میں محفوظ ہے اور یہ پیغام ہے
+BLS دستخطوں کے ذریعہ تصدیق شدہ۔
 
-**Merge QC Construction (MUST):**
+** QC تعمیر (لازمی) کو ضم کریں: **
 
-- The merge committee roster is the current commit-topology validator set.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- انضمام کمیٹی روسٹر موجودہ کمٹوپولوجی کی توثیق کرنے والا سیٹ ہے۔
+- مطلوبہ کورم = `commit_quorum_from_len(roster_len)`۔
+- `merge_qc.signers_bitmap` شریک کو انکوڈ کرتا ہے۔
+  کمٹوپولوجی ترتیب میں۔
+- `merge_qc.aggregate_signature` ڈائجسٹ کے لئے BLS-معمول کی مجموعی ہے
+  اوپر
 
-**Validation (MUST):**
+** توثیق (لازمی): **
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+1. `lane_tips[i]` کے خلاف ہر `lane_qc_i` کی تصدیق کریں اور بلاک ہیڈر کی تصدیق کریں
+   مماثل `merge_hint_root_i` شامل کریں۔
+2. یقینی بنائیں کہ کوئی `lane_qc_i` ایک `Invalid` یا غیر منقولہ بلاک کی طرف اشارہ کرے۔
+   مذکورہ بالا غیر خالی پالیسی اس بات کو یقینی بناتی ہے کہ ہیڈر میں ریاستی اوورلیز شامل ہیں۔
+3. recompute `ReduceMergeHints` اور `global_state_root` کے ساتھ موازنہ کریں۔
+4. انضمام کیو سی ڈائجسٹ کو دوبارہ تشکیل دیں اور دستخط کرنے والے بٹ میپ ، کورم کی دہلیز ، کی تصدیق کریں ،
+   اور کمٹ ٹاپولوجی روسٹر کے خلاف مجموعی دستخط۔
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+** مشاہدہ: ** انضمام نوڈس Prometheus کاؤنٹرز کے لئے اخراج کریں
+`merge_entry_lane_repeats_total{i}` لینوں کو اجاگر کرنے کے لئے جو سلاٹ چھوڑ دیتے ہیں
+آپریشنل مرئیت
 
-## 3. Finality Workflow
+## 3. فائنلٹی ورک فلو
 
-### 3.1 Lane-Level Finality
+### 3.1 لین سطح کی حتمی شکل
 
-1. Transactions are scheduled per lane in deterministic slots.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+1. ٹرانزیکشنز فی لین کا تعی .ن سلاٹوں میں شیڈول ہیں۔
+2. ایگزیکٹر `StateBlock` میں اوورلیز کا اطلاق کرتا ہے ، جس سے ڈیلٹا تیار ہوتا ہے اور
+نمونے
+3. توثیق کے بعد ، لین کمیٹی نے پھانسی کے بارے میں ووٹ پر دستخط کیے ہیں
+   بلاک ہیش ، ریاست کی جڑیں ، اور اونچائی/نظارہ/عہد کو باندھتا ہے۔ ٹپل
+   `(block_hash, lane_qc_i, merge_hint_root_i)` کو لین فائنل سمجھا جاتا ہے۔
+4. ہلکے کلائنٹ لین ٹپ کو ڈی ایس محدود ثبوتوں کے لئے حتمی سمجھ سکتے ہیں ، لیکن
+انضمام لیجر کے ساتھ مصالحت کرنے کے لئے ایسوسی ایٹڈ `merge_hint_root` کو ریکارڈ کرنا چاہئے
+بعد میںلین کمیٹیاں فی ڈیٹا اسپیس ہیں اور عالمی عہد کی جگہ نہیں لیتی ہیں
+ٹوپولوجی۔ کمیٹی کا سائز `3f+1` پر طے کیا گیا ہے ، جہاں `f` سے آتا ہے
+ڈیٹاسپیس کیٹلاگ (`fault_tolerance`)۔ توثیق کرنے والا پول ڈیٹاسپیس کا ہے
+ویلڈیٹرز (لین گورننس ایڈمن سے چلنے والی لینوں ، یا عوامی لین کے لئے ظاہر ہوتی ہے
+اسٹیک سے منتخب گلیوں کے لئے ریکارڈنگ ریکارڈ)۔ کمیٹی کی رکنیت ہے
+VRF EPOCH بیج کے ساتھ جکڑے ہوئے ہر عہد کا استعمال کرتے ہوئے ایک بار ایک بار نمونہ لیا گیا
+`dataspace_id` اور `lane_id`۔ اگر پول `3f+1` سے چھوٹا ہے تو ، لین کی فائنلٹی
+جب تک کورم بحال نہیں ہوتا ہے اس وقت تک توقف کرتا ہے (ہنگامی بحالی کو الگ سے سنبھالا جاتا ہے)۔
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+### 3.2 انضمام لیجر کی حتمی شکل
 
-### 3.2 Merge-Ledger Finality
+1. انضمام کمیٹی لین کے تازہ ترین نکات جمع کرتی ہے ، ہر `lane_qc_i` کی تصدیق کرتی ہے ، اور
+مذکورہ بالا `MergeLedgerEntry` کی تعمیر کرتا ہے۔
+2. تعصب کی کمی کی تصدیق کے بعد ، انضمام کمیٹی اس پر دستخط کرتی ہے
+اندراج (`merge_qc`)۔
+3. نوڈس انضمام لیجر لاگ میں اندراج کو شامل کریں اور اس کے ساتھ ساتھ اسے برقرار رکھیں
+لین بلاک حوالہ جات۔
+4. `global_state_root` کے لئے عالمی ریاست کا مستند عزم بن جاتا ہے
+عہد/سلاٹ۔ مکمل نوڈس اپنے WSV چوکی میٹا ڈیٹا کو اس کی عکسبندی کے ل appated اپ ڈیٹ کریں
+قیمت ؛ عین مطابق ری پلے کو اسی کمی کو دوبارہ پیش کرنا چاہئے۔
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+### 3.3 WSV اور اسٹوریج انضمام
 
-### 3.3 WSV and Storage Integration
+- `State::commit_merge_entry` فی لین ریاست کی جڑوں اور اس کو ریکارڈ کرتا ہے
+  حتمی `global_state_root` ، عالمی چیکسم کے ساتھ لین پر عمل درآمد برجنگ۔
+- کورا لین بلاک نمونے سے متصل `MergeLedgerEntry` برقرار ہے لہذا a
+  ری پلے لین سطح اور عالمی سطح پر حتمی ترتیب دونوں کی تشکیل نو کرسکتا ہے۔
+- جب کوئی لین ایک سلاٹ چھوڑ دیتی ہے تو ، اسٹوریج صرف پچھلے نوک کو برقرار رکھتا ہے۔ نہیں
+  پلیس ہولڈر انضمام اندراجات بنائے جاتے ہیں جب تک کہ کم از کم ایک لین ایک نیا پیدا نہ کرے
+  بلاک.
+- API سطحوں (Torii ، ٹیلی میٹری) دونوں لین ٹپس اور تازہ ترین انضمام دونوں کو بے نقاب کریں
+  اندراج تاکہ آپریٹرز اور مؤکل فی لین اور عالمی نظریات میں صلح کر سکتے ہیں۔
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
-
-## 4. Implementation Notes
-
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
+## 4. نفاذ کے نوٹ- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` کی توثیق کرتا ہے
+  کمی اور تاروں کو لین/گلوبل میٹا ڈیٹا کو عالمی ریاست میں
+  اور مبصرین انضمام کے اشارے اور مستند عالمی ہیش تک رسائی حاصل کرسکتے ہیں۔
 - `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+  بلاک اور اس سے وابستہ انضمام کے اندراج کو ایک قدم میں برقرار رکھتا ہے ، پیچھے ہٹتا ہے
+  ان میموری بلاک جب ضمیمہ ناکام ہوجاتا ہے تو اسٹوریج کبھی بھی بلاک کو ریکارڈ نہیں کرتا ہے
+  اس کے بغیر سگ ماہی میٹا ڈیٹا کے۔ انضمام کے لئے لاج والا لاگ لاک مرحلہ میں کٹ جاتا ہے
+  اسٹارٹ اپ کی بازیابی کے دوران توثیق شدہ بلاک کی اونچائی کے ساتھ ، اور میموری میں کیشے ہوئے
+  پابند ونڈو کے ساتھ (`kura.merge_ledger_cache_capacity` ، پہلے سے طے شدہ 256) سے
+  طویل عرصے سے چلنے والے نوڈس پر بے حد ترقی سے پرہیز کریں۔ بازیافت جزوی یا کو چھوٹا کرتی ہے
+  بڑے پیمانے پر انضمام لیجر کی دم کے اندراجات ، اور اس سے اوپر کے اندراجات کو مسترد کرتا ہے
+  کیپ مختص کرنے کے لئے زیادہ سے زیادہ پے لوڈ سائز گارڈ۔
+- `crates/iroha_core/src/block.rs`: بلاک کی توثیق بلاکس کو بغیر مسترد کرتی ہے
+  انٹری پوائنٹس (بیرونی لین دین یا وقت کے محرکات) اور بغیر کسی تعصب کے
+  اس بات کو یقینی بنانا ، ڈی اے بنڈل (`BlockValidationError::EmptyBlock`) جیسے نمونے
+  دستخطوں کی درخواست کرنے اور لے جانے سے پہلے غیر خالی پالیسی نافذ کی جاتی ہے
+  انضمام لیجر میں۔
+- عین مطابق کمی مددگار انضمام کی خدمت میں رہتی ہے: `reduce_merge_hint_roots`
+  (`crates/iroha_core/src/merge.rs`) اوپر بیان کردہ پوسیڈون 2 فول کو نافذ کرتا ہے۔
+  ہارڈ ویئر ایکسلریشن ہکس مستقبل کے کام میں رہتے ہیں ، لیکن اسکیلر کا راستہ اب نافذ ہوتا ہے
+  کیننیکل کمی کا تعی .ن۔
+- ٹیلی میٹری انضمام: فی لین انضمام کو بے نقاب کرنا دہراتا ہے اور
+  `global_state_root` گیج مشاہدہ کرنے والے بیک بلاگ میں ٹریک کیا جاتا ہے لہذا
+  ڈیش بورڈ کا کام انضمام سروس رول آؤٹ کے ساتھ ساتھ جہاز بھیج سکتا ہے۔
+- کراس اجزاء ٹیسٹ: انضمام میں کمی کے لئے گولڈن ری پلے کوریج ہے
+  مستقبل میں ہونے والی تبدیلیوں کو یقینی بنانے کے لئے انضمام ٹیسٹ کے بیکلاگ کے ساتھ ٹریک کیا
+  `reduce_merge_hint_roots` ریکارڈ شدہ جڑوں کو مستحکم رکھیں۔

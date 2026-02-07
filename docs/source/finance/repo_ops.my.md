@@ -9,76 +9,75 @@ source_last_modified: "2026-01-22T16:26:46.567961+00:00"
 translation_last_reviewed: 2026-02-07
 title: Repo Operations & Evidence Guide
 summary: Governance, lifecycle, and audit requirements for repo/reverse-repo flows (roadmap F1).
+translator: machine-google-reviewed
 ---
 
-# Repo Operations & Evidence Guide (Roadmap F1)
+# Repo လည်ပတ်မှုနှင့် အထောက်အထားလမ်းညွှန် (လမ်းပြမြေပုံ F1)
 
-The repo program unlocks bilateral and tri-party financing with deterministic
-Norito instructions, CLI/SDK helpers, and ISO 20022 parity. This note captures
-the operational contract required to satisfy roadmap milestone **F1 — repo
-lifecycle documentation & tooling**. It complements the workflow-oriented
-[`repo_runbook.md`](./repo_runbook.md) by articulating:
+repo ပရိုဂရမ်သည် နှစ်ဘက်နှင့် သုံးပါတီဘဏ္ဍာငွေကို အဆုံးအဖြတ်ဖြင့် ဖွင့်ပေးသည်။
+Norito လမ်းညွှန်ချက်များ၊ CLI/SDK အထောက်အကူများနှင့် ISO 20022 တူညီမှု။ ဒီမှတ်စုက ဖမ်းတယ်။
+လမ်းပြမြေပုံမှတ်တိုင် **F1 — repo ကျေနပ်စေရန် လုပ်ငန်းလည်ပတ်မှုဆိုင်ရာ စာချုပ်
+ဘဝသံသရာ စာရွက်စာတမ်းနှင့် ကိရိယာ **။ ၎င်းသည် အလုပ်အသွားအလာကို ဦးတည်သော အားဖြည့်ပေးသည်။
+[`repo_runbook.md`](./repo_runbook.md) ဖြင့်-
 
-- lifecycle surfaces across CLI/SDKs/runtime (`crates/iroha_cli/src/main.rs:3821`,
-  `python/iroha_python/iroha_python_rs/src/lib.rs:2216`,
+- CLI/SDKs/runtime (`crates/iroha_cli/src/main.rs:3821`၊
+  `python/iroha_python/iroha_python_rs/src/lib.rs:2216`၊
   `crates/iroha_core/src/smartcontracts/isi/repo.rs:1`);
-- deterministic proof/evidence capture (`integration_tests/tests/repo.rs:1`);
-- tri-party custody & collateral substitution behaviour; and
-- governance expectations (dual-control, audit trails, rollback playbooks).
+- အဆုံးအဖြတ်ပေးသော သက်သေ/အထောက်အထားများ (`integration_tests/tests/repo.rs:1`);
+- သုံးဖွဲ့အချုပ်အနှောင်နှင့် အပေါင်ပစ္စည်းအစားထိုး အပြုအမူ၊ နှင့်
+- အုပ်ချုပ်မှုမျှော်လင့်ချက်များ ( dual-control၊ စာရင်းစစ်လမ်းကြောင်း၊ ပြန်လှည့်ဖွင့်စာအုပ်များ)။
 
 ## 1. Scope & Acceptance Criteria
 
-Roadmap item F1 remains gated on four themes; this document enumerates the
-required artefacts and links to the code/tests that already satisfy them:
+လမ်းပြမြေပုံပါအချက် F1 သည် အပြင်အဆင်လေးခုတွင် ကန့်သတ်ထားဆဲဖြစ်သည်။ ဤစာတမ်းတွင် ဖော်ပြထားပါသည်။
+လိုအပ်သော ပစ္စည်းများနှင့် ကုဒ်များ/စမ်းသပ်မှုများထံသို့ လင့်ခ်များ-
 
-| Requirement | Evidence |
+| လိုအပ်ချက် | အထောက်အထား |
 |-------------|----------|
-| Deterministic settlement proofs covering repo → reverse repo → substitution | `integration_tests/tests/repo.rs` captures end-to-end flows, duplicate-ID guards, margin cadence checks, and collateral substitution success/failure cases. The suite runs as part of `cargo test --workspace`. The deterministic lifecycle digest harness at `crates/iroha_core/src/smartcontracts/isi/repo.rs` (`repo_deterministic_lifecycle_proof_matches_fixture`) snapshots initiation → margin → substitution frames so auditors can diff the canonical payloads. |
-| Tri-party coverage | Runtime enforces custodian-aware flows: `RepoAgreement::custodian` + `RepoAccountRole::Custodian` events (`crates/iroha_data_model/src/repo.rs:74`, `crates/iroha_data_model/src/events/data/events.rs:742`). |
-| Collateral substitution tests | Reverse-leg invariants reject under-collateralised substitutions (`crates/iroha_core/src/smartcontracts/isi/repo.rs:417`) and integration tests assert the ledger clears correctly after a substitution roundtrip (`integration_tests/tests/repo.rs:261`). |
-| Margin-call cadence & participant enforcement | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` exercises `RepoMarginCallIsi`, proving cadence-aligned scheduling, rejection of premature calls, and participant-only authorisation. |
-| Governance-approved runbooks | This guide and `repo_runbook.md` provide CLI/SDK procedures, fraud/rollback steps, and evidence capture instructions for audits. |
+| Repo → ပြောင်းပြန် repo → အစားထိုး | `integration_tests/tests/repo.rs` သည် အဆုံးမှအဆုံးသို့ စီးဆင်းမှုများ၊ ပွားနေသော ID အစောင့်များ၊ အနားသတ်ပုံစံစစ်ဆေးမှုများနှင့် အပေါင်ပစ္စည်းအစားထိုးအောင်မြင်မှု/ကျရှုံးမှုများကို ဖမ်းယူသည်။ suite သည် `cargo test --workspace` ၏ အစိတ်အပိုင်းအဖြစ် လုပ်ဆောင်ပါသည်။ `crates/iroha_core/src/smartcontracts/isi/repo.rs` (`repo_deterministic_lifecycle_proof_matches_fixture`) ရှိ အဆုံးအဖြတ်ပေးသော lifecycle digest harness သည် လျှပ်တစ်ပြက် စတင်ခြင်း → margin → အစားထိုး frames ဖြစ်သောကြောင့် စာရင်းစစ်များသည် canonical payload များကို ကွဲပြားစေပါသည်။ |
+| သုံးပါတီလွှမ်းခြုံ | Runtime သည် custodian-aware flows- `RepoAgreement::custodian` + `RepoAccountRole::Custodian` ဖြစ်ရပ်များ (`crates/iroha_data_model/src/repo.rs:74`, `crates/iroha_data_model/src/events/data/events.rs:742`)။ |
+| အပေါင်ပစ္စည်းအစားထိုးစစ်ဆေးမှုများ | ပြောင်းပြန်-ခြေထောက်ပုံစံကွဲလွဲမှုများသည် အပေါင်ပစ္စည်းမပါသောအစားထိုးမှုများ (`crates/iroha_core/src/smartcontracts/isi/repo.rs:417`) ကို ငြင်းပယ်ပြီး ပေါင်းစပ်စစ်ဆေးမှုများ (`integration_tests/tests/repo.rs:261`) အစားထိုးအသွားအပြန်ပြီးနောက် လယ်ဂျာသည် မှန်ကန်စွာရှင်းလင်းသွားကြောင်း အခိုင်အမာဆိုသည်။ |
+| Margin-call cadence & participant enforcement | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` လေ့ကျင့်ခန်း `RepoMarginCallIsi`၊ အချိုးညီသော အချိန်ဇယားဆွဲခြင်း၊ အချိန်မတန်မီခေါ်ဆိုမှုများကို ငြင်းပယ်ခြင်းနှင့် ပါဝင်သူသီးသန့်ခွင့်ပြုချက်တို့ကို သက်သေပြသည်။ |
+| အုပ်ချုပ်မှု-အတည်ပြုထားသော ပြေးစာအုပ်များ | ဤလမ်းညွှန်ချက်နှင့် `repo_runbook.md` သည် CLI/SDK လုပ်ထုံးလုပ်နည်းများ၊ လိမ်လည်မှု/ပြန်လှည့်ခြင်းအဆင့်များနှင့် စာရင်းစစ်များအတွက် အထောက်အထားများဖမ်းယူရန် ညွှန်ကြားချက်များကို ပေးပါသည်။ |
 
 ## 2. Lifecycle Surfaces
 
-### 2.1 CLI & Norito builders
+### 2.1 CLI & Norito တည်ဆောက်သူများ
 
-- `iroha app repo initiate|unwind|margin|margin-call` wrap `RepoIsi`,
-  `ReverseRepoIsi`, and `RepoMarginCallIsi`
-  (`crates/iroha_cli/src/main.rs:3821`). Each subcommand supports `--input` /
-  `--output` so desks can stage instruction payloads for dual approval before
-  submission. Custodian routing is expressed via `--custodian`.
-- `repo query list|get` uses `FindRepoAgreements` to snapshot agreements and can
-  be redirected into JSON artefacts for evidence bundles.
-- The CLI smoke tests under `crates/iroha_cli/tests/cli_smoke.rs:2637` ensure
-  the emit-to-file path stays stable for auditors.
+- `iroha app repo initiate|unwind|margin|margin-call` ထုပ်ပိုး `RepoIsi`၊
+  `ReverseRepoIsi` နှင့် `RepoMarginCallIsi`
+  (`crates/iroha_cli/src/main.rs:3821`)။ subcommand တစ်ခုစီသည် `--input` / ကိုပံ့ပိုးသည်
+  `--output` ထို့ကြောင့် စားပွဲခုံများသည် ညွှန်ကြားချက်နှစ်ခုကို အရင်ခွင့်ပြုချက်အတွက် အဆင့်မြှင့်တင်နိုင်သည်
+  တင်ပြချက်။ Custodian လမ်းကြောင်းကို `--custodian` မှတစ်ဆင့် ဖော်ပြသည်။
+- `repo query list|get` `FindRepoAgreements` ကို အသုံးပြု၍ သဘောတူညီချက်များကို လျှပ်တစ်ပြက် ရိုက်ယူနိုင်ပြီး လုပ်နိုင်သည်
+  အထောက်အထားအစုအဝေးအတွက် JSON အနုပညာပစ္စည်းများသို့ ပြန်ညွှန်းခံရသည်။
+- `crates/iroha_cli/tests/cli_smoke.rs:2637` အောက်တွင် CLI မီးခိုးစမ်းသပ်မှုများ သေချာပါစေ။
+  emit-to-file လမ်းကြောင်းသည် စာရင်းစစ်များအတွက် တည်ငြိမ်နေပါသည်။
 
-### 2.2 SDKs & automation hooks
+### 2.2 SDKs & automation ချိတ်များ- Python bindings များကို `RepoAgreementRecord`၊ `RepoCashLeg` ဖော်ထုတ်၊
+  `RepoCollateralLeg` နှင့် အဆင်ပြေသော တည်ဆောက်သူများ
+  (`python/iroha_python/iroha_python_rs/src/lib.rs:2216`) ဒါမှ automation လုပ်လို့ရတယ်။
+  အရောင်းအဝယ်များကို စုစည်းပြီး `next_margin_check_after` ကို စက်တွင်းတွင် အကဲဖြတ်ပါ။
+- JS/Swift အကူအညီပေးသူများသည် တူညီသော Norito အပြင်အဆင်များမှတစ်ဆင့် ပြန်လည်အသုံးပြုသည်
+  `javascript/iroha_js/src/instructionBuilders.js` နှင့်
+  မှတ်စုတိုအတွက် `IrohaSwift/Sources/IrohaSwift/ConfidentialEncryptedPayload.swift`
+  ကိုင်တွယ်; SDK များသည် repo အုပ်ချုပ်မှုခလုတ်များကို ချည်နှောင်သည့်အခါ ဤ doc ကို ကိုးကားသင့်သည်။
 
-- Python bindings expose `RepoAgreementRecord`, `RepoCashLeg`,
-  `RepoCollateralLeg`, and convenience builders
-  (`python/iroha_python/iroha_python_rs/src/lib.rs:2216`) so automation can
-  assemble transactions and evaluate `next_margin_check_after` locally.
-- JS/Swift helpers reuse the same Norito layouts via
-  `javascript/iroha_js/src/instructionBuilders.js` and
-  `IrohaSwift/Sources/IrohaSwift/ConfidentialEncryptedPayload.swift` for memo
-  handling; SDKs should refer to this doc when threading repo governance knobs.
+### 2.3 မှတ်တမ်းဖြစ်ရပ်များနှင့် တယ်လီမီတာ
 
-### 2.3 Ledger events & telemetry
+ဘဝလည်ပတ်မှုလုပ်ဆောင်ချက်တိုင်းသည် `AccountEvent::Repo(...)` ပါဝင်သော မှတ်တမ်းများကို ထုတ်လွှတ်သည်။
+`RepoAccountEvent::{Initiated,Settled,MarginCalled}` တွင် အတိုင်းအတာများ
+ပါဝင်သူအခန်းကဏ္ဍ (`crates/iroha_data_model/src/events/data/events.rs:742`)။ တွန်းပါ။
+အဆိုပါ ဖြစ်ရပ်များကို ရှင်းရှင်းလင်းလင်း သိသာထင်ရှားသော စာရင်းစစ်မှတ်တမ်းကို ရယူရန် သင်၏ SIEM/log စုစည်းမှုတွင် ထိုအဖြစ်အပျက်များ
+ရုံးလုပ်ဆောင်ချက်များ၊ အနားသတ်ခေါ်ဆိုမှုများနှင့် အုပ်ထိန်းသူ၏ အကြောင်းကြားချက်များအတွက်။
 
-Every lifecycle action emits `AccountEvent::Repo(...)` records containing
-`RepoAccountEvent::{Initiated,Settled,MarginCalled}` payloads scoped to the
-participant role (`crates/iroha_data_model/src/events/data/events.rs:742`). Push
-those events into your SIEM/log aggregator to obtain a tamper-evident audit log
-for desk actions, margin calls, and custodian notifications.
+### 2.4 ဖွဲ့စည်းမှု ပျံ့နှံ့ခြင်းနှင့် အတည်ပြုခြင်း။
 
-### 2.4 Configuration propagation & verification
-
-Nodes ingest repo governance knobs from the `[settlement.repo]` stanza in
-`iroha_config` (`crates/iroha_config/src/parameters/user.rs:4071`). Treat that
-snippet as part of the governance evidence contract—stage it in version control
-alongside the repo packet and hash it before pushing the change through your
-automation or ConfigMap. A minimal profile looks like:
+`[settlement.repo]` ပိုဒ်တွင်းမှ repo အုပ်ချုပ်မှုခလုတ်များကို Node များ ထည့်သွင်းသည်
+`iroha_config` (`crates/iroha_config/src/parameters/user.rs:4071`)။ ဆက်ဆံပါ။
+အုပ်ချုပ်မှုဆိုင်ရာ အထောက်အထားစာချုပ်၏ အစိတ်အပိုင်းတစ်ခုအနေဖြင့် အတိုအထွာ—၎င်းကို ဗားရှင်းထိန်းချုပ်မှုတွင် ထည့်သွင်းပါ။
+repo packet နှင့်တွဲပြီး အပြောင်းအလဲကို မတွန်းပို့မီ ၎င်းကို hash လုပ်ပါ။
+အလိုအလျောက်စနစ် သို့မဟုတ် ConfigMap။ အနည်းငယ်မျှသော ပရိုဖိုင်ပုံသည်-
 
 ```toml
 [settlement.repo]
@@ -90,100 +89,98 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
 "bond#wonderland" = ["note#wonderland", "bill#wonderland"]
 ```
 
-Operational checklist:
+လည်ပတ်မှုစစ်ဆေးစာရင်း-
 
-1. Commit the snippet above (or your production variant) into the config repo
-   that feeds `irohad` and record its SHA-256 inside the governance packet so
-   reviewers can diff the bytes you plan to deploy.
-2. Roll the change across the fleet (systemd unit, Kubernetes ConfigMap, etc.)
-   and restart each node. Immediately after rollout, capture the Torii
-   configuration snapshot for provenance:
+1. အထက်ဖော်ပြပါ အတိုအထွာ (သို့မဟုတ် သင့်ထုတ်လုပ်မှုပုံစံကွဲ) ကို config repo တွင် ထည့်သွင်းပါ။
+   ၎င်းသည် `irohad` ကို ကျွေးမွေးပြီး ၎င်း၏ SHA-256 ကို အုပ်ချုပ်မှုပက်ကေ့ဂျ်အတွင်း မှတ်တမ်းတင်ထားသောကြောင့်၊
+   သုံးသပ်သူများသည် သင်အသုံးပြုရန် စီစဉ်ထားသော ဘိုက်များကို ကွဲပြားနိုင်သည်။
+2. အပြောင်းအလဲကို ရေယာဉ်စုတစ်လျှောက် (စနစ်တကျ ယူနစ်၊ Kubernetes ConfigMap စသည်ဖြင့်)
+   node တစ်ခုစီကို ပြန်လည်စတင်ပါ။ စတင်ပြီးပြီးချင်း၊ Torii ကို ဖမ်းယူပါ။
+   သက်သေပြချက်အတွက် ဖွဲ့စည်းမှုလျှပ်တစ်ပြက်-
 
    ```bash
    curl -sS "${TORII_URL}/v1/configuration" \
      -H "Authorization: Bearer ${TOKEN}" | jq .
    ```
 
-   `ToriiClient.get_configuration()` is available in the Python SDK for the same
-   purpose when automation needs typed evidence.【python/iroha_python/src/iroha_python/client.py:5791】
-3. Prove that the runtime now enforces the requested cadence/haircut by querying
-   `FindRepoAgreements` (or `iroha app repo margin --agreement-id ...`) and
-   inspecting the embedded `RepoGovernance` values. Store the JSON responses
-   under `artifacts/finance/repo/<agreement>/agreements_after.json`; those values
-   are derived from `[settlement.repo]`, so they act as a secondary witness when
-   Torii’s `/v1/configuration` snapshot is insufficient.
-4. Keep both artefacts—the TOML snippet and the Torii/CLI snapshots—in the
-   evidence bundle before filing a governance request. Auditors must be able to
-   replay the snippet, verify its hash, and correlate it with the runtime view.
+   `ToriiClient.get_configuration()` ကို Python SDK တွင် အလားတူအသုံးပြုနိုင်ပါသည်။
+   အလိုအလျောက်စနစ်ဖြင့် ရိုက်ထားသော အထောက်အထားများ လိုအပ်သည့်အခါ ရည်ရွယ်ချက်။【python/iroha_python/src/iroha_python/client.py:5791】
+3. ယခု runtime သည် တောင်းဆိုထားသော cadence/haircut ကို မေးမြန်းခြင်းဖြင့် သက်သေပြပါ
+   `FindRepoAgreements` (သို့မဟုတ် `iroha app repo margin --agreement-id ...`) နှင့်
+   ထည့်သွင်းထားသော `RepoGovernance` တန်ဖိုးများကို စစ်ဆေးခြင်း။ JSON တုံ့ပြန်မှုများကို သိမ်းဆည်းပါ။
+   `artifacts/finance/repo/<agreement>/agreements_after.json` အောက်တွင်၊ ထိုတန်ဖိုးများ
+   `[settlement.repo]` မှဆင်းသက်လာသောကြောင့် ၎င်းတို့သည် ဒုတိယသက်သေအဖြစ် ဆောင်ရွက်သည့်အခါ၊
+   Torii ၏ `/v1/configuration` လျှပ်တစ်ပြက်ရိုက်ချက်သည် မလုံလောက်ပါ။
+4. ပစ္စည်းနှစ်ခုစလုံး—TOML အတိုအထွာနှင့် Torii/CLI လျှပ်တစ်ပြက်—ထဲတွင် သိမ်းဆည်းထားပါ
+   အုပ်ချုပ်ရေးဆိုင်ရာ တောင်းဆိုချက် မတင်သွင်းမီ အထောက်အထား အစုအဝေး။ စာရင်းစစ်တွေ လုပ်နိုင်ရမယ်။
+   အတိုအထွာကို ပြန်ဖွင့်ပါ၊ ၎င်း၏ hash ကို စစ်ဆေးပြီး ၎င်းကို runtime မြင်ကွင်းနှင့် ဆက်စပ်ပါ။
 
-This workflow ensures repo desks never rely on ad-hoc environment variables, the
-configuration path stays deterministic, and every governance ticket carries the
-same set of `iroha_config` proofs expected in roadmap F1.
+ဤအလုပ်အသွားအလာသည် repo စားပွဲခုံများသည် ad-hoc ပတ် ၀ န်းကျင် variables များပေါ်တွင်ဘယ်တော့မှမမှီခိုကြောင်းသေချာစေသည်။
+ဖွဲ့စည်းမှုလမ်းကြောင်းသည် အဆုံးအဖြတ်ရှိပြီး၊ အုပ်ချုပ်မှုလက်မှတ်တိုင်းသည် ၎င်းကို သယ်ဆောင်သည်။
+လမ်းပြမြေပုံ F1 တွင် မျှော်လင့်ထားသည့် တူညီသော `iroha_config` အထောက်အထားများ။
 
-### 2.5 Deterministic proof harness
+### 2.5 အဆုံးအဖြတ် အထောက်အထား ကြိုးသိုင်း
 
-The unit test `repo_deterministic_lifecycle_proof_matches_fixture` (see
-`crates/iroha_core/src/smartcontracts/isi/repo.rs`) serializes each stage of the
-repo lifecycle into a Norito JSON frame, compares it to the canonical fixture at
-`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.json`, and hashes the
-bundle (fixture digest tracked at
-`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`). Run it locally via:
+ယူနစ်စမ်းသပ်မှု `repo_deterministic_lifecycle_proof_matches_fixture` (ကြည့်ပါ။
+`crates/iroha_core/src/smartcontracts/isi/repo.rs`) သည် အဆင့်တစ်ခုစီကို အမှတ်အသားပြုသည်။
+repo lifecycle ကို Norito JSON frame သို့၊ ၎င်းကို canonical fixture နှင့် နှိုင်းယှဉ်သည်
+`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.json` နှင့် the hashes
+အစုအဝေး (Fixture Digest တွင် ခြေရာခံသည်။
+`crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`)။ ၎င်းကို စက်တွင်းဖြင့် လုပ်ဆောင်ပါ-
 
 ```bash
 cargo test -p iroha_core \
   -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
-```
-
-This test now runs as part of the default `cargo test -p iroha_core` suite, so CI
-guards the snapshot automatically. Whenever repo semantics or fixtures change,
-refresh both the JSON and digest with:
+```ဤစမ်းသပ်မှုသည် မူရင်း `cargo test -p iroha_core` ၏ တစ်စိတ်တစ်ပိုင်းအနေဖြင့် လုပ်ဆောင်နေပြီဖြစ်သောကြောင့် CI
+လျှပ်တစ်ပြက်ကို အလိုအလျောက် ကာကွယ်ပေးသည်။ repo semantics သို့မဟုတ် fixtures ပြောင်းလဲသည့်အခါတိုင်း၊
+JSON နှစ်ခုလုံးကို ပြန်လည်ဆန်းသစ်ပြီး ချေဖျက်ပါ-
 
 ```bash
 scripts/regen_repo_proof_fixture.sh
 ```
 
-The helper uses the pinned `rust-toolchain.toml` channel, rewrites the fixtures
-under `crates/iroha_core/tests/fixtures/`, and reruns the deterministic harness
-so the checked-in snapshot/digest stay in sync with the runtime behaviour
-auditors will replay.
+အကူအညီပေးသူက ပင်ထိုးထားသော `rust-toolchain.toml` ချန်နယ်ကို အသုံးပြုကာ တပ်ဆင်မှုများကို ပြန်လည်ရေးသားသည်
+`crates/iroha_core/tests/fixtures/` အောက်တွင်၊ အဆုံးအဖြတ်ပေးသောကြိုးကို ပြန်လည်လုပ်ဆောင်သည်။
+ထို့ကြောင့် check-in snapshot/digest သည် runtime အပြုအမူနှင့် ထပ်တူကျနေပါသည်။
+စာရင်းစစ်များ ပြန်ဖွင့်ပါမည်။
 
-### 2.4 Torii API surfaces
+### 2.4 Torii API ရပါသေးတယ်။
 
-- `GET /v1/repo/agreements` returns the active agreements with optional pagination, filtering
-  (`filter={...}`), sorting, and address-formatting parameters. Use this for quick audits or
-  dashboards when the raw JSON payloads are sufficient.
-- `POST /v1/repo/agreements/query` accepts the structured query envelope (pagination, sort,
-  `FilterExpr`, `fetch_size`) so downstream services can page through the ledger deterministically.
-- The JavaScript SDK now exposes `listRepoAgreements`, `queryRepoAgreements`, and the iterator
-  helpers so browser/Node.js tooling receives the same typed DTOs as Rust/Python.
+- `GET /v1/repo/agreements` သည် ရွေးချယ်နိုင်သော pagination၊ filtering ဖြင့် တက်ကြွသောသဘောတူညီချက်များကို ပြန်ပေးသည်
+  (`filter={...}`)၊ စီခြင်း၊ နှင့် လိပ်စာဖော်မတ်ခြင်း ဘောင်များ။ အမြန်စာရင်းစစ်ခြင်းအတွက် ၎င်းကိုသုံးပါ။
+  အကြမ်း JSON ပေးဆောင်မှုများ လုံလောက်သောအခါ ဒက်ရှ်ဘုတ်များ။
+- `POST /v1/repo/agreements/query` သည် ဖွဲ့စည်းတည်ဆောက်ထားသော မေးခွန်းစာအိတ်ကို လက်ခံသည် (pagination၊ sort၊
+  `FilterExpr`၊ `fetch_size`) ထို့ကြောင့် downstream services များသည် လယ်ဂျာမှတဆင့် အဆုံးအဖြတ်ပေးနိုင်ပါသည်။
+- JavaScript SDK သည် ယခု `listRepoAgreements`၊ `queryRepoAgreements` နှင့် ထပ်တူပြုခြင်းတို့ကို ဖော်ထုတ်ပေးသည်
+  အကူအညီပေးသူများအနေဖြင့် browser/Node.js tooling သည် Rust/Python ကဲ့သို့ တူညီသောရိုက်ထည့်ထားသော DTO များကို လက်ခံရရှိပါသည်။
 
-### 2.4 Configuration defaults
+### 2.4 ဖွဲ့စည်းမှုပုံသေများ
 
-Nodes read `[settlement.repo]` into
-`iroha_config::parameters::actual::Repo` during start-up; any repo instruction
-that leaves a parameter at zero is normalised against those defaults before it
-is recorded on-chain.【crates/iroha_core/src/smartcontracts/isi/repo.rs:40】 This
-lets governance raise (or lower) baseline policy without touching every SDK
-call-site, provided the policy change is fully documented.
+Nodes များသည် `[settlement.repo]` ကိုဖတ်သည်။
+စတင်ချိန်တွင် `iroha_config::parameters::actual::Repo`; မည်သည့် repo ညွှန်ကြားချက်
+သုညတွင် ပါရာမီတာကို ချန်ထားသောကြောင့် ၎င်းမတိုင်မီ ထိုမူရင်းများနှင့် ဆန့်ကျင်ဘက်ဖြစ်သည်။
+ကွင်းဆက်တွင် မှတ်တမ်းတင်ထားသည်။ 【crates/iroha_core/src/smartcontracts/isi/repo.rs:40】 ဤ
+SDK တိုင်းကို မထိဘဲ အုပ်ချုပ်မှုမြှင့်တင်ရန် (သို့မဟုတ်) အခြေခံမူဝါဒကို လျှော့ချခွင့်ပြုပါ။
+ခေါ်ဆိုမှု-ဆိုက်၊ မူဝါဒပြောင်းလဲမှုကို အပြည့်အစုံမှတ်တမ်းတင်ထားပေးပါသည်။
 
-- `default_haircut_bps` – fallback haircut when `RepoGovernance::haircut_bps()`
-  equals zero. The runtime clamps it to the hard 10 000 bps ceiling to keep
-  configs sane.【crates/iroha_core/src/smartcontracts/isi/repo.rs:44】
-- `margin_frequency_secs` – cadence for `RepoMarginCallIsi`. Zeroed requests
-  inherit this value, so shortening the cadence forces desks to margin more
-  frequently by default.【crates/iroha_core/src/smartcontracts/isi/repo.rs:49】
-- `eligible_collateral` – optional allow-list of `AssetDefinitionId`s. When the
-  list is non-empty `RepoIsi` rejects any pledge outside the set, preventing
-  accidental onboarding of unvetted bonds.【crates/iroha_core/src/smartcontracts/isi/repo.rs:57】
-- `collateral_substitution_matrix` – map of original collateral →
-  permitted substitutes. `ReverseRepoIsi` only accepts a substitution when the
-  matrix contains the recorded definition as a key and the replacement in its
-  value array; otherwise the unwind fails, proving that governance approved the
-  ladder.【crates/iroha_core/src/smartcontracts/isi/repo.rs:74】
+- `default_haircut_bps` - `RepoGovernance::haircut_bps()` အချိန်တွင် နောက်ပြန်ဆံပင်ပုံစံ
+  သုညနှင့် ညီမျှသည်။ Runtime သည် ၎င်းကို ထိန်းထားရန် ခက်ခဲသော 10000bps မျက်နှာကျက်သို့ ချိတ်ထားသည်။
+  ပြင်ဆင်မှုများ ကောင်းမွန်ပါသည်။ 【crates/iroha_core/src/smartcontracts/isi/repo.rs:44】
+- `margin_frequency_secs` - `RepoMarginCallIsi` အတွက် cadence တောင်းဆိုချက်များကို လုံး၀
+  ဤတန်ဖိုးကို အမွေဆက်ခံသောကြောင့် cadence ကို အတိုချုံ့ခြင်းဖြင့် စားပွဲခုံများကို ပိုမိုအနားသတ်စေသည်။
+  ပုံမှန်အားဖြင့် မကြာခဏ။ 【crates/iroha_core/src/smartcontracts/isi/repo.rs:49】
+- `eligible_collateral` - `AssetDefinitionId` ၏ ရွေးချယ်ခွင့်စာရင်း။ ဟို
+  စာရင်းသည် အလွတ်မဟုတ်သော `RepoIsi` သည် သတ်မှတ်အပြင်ဘက်တွင် မည်သည့်ကတိကဝတ်ကိုမဆို ပယ်ချခြင်းမှ ကာကွယ်ခြင်း၊
+  မထင်မှတ်ထားသော ငွေချေးစာချုပ်များ မတော်တဆ ဝင်ရောက်လာခြင်း။【crates/iroha_core/src/smartcontracts/isi/repo.rs:57】
+- `collateral_substitution_matrix` – မူရင်းစရံ → မြေပုံ
+  အစားထိုးခွင့်ပြုသည်။ `ReverseRepoIsi` သည် အစားထိုးသည့်အခါမှသာ လက်ခံသည်။
+  matrix တွင် သော့တစ်ခုအဖြစ် မှတ်တမ်းတင်ထားသော အဓိပ္ပါယ်နှင့် ၎င်း၏နေရာတွင် အစားထိုးခြင်းပါရှိသည်။
+  တန်ဖိုးအခင်းအကျင်း; မဟုတ်ရင် အုပ်ချုပ်ရေးက ဒါကို အတည်ပြုကြောင်း သက်သေပြပြီး လေအေးမရပါဘူး။
+  လှေကား။ 【crates/iroha_core/src/smartcontracts/isi/repo.rs:74】
 
-These knobs live under `[settlement.repo]` in the node configuration and are
-parsed via `iroha_config::parameters::user::Repo`, so they should be captured in
-every governance evidence bundle.【crates/iroha_config/src/parameters/user.rs:3956】
+ဤအဖုများသည် node configuration တွင် `[settlement.repo]` အောက်တွင်နေထိုင်ကြပြီး၊
+`iroha_config::parameters::user::Repo` ဖြင့် ပိုင်းခြားထားသောကြောင့် ၎င်းတို့ကို ဖမ်းယူသင့်သည်။
+အုပ်ချုပ်ရေးဆိုင်ရာ အထောက်အထား အစုအဝေးတိုင်း။【crates/iroha_config/src/parameters/user.rs:3956】
 
 ```toml
 [settlement.repo]
@@ -195,36 +192,34 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
 "bond#wonderland" = ["note#wonderland", "bill#wonderland"]
 ```
 
-**Change-management checklist**
+** အပြောင်းအလဲစီမံခန့်ခွဲမှုစာရင်း **1. အဆိုပြုထားသော TOML အတိုအထွာ (အစားထိုး matrix deltas အပါအဝင်) hash ကို အဆင့်သတ်မှတ်ပါ
+   ၎င်းကို SHA-256 ဖြင့်၊ အတိုအထွာနှင့် hash နှစ်ခုလုံးကို အုပ်ချုပ်ရေးတွင် ပူးတွဲပါ။
+   လက်မှတ်ကို သုံးသပ်သူများသည် bytes verbatim ကို ပြန်ထုတ်ပေးနိုင်သည်။
+2. အဆိုပြုချက်/ဆန္ဒခံယူပွဲအတွင်း အတိုအထွာကို ကိုးကားပါ (ဥပမာ၊ မှတဆင့်
+   အုပ်ချုပ်မှု CLI ရှိ `--notes` အကွက်) နှင့် လိုအပ်သော အတည်ပြုချက်များကို စုဆောင်းပါ။
+   F1 အတွက် အတိုအထွာ ပူးတွဲပါရှိသည့် လက်မှတ်ရေးထိုးထားသော အတည်ပြုချက်အထုပ်ကို သိမ်းဆည်းပါ။
+3. အပြောင်းအလဲကို လှိမ့်လိုက်သည်- `[settlement.repo]` ကို အပ်ဒိတ်လုပ်ပါ၊ တစ်ခုစီကို ပြန်လည်စတင်ပါ
+   node၊ ထို့နောက် `GET /v1/configuration` လျှပ်တစ်ပြက်ရိုက်ချက် (သို့မဟုတ်
+   `ToriiClient.getConfiguration`) အမျိုးအစားအလိုက် အသုံးချတန်ဖိုးများကို သက်သေပြခြင်း။
+4. `integration_tests/tests/repo.rs` plus ကို ပြန်ဖွင့်ပါ။
+   `repo_deterministic_lifecycle_proof_matches_fixture` နှင့် မှတ်တမ်းများကို နောက်တွင် သိမ်းဆည်းပါ။
+   config diff သို့ စာရင်းစစ်များသည် ပုံသေအသစ်များကို ထိန်းသိမ်းထားကြောင်း သိနိုင်သည်။
+   ပြဋ္ဌာန်းချက်။
 
-1. Stage the proposed TOML snippet (including substitution matrix deltas), hash
-   it with SHA-256, and attach both the snippet and hash to the governance
-   ticket so reviewers can reproduce the bytes verbatim.
-2. Reference the snippet inside the proposal/referendum (for example via the
-   `--notes` field on the governance CLI) and collect the required approvals
-   for F1. Keep the signed approval packet with the snippet attached.
-3. Roll the change across the fleet: update `[settlement.repo]`, restart each
-   node, then capture a `GET /v1/configuration` snapshot (or
-   `ToriiClient.getConfiguration`) proving the applied values per peer.
-4. Re-run `integration_tests/tests/repo.rs` plus
-   `repo_deterministic_lifecycle_proof_matches_fixture` and store the logs next
-   to the config diff so auditors can see that the new defaults preserve
-   determinism.
+matrix ထည့်သွင်းခြင်းမရှိဘဲ runtime သည် ပိုင်ဆိုင်မှုကိုပြောင်းလဲသော အစားထိုးမှုများကို ငြင်းပယ်သည်။
+ယေဘုယျ `eligible_collateral` စာရင်းက ခွင့်ပြုတယ်ဆိုရင်တောင်၊ ကျူးလွန်သည်။
+repo အထောက်အထားများနှင့်အတူ config လျှပ်တစ်ပြက်ဓာတ်ပုံများကိုစာရင်းစစ်သူများအတိအကျပြန်ထုတ်ပေးနိုင်သည်။
+repo ကို ကြိုတင်စာရင်းသွင်းသောအခါတွင် မူဝါဒကို ချမှတ်ခဲ့သည်။
 
-Without a matrix entry the runtime rejects substitutions that change the asset
-definition, even if the general `eligible_collateral` list permits it; commit
-config snapshots alongside repo evidence so auditors can reproduce the exact
-policy enforced when a repo was booked.
+### 2.5 ဖွဲ့စည်းမှုဆိုင်ရာ အထောက်အထားနှင့် လမ်းကြောင်းရှာဖွေခြင်း
 
-### 2.5 Configuration evidence & drift detection
+ယခုအခါ Norito/`iroha_config` ပိုက်လိုင်းသည် ဖြေရှင်းထားသော repo ပေါ်လစီကို ထုတ်ဖော်ပြသသည်
+`iroha_config::parameters::actual::Repo`၊ ထို့ကြောင့် အုပ်ချုပ်မှု အစုံလိုက်များသည် သက်သေပြရပါမည်။
+တူညီသောတန်ဖိုးများ—အဆိုပြုထားသည့် TOML တစ်ခုတည်းတင်မဟုတ်ပေ။ ပြေလည်အောင်ရိုက်ပါ။
+ထုတ်လွှင့်မှုတိုင်းပြီးနောက် ဖွဲ့စည်းမှုပုံစံနှင့် ၎င်း၏အနှစ်အချုပ်-
 
-The Norito/`iroha_config` plumbing now exposes the resolved repo policy under
-`iroha_config::parameters::actual::Repo`, so governance packets must prove the
-applied values per peer—not just the proposed TOML. Capture the resolved
-configuration and its digest after every rollout:
-
-1. Fetch the configuration from each peer (`GET /v1/configuration` or
-   `ToriiClient.getConfiguration`) and isolate the repo stanza:
+1. သက်တူရွယ်တူတစ်ဦးစီမှ စီစဉ်သတ်မှတ်မှုကို ရယူပါ (`GET /v1/configuration` သို့မဟုတ်
+   `ToriiClient.getConfiguration`) နှင့် repo ပိုဒ်ကို ခွဲထုတ်ပါ-
 
    ```bash
    curl -s http://<torii-host>/v1/configuration \
@@ -232,115 +227,111 @@ configuration and its digest after every rollout:
      > artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
 
-2. Hash the canonical JSON and record it in the evidence manifest. When the
-   fleet is healthy the hash should match across peers because `actual`
-   combines defaults with the staged `[settlement.repo]` snippet:
+2. Canonical JSON ကို ဖျက်ပြီး သက်သေပြချက်တွင် မှတ်တမ်းတင်ပါ။ ဟို
+   `actual` ဖြစ်သောကြောင့် သင်္ဘောအုပ်စုသည် ကျန်းမာသော hash ဖြစ်သင့်သည်။
+   ပုံသေများကို အဆင့်သတ်မှတ်ထားသော `[settlement.repo]` နှင့် ပေါင်းစပ်သည်-
 
    ```bash
    shasum -a 256 artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
 
-3. Attach the JSON + hash to the governance packet and mirror the entry in the
-   manifest uploaded to the governance DAG. If any peer reports a divergent
-   digest, halt the rollout and reconcile the config/state drift before
-   proceeding.
+3. JSON + hash ကို အုပ်ချုပ်မှု ပက်ကေ့ဂျ်တွင် တွဲပြီး ပါ၀င်မှုကို ရောင်ပြန်ဟပ်ပါ။
+   Manifest ကို အုပ်ချုပ်မှု DAG သို့ အပ်လုဒ်လုပ်ထားသည်။ ရွယ်တူချင်း ကွဲလွဲမှုတစ်ခုကို တင်ပြလျှင်
+   ချေဖျက်ပါ၊ ထုတ်ဝေမှုကို ရပ်လိုက်ပြီး config/state drift ကို ညှိနှိုင်းပါ။
+   ဆက်လက်ဆောင်ရွက်သည်။
 
-### 2.6 Governance approvals & evidence pack
+### 2.6 အုပ်ချုပ်မှုခွင့်ပြုချက်များနှင့် အထောက်အထားထုပ်ပိုးခြင်း။
 
-Roadmap F1 closes only when repo desks feed a deterministic packet into the
-governance DAG, so every change (new haircut, custodian policy, or collateral
-matrix) must ship the same artefacts before a vote is scheduled.【docs/source/governance_playbook.md:1】
+လမ်းပြမြေပုံ F1 သည် repo desks များထဲသို့ အဆုံးအဖြတ်ပေးသော ပက်ကေ့ခ်ျတစ်ခုကို ဖြည့်သွင်းသည့်အခါမှသာ ပိတ်ပါသည်။
+အုပ်ချုပ်မှု DAG၊ ထို့ကြောင့် ပြောင်းလဲမှုတိုင်း (ဆံပင်ပုံစံအသစ်၊ အုပ်ထိန်းသူမူဝါဒ သို့မဟုတ် အပေါင်ပစ္စည်း
+မက်ထရစ်)) မဲပေးရန် စီစဉ်ထားခြင်းမပြုမီ တူညီသောပစ္စည်းများကို ပေးပို့ရပါမည်။【docs/source/governance_playbook.md:1】
 
-**Intake packet**
+** စားသုံးမှုအထုပ်**1. **ခြေရာခံ နမူနာ** – မိတ္တူ
+   `docs/examples/finance/repo_governance_packet_template.md` တွင် သင်၏ အထောက်အထား
+   လမ်းညွှန် (ဥပမာ
+   `artifacts/finance/repo/<agreement-id>/packet.md`) နှင့် metadata ကိုဖြည့်ပါ။
+   အနုပညာပစ္စည်းများကို မစတင်မီ ပိတ်ဆို့ပါ။ ပုံစံခွက်သည် အုပ်ချုပ်ရေးကို ထိန်းသိမ်းသည်။
+   ဖိုင်လမ်းကြောင်းများ၊ SHA-256 အချေအတင်များနှင့်၊
+   တစ်နေရာတည်းတွင် ဝေဖန်သုံးသပ်သူ အသိအမှတ်ပြုချက်များ။
+2. **ညွှန်ကြားချက်ပေးဆောင်မှုများ** – စတင်လုပ်ဆောင်ရန်၊ အနားယူရန်နှင့် အနားသတ်ခေါ်ဆိုမှုအဆင့်ကို စတင်ပါ။
+   `iroha app repo ... --output` ပါသော ညွှန်ကြားချက်များ ဖြစ်သောကြောင့် dual-control approvers ပြန်လည်သုံးသပ်ခြင်း။
+   byte-တူညီသော payloads။ ဖိုင်တစ်ခုစီကို ဟက်ကာ အောက်တွင် သိမ်းဆည်းပါ။
+   `artifacts/finance/repo/<agreement-id>/` စားပွဲခုံ၏ အထောက်အထားအတွဲဘေးတွင်
+   ဤမှတ်စုတွင် အခြားနေရာများကို ကိုးကားထားသည်။ 【crates/iroha_cli/src/main.rs:3821】
+3. **Configuration diff** – အတိအကျ `[settlement.repo]` TOML အတိုအထွာကို ထည့်သွင်းပါ
+   (မူရင်းများနှင့် အစားထိုးမက်ထရစ်) နှင့် ၎င်း၏ SHA-256။ ဒါက ဘာကိုသက်သေပြလဲ။
+   `iroha_config` ခလုတ်များသည် မဲပေးပြီးသည်နှင့် မှန်ကြည့်သည်နှင့် လှုပ်ရှားလိမ့်မည်
+   ဝင်ခွင့်အချိန်အတွင်း repo ညွှန်ကြားချက်များကို ပုံမှန်ဖြစ်စေသော runtime အကွက်များ။ 【crates/iroha_config/src/parameters/user.rs:3956】
+4. **Deterministic tests** – နောက်ဆုံးပေါ် ပူးတွဲပါ
+   `integration_tests/tests/repo.rs` log နှင့် output တို့မှ
+   `repo_deterministic_lifecycle_proof_matches_fixture` ဆိုတော့ သုံးသပ်သူတွေက မြင်ပါတယ်။
+   အဆင့်လိုက် ညွှန်ကြားချက်များနှင့် ကိုက်ညီသည့် lifecycle proof hash။ 【integration_tests/tests/repo.rs:1】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1450】
+5. **ဖြစ်ရပ်/တယ်လီမီတာ လျှပ်တစ်ပြက်** – မကြာသေးမီက `AccountEvent::Repo(*)` ကို တင်ပို့ပါ
+   scope ရှိ စားပွဲခုံများအတွက် stream များအပြင် ကောင်စီလိုအပ်သည့် မည်သည့် dashboards/metrics များမဆို
+   အန္တရာယ်ကို ဆုံးဖြတ်ရန် (ဥပမာ၊ margin drift)။ ဒါက စာရင်းစစ်တွေကို အတူတူပါပဲ။
+   နောက်ပိုင်းတွင် ၎င်းတို့သည် Torii မှ ပြန်လည်တည်ဆောက်သွားမည်ဖြစ်ကြောင်း ထင်ရှားသောမှတ်တမ်း။【crates/iroha_data_model/src/events/data/events.rs:742】
 
-1. **Tracking template** – copy
-   `docs/examples/finance/repo_governance_packet_template.md` into your evidence
-   directory (for example
-   `artifacts/finance/repo/<agreement-id>/packet.md`) and fill the metadata
-   block before you start hashing artefacts. The template keeps the governance
-   council’s cadence deterministic by listing file paths, SHA-256 digests, and
-   reviewer acknowledgements in one place.
-2. **Instruction payloads** – stage the initiation, unwind, and margin-call
-   instructions with `iroha app repo ... --output` so dual-control approvers review
-   byte-identical payloads. Hash each file and store it under
-   `artifacts/finance/repo/<agreement-id>/` next to the desk’s evidence bundle
-   referenced elsewhere in this note.【crates/iroha_cli/src/main.rs:3821】
-3. **Configuration diff** – include the exact `[settlement.repo]` TOML snippet
-   (defaults plus substitution matrix) and its SHA-256. This proves which
-   `iroha_config` knobs will be active once the vote passes and mirrors the
-   runtime fields that normalise repo instructions at admission time.【crates/iroha_config/src/parameters/user.rs:3956】
-4. **Deterministic tests** – attach the latest
-   `integration_tests/tests/repo.rs` log and the output from
-   `repo_deterministic_lifecycle_proof_matches_fixture` so reviewers see the
-   lifecycle proof hash that corresponds to the staged instructions.【integration_tests/tests/repo.rs:1】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1450】
-5. **Event/telemetry snapshot** – export the recent `AccountEvent::Repo(*)`
-   stream for the desks in scope plus any dashboards/metrics the council needs
-   to judge risk (for example, margin drift). This gives auditors the same
-   tamper-evident log they would reconstruct from Torii later.【crates/iroha_data_model/src/events/data/events.rs:742】
+**ခွင့်ပြုချက်နှင့် မှတ်တမ်း**
 
-**Approval & logging**
+- အုပ်ချုပ်မှုလက်မှတ် သို့မဟုတ် ပြည်လုံးကျွတ်ဆန္ဒခံယူပွဲအတွင်း ပါဝင်သည့် ကိန်းဂဏာန်းများကို ကိုးကားပါ။
+  ကောင်စီသည် စံအခမ်းအနားများကို လိုက်နာနိုင်စေရန် အဆင့်သတ်မှတ်ထားသော ပက်ကတ်ကို ချိတ်ဆက်ပါ။
+  ad-hoc လမ်းကြောင်းများကို မလိုက်ဘဲ အုပ်ချုပ်မှုဆိုင်ရာ ပြခန်းစာအုပ်တွင် ဖော်ပြထားပါသည်။【docs/source/governance_playbook.md:8】
+- ထိန်းချုပ်မှုနှစ်ခု လက်မှတ်ထိုးသူများသည် အဆင့်သတ်မှတ်ထားသော ညွှန်ကြားချက်ဖိုင်များနှင့် ပြန်လည်သုံးသပ်ထားသည့် ဖမ်းယူပါ။
+  ဟက်ရှ်များဘေးတွင် ၎င်းတို့၏အသိအမှတ်ပြုချက်များကို သိမ်းဆည်းပါ။ ဒါက ကွင်းဆက်သက်သေပါ။
+  runtime သည်ပင်လျှင် repo စားပွဲများသည် "လူနှစ်ယောက်စည်းမျဉ်း" ကို ကျေနပ်စေသည်။
+  ပါဝင်သူသီးသန့် ကွပ်မျက်မှုကို တွန်းအားပေးသည်။
+- ကောင်စီသည် အုပ်ချုပ်မှုခွင့်ပြုချက်မှတ်တမ်း (GAR) ကို ထုတ်ပြန်သောအခါ၊
+  အထောက်အထားလမ်းညွှန်အတွင်း၌ ရေးထိုးထားသော မိနစ်များကို နောင်တွင် အစားထိုးခြင်း သို့မဟုတ်
+  ဆံပင်ညှပ်ခြင်း အပ်ဒိတ်များသည် ဆုံးဖြတ်ချက်ကို ပြန်လည်ဖော်ပြမည့်အစား တိကျသော ဆုံးဖြတ်ချက်ထုပ်ကို ကိုးကားနိုင်သည်။
+  ကျိုးကြောင်းဆီလျော်မှု။
 
-- Reference the artefact hashes inside the governance ticket or referendum and
-  link to the staged packet so the council can follow the standard ceremony
-  outlined in the governance playbook without chasing ad-hoc paths.【docs/source/governance_playbook.md:8】
-- Capture which dual-control signers reviewed the staged instruction files and
-  store their acknowledgements next to the hashes; this is the on-chain proof
-  that repo desks satisfied the “two-person rule” even though the runtime also
-  enforces participant-only execution.
-- When the council publishes the Governance Approval Record (GAR), mirror the
-  signed minutes inside the evidence directory so future substitutions or
-  haircut updates can cite the exact decision packet instead of restating the
-  rationale.
+**ခွင့်ပြုချက်ရပြီးနောက်ပိုင်း ဖြန့်ချိမှုများ**1. အတည်ပြုထားသော `[settlement.repo]` config ကိုအသုံးပြုပြီး node တစ်ခုစီကို ပြန်လည်စတင်ပါ (သို့မဟုတ် roll
+   ၎င်းကို သင်၏ အလိုအလျောက်စနစ်ဖြင့်)။ `GET /v1/configuration` ကို ချက်ချင်းခေါ်ပြီး တင်ထားပါတယ်။
+   node အလိုက် တုံ့ပြန်မှု ဖြစ်သောကြောင့် အုပ်ချုပ်မှုအစုအဝေးသည် မည်သည့်ရွယ်တူများ လက်ခံသည်ကို ပြသသည်။
+   အပြောင်းအလဲ။ 【crates/iroha_torii/src/lib.rs:3225】
+2. အဆုံးအဖြတ်ပေးသော repo စမ်းသပ်မှုများကို ပြန်လည်လုပ်ဆောင်ပြီး လတ်ဆတ်သောမှတ်တမ်းများနှင့် တည်ဆောက်မှုကို ပူးတွဲလုပ်ဆောင်ပါ။
+   မက်တာဒေတာ (git commit၊ toolchain) ကြောင့် စာရင်းစစ်များသည် အခြေချမှုကို ပြန်လည်ထုတ်လုပ်နိုင်သည်။
+   ဖြန့်ချိပြီးနောက်အထောက်အထား။
+3. အုပ်ချုပ်မှုခြေရာခံကိရိယာကို အထောက်အထားသိမ်းဆည်းမှုလမ်းကြောင်း၊ ဟက်ရှ်များနှင့် အပ်ဒိတ်လုပ်ပါ။
+   စောင့်ကြည့်လေ့လာသူ အဆက်အသွယ်ဖြစ်သောကြောင့် နောက်ပိုင်းတွင် repo desks များအစား တူညီသောလုပ်ငန်းစဉ်ကို အမွေဆက်ခံနိုင်ပါသည်။
+   စစ်ဆေးစာရင်းကို ပြန်လည်ရယူခြင်း။
 
-**Post-approval rollouts**
+** အုပ်ချုပ်ရေး DAG ထုတ်ဝေမှု (လိုအပ်သည်)**
 
-1. Apply the approved `[settlement.repo]` config and restart each node (or roll
-   it via your automation). Immediately call `GET /v1/configuration` and archive
-   the response per node so the governance bundle shows which peers accepted the
-   change.【crates/iroha_torii/src/lib.rs:3225】
-2. Re-run the deterministic repo tests and attach the fresh logs plus build
-   metadata (git commit, toolchain) so auditors can reproduce the settlement
-   proof after the rollout.
-3. Update the governance tracker with the evidence archive path, hashes, and
-   observer contact so later repo desks can inherit the same process instead of
-   re-deriving the checklist.
+1. အထောက်အထားလမ်းညွှန် (config snippet၊ instruction payloads၊ proof logs၊
+   GAR/မိနစ်) နှင့် ၎င်းကို အုပ်ချုပ်မှု DAG ပိုက်လိုင်းအဖြစ် လွှဲပြောင်းပေးသည်။
+   `GovernancePayloadKind::PolicyUpdate` အတွက် မှတ်စာများပါသော payload
+   `agreement_id`၊ `iso_week` နှင့် အဆိုပြုထားသော ဆံပင်ညှပ်/အနားသတ်တန်ဖိုးများ အဆိုပါ
+   ပိုက်လိုင်း spec နှင့် CLI မျက်နှာပြင်များ နေထိုင်သည်။
+   `docs/source/sorafs_governance_dag_plan.md`။
+2. ထုတ်ဝေသူသည် IPNS ခေါင်းကို အပ်ဒိတ်လုပ်ပြီးနောက်၊ ဘလောက် CID နှင့် head CID ကို မှတ်တမ်းတင်ပါ။
+   အုပ်ချုပ်မှုခြေရာခံစနစ်နှင့် GAR တွင် မည်သူမဆို မပြောင်းလဲနိုင်သောအရာကို ရယူနိုင်သည်။
+   packet နောက်မှ။ `sorafs governance dag head` နှင့် `sorafs governance dag list`
+   မဲမဖွင့်မီ node ကို ပင်ချိတ်ထားကြောင်း အတည်ပြုပါစေ။
+3. CAR ဖိုင်ကို သိမ်းဆည်းပါ သို့မဟုတ် repo အထောက်အထား မှတ်တမ်း၏ ဘေးတွင် ပါ၀င်ငွေကို ပိတ်ဆို့ပါ
+   စာရင်းစစ်များသည် ကွင်းဆက်အုပ်ချုပ်ရေးဆိုင်ရာ ဆုံးဖြတ်ချက်ကို အတိအကျနှင့် ညှိနှိုင်းနိုင်သည်။
+   အတည်ပြုထားသော off-chain packet
 
-**Governance DAG publication (required)**
+### 2.7 Lifecycle လျှပ်တစ်ပြက်ရိုက်ချက် ပြန်လည်စတင်ခြင်း။
 
-1. Tar the evidence directory (config snippet, instruction payloads, proof logs,
-   GAR/minutes) and hand it to the governance DAG pipeline as a
-   `GovernancePayloadKind::PolicyUpdate` payload with annotations for
-   `agreement_id`, `iso_week`, and the proposed haircut/margin values; the
-   pipeline spec and CLI surfaces live in
-   `docs/source/sorafs_governance_dag_plan.md`.
-2. After the publisher updates the IPNS head, record the block CID and head CID
-   in the governance tracker and in the GAR so anyone can fetch the immutable
-   packet later. `sorafs governance dag head` and `sorafs governance dag list`
-   let you confirm the node was pinned before the vote opens.
-3. Store the CAR file or block payload next to the repo evidence archive so
-   auditors can reconcile the on-chain governance decision with the exact
-   off-chain packet that was approved.
+repo semantics (နှုန်းထားများ၊ အခြေချသင်္ချာ၊ အုပ်ထိန်းမှုယုတ္တိ၊ သို့မဟုတ်
+ပုံသေ config)) အုပ်ချုပ်မှုလုပ်နိုင်စေရန် အဆုံးအဖြတ်ပေးသော ဘဝသံသရာလျှပ်တစ်ပြက်ကို ပြန်လည်စတင်ပါ။
+reverse engineering မပါဘဲ proof harness အသစ်ကို ကိုးကားပါ။
 
-### 2.7 Lifecycle snapshot refresh
-
-Whenever repo semantics change (rates, settlement maths, custody logic, or
-default config), refresh the deterministic lifecycle snapshot so governance can
-cite the new digest without reverse engineering the proof harness.
-
-1. Refresh the fixtures under the pinned toolchain:
+1. Pinned toolchain အောက်ရှိ ပရိဘောဂများကို ပြန်လည်စတင်ပါ။
 
    ```bash
    scripts/regen_repo_proof_fixture.sh --toolchain <toolchain> \
      --bundle-dir artifacts/finance/repo/<agreement>
    ```
 
-   The helper stages outputs in a temp directory, updates the tracked fixtures
-   at `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.{json,digest}`,
-   reruns the proof test for verification, and (when `--bundle-dir` is set)
-   drops `repo_proof_snapshot.json` and `repo_proof_digest.txt` into the bundle
-   directory for auditors.
-2. To export artefacts without touching the tracked fixtures (e.g., dry-run
-   evidence), set the env helpers directly:
+   အကူအညီပေးသူက temp directory တစ်ခုတွင် output များကို အဆင့်လိုက်လုပ်ကာ ခြေရာခံထားသော fixtures များကို အပ်ဒိတ်လုပ်သည်။
+   `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.{json,digest}` တွင်၊
+   အတည်ပြုခြင်းအတွက် အထောက်အထားစစ်ဆေးမှုကို ပြန်လည်လုပ်ဆောင်ပြီး (`--bundle-dir` ကို သတ်မှတ်သည့်အခါ)
+   `repo_proof_snapshot.json` နှင့် `repo_proof_digest.txt` ကိုအတွဲလိုက်ထဲသို့ ချလိုက်ပါ။
+   စာရင်းစစ်များအတွက်လမ်းညွှန်။
+2. ခြေရာခံထားသော ပစ္စည်းများကို မထိဘဲ ရှေးဟောင်းပစ္စည်းများကို တင်ပို့ရန် (ဥပမာ၊ အခြောက်ခံခြင်း။
+   အထောက်အထား) env အကူအညီပေးသူများကို တိုက်ရိုက်သတ်မှတ်ပါ-
 
    ```bash
    REPO_PROOF_SNAPSHOT_OUT=artifacts/finance/repo/<agreement>/repo_proof_snapshot.json \
@@ -349,36 +340,34 @@ cite the new digest without reverse engineering the proof harness.
      -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
    ```
 
-   `REPO_PROOF_SNAPSHOT_OUT` receives the prettified Norito JSON from the proof
-   harness while `REPO_PROOF_DIGEST_OUT` stores the uppercase hex digest (with a
-   trailing newline for convenience). The helper refuses to overwrite files when
-   the parent directory does not exist, so build the `artifacts/...` tree first.
-3. Attach both exported files to the agreement bundle (see §3) and regenerate
-   the manifest via `scripts/repo_evidence_manifest.py` so the governance packet
-   references the refreshed proof artefacts explicitly. The in-repo fixtures
-   remain the source of truth for CI.
+   `REPO_PROOF_SNAPSHOT_OUT` သည် ခိုင်ခံ့သော Norito JSON ကို အထောက်အထားမှ လက်ခံရရှိသည်
+   `REPO_PROOF_DIGEST_OUT` သည် အကြီးစား hex digest ကို သိမ်းဆည်းထားစဉ် ကြိုးသည် (တစ်ခုနှင့်
+   အဆင်ပြေစေရန်အတွက် လိုင်းသစ်နောက်သို့ လိုက်ခြင်း။) အကူအညီပေးသူက ဖိုင်များကို ထပ်ရေးရန် ငြင်းဆိုသည်။
+   ပင်မလမ်းညွှန်တွင်မရှိပါ၊ ထို့ကြောင့် `artifacts/...` သစ်ပင်ကို ဦးစွာတည်ဆောက်ပါ။
+3. တင်ပို့ထားသောဖိုင်နှစ်ခုလုံးကို သဘောတူညီချက်အစုအဝေးတွင် ပူးတွဲပါ (§3 ကိုကြည့်ပါ) နှင့် ပြန်ထုတ်ပါ။
+   မန်နီးဖက်စ်သည် `scripts/repo_evidence_manifest.py` မှတဆင့် အုပ်ချုပ်မှု ပက်ကတ်ကို ထုတ်ပေးပါသည်။
+   ပြန်လည်ဆန်းသစ်ထားသော အထောက်အထားပစ္စည်းများကို အတိအလင်းကိုးကားသည်။ in-repo ပွဲများ
+   CI အတွက် အမှန်တရား၏ အရင်းအမြစ်အဖြစ် တည်ရှိနေပါသည်။
 
-### 2.8 Interest accrual & maturity governance
-
-**Deterministic interest math.** `RepoIsi` and `ReverseRepoIsi` derive the cash
-owed at unwind time from the ACT/360 helper
+### 2.8 အတိုးငွေနှင့် သက်တမ်းရင့် အုပ်ချုပ်မှု**သတ်မှတ်အတိုးနှုန်းသင်္ချာ။** `RepoIsi` နှင့် `ReverseRepoIsi` သည် ငွေသားကို ရယူသည်။
+ACT/360 အကူအညီပေးသူထံမှ အနားယူချိန်၌ အကြွေးတင်နေပါသည်။
 `compute_accrued_interest()`【crates/iroha_core/src/smartcontracts/isi/repo.rs:100】
-and the guard inside `expected_cash_settlement()` that rejects repayment legs
-which return less than *principal + interest*.【crates/iroha_core/src/smartcontracts/isi/repo.rs:132】
-The helper normalises `rate_bps` into a four-decimal fraction, multiplies it by
-`elapsed_ms / (360 * 24h)` using 18 decimal places, and finally rounds to the
-scale declared by the cash leg’s `NumericSpec`. To keep the governance packet
-reproducible, capture the four values that feed the helper:
+နှင့် `expected_cash_settlement()` အတွင်းရှိ အစောင့်သည် ပြန်ဆပ်သည့်ခြေထောက်များကို ငြင်းပယ်သည်။
+*principal + အတိုး* ထက်နည်းသော ပြန်ပေးသည်။【crates/iroha_core/src/smartcontracts/isi/repo.rs:132】
+အကူအညီပေးသူက `rate_bps` ကို ဒဿမလေးပုံတစ်ပုံအဖြစ် ပုံမှန်ဖြစ်အောင်ပြုလုပ်ပြီး ၎င်းကို မြှောက်ပေးသည်။
+`elapsed_ms / (360 * 24h)` ကို ဒဿမ ၁၈ နေရာသုံးပြီး၊
+ငွေသားခြေထောက်၏ `NumericSpec` မှကြေငြာထားသောစကေး။ အုပ်ချုပ်မှု packet ကိုစောင့်ရှောက်ရန်
+မျိုးပွားနိုင်သော၊ ကူညီသူအား ကျွေးမွေးသော တန်ဖိုးလေးခုကို ဖမ်းယူပါ-
 
-1. `cash_leg.quantity` (principal),
-2. `rate_bps`,
-3. `initiated_timestamp_ms`, and
-4. the unwind timestamp you intend to use (for planned GL entries this is
-   usually `maturity_timestamp_ms`, but emergency unwinds record the actual
-   `ReverseRepoIsi::settlement_timestamp_ms`).
+1. `cash_leg.quantity` (ကျောင်းအုပ်)၊
+2. `rate_bps`၊
+3. `initiated_timestamp_ms`၊ နှင့်
+4. သင်အသုံးပြုရန် ရည်ရွယ်ထားသော အချိန်တံဆိပ်ကို ဖြေလျှော့ပါ (စီစဉ်ထားသည့် GL ထည့်သွင်းမှုများအတွက် ၎င်းမှာဖြစ်သည်။
+   များသောအားဖြင့် `maturity_timestamp_ms`၊ သို့သော် အရေးပေါ်အခြေအနေသည် အမှန်တကယ် စံချိန်ကို ချိုးဖျက်သည်။
+   `ReverseRepoIsi::settlement_timestamp_ms`)။
 
-Store the tuple alongside the staged unwind instruction and attach a short proof
-snippet such as:
+ထုပ်ပိုးထားသော tuple ကို အစီအစဥ်အလျှော့ပေးသည့် ညွှန်ကြားချက်နှင့်အတူ သိမ်းဆည်းပြီး အထောက်အထားတိုတိုကို ပူးတွဲပါ။
+ဥပမာ- အတိုအထွာ
 
 ```python
 from decimal import Decimal
@@ -391,158 +380,152 @@ interest = principal * (rate_bps / Decimal(10_000)) * (elapsed_ms / Decimal(ACT_
 expected_cash = principal + interest.quantize(Decimal("0.01"))
 ```
 
-The rounded `expected_cash` must match the `quantity` encoded in the reverse
-repo instruction. Keep the script output (or calculator worksheet) in
-`artifacts/finance/repo/<agreement>/interest.json` so auditors can recompute the
-figure without interpreting your trading spreadsheet. The integration suite
-already enforces the same invariant
-(`repo_roundtrip_transfers_balances_and_clears_agreement`), but ops evidence
-should cite the exact values that will be unwound.【integration_tests/tests/repo.rs:1】
+အဝိုင်းပတ်ထားသော `expected_cash` သည် ပြောင်းပြန်တွင်ဝှက်ထားသော `quantity` နှင့် ကိုက်ညီရမည်
+repo ညွှန်ကြားချက်။ script output (သို့မဟုတ် calculator worksheet) ကို ထည့်ထားပါ။
+`artifacts/finance/repo/<agreement>/interest.json` ထို့ကြောင့် စာရင်းစစ်များသည် ၎င်းကို ပြန်လည်တွက်ချက်နိုင်သည်။
+သင်၏ ကုန်သွယ်မှုစာရင်းဇယားကို အဓိပ္ပါယ်မဖော်ဘဲ ပုံဖော်ပါ။ ပေါင်းစပ်မှုအစုံ
+တူညီသောပုံစံကို ပြဌာန်းထားပြီးဖြစ်သည်။
+(`repo_roundtrip_transfers_balances_and_clears_agreement`)၊ သို့သော် ops အထောက်အထား
+အနာပျောက်စေမည့် အတိအကျတန်ဖိုးများကို ကိုးကားသင့်သည်။【integration_tests/tests/repo.rs:1】
 
-**Margin & accrual cadence.** Every agreement exposes the cadence helpers
-`RepoAgreement::next_margin_check_after()` and the cached
-`last_margin_check_timestamp_ms`, enabling desks to prove that margin sweeps
-were scheduled according to policy even before they submit a `RepoMarginCallIsi`
-transaction.【crates/iroha_data_model/src/repo.rs:113】【crates/iroha_core/src/smartcontracts/isi/repo.rs:557】
-Each margin call must include three artefacts in the evidence bundle:
+**အနားသတ်နှင့် တိုးနှုန်းများ။** သဘောတူညီချက်တိုင်းသည် cadence အထောက်အမများကို ဖော်ထုတ်ပေးသည်။
+`RepoAgreement::next_margin_check_after()` နှင့် သိမ်းဆည်းထားသည်။
+`last_margin_check_timestamp_ms`၊ အနားသတ်အကွာအဝေးများကို သက်သေပြရန် စားပွဲခုံများကို ဖွင့်ပေးသည်
+`RepoMarginCallIsi` ကို မတင်သွင်းမီကပင် မူဝါဒအရ စီစဉ်ထားသည်။
+အရောင်းအဝယ်။ 【crates/iroha_data_model/src/repo.rs:113】【crates/iroha_core/src/smartcontracts/isi/repo.rs:557】
+အနားသတ်ခေါ်ဆိုမှုတစ်ခုစီတွင် အထောက်အထားအစုအဝေးတွင် ရှေးဟောင်းပစ္စည်းများ သုံးခုပါဝင်ရမည်-
 
-1. `repo margin-call --agreement <id>` JSON output (or the equivalent SDK
-   payload), which records the agreement id, the block timestamp used for the
-   check, and the authority that triggered it.【crates/iroha_cli/src/main.rs:3821】
-2. A snapshot of the agreement (`repo query get --agreement-id <id>`) taken
-   immediately before the call so reviewers can confirm the cadence was due
-   (compare `current_timestamp_ms` with `next_margin_check_after()`).
-3. The `AccountEvent::Repo::MarginCalled` SSE/NDJSON feed emitted to each role
-   (initiator, counterparty, and optionally custodian) because the runtime
-   duplicates the event for every participant.【crates/iroha_data_model/src/events/data/events.rs:742】
+1. `repo margin-call --agreement <id>` JSON အထွက် (သို့မဟုတ် ညီမျှသော SDK
+   payload) သဘောတူညီချက် id ကိုမှတ်တမ်းတင်သော၊ ပိတ်ဆို့ခြင်းအတွက်အသုံးပြုသည့်အချိန်တံဆိပ်
+   စစ်ဆေးပြီး အစပျိုးခဲ့တဲ့ အာဏာပိုင်။【crates/iroha_cli/src/main.rs:3821】
+2. သဘောတူညီချက် (`repo query get --agreement-id <id>`) ရိုက်ကူးထားသော လျှပ်တစ်ပြက်
+   ခေါ်ဆိုမှုမပြုမီ ချက်ခြင်း သုံးသပ်သူများသည် အတန်းချိန်ကို သတ်မှတ်ကြောင်း အတည်ပြုနိုင်သည်။
+   (`current_timestamp_ms` နှင့် `next_margin_check_after()` နှိုင်းယှဉ်)။
+3. အခန်းကဏ္ဍတစ်ခုစီသို့ ထုတ်လွှတ်သော `AccountEvent::Repo::MarginCalled` SSE/NDJSON ဖိဒ်
+   (initiator, counterparty, and optionally custodian) runtime ကြောင့်
+   ပါဝင်သူတိုင်းအတွက် အဖြစ်အပျက်ကို ပွားသည်။【crates/iroha_data_model/src/events/data/events.rs:742】
 
-CI already exercises these rules via
-`repo_margin_call_enforces_cadence_and_participant_rules`, which rejects calls
-that arrive early or from unauthorised accounts.【integration_tests/tests/repo.rs:395】
-Repeating that provenance in the evidence archive is what closes the roadmap F1
-documentation gap: governance reviewers can see the same timestamps that the
-runtime relied on, together with the deterministic proof hash captured in §2.7
-and the manifest discussed in §3.2.
+CI သည် ဤစည်းမျဉ်းများကို ကျင့်သုံးနေပြီဖြစ်သည်။
+ခေါ်ဆိုမှုများကို ငြင်းပယ်သည့် `repo_margin_call_enforces_cadence_and_participant_rules`
+အစောပိုင်း သို့မဟုတ် ခွင့်ပြုချက်မရှိဘဲ အကောင့်များမှ ရောက်ရှိလာသော။ 【integration_tests/tests/repo.rs:395】
+အထောက်အထား သိမ်းဆည်းမှုတွင် ထိုအထောက်အထားကို ထပ်ခါတလဲလဲ ပြုလုပ်ခြင်းသည် လမ်းပြမြေပုံ F1 ကို ပိတ်စေသည်။
+စာရွက်စာတမ်းကွာဟချက်- အုပ်ချုပ်မှုပြန်လည်သုံးသပ်သူများသည် အလားတူအချိန်တံဆိပ်တုံးများကို မြင်နိုင်သည်။
+runtime သည် §2.7 တွင် ဖမ်းယူထားသော အဆုံးအဖြတ်အထောက်အထား hash နှင့်အတူ အားကိုးအားထားပြုပါသည်။
+§ 3.2 တွင် ဆွေးနွေးထားသော သရုပ်
 
-### 2.8 Tri-party custody approvals & monitoring
+### 2.8 သုံးဖွဲ့အချုပ်အနှောင်ခွင့်ပြုချက်များနှင့် စောင့်ကြည့်ခြင်း။လမ်းပြမြေပုံ **F1** သည် အပေါင်ပစ္စည်းဖြင့် ရပ်ထားသည့် tri-party repos ကိုလည်း ခေါ်သည်။
+ဆန့်ကျင်သူထက် စောင့်ထိန်းသူ။ runtime သည် စောင့်ထိန်းလမ်းကြောင်းကို တွန်းအားပေးသည်။
+`RepoAgreement::custodian` ကို ဆက်လက်တည်မြဲခြင်းဖြင့်၊ ကတိပြုထားသော ပိုင်ဆိုင်မှုများကို လမ်းကြောင်းပြောင်းခြင်း၊
+စတင်စဉ်အတွင်း ထိန်းသိမ်းသူ၏ အကောင့်နှင့် ထုတ်လွှတ်ခြင်း။
+`RepoAccountRole::Custodian` ဖြစ်ရပ်များသည် စာရင်းစစ်များမြင်နိုင်စေရန်အတွက် lifecycle အဆင့်တိုင်းအတွက်ဖြစ်သည်။
+တံဆိပ်ခေါင်းတစ်ခုစီတွင် အပေါင်ပစ္စည်းကိုင်ထားသူ။【crates/iroha_data_model/src/repo.rs:74】【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【integration_tests/tests/repo.rs:951】
+အထက်ဖော်ပြပါ နှစ်ဖက်အထောက်အထားများအပြင်၊ သုံးပွင့်ဆိုင်အဖွဲ့ခွဲတိုင်းတွင် ပါရှိရမည်။
+အုပ်ချုပ်မှုပက်ကေ့ချ် မပြီးသေးမီတွင် အောက်ပါအရာများကို ဖမ်းယူပါ။
 
-Roadmap **F1** also calls out tri-party repos where collateral is parked with a
-custodian rather than the counterparty. The runtime enforces the custodian path
-by persisting `RepoAgreement::custodian`, routing pledged assets into the
-custodian’s account during initiation, and emitting
-`RepoAccountRole::Custodian` events for every lifecycle step so auditors can see
-who held collateral at each timestamp.【crates/iroha_data_model/src/repo.rs:74】【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【integration_tests/tests/repo.rs:951】
-In addition to the bilateral evidence listed above, every tri-party repo must
-capture the artefacts below before the governance packet is considered complete.
+** အပိုစားသုံးမှုလိုအပ်ချက်များ **
 
-**Additional intake requirements**
-
-1. **Custodian acknowledgement.** Desks must store a signed acknowledgement from
-   each custodian confirming the repo identifier, custody window, routing
-   account, and settlement SLAs. Attach the signed document
+1. **အုပ်ထိန်းသူ၏ ဝန်ခံချက်** စားပွဲခုံများမှ လက်မှတ်ရေးထိုးထားသော အသိအမှတ်ပြုလက်မှတ်ကို သိမ်းဆည်းရမည်၊
+   repo identifier၊ custody window၊ routing ကို အတည်ပြုနေသော အုပ်ထိန်းသူတိုင်း
+   အကောင့်နှင့် SLA များကို ဖြေရှင်းပေးခြင်း။ လက်မှတ်ရေးထိုးထားသောစာရွက်စာတမ်းကို ပူးတွဲပါ။
    (`artifacts/finance/repo/<agreement>/custodian_ack_<custodian>.md`)
-   and reference it in the governance packet so reviewers can see that the
-   third party agreed to the same bytes the initiator/counterparty approved.
-2. **Custody ledger snapshot.** Initiation moves collateral into the custodian
-   account and unwind returns it to the initiator; capture the relevant
-   `FindAssets` output for the custodian before and after each leg so auditors
-   can confirm the balances match the staged instructions.【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1641】
-3. **Event receipts.** Mirror the `RepoAccountEvent` stream for all roles and
-   store the custodian payload alongside the initiator/counterparty records.
-   The runtime emits separate events for each role in
+   ၎င်းကို အုပ်ချုပ်မှုဆိုင်ရာ ထုပ်ပိုးမှုတွင် ကိုးကား၍ သုံးသပ်သူများ သိရှိနိုင်စေရန်
+   တတိယအဖွဲ့အစည်းက တူညီသောဘိုက်များကို စတင်လုပ်ဆောင်သူ/ ကောင်တာမှ သဘောတူလက်ခံထားသည်။
+2. **အချုပ်အနှောင်စာရင်းရှင်းတမ်း လျှပ်တစ်ပြက်။** အစပြုခြင်းသည် အပေါင်ပစ္စည်းကို ထိန်းသိမ်းသူထံ ရွှေ့သည်
+   အကောင့်ကို unwind က အစပြုသူထံ ပြန်ပေးသည်။ သက်ဆိုင်ရာကို ဖမ်းတယ်။
+   `FindAssets` သည် အုပ်ထိန်းသူအတွက် ခြေထောက်တစ်ခုစီ၏ ရှေ့နှင့်နောက်တွင် ထုတ်ပေးသည် ဖြစ်သောကြောင့် စာရင်းစစ်များ၊
+   လက်ကျန်များကို အဆင့်သတ်မှတ်ထားသော ညွှန်ကြားချက်များနှင့် ကိုက်ညီကြောင်း အတည်ပြုနိုင်သည်။ 【crates/iroha_core/src/smartcontracts/isi/repo.rs:252】【crates/iroha_core/src/smartcontracts/isi/repo.rs:1641】
+3. **ပွဲဖြတ်ပိုင်းများ။** အခန်းကဏ္ဍအားလုံးအတွက် `RepoAccountEvent` stream ကို Mirror လုပ်ပါ
+   စတင်ဆောင်ရွက်သူ/ ကောင်တာမှတ်တမ်းများနှင့်အတူ အုပ်ထိန်းသူပေးဆောင်ရမည့်ဝန်ကို သိမ်းဆည်းပါ။
+   Runtime သည် အခန်းကဏ္ဍတစ်ခုစီအတွက် သီးခြားဖြစ်ရပ်များကို ထုတ်လွှတ်သည်။
    `RepoAccountRole::{Initiator,Counterparty,Custodian}`, so attaching the raw
-   SSE feed proves that all three parties saw the same timestamps and
-   settlement amounts.【crates/iroha_data_model/src/events/data/events.rs:742】【integration_tests/tests/repo.rs:1508】
-4. **Custodian readiness checklist.** When the repo references operational
-   shims (for example, escrow reconciliations or standing instructions), record
-   the automation contact and the command used to rehearse the workflow (such
-   as `iroha app repo initiate --custodian ... --dry-run`) so reviewers can reach
-   the custodian operators during drills.
+   SSE feed သည် အဖွဲ့သုံးဖွဲ့စလုံးသည် တူညီသောအချိန်တံဆိပ်တုံးများကို မြင်တွေ့ရပြီးဖြစ်ကြောင်း သက်သေပြပါသည်။
+   ပေးချေမှုပမာဏ။ 【crates/iroha_data_model/src/events/data/events.rs:742】【integration_tests/tests/repo.rs:1508】
+4. **Custodian အဆင်သင့်စစ်ဆေးရေးစာရင်း။** repo မှ ရည်ညွှန်းချက်များ လည်ပတ်သည့်အခါ
+   shims (ဥပမာ၊ escrow reconciliation သို့မဟုတ် မတ်တပ်ရပ်ညွှန်ကြားချက်များ)၊ မှတ်တမ်း
+   automation contact နှင့် workflow ကို ပြန်လည်လေ့ကျင့်ရန် အသုံးပြုသည့် command (ဥပမာ
+   `iroha app repo initiate --custodian ... --dry-run`) ဖြစ်သောကြောင့် သုံးသပ်သူများထံ ဆက်သွယ်နိုင်ပါသည်။
+   စစ်ရေးလေ့ကျင့်မှုအတွင်း ထိန်းသိမ်းစောင့်ရှောက်ရေး လုပ်ငန်းရှင်များ၊
 
-| Evidence | Command / Path | Purpose |
-|----------|----------------|---------|
-| Custodian acknowledgement (`custodian_ack_<custodian>.md`) | Link to the signed note referenced in `docs/examples/finance/repo_governance_packet_template.md` (use `docs/examples/finance/repo_custodian_ack_template.md` as the seed). | Shows the third party accepted the repo id, custody SLA, and settlement channel before assets move. |
-| Custody asset snapshot | `iroha json --query FindAssets '{ "id": "...#<custodian>" }' > artifacts/.../assets/custodian_<ts>.json` | Proves collateral left/returned exactly as `RepoIsi` encoded it. |
-| Custodian `RepoAccountEvent` feed | `torii-events --account <custodian> --event-type repo > artifacts/.../events/custodian.ndjson` | Captures the `RepoAccountRole::Custodian` payloads the runtime emitted for initiation, margin calls, and unwind. |
-| Custody drill log | `artifacts/.../governance/drills/<timestamp>-custodian.log` | Documents dry runs where the custodian exercised their rollback or settlement scripts. |
+| အထောက်အထား | Command / Path | ရည်ရွယ်ချက် |
+|----------------|----------------|---------|
+| အုပ်ထိန်းသူ အသိအမှတ်ပြုချက် (`custodian_ack_<custodian>.md`) | `docs/examples/finance/repo_governance_packet_template.md` တွင် ကိုးကားထားသော လက်မှတ်ထိုးထားသော မှတ်စုသို့ လင့်ခ်ချိတ်ပါ (မျိုးစေ့အဖြစ် `docs/examples/finance/repo_custodian_ack_template.md` ကိုသုံးပါ)။ | ပိုင်ဆိုင်မှုမရွှေ့မီ ကြားခံအဖွဲ့အစည်းက လက်ခံထားသော repo id၊ ထိန်းသိမ်းမှု SLA နှင့် ငွေပေးချေမှုချန်နယ်တို့ကို ပြသသည်။ |
+| ပိုင်ဆိုင်မှု လျှပ်တစ်ပြက် | `iroha json --query FindAssets '{ "id": "...#<custodian>" }' > artifacts/.../assets/custodian_<ts>.json` | `RepoIsi` ကုဒ်ဝှက်ထားသည့်အတိုင်း အပေါင်ပစ္စည်း ဘယ်ဘက်သို့ ပြန်ပေးကြောင်း သက်သေပြပါသည်။ |
+| စောင့်ထိန်း `RepoAccountEvent` feed | `torii-events --account <custodian> --event-type repo > artifacts/.../events/custodian.ndjson` | `RepoAccountRole::Custodian` သည် စတင်ခြင်း၊ အနားသတ်ခေါ်ဆိုမှုများအတွက် ထုတ်လွှတ်သော runtime ကို ဖမ်းယူပေးပြီး အနားယူပါ။ |
+| အချုပ်အနှောင် | `artifacts/.../governance/drills/<timestamp>-custodian.log` | ထိန်းသိမ်းသူသည် ၎င်းတို့၏ နောက်ပြန်ဆွဲခြင်း သို့မဟုတ် အခြေချရေး scripts များကို အသုံးပြုသည့် စာရွက်စာတမ်းများ ခြောက်သွေ့သွားပါသည်။ |တူညီသော hashing workflow (`scripts/repo_evidence_manifest.py`) ကို ပြန်လည်အသုံးပြုခြင်း။
+အုပ်ထိန်းသူ၏ အသိအမှတ်ပြုမှု၊ ပိုင်ဆိုင်မှုလျှပ်တစ်ပြက်ရိုက်ချက်များနှင့် ဖြစ်ရပ်ဖိဒ်များသည် သုံးဖက်ပါတီကို ထားရှိသည်
+ထုပ်ပိုးမှုများ ပြန်လည်ထုတ်လုပ်နိုင်သည်။ စာအုပ်တစ်အုပ်တွင် အုပ်ထိန်းသူအများအပြားပါဝင်သည့်အခါ ဖန်တီးပါ။
+အုပ်ထိန်းသူ တစ်ဦးစီ၏ လမ်းညွှန်ချက်ခွဲများ ဖြစ်သောကြောင့် မန်နီးဖက်စ်သည် မည်သည့်ဖိုင်များနှင့် သက်ဆိုင်သည်ကို မီးမောင်းထိုးပြသည်။
+ပါတီတစ်ခုစီ၊ အုပ်ချုပ်မှုလက်မှတ်သည် manifest hash တစ်ခုစီနှင့် တို့ကို ကိုးကားသင့်သည်။
+ကိုက်ညီသော အသိအမှတ်ပြုဖိုင်။ ပေါင်းစပ်စမ်းသပ်မှုများ ပြုလုပ်နိုင်သည်။
+`repo_initiation_with_custodian_routes_collateral` နှင့်
+`reverse_repo_with_custodian_emits_events_for_all_parties` မှ ပြဋ္ဌာန်းထားပြီးဖြစ်သည်။
+runtime အပြုအမူ—အထောက်အထားအစုအဝေးအတွင်း ၎င်းတို့၏ရှေးဟောင်းပစ္စည်းများကို ရောင်ပြန်ဟပ်ခြင်းသည် အဘယ်နည်း
+လမ်းပြမြေပုံ **F1** သည် tri-party scenario အတွက် GA-ready documentation ကို သင်္ဘောတင်ခွင့်ပြုပါ။【integration_tests/tests/repo.rs:951】【integration_tests/tests/repo.rs:1508】
 
-Reusing the same hashing workflow (`scripts/repo_evidence_manifest.py`) for the
-custodian acknowledgement, asset snapshots, and event feeds keeps tri-party
-packets reproducible. When multiple custodians participate in a book, create
-subdirectories per custodian so the manifest highlights which files belong to
-each party; the governance ticket should reference each manifest hash and the
-matching acknowledgement file. The integration tests that cover
-`repo_initiation_with_custodian_routes_collateral` and
-`reverse_repo_with_custodian_emits_events_for_all_parties` already enforce the
-runtime behaviour—mirroring their artefacts inside the evidence bundle is what
-lets roadmap **F1** ship GA-ready documentation for the tri-party scenario.【integration_tests/tests/repo.rs:951】【integration_tests/tests/repo.rs:1508】
+### 2.9 အတည်ပြုပြီးနောက် ဖွဲ့စည်းမှုပုံစံ လျှပ်တစ်ပြက်ပုံများ
 
-### 2.9 Post-approval configuration snapshots
+အုပ်ချုပ်ရေးက အပြောင်းအလဲတစ်ခု အတည်ပြုပြီးသည်နှင့် `[settlement.repo]` ပိုဒ်သည် ဆက်လက်တည်ရှိနေပါသည်။
+အစုအဖွဲ့၊ သက်တူရွယ်တူတိုင်းထံမှ စစ်မှန်သော ဖွဲ့စည်းမှုဆိုင်ရာ လျှပ်တစ်ပြက်ဓာတ်ပုံကို ဖမ်းယူပါ။
+စာရင်းစစ်များသည် အတည်ပြုထားသော တန်ဖိုးများသည် တိုက်ရိုက်ဖြစ်ကြောင်း သက်သေပြနိုင်သည်။ Torii မှ ဖော်ထုတ်သည်။
+ဤရည်ရွယ်ချက်အတွက် `/v1/configuration` လမ်းကြောင်းနှင့် SDKs ကဲ့သို့သော မျက်နှာပြင်အကူအညီများ အားလုံး
+`ToriiClient.getConfiguration`၊ ထို့ကြောင့် capture workflow သည် desk scripts များအတွက် အလုပ်လုပ်သည်၊
+CI၊ သို့မဟုတ် ကိုယ်တိုင်အော်ပရေတာ လုပ်ဆောင်သည်။【crates/iroha_torii/src/lib.rs:3225】【javascript/iroha_js/src/toriiClient.js:2115】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:4681】
 
-Once governance approves a change and the `[settlement.repo]` stanza lands on
-the cluster, capture an authenticated configuration snapshot from every peer so
-auditors can prove the approved values are live. Torii exposes the
-`/v1/configuration` route for this purpose and all SDKs surface helpers such as
-`ToriiClient.getConfiguration`, so the capture workflow works for desk scripts,
-CI, or manual operator runs.【crates/iroha_torii/src/lib.rs:3225】【javascript/iroha_js/src/toriiClient.js:2115】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:4681】
-
-1. Call `GET /v1/configuration` (or the SDK helper) per peer immediately after
-   the roll-out. Persist the full JSON under
-   `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` and record
-   the block height/cluster timestamp in `config/config_snapshot_index.md`.
+1. ပြီးပြီးချင်း ရွယ်တူချင်းအလိုက် `GET /v1/configuration` (သို့မဟုတ် SDK အကူအညီပေးသူ) ကို ခေါ်ပါ
+   roll-out ကို။ အောက်တွင် JSON အပြည့်အစုံကို ဆက်ထားပါ။
+   `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` နဲ့ record လုပ်ပါတယ်။
+   `config/config_snapshot_index.md` တွင် ဘလောက်အမြင့်/အစုလိုက်အချိန်တံဆိပ်
    ```bash
    mkdir -p artifacts/finance/repo/<slug>/config/peers
    curl -fsSL https://peer01.example/v1/configuration \
      | jq '.' \
      > artifacts/finance/repo/<slug>/config/peers/peer01.json
    ```
-2. Hash every snapshot (`sha256sum config/peers/*.json`) and log the digest next
-   to the peer id in the governance packet template. This proves which peers
-   ingested the policy and which commit/toolchain produced the snapshot.
-3. Compare the `.settlement.repo` block in each snapshot with the staged
-   `[settlement.repo]` TOML snippet; record any drift and rerun
-   `repo query get --agreement-id <id> --pretty` so the evidence bundle shows
-   both the runtime configuration and the normalised `RepoGovernance` values
-   stored with the agreement.【crates/iroha_cli/src/main.rs:3821】
-4. Attach the snapshot files and summary index to the evidence manifest (see
-   §3.2) so the governance record links the approved change to the actual peer
-   configuration bytes. The governance template was updated to include this
-   table, so every future repo packet carries the same proof.
+2. လျှပ်တစ်ပြက်ရိုက်ချက်တိုင်း (`sha256sum config/peers/*.json`) ကို Hash လုပ်ပြီး နောက်တစ်နေ့တွင် digest ကို စာရင်းသွင်းပါ။
+   အုပ်ချုပ်မှုပက်ကတ် နမူနာပုံစံရှိ သက်တူရွယ်တူ ID သို့။ ဒါက ဘယ်ရွယ်တူလဲဆိုတာ သက်သေပြတယ်။
+   မူဝါဒကို ထည့်သွင်းပြီး လျှပ်တစ်ပြက်ရိုက်ချက်အား ထုတ်လုပ်ပေးသည့် ကတိက၀တ်/ကိရိယာကြိုးကွင်းဆက်။
+3. လျှပ်တစ်ပြက်ရိုက်ချက်တစ်ခုစီတွင် `.settlement.repo` ဘလောက်ကို အဆင့်လိုက်လုပ်ထားသည့်အရာနှင့် နှိုင်းယှဉ်ပါ။
+   `[settlement.repo]` TOML အတိုအထွာ၊ drift တစ်ခုခုကို မှတ်တမ်းတင်ပြီး ပြန်ပြေးပါ။
+   `repo query get --agreement-id <id> --pretty` ဖြစ်သောကြောင့် သက်သေအတွဲလိုက်ပြသည်။
+   runtime configuration နှင့် normalized `RepoGovernance` တန်ဖိုးများ
+   သဘောတူညီချက်ဖြင့် သိမ်းဆည်းထားသည်။【crates/iroha_cli/src/main.rs:3821】
+4. လျှပ်တစ်ပြက် ဖိုင်များနှင့် အနှစ်ချုပ် အညွှန်းကို သက်သေပြချက်တွင် ပူးတွဲပါ (ကြည့်ပါ။
+   §3.2) ထို့ကြောင့် အုပ်ချုပ်မှုမှတ်တမ်းသည် အတည်ပြုထားသောပြောင်းလဲမှုကို အမှန်တကယ်သက်တူရွယ်တူများနှင့် ချိတ်ဆက်ထားသည်။
+   configuration bytes ၎င်းကိုထည့်သွင်းရန်အတွက် အုပ်ချုပ်မှုပုံစံပုံစံကို မွမ်းမံထားသည်။
+   ဇယား၊ ထို့ကြောင့် အနာဂတ် repo packet တိုင်းတွင် တူညီသော အထောက်အထား ပါရှိသည်။
 
-Capturing these snapshots closes the `iroha_config` documentation gap called out
-in the roadmap: reviewers can now diff the staged TOML against the bytes every
-peer reports, and auditors can re-run the comparison whenever a repo change is
-under investigation.
+ဤလျှပ်တစ်ပြက်ရိုက်ချက်များကိုဖမ်းယူခြင်းသည် `iroha_config` ဟုခေါ်သော စာရွက်စာတမ်းကွာဟချက်ကို ပိတ်သွားသည်
+လမ်းပြမြေပုံတွင်- သုံးသပ်သူများသည် ယခုအခါ ဘိုက်တစ်ခုစီနှင့် TOML ကို အဆင့်လိုက် ကွဲပြားနိုင်သည်။
+ရွယ်တူအစီရင်ခံချက်များနှင့် စာရင်းစစ်များသည် repo အပြောင်းအလဲဖြစ်သည့်အခါတိုင်း နှိုင်းယှဉ်မှုကို ပြန်လည်လုပ်ဆောင်နိုင်သည်။
+စုံစမ်းနေဆဲ။
 
-## 3. Deterministic Evidence Workflow
+## 3. Deterministic Evidence Workflow1. **ညွှန်ကြားချက်အထောက်အထားကို မှတ်တမ်းတင်ပါ**
+   - `iroha app repo ... --output` မှတစ်ဆင့် repo/unwind payload ကို ဖန်တီးပါ။
+   - `InstructionBox` JSON ကို အောက်တွင် သိမ်းဆည်းပါ။
+     `artifacts/finance/repo/<agreement-id>/initiation.json`။
+2. **လယ်ဂျာ အခြေအနေကို ဖမ်းယူပါ**
+   - ရှေ့တွင် `iroha app repo query list --pretty > artifacts/.../agreements.json` ကို Run ပါ။
+     အခြေချပြီးမှ ချိန်ခွင်လျှာ ရှင်းကြောင်း သက်သေပြရန်။
+   - သိမ်းဆည်းရန် `FindAssets` သို့မဟုတ် SDK အကူအညီပေးသူများမှတဆင့် ရွေးချယ်မေးမြန်းနိုင်သည်
+     repo ခြေထောက်တွင် ထိသော ပိုင်ဆိုင်မှု လက်ကျန်များ။
+3. **ဆက်ရှိနေသော အဖြစ်အပျက် ထုတ်လွှင့်မှုများ**
+   - Torii SSE ထက် `AccountEvent::Repo` သို့ စာရင်းသွင်းပါ သို့မဟုတ် ဆွဲယူပြီး ပူးတွဲပါ
+     အထောက်အထားလမ်းညွှန်သို့ JSON ကို ထုတ်လွှတ်သည်။ ယင်းက အံဝင်ခွင်ကျဖြစ်မှုကို ကျေနပ်စေသည်။
+     အဖြစ်အပျက်များကို စောင့်ကြည့်လေ့လာသော သက်တူရွယ်တူများက လက်မှတ်ရေးထိုးထားသောကြောင့် သစ်ခုတ်ခြင်းအပိုဒ်
+     အပြောင်းအလဲတစ်ခုစီ။
+4. ** အဆုံးအဖြတ်ပေးသော စမ်းသပ်မှုများကို လုပ်ဆောင်ပါ**
+   - CI သည် `integration_tests/tests/repo.rs` ကို အသုံးပြုပြီးဖြစ်သည်။ လူကိုယ်တိုင်ဝင်ရောက်ခြင်းအတွက်၊
+     `cargo test -p integration_tests repo::` ကို execute လုပ်ပြီး log plus ကို သိမ်းဆည်းပါ။
+     `target/debug/deps/repo-*` JUnit အထွက်။
+5. ** အုပ်ချုပ်မှုပုံစံကို စီစဥ်ပြီး ပြင်ဆင်သတ်မှတ်ခြင်း**
+   - ကာလအတွက်အသုံးပြုသော `[settlement.repo]` config ကို Check in (သို့မဟုတ် ပူးတွဲပါ)၊
+     ဆံပင်ညှပ်ခြင်း/ အရည်အချင်းပြည့်မီသော စာရင်းများ အပါအဝင်။ ၎င်းသည် စာရင်းစစ် ပြန်လည်ပြသမှုများကို ကိုက်ညီစေရန် ခွင့်ပြုသည်။
+     `RepoAgreement` တွင် မှတ်တမ်းတင်ထားသော runtime-ပုံမှန်အုပ်ချုပ်မှု။
 
-1. **Record the instruction provenance**
-   - Generate the repo/unwind payload via `iroha app repo ... --output`.
-   - Store the `InstructionBox` JSON under
-     `artifacts/finance/repo/<agreement-id>/initiation.json`.
-2. **Capture ledger state**
-   - Run `iroha app repo query list --pretty > artifacts/.../agreements.json` before
-     and after settlement to prove balances cleared.
-   - Optionally query `FindAssets` via `iroha json` or SDK helpers to archive
-     the asset balances touched in the repo leg.
-3. **Persist event streams**
-   - Subscribe to `AccountEvent::Repo` over Torii SSE or Pull and attach the
-     emitted JSON to the evidence directory. This satisfies the tamper-evident
-     logging clause because the events are signed by the peers that observed
-     each change.
-4. **Run deterministic tests**
-   - CI already runs `integration_tests/tests/repo.rs`; for manual sign-off,
-     execute `cargo test -p integration_tests repo::` and archive the log plus
-     `target/debug/deps/repo-*` JUnit output.
-5. **Serialize governance & config**
-   - Check in (or attach) the `[settlement.repo]` config used for the period,
-     including haircut/eligible lists. This allows audit replays to match the
-     runtime-normalised governance recorded in `RepoAgreement`.
+### 3.1 အထောက်အထားအစုအဝေး အပြင်အဆင်
 
-### 3.1 Evidence bundle layout
-
-Store every artefact called out in this section beneath a single agreement
-directory so governance can archive or hash one tree. The recommended layout is:
+ဤကဏ္ဍတွင်ဖော်ပြထားသော ပစ္စည်းအားလုံးကို သဘောတူညီချက်တစ်ခုအောက်တွင် သိမ်းဆည်းပါ။
+ထို့ကြောင့် အုပ်ချုပ်ရေးသည် သစ်ပင်တစ်ပင်ကို သိမ်းဆည်းနိုင်သည် သို့မဟုတ် ဟက်ခ်လုပ်နိုင်သည်။ အကြံပြုထားသော အပြင်အဆင်မှာ-
 
 ```
 artifacts/finance/repo/<agreement-id>/
@@ -565,27 +548,27 @@ artifacts/finance/repo/<agreement-id>/
     └── repo_lifecycle.log
 ```
 
-- `agreements_before/after.json` capture `repo query list` output so auditors can
-  prove the ledger cleared the agreement.
-- `initiation.json`, `unwind.json`, and `margin/*.json` are the exact Norito
-  payloads staged with `iroha app repo ... --output`.
-- `events/repo-events.ndjson` replays the `AccountEvent::Repo(*)` stream while
-  `tests/repo_lifecycle.log` preserves the `cargo test` evidence.
-- `repo_proof_snapshot.json` and `repo_proof_digest.txt` come from the snapshot
-  refresh procedure in §2.7 and let reviewers recompute the lifecycle hash
-  without re-running the harness.
-- `config/settlement_repo.toml` contains the `[settlement.repo]` snippet
-  (haircuts, substitution matrix) that was active when the repo executed.
-- `config/peers/*.json` captures `/v1/configuration` snapshots for each peer,
-  closing the loop between the staged TOML and the runtime values peers report
-  over Torii.
+- `agreements_before/after.json` သည် `repo query list` အထွက်ကို ဖမ်းယူနိုင်သောကြောင့် စာရင်းစစ်များလုပ်နိုင်သည်
+  လယ်ဂျာမှ သဘောတူညီချက်ကို ရှင်းလင်းကြောင်း သက်သေပြခဲ့သည်။
+- `initiation.json`၊ `unwind.json` နှင့် `margin/*.json` များသည် Norito အတိအကျဖြစ်သည်
+  `iroha app repo ... --output` ဖြင့် ပါ၀င်သော ဝန်တင်များ။
+- `events/repo-events.ndjson` သည် `AccountEvent::Repo(*)` ထုတ်လွှင့်နေစဉ်
+  `tests/repo_lifecycle.log` သည် `cargo test` အထောက်အထားများကို ထိန်းသိမ်းထားသည်။
+- `repo_proof_snapshot.json` နှင့် `repo_proof_digest.txt` လျှပ်တစ်ပြက်မှလာသည်
+  § 2.7 တွင် လုပ်ငန်းစဉ်ကို ပြန်လည်ဆန်းသစ်ပြီး ပြန်လည်သုံးသပ်သူများသည် ဘဝသံသရာ hash ကို ပြန်လည်တွက်ချက်ခွင့်ပြုပါ။
+  ကြိုးကို ပြန်မပြေးဘဲ၊
+- `config/settlement_repo.toml` တွင် `[settlement.repo]` အတိုအထွာ ပါရှိသည်။
+  (ဆံပင်ညှပ်ခြင်း၊ အစားထိုး matrix) repo ကို ကွပ်မျက်ချိန်တွင် တက်ကြွနေပါသည်။
+- `config/peers/*.json` သည် သက်တူရွယ်တူတစ်ဦးစီအတွက် `/v1/configuration` လျှပ်တစ်ပြက်ရိုက်ချက်များ၊
+  အဆင့်သတ်မှတ်ထားသော TOML နှင့် runtime တန်ဖိုးများကို သက်တူရွယ်တူများ၏ အစီရင်ခံစာကြားရှိ ကွင်းဆက်ကို ပိတ်ပါ။
+  Torii ကျော်။
 
-### 3.2 Hash manifest generation
+### 3.2 Hash manifest မျိုးဆက်
 
-Attach a deterministic manifest to every bundle so reviewers can verify hashes
-without unpacking the archive. The helper at `scripts/repo_evidence_manifest.py`
-walks the agreement directory, records `size`, `sha256`, `blake2b`, and the last
-modified timestamp for each file, and writes a JSON summary:
+သုံးသပ်သူများသည် hashes များကို အတည်ပြုနိုင်စေရန် အစုအစည်းတစ်ခုချင်းစီတွင် အဆုံးအဖြတ်ပေးသော သရုပ်ကို ပူးတွဲပါ။
+archive ကိုမဖွင့်ဘဲ။ `scripts/repo_evidence_manifest.py` တွင် အကူအညီပေးသူ
+သဘောတူညီချက်လမ်းညွှန်၊ `size`၊ `sha256`၊ `blake2b` နှင့် နောက်ဆုံးမှတ်တမ်းများကို လှမ်းကြည့်လိုက်သည်
+ဖိုင်တစ်ခုစီအတွက် အချိန်တံဆိပ်ကို ပြင်ဆင်ပြီး JSON အနှစ်ချုပ်ကို ရေးသည်-
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -595,15 +578,13 @@ python3 scripts/repo_evidence_manifest.py \
   --exclude 'scratch/*'
 ```
 
-The generator sorts paths lexicographically, skips the output file when it lives
-inside the same directory, and emits totals that governance can copy directly
-into the change ticket. When `--output` is omitted the manifest prints to
-stdout, which is convenient for quick diffs during desk reviews.
-Use `--exclude <glob>` to omit scratch material (for example, `--exclude 'scratch/*' --exclude '*.tmp'`)
-without moving files out of the bundle; the glob pattern always applies to the
-path relative to `--root`.
-
-Example manifest (truncated for brevity):
+ဂျင်နရေတာသည် လမ်းကြောင်းများကို အဘိဓာန်အလိုက် စီခွဲပေးသည်၊ ၎င်းသည် အသက်ရှင်နေချိန်တွင် အထွက်ဖိုင်ကို ကျော်သွားသည်။
+တူညီသောလမ်းညွှန်အတွင်းတွင်၊ အုပ်ချုပ်ရေးမှတိုက်ရိုက်ကူးယူနိုင်သောစုစုပေါင်းများကိုထုတ်လွှတ်သည်။
+change ticket ထဲကို။ `--output` အား မန်နီးဖက်စ်ပရင့်များကို ချန်လှပ်ထားသည့်အခါ
+stdout၊ စားပွဲမှပြန်လည်သုံးသပ်နေစဉ်အတွင်း လျင်မြန်သောကွဲပြားမှုများအတွက် အဆင်ပြေသည်။
+ခြစ်ရာပစ္စည်းများကို ချန်လှပ်ရန် `--exclude <glob>` ကိုသုံးပါ (ဥပမာ၊ `--exclude 'scratch/*' --exclude '*.tmp'`)
+ဖိုင်များကိုအစုအဝေးမှမရွှေ့ဘဲ၊ glob ပုံစံသည် အမြဲတမ်း အကျုံးဝင်သည်။
+`--root` နှင့် ဆက်စပ်သော လမ်းကြောင်း။ဥပမာ မန်နီးဖက်စ် (အတိုကောက်အတွက် ဖြတ်ထားသည်)
 
 ```json
 {
@@ -631,42 +612,42 @@ Example manifest (truncated for brevity):
 }
 ```
 
-Include the manifest next to the evidence bundle and reference its SHA-256 hash
-in the governance proposal so desks, operators, and auditors share the same
-ground truth.
+သက်သေအစုအဝေးဘေးရှိ မန်နီးဖက်စ်ကို ထည့်သွင်းပြီး ၎င်း၏ SHA-256 hash ကို ကိုးကားပါ။
+အုပ်ချုပ်မှုအဆိုပြုချက်တွင် စားပွဲများ၊ အော်ပရေတာများနှင့် စာရင်းစစ်များသည် အတူတူပင်ဖြစ်သည်။
+မြေပြင်အမှန်တရား။
 
-### 3.3 Governance change log & rollback drills
+### 3.3 အုပ်ချုပ်မှုပြောင်းလဲခြင်းမှတ်တမ်းနှင့် နောက်ပြန်ဆွဲလေ့ကျင့်ခန်းများ
 
 The finance council expects every repo request, haircut tweak, or substitution
-matrix change to arrive with a reproducible governance packet that can be linked
-directly from the referendum minutes.【docs/source/governance_playbook.md:1】
+ချိတ်ဆက်နိုင်သော ပြန်လည်ထုတ်လုပ်နိုင်သော အုပ်ချုပ်မှုပက်ကတ်တစ်ခုဖြင့် ရောက်ရှိရန် matrix ပြောင်းလဲမှု
+ဆန္ဒခံယူပွဲ မိနစ်များမှ တိုက်ရိုက်။【docs/source/governance_playbook.md:1】
 
-1. **Build the governance packet**
-   - Copy the evidence bundle for the agreement into
-     `artifacts/finance/repo/<agreement-id>/governance/`.
-   - Add `gar.json` (council approval record), `referendum.md` (who approved
-     and which hashes they reviewed), and `rollback_playbook.md`
-     summarising the reversal procedure from `repo_runbook.md`
-     §§4–5.【docs/source/finance/repo_runbook.md:1】
-   - Capture the deterministic manifest hash from §3.2 in
-     `hashes.txt` so reviewers can confirm the payloads they see in Torii match
-     the staged bytes.
-2. **Reference the packet in the referendum**
-   - When running `iroha app governance referendum submit` (or the equivalent SDK
-     helper) include the manifest hash from `hashes.txt` in the `--notes`
-     payload so the GAR points back to the immutable packet.
-   - File the same hash inside the governance tracker or ticketing system so
-     audit traces do not rely on screenshotting dashboards.
-3. **Document drills and rollbacks**
-   - After the referendum passes, update `ops/drill-log.md` with the repo
-     agreement id, deployed config hash, GAR id, and operator contact so the
-     quarterly drill record includes finance actions.【ops/drill-log.md:1】
-   - If a rollback drill executes, attach the signed
-     `rollback_playbook.md` and the CLI output from `iroha app repo unwind` under
-     `governance/drills/<timestamp>.log` and inform the council using the same
-     steps described in the governance playbook.
+1. **အုပ်ချုပ်မှုအထုပ်ကိုတည်ဆောက်ပါ**
+   - သဘောတူညီချက်အတွက် အထောက်အထားအစုအဝေးကို ကူးယူပါ။
+     `artifacts/finance/repo/<agreement-id>/governance/`။
+   - `gar.json` (ကောင်စီအတည်ပြုချက်မှတ်တမ်း)၊ `referendum.md` (အတည်ပြုသူထည့်ပါ။
+     ၎င်းတို့ ပြန်လည်သုံးသပ်ထားသည့် ကိန်းဂဏန်းများ) နှင့် `rollback_playbook.md`
+     `repo_runbook.md` မှ ပြောင်းပြန်လုပ်ထုံးလုပ်နည်း အကျဉ်းချုပ်
+     §§၄–၅။【docs/source/finance/repo_runbook.md:1】
+   - §3.2 လက်မမှ အဆုံးအဖြတ်ရှိသော ထင်ရှားသော ဟက်ရှ်ကို ဖမ်းယူပါ။
+     `hashes.txt` သို့မှသာ သုံးသပ်သူများသည် Torii ပွဲစဉ်တွင် တွေ့ရသည့် ပေးဆောင်မှုများကို အတည်ပြုနိုင်သည်
+     အဆင့်လိုက် ဘိုက်များ။
+2. **ဆန္ဒခံယူပွဲရှိ ပက်ကေ့ဂျ်ကို ကိုးကားပါ**
+   - `iroha app governance referendum submit` (သို့မဟုတ် ညီမျှသော SDK ကိုအသုံးပြုသောအခါ
+     helper) `--notes` တွင် `hashes.txt` မှ manifest hash ကို ထည့်သွင်းပါ။
+     payload သည် GAR သည် မပြောင်းလဲနိုင်သော packet သို့ ပြန်ညွှန်သည်။
+   - အုပ်ချုပ်မှုခြေရာခံစနစ် သို့မဟုတ် လက်မှတ်ရောင်းသည့်စနစ်အတွင်း တူညီသော hash ကို ရေးပါ။
+     စာရင်းစစ်ခြေရာများသည် ဖန်သားပြင်ရိုက်ခြင်း ဒက်ရှ်ဘုတ်များပေါ်တွင် အားမကိုးပါ။
+3. ** စာရွက်စာတမ်း လေ့ကျင့်မှုများ နှင့် နောက်ပြန်ဆုတ်ခြင်းများ **
+   - ဆန္ဒခံယူပွဲပြီးသောအခါ၊ Repo ဖြင့် `ops/drill-log.md` ကို အပ်ဒိတ်လုပ်ပါ။
+     သဘောတူညီချက် id၊ ဖြန့်ကျက်ထားသော config hash၊ GAR id နှင့် အော်ပရေတာ ဆက်သွယ်ရန်
+     သုံးလတစ်ကြိမ်လေ့ကျင့်ရေးမှတ်တမ်းတွင် ဘဏ္ဍာရေးဆိုင်ရာလုပ်ဆောင်ချက်များ ပါဝင်သည်။【ops/drill-log.md:1】
+   - လေ့ကျင့်မှုတစ်ခုလုပ်ဆောင်ပါက၊ လက်မှတ်ရေးထိုးထားသော ပူးတွဲပါရှိသည်။
+     `rollback_playbook.md` နှင့် `iroha app repo unwind` မှ CLI အထွက်နှုန်း
+     `governance/drills/<timestamp>.log` ကို အသုံးပြု၍ ကောင်စီကို အကြောင်းကြားပါ။
+     အုပ်ချုပ်မှုပြစာအုပ်တွင် ဖော်ပြထားသော အဆင့်များ။
 
-Example layout:
+နမူနာ အပြင်အဆင်-
 
 ```
 artifacts/finance/repo/<agreement-id>/governance/
@@ -678,46 +659,42 @@ artifacts/finance/repo/<agreement-id>/governance/
     └── 2026-05-12T09-00Z.log
 ```
 
-Keeping the GAR, referendum, and drill artefacts alongside the lifecycle
-evidence guarantees that every repo change satisfies the roadmap F1 governance
-bar without requiring bespoke ticket spelunking later on.
+GAR၊ လူထုဆန္ဒခံယူပွဲနှင့် တူးဖော်ရေးပစ္စည်းများကို အသက်စက်ဝန်းနှင့်အတူ ထိန်းသိမ်းထားပါ။
+repo ပြောင်းလဲမှုတိုင်းသည် လမ်းပြမြေပုံ F1 အုပ်ချုပ်မှုအား ကျေနပ်စေကြောင်း အာမခံပါသည်။
+bar မှာ စိတ်ကြိုက် လက်မှတ် မလိုဘဲ နောက်မှ လာပြောသည် ။
 
-### 3.4 Lifecycle governance checklist
+### 3.4 ဘဝသံသရာ အုပ်ချုပ်မှု စစ်ဆေးရေးစာရင်း
 
-Roadmap **F1** calls out governance coverage for initiation, accrual/margin, and
-tri-party unwinds. The table below consolidates the approvals, deterministic
-artefacts, and test references per lifecycle step so finance desks can cite a
-single checklist when assembling a packet.
+လမ်းပြမြေပုံ **F1** သည် စတင်လုပ်ဆောင်ရန်၊ စုဆောင်းငွေ/အနားသတ်အတွက် အုပ်ချုပ်မှုလွှမ်းခြုံမှုကို ခေါ်ဆိုသည်
+သုံးပွင့်ဆိုင် အပန်းဖြေ။ အောက်ပါဇယားသည် အတည်ပြုချက်များကို စုစည်း၍ အဆုံးအဖြတ်ပေးသည်။
+ရှေးဟောင်းပစ္စည်းများ၊ နှင့် ဘဝစက်ဝန်းအဆင့်အလိုက် စမ်းသပ်ကိုးကားချက်များ၊ သို့မှသာ ဘဏ္ဍာရေးစားပွဲခုံများကို ကိုးကားနိုင်သည်။
+packet တစ်ခုကို တပ်ဆင်သည့်အခါ တစ်ခုတည်း စစ်ဆေးရန်စာရင်း။| ဘဝသံသရာခြေလှမ်း | လိုအပ်သော အတည်ပြုချက်များနှင့် လက်မှတ်များ | Deterministic artefacts & commands | ဆုတ်ယုတ်မှုလွှမ်းခြုံမှု | ချိတ်ဆက်ထားသည်။
+|----------------|--------------------------------|--------------------------------------------------------------------------------|
+| **အစပြုခြင်း (နှစ်နိုင်ငံ သို့မဟုတ် သုံးပါတီ)** | `docs/examples/finance/repo_governance_packet_template.md`၊ `[settlement.repo]` ကွာခြားချက်နှင့် GAR ID ပါသော အုပ်ချုပ်မှုလက်မှတ်၊ `--custodian` ကို သတ်မှတ်သည့်အခါ အုပ်ထိန်းသူမှ အသိအမှတ်ပြုသည့် အသိအမှတ်ပြု လက်မှတ်နှစ်ခု။ | ညွှန်ကြားချက်ကို`iroha --config client.toml --output repo initiate ...` မှတစ်ဆင့် အဆင့်သတ်မှတ်ပါ။အသက်ကယ်စက်ဝန်းသက်သေလျှပ်တစ်ပြက် (`REPO_PROOF_*` env vars) နှင့် `scripts/repo_evidence_manifest.py` မှ မန်နီးဖက်စ်အတွဲကို ထုတ်လွှတ်ပါ။နောက်ဆုံးပေါ် `scripts/repo_evidence_manifest.py` နှင့် Norito နှင့် Norito ကို ပူးတွဲပါ အပိုင်းအစများ (ဆံပင်ညှပ်ခြင်း၊ အရည်အချင်းပြည့်မီသောစာရင်း၊ အစားထိုး matrix)။ | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` (နှစ်နိုင်ငံ) နှင့် `integration_tests/tests/repo.rs::repo_roundtrip_with_custodian_routes_collateral` (tri-party) သည် runtime သည် staged payloads နှင့် ကိုက်ညီကြောင်း သက်သေပြပါသည်။ |
+| **Margin ခေါ်ဆိုမှု accreual cadence** | Desk Lead + Risk Manager သည် အုပ်ချုပ်မှုပက်ကတ်တွင် မှတ်တမ်းတင်ထားသော cadence window ကို အတည်ပြုသည်၊ လက်မှတ်သည် စီစဉ်ထားသော `RepoMarginCallIsi` ကို ရည်ညွှန်းသည်။ | `iroha app repo margin --agreement-id` ကို မခေါ်ဆိုမီ `iroha app repo margin --agreement-id` အထွက်ကို ဖမ်းယူပါ၊ ရလဒ် JSON ကို ဖျက်ပြီး `RepoAccountEvent::MarginCalled` SSE payload ကို အထောက်အထားအစုအဝေးတွင် သိမ်းဆည်းပါ။သတ်မှတ်ထားသော အထောက်အထား ဟက်ရ်ှဘေးတွင် CLI မှတ်တမ်းကို သိမ်းဆည်းပါ။ | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` သည် အချိန်မတန်မီ ဖုန်းခေါ်ဆိုမှုများနှင့် ပါဝင်သူမဟုတ်သော တင်ပြမှုများကို ပယ်ချကြောင်း အာမခံပါသည်။ |
+| **အပေါင်ပစ္စည်း အစားထိုးခြင်းနှင့် ရင့်ကျက်မှုကို ပြေလျော့စေခြင်း** | အုပ်ချုပ်မှုပြောင်းလဲမှုမှတ်တမ်းသည် လိုအပ်သော `collateral_substitution_matrix` ထည့်သွင်းမှုများနှင့် ဆံပင်ညှပ်မူဝါဒကို ကိုးကားဖော်ပြပါသည်။ ကောင်စီ၏ မိနစ်များတွင် အစားထိုးအတွဲ SHA-256 hash ကို စာရင်းပြုစုပါ။ | `iroha app repo unwind --output ... --settlement-timestamp-ms <planned>` ဖြင့် ခြေထောက်ကို ဖြေလျှော့ပေးခြင်းဖြင့် ACT/360 တွက်ချက်မှု (§2.8) နှင့် အစားထိုး payload နှစ်ခုလုံးကို ပြန်ထုတ်ပေးနိုင်သည်။`[settlement.repo]` TOML အတိုအထွာ၊ အစားထိုး မန်နီးဖက်စ်နှင့် ရလဒ် I18074000 တို့ကို ထည့်သွင်းပါ။ | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` အတွင်းရှိ အစားထိုး အသွားအပြန် ခရီးသည် သဘောတူညီချက် id ကို စဉ်ဆက်မပြတ် ထိန်းသိမ်းထားစဉ်တွင် မလုံလောက်သော-ဆန့်ကျင်-အတည်ပြုထားသော အစားထိုးစီးဆင်းမှုများကို လေ့ကျင့်ခန်းလုပ်သည်။ |
+| **အရေးပေါ်ဖြေလျှော့ခြင်း/ပြန်လှည့်ခြင်း** | `docs/source/finance/repo_runbook.md` (ပုဒ်မ 4-5) တွင်ဖော်ပြထားသည့်အတိုင်း ပြန်သိမ်းခြင်းကို ဆူပူမှုမှူး + ဘဏ္ဍာရေးကောင်စီက အတည်ပြုပြီး `ops/drill-log.md` တွင် ထည့်သွင်းမှုကို ဖမ်းယူပါ။ | အဆင့်လိုက် rollback payload ကို အသုံးပြု၍ `iroha app repo unwind` ကို လုပ်ဆောင်ပါ၊ CLI မှတ်တမ်းများ + GAR ကို `governance/drills/<timestamp>.log` ကို ကိုးကားပြီး `repo_deterministic_lifecycle_proof_matches_fixture` နှင့် `scripts/repo_evidence_manifest.py` တို့ကို ပံ့ပိုးပေးသူ နှစ်ခုလုံးကို ပြန်ဖွင့်ပါ။ | ပျော်ရွှင်သောလမ်းကို `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` ဖြင့် ဖုံးလွှမ်းထားသည်။ လေ့ကျင့်မှုအဆင့်များကို လိုက်နာခြင်းဖြင့် အဆိုပါစမ်းသပ်မှုပြုလုပ်သည့် runtime အာမခံချက်များနှင့်အညီ အုပ်ချုပ်မှုဆိုင်ရာပစ္စည်းများကို ဆက်လက်ထားရှိမည်ဖြစ်သည်။ |
 
-| Lifecycle step | Required approvals & tickets | Deterministic artefacts & commands | Linked regression coverage |
-|----------------|------------------------------|------------------------------------|----------------------------|
-| **Initiation (bilateral or tri-party)** | Dual-control sign-off recorded via `docs/examples/finance/repo_governance_packet_template.md`, governance ticket with the `[settlement.repo]` diff and GAR ID, custodian acknowledgement when `--custodian` is set. | Stage the instruction via<br>`iroha --config client.toml --output repo initiate ...`.<br>Emit the lifecycle proof snapshot (`REPO_PROOF_*` env vars) plus the bundle manifest from `scripts/repo_evidence_manifest.py`.<br>Attach the latest `FindRepoAgreements` JSON and `[settlement.repo]` snippet (haircut, eligible list, substitution matrix). | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` (bilateral) and `integration_tests/tests/repo.rs::repo_roundtrip_with_custodian_routes_collateral` (tri-party) prove the runtime matches the staged payloads. |
-| **Margin call accrual cadence** | Desk lead + risk manager approve the cadence window documented in the governance packet; ticket references the scheduled `RepoMarginCallIsi`. | Capture `iroha app repo margin --agreement-id` output before calling `iroha app repo margin-call`, hash the resulting JSON, and archive the `RepoAccountEvent::MarginCalled` SSE payload in the evidence bundle.<br>Store the CLI log next to the deterministic proof hash. | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` guarantees the runtime rejects premature calls and non-participant submissions. |
-| **Collateral substitution & maturity unwind** | Governance change record cites the required `collateral_substitution_matrix` entries and haircut policy; council minutes list the substitution pair SHA-256 hash. | Stage the unwind leg with `iroha app repo unwind --output ... --settlement-timestamp-ms <planned>` so both the ACT/360 calculation (§2.8) and substitution payload are reproducible.<br>Include the `[settlement.repo]` TOML snippet, substitution manifest, and the resulting `RepoAccountEvent::Settled` payload in the artefact bundle. | The substitution round-trip inside `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` exercises insufficient-versus-approved substitution flows while keeping the agreement id constant. |
-| **Emergency unwind / rollback drill** | Incident commander + finance council approve the rollback as described in `docs/source/finance/repo_runbook.md` (sections 4–5) and capture the entry in `ops/drill-log.md`. | Execute `iroha app repo unwind` using the staged rollback payload, append CLI logs + GAR reference to `governance/drills/<timestamp>.log`, and rerun both `repo_deterministic_lifecycle_proof_matches_fixture` and the `scripts/repo_evidence_manifest.py` helper to prove determinism before/after the drill. | The happy-path unwind is covered by `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement`; following the drill steps keeps the governance artefacts aligned with the runtime guarantees exercised by that test. |
+**စားပွဲတင်အချိန်ဇယား။**1. စားသုံးမှုပုံစံပုံစံကို ကူးယူပြီး မက်တာဒေတာပိတ်ဆို့ခြင်းကို ဖြည့်ပါ (သဘောတူညီချက် ID၊ GAR လက်မှတ်၊
+   စောင့်ထိန်းသူ၊ ဖွဲ့စည်းမှုပုံစံ hash) နှင့် အထောက်အထားလမ်းညွှန်ကို ဖန်တီးပါ။
+2. ညွှန်ကြားချက်တိုင်းကို အဆင့်လိုက် (`initiate`၊ `margin-call`၊ `unwind`၊ အစားထိုး)
+   `--output` မုဒ်၊ JSON ကို နှိပ်ပြီး hash တစ်ခုစီဘေးရှိ အတည်ပြုချက်များကို မှတ်တမ်းတင်ပါ။
+3. အသက်ကယ်စက်ဝန်းသက်သေပြချက် လျှပ်တစ်ပြက်ကို ထုတ်လွှတ်ပြီး ထိုသို့ပြုလုပ်ပြီးနောက် ချက်ချင်းပြသပါ။
+   အုပ်ချုပ်မှုပြန်လည်သုံးသပ်သူများသည် တူညီသော repo fixtures များဖြင့် digest ကို ပြန်လည်တွက်ချက်နိုင်သည်။
+4. ထိခိုက်ထားသော အကောင့်များအတွက် Mirror `RepoAccountEvent::*` SSE ပေးချေမှုများ၊
+   `artifacts/finance/repo/<agreement-id>/events.ndjson` တွင် တင်ပို့ထားသော NDJSON
+   packet မတင်မီ။
+5. မဲပေးပြီးသည်နှင့် `hashes.txt` ကို GAR identifier ဖြင့် အပ်ဒိတ်လုပ်ပါ။
+   ကောင်စီသည် ဖြန့်ချိမှုကို ခြေရာခံနိုင်စေရန် စီစဉ်သတ်မှတ်မှု hash နှင့် checksum တို့ကို ဖော်ပြပါ။
+   ဒေသတွင်း scripts များကို ပြန်လည်လုပ်ဆောင်ခြင်းမရှိဘဲ။
 
-**Desk timeline.**
+### 3.5 အုပ်ချုပ်မှုပက်ကတ်ကို အမြန်စတင်ပါ။
 
-1. Copy the intake template, fill the metadata block (agreement id, GAR ticket,
-   custodian, configuration hash), and create the evidence directory.
-2. Stage every instruction (`initiate`, `margin-call`, `unwind`, substitution) in
-   `--output` mode, hash the JSON, and log the approvals beside each hash.
-3. Emit the lifecycle proof snapshot and manifest immediately after staging so
-   governance reviewers can recompute the digest with the same repo fixtures.
-4. Mirror `RepoAccountEvent::*` SSE payloads for the affected accounts and drop
-   the exported NDJSON in `artifacts/finance/repo/<agreement-id>/events.ndjson`
-   before filing the packet.
-5. Once the vote passes, update `hashes.txt` with the GAR identifier,
-   configuration hash, and manifest checksum so the council can trace the rollout
-   without re-running local scripts.
+Roadmap F1 သုံးသပ်သူများသည် ၎င်းတို့အား အချိန်နှင့်တပြေးညီ ကိုးကားနိုင်သော အတိုချုံး စစ်ဆေးရန်စာရင်းကို တောင်းဆိုခဲ့သည်။
+အထောက်အထား အစုအဝေးတစ်ခုကို စုစည်းခြင်း။ repo တောင်းဆိုသည့်အခါတိုင်း အောက်ဖော်ပြပါအတိုင်း လုပ်ဆောင်ပါ။
+သို့မဟုတ် မူဝါဒပြောင်းလဲမှုသည် အုပ်ချုပ်ရေးဆီသို့ ဦးတည်နေသည်-
 
-### 3.5 Governance packet quickstart
-
-Roadmap F1 reviewers asked for a concise checklist they can reference while
-assembling an evidence bundle. Follow the sequence below whenever a repo request
-or policy change is heading to governance:
-
-1. **Export the lifecycle proof artefacts.**
+1. **ဘဝသံသရာ အထောက်အထား ပစ္စည်းများ တင်ပို့ပါ။**
    ```bash
    mkdir -p artifacts/finance/repo/<slug>
    REPO_PROOF_SNAPSHOT_OUT=artifacts/finance/repo/<slug>/repo_proof_snapshot.json \
@@ -725,155 +702,151 @@ or policy change is heading to governance:
    cargo test -p iroha_core \
      -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
    ```
-   The exported JSON + digest mirror the checked-in fixtures under
-   `crates/iroha_core/tests/fixtures/`, so reviewers can recompute the lifecycle
-   frame without re-running the entire suite (see §2.7). You can also call
+   ထုတ်ယူထားသော JSON + digest သည် အောက်ရှိ check-in ပစ္စည်းများကို ရောင်ပြန်ဟပ်သည်။
+   `crates/iroha_core/tests/fixtures/`၊ ထို့ကြောင့် သုံးသပ်သူများသည် ဘဝသံသရာကို ပြန်လည်တွက်ချက်နိုင်သည်။
+   အစုံလိုက်တစ်ခုလုံးကို ပြန်မလည်ပတ်ဘဲ frame (§2.7 ကိုကြည့်ပါ)။ ဖုန်းဆက်လို့လည်းရပါတယ်။
    `scripts/regen_repo_proof_fixture.sh --bundle-dir artifacts/finance/repo/<slug>`
-   to refresh and copy the same files in one step.
-2. **Stage and hash every instruction.** Generate initiation/margin/unwind
-   payloads with `iroha app repo ... --output`. Capture the SHA-256 for each file
-   (store under `hashes/`) so `docs/examples/finance/repo_governance_packet_template.md`
-   can reference the same bytes the desks reviewed.
-3. **Save ledger/config snapshots.** Export `repo query list` output before/after
-   settlement, dump the `[settlement.repo]` TOML block that will be applied, and
-   mirror the relevant `AccountEvent::Repo(*)` SSE feed into
-   `artifacts/finance/repo/<slug>/events/repo-events.ndjson`. After the GAR
-   passes, capture `/v1/configuration` snapshots per peer (§2.9) and store them
-   under `config/peers/` so the governance packet proves the rollout succeeded.
-4. **Generate the evidence manifest.**
+   အဆင့်တစ်ဆင့်တွင် တူညီသောဖိုင်များကို ပြန်လည်စတင်ရန်နှင့် ကူးယူရန်။
+2. **အဆင့်နှင့် ညွှန်ကြားချက်တိုင်းကို hash။** စတင်ခြင်း/အနားသတ်/ပြန်ဖွင့်ခြင်းကို ဖန်တီးပါ။
+   `iroha app repo ... --output` ဖြင့် payloads ဖိုင်တစ်ခုစီအတွက် SHA-256 ကို ဖမ်းယူပါ။
+   (`hashes/` အောက်တွင် သိမ်းဆည်းထားသည်) ထို့ကြောင့် `docs/examples/finance/repo_governance_packet_template.md`
+   သုံးသပ်ထားသော စားပွဲမှ တူညီသော ဘိုက်များကို ကိုးကားနိုင်သည်။
+3. **လယ်ဂျာ/config လျှပ်တစ်ပြက်ပုံများကို သိမ်းဆည်းပါ။** `repo query list` အထွက်ကို ရှေ့/နောက် ထုတ်ယူပါ။
+   ဖြေရှင်းချက်၊ အသုံးပြုမည့် `[settlement.repo]` TOML ဘလောက်ကို စွန့်ပစ်ပါ၊
+   သက်ဆိုင်ရာ `AccountEvent::Repo(*)` SSE feed ထဲသို့ ပြန်ပြောင်းပါ။
+   `artifacts/finance/repo/<slug>/events/repo-events.ndjson`။ GAR ပြီးနောက်
+   ဖြတ်သွားသည်၊ ရွယ်တူတစ်ဦးလျှင် `/v1/configuration` လျှပ်တစ်ပြက်ရိုက်ချက်များ (§2.9) ကိုဖမ်းယူပြီး ၎င်းတို့ကို သိမ်းဆည်းပါ။
+   `config/peers/` အောက်တွင် ဖြစ်သောကြောင့် အုပ်ချုပ်မှု ပက်ကတ်သည် ဖြန့်ချိမှု အောင်မြင်ကြောင်း သက်သေပြပါသည်။
+4. **သက်သေအထောက်အထားကို ဖန်တီးပါ။**
    ```bash
    python3 scripts/repo_evidence_manifest.py \
      --root artifacts/finance/repo/<slug> \
      --agreement-id <repo-id> \
      --output artifacts/finance/repo/<slug>/manifest.json
    ```
-   Include the manifest hash inside the governance ticket or GAR minutes so
-   auditors can diff the packet without downloading the raw bundle (see §3.2).
-5. **Assemble the packet.** Copy the template from
-   `docs/examples/finance/repo_governance_packet_template.md`, fill the metadata,
-   attach the proof snapshot/digest, manifest, config hash, SSE export, and test
-   logs, then cite the manifest SHA-256 inside the referendum `--notes` field.
-   Store the completed Markdown next to the artefacts so rollbacks inherit the
-   exact evidence you shipped for approval.
+   အုပ်ချုပ်မှုလက်မှတ် သို့မဟုတ် GAR မိနစ်အတွင်း ထင်ရှားသော hash ကို ထည့်သွင်းပါ။
+   စာရင်းစစ်များသည် ကုန်ကြမ်းအစုအဝေးကို ဒေါင်းလုဒ်မလုပ်ဘဲ ပက်ကတ်ကို ကွဲပြားနိုင်သည် (§3.2 ကိုကြည့်ပါ)။
+5. **ပက်ကေ့ချ်ကို စုစည်းပါ။** နမူနာပုံစံကို ကော်ပီကူးပါ။
+   `docs/examples/finance/repo_governance_packet_template.md`၊ မက်တာဒေတာကိုဖြည့်ပါ၊
+   အထောက်အထားလျှပ်တစ်ပြက်ရိုက်ချက်/ဒက်ဂျစ်၊ မန်နီးဖက်စ်၊ ပြင်ဆင်သတ်မှတ်မှု hash၊ SSE ထုတ်ယူခြင်းနှင့် စမ်းသပ်ခြင်းတို့ကို ပူးတွဲပါ
+   မှတ်တမ်းများ၊ ထို့နောက် ဆန္ဒခံယူပွဲ `--notes` အကွက်အတွင်းရှိ ထင်ရှားသော SHA-256 ကို ကိုးကားပါ။
+   ပြီးပြည့်စုံသော Markdown ကို artefacts များဘေးတွင် သိမ်းဆည်းထားပါ၊ သို့မှသာ rollbacks များသည် ၎င်းကို အမွေဆက်ခံပါသည်။
+   ခွင့်ပြုချက်အတွက် သင်ပေးပို့ထားသော အထောက်အထားအတိအကျ။
 
-Running the steps above immediately after staging a repo request means the
-governance packet is ready as soon as the council convenes, avoiding last-minute
-scrambles to recreate hashes or event streams.
+repo တောင်းဆိုမှုကို လုပ်ဆောင်ပြီးနောက် အထက်ဖော်ပြပါ အဆင့်များကို ချက်ခြင်း လုပ်ဆောင်ခြင်းကို ဆိုလိုသည်။
+ကောင်စီအစည်းအဝေးကျင်းပသည်နှင့်တပြိုင်နက် အုပ်ချုပ်ရေးအဖွဲ့သည် အဆင်သင့်ဖြစ်နေပြီဖြစ်ပြီး နောက်ဆုံးမိနစ်ကို ရှောင်ရှားပါ။
+hash သို့မဟုတ် event streams များကို ပြန်လည်ဖန်တီးရန် ရုန်းကန်နေပါသည်။
 
-## 4. Tri-Party Custody & Collateral Substitution
+## 4. Tri-Party Custody & Collateral Substitution- ** အုပ်ထိန်းသူများ-** `--custodian <account>` ကို ဖြတ်သန်းခြင်း သည် အပေါင်ပစ္စည်းသို့ လမ်းကြောင်းများ
+  စောင့်ကြပ်တဲ; runtime သည် အကောင့်ဖြစ်တည်မှုကို တွန်းအားပေးပြီး အခန်းကဏ္ဍ-တဂ်လုပ်ထားသော အရာများကို ထုတ်လွှတ်သည်။
+  အုပ်ထိန်းသူများ ညှိနှိုင်းဆောင်ရွက်နိုင်သော ဖြစ်ရပ်များ (`RepoAccountRole::Custodian`)။ ပြည်နယ်
+  စက်သည် အုပ်ထိန်းသူ နှစ်ဖက်စလုံးနှင့် ကိုက်ညီသော သဘောတူညီချက်များကို ပယ်ချသည်။
+- **အပေါင်ပစ္စည်း အစားထိုးခြင်း-** ခြေထောက်သည် ကွဲပြားခြားနားသော အပေါင်ပစ္စည်းတစ်ခုကို ပေးဆောင်နိုင်ပါသည်။
+  အစားထိုးစဉ်အတွင်း ပမာဏ/စီးရီးသည် **ထက်မနည်း** ဖြစ်နေသရွေ့၊
+  ကတိပြုထားသော ပမာဏ * နှင့် * အစားထိုး matrix သည် အတွဲကို ခွင့်ပြုသည်။ `ReverseRepoIsi`
+  အခြေအနေ နှစ်ခုလုံးကို ပြဋ္ဌာန်းသည်။
+  (`crates/iroha_core/src/smartcontracts/isi/repo.rs:414`–`437`)။ ပေါင်းစည်းမှု
+  test suite သည် ငြင်းပယ်ခြင်းလမ်းကြောင်းနှင့် အောင်မြင်သောအစားထိုးမှုနှစ်ခုလုံးကို လေ့ကျင့်သည်။
+  အသွားအပြန် (`integration_tests/tests/repo.rs:261`–`359`)၊ repo ယူနစ်၊
+  စမ်းသပ်မှုများသည် မက်ထရစ်မူဝါဒအသစ်ကို အကျုံးဝင်သည်။
+- **ISO 20022 မြေပုံဆွဲခြင်း-** ISO စာအိတ်များကို တည်ဆောက်သည့်အခါ သို့မဟုတ် ပြင်ပကို ပြန်လည်ညှိနှိုင်းသည့်အခါ၊
+  စနစ်များ၊ မှတ်တမ်းတင်ထားသော အကွက်မြေပုံကို ပြန်သုံးပါ။
+  `docs/source/finance/settlement_iso_mapping.md` (`colr.007`, `sese.023`၊
+  `sese.025`) ထို့ကြောင့် Norito payload နှင့် ISO အတည်ပြုချက်များသည် ထပ်တူကျနေမည်ဖြစ်သည်။
 
-- **Custodians:** Passing `--custodian <account>` routes collateral to the
-  custodian vault; runtime enforces account existence and emits role-tagged
-  events so custodians can reconcile (`RepoAccountRole::Custodian`). The state
-  machine rejects agreements whose custodian matches either party.
-- **Collateral substitution:** The unwind leg may deliver a different collateral
-  quantity/series during substitution so long as it is **not less** than the
-  pledged amount *and* the substitution matrix allows the pair; `ReverseRepoIsi`
-  enforces both conditions
-  (`crates/iroha_core/src/smartcontracts/isi/repo.rs:414`–`437`). The integration
-  test suite exercises both the rejection path and a successful substitution
-  roundtrip (`integration_tests/tests/repo.rs:261`–`359`), while the repo unit
-  tests cover the new matrix policy.
-- **ISO 20022 mapping:** When building ISO envelopes or reconciling external
-  systems, reuse the field mapping documented in
-  `docs/source/finance/settlement_iso_mapping.md` (`colr.007`, `sese.023`,
-  `sese.025`) so the Norito payload and ISO confirmations stay in sync.
+## 5. စစ်ဆင်ရေးဆိုင်ရာ စစ်ဆေးစာရင်းများ
 
-## 5. Operational Checklists
+### နေ့စဥ်ကြိုတင်ဖွင့်ပါသည်။
 
-### Daily pre-open
-
-1. Export the outstanding agreement set via `iroha app repo query list`.
-2. Compare against treasury inventory and ensure eligible collateral config
-   matches the planned book.
-3. Stage upcoming repos/unwinds with `--output` and collect dual approvals.
+1. `iroha app repo query list` မှတစ်ဆင့် သတ်မှတ်ထားသော ထူးခြားသောသဘောတူညီချက်ကို တင်ပို့ပါ။
+2. ဘဏ္ဍာတိုက်စာရင်းများနှင့် နှိုင်းယှဉ်ပြီး အကျုံးဝင်သော အပေါင်ပစ္စည်းပုံစံကို သေချာပါစေ။
+   စီစဉ်ထားသောစာအုပ်နှင့်ကိုက်ညီသည်။
+3. `--output` ဖြင့် လာမည့် repos/ unwinds အဆင့်ဖြင့် လုပ်ဆောင်ပြီး အတည်ပြုချက်နှစ်ခုကို စုဆောင်းပါ။
 
 ### Intraday monitoring
 
-1. Subscribe to `AccountEvent::Repo` for initiator/counterparty/custodian
-   accounts; alert when unexpected initiations occur.
-2. Use `iroha app repo margin --agreement-id ID` (or
-   `RepoAgreementRecord::next_margin_check_after`) hourly to detect cadence
-   drift; trigger `repo margin-call` when `is_due = true`.
-3. Log all margin calls with operator initials and attach the CLI JSON output to
-   the evidence directory.
+1. အစပြုသူ/ ကောင်တာ/ စောင့်ထိန်းသူအတွက် `AccountEvent::Repo` တွင် စာရင်းပေးသွင်းပါ
+   အကောင့်များ; မထင်မှတ်ဘဲ စတင်လုပ်ဆောင်မှုများ ဖြစ်ပေါ်လာသည့်အခါ သတိပေးချက်။
+2. `iroha app repo margin --agreement-id ID` (သို့မဟုတ်
+   `RepoAgreementRecord::next_margin_check_after`) cadence ကိုသိရှိရန် နာရီတိုင်း
+   ပျံ့; `repo margin-call` က `is_due = true` တုန်းက အစပျိုးပါတယ်။
+3. အနားသတ်ခေါ်ဆိုမှုများအားလုံးကို အော်ပရေတာအတိုကောက်ဖြင့် မှတ်တမ်းတင်ပြီး CLI JSON အထွက်ကို ပူးတွဲပါ။
+   အထောက်အထားလမ်းညွှန်။
 
-### End-of-day + post-settlement
+### တစ်နေကုန် + အပြီးဖြေရှင်း
 
-1. Re-run `repo query list` and confirm unwound agreements have been removed.
-2. Archive the `RepoAccountEvent::Settled` payloads and cross-check cash/collateral
-   balances via `FindAssets`.
-3. File a drill entry in `ops/drill-log.md` when repo drills or incident tests
-   run; reuse `scripts/telemetry/log_sorafs_drill.sh` conventions for timestamps.
+1. `repo query list` ကို ပြန်လည်လည်ပတ်ပြီး အနာကင်းသောသဘောတူညီချက်များကို ဖယ်ရှားလိုက်ကြောင်း အတည်ပြုပါ။
+2. `RepoAccountEvent::Settled` ပေးချေမှုများနှင့် ငွေသား/စရံစစ်ဆေးခြင်းတို့ကို သိမ်းဆည်းပါ
+   `FindAssets` မှတဆင့် လက်ကျန်ငွေများ။
+3. repo လေ့ကျင့်ခန်းများ သို့မဟုတ် မတော်တဆမှုစမ်းသပ်မှုများ ပြုလုပ်သည့်အခါ `ops/drill-log.md` တွင် လေ့ကျင့်မှုတစ်ခု ထည့်သွင်းပါ
+   ပြေး; အချိန်တံဆိပ်တုံးများအတွက် `scripts/telemetry/log_sorafs_drill.sh` သဘောတူညီချက်များကို ပြန်သုံးပါ။
 
-## 6. Fraud & Rollback Procedures
+## 6. လိမ်လည်မှုနှင့် ပြန်လှည့်ခြင်းဆိုင်ရာ လုပ်ထုံးလုပ်နည်းများ
 
-- **Dual control:** Always generate instructions with `--output` and store the
-  JSON for co-signing. Reject single-party submissions at the process level
-  even though the runtime enforces initiator authority.
-- **Tamper-evident logging:** Mirror the `RepoAccountEvent` stream into your
-  SIEM so any forged instruction would be detectable (missing peer signatures).
-- **Rollback:** If a repo must be unwound prematurely, submit `repo unwind`
-  with the same agreement id and attach the `--notes` field in your incident
-  tracker referencing the GAR-approved rollback playbook.
-- **Fraud escalation:** If unauthorised repos appear, export the offending
-  `RepoAccountEvent` payloads, freeze the accounts via governance policy, and
-  notify the council per the repo governance SOP.
+- **Dual control-** `--output` ဖြင့် ညွှန်ကြားချက်များကို အမြဲထုတ်ပေးပြီး ၎င်းကို သိမ်းဆည်းပါ။
+  ပူးတွဲလက်မှတ်ထိုးခြင်းအတွက် JSON လုပ်ငန်းစဉ်အဆင့်တွင် တစ်ပါတီတည်းတင်ပြမှုများကို ငြင်းပယ်ပါ။
+  runtime သည် အစပြုသူ၏ အခွင့်အာဏာကို ပြဋ္ဌာန်းထားသော်လည်း၊
+- **Tamper-evident logging-** `RepoAccountEvent` stream ကို သင့်ထဲသို့ Mirror လုပ်ပါ။
+  ထို့ကြောင့် SIEM သည် အတုအပ ညွန်ကြားချက်မှန်သမျှကို ရှာဖွေတွေ့ရှိနိုင်လိမ့်မည် (ရွယ်တူလက်မှတ်များ ပျောက်ဆုံးနေသည်)။
+- **ပြန်သိမ်းခြင်း-** ပြန်လည်စုပုံတစ်ခုသည် အချိန်မတိုင်မီ ဒဏ်ရာကင်းစင်သွားပါက `repo unwind` ကို တင်ပြပါ။
+  တူညီသောသဘောတူညီချက် ID ဖြင့် `--notes` အကွက်ကို သင့်အဖြစ်အပျက်တွင် ပူးတွဲပါ။
+  GAR-ခွင့်ပြုထားသော rollback playbook ကို ကိုးကားသည့် ခြေရာခံကိရိယာ။
+- ** လိမ်လည်မှု တိုးလာခြင်း-** ခွင့်ပြုချက်မရှိဘဲ ပြန်လည်သိမ်းဆည်းမှု ပေါ်လာပါက၊ ကျူးလွန်သူကို တင်ပို့ပါ။
+  `RepoAccountEvent` ပေးချေမှုများ၊ အုပ်ချုပ်မှုမူဝါဒမှတစ်ဆင့် အကောင့်များကို အေးခဲစေခြင်း၊
+  repo အုပ်ချုပ်မှု SOP အရ ကောင်စီကို အကြောင်းကြားပါ။
 
-## 7. Reporting & Follow-Up
+## 7. အစီရင်ခံခြင်းနှင့် နောက်ဆက်တွဲ
 
-### 7.1 Treasury reconciliation & ledger evidence
+### 7.1 ဘဏ္ဍာတိုက်ပြန်လည်သင့်မြတ်ရေးနှင့် လယ်ဂျာအထောက်အထားများလမ်းပြမြေပုံ **F1** နှင့် ကမ္ဘာလုံးဆိုင်ရာ အခြေချနေထိုင်မှု အစောင့်အကြပ် (roadmap.md#L1975-L1978)
+အဆုံးအဖြတ်ပေးသောဘဏ္ဍာရေးအထောက်အထားများပါ၀င်ရန် repo ပြန်လည်သုံးသပ်မှုတိုင်းကို လိုအပ်သည်။ တစ်ခုထုတ်လုပ်ပါ။
+အောက်ပါစာရင်းကို လိုက်နာခြင်းဖြင့် စာအုပ်တစ်အုပ်လျှင် သုံးလတစ်ကြိမ် အတွဲလိုက်။
 
-Roadmap **F1** and the global settlement guardrail (roadmap.md#L1975-L1978)
-require every repo review to include deterministic treasury proofs. Produce a
-quarterly bundle per book by following the checklist below.
+1. **လျှပ်တစ်ပြက်လက်ကျန်များ** စွမ်းအားပေးသော `FindAssets` မေးမြန်းချက်ကို အသုံးပြုပါ။
+   `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) သို့မဟုတ်
+   `ih58...` အတွက် XOR လက်ကျန်များကို တင်ပို့ရန် `iroha_python` အကူအညီပေးသူ
+   `ih58...` နှင့် သုံးသပ်ချက်တွင် ပါဝင်သည့် စားပွဲအကောင့်တိုင်း။ စတိုး
+   JSON အောက်တွင်
+   `artifacts/finance/repo/<period>/treasury_assets.json` နှင့် git ကိုမှတ်တမ်းတင်ပါ။
+   ပါရှိသော `README.md` တွင် commit/toolchain
+2. ** ခွဲခြမ်းစိတ်ဖြာမှု မှတ်တမ်း ခန့်မှန်းချက်များ။** ပြန်လည်လုပ်ဆောင်ခြင်း။
+   `sorafs reserve ledger --quote <...> --json-out ...` နှင့် output ကိုပုံမှန်လုပ်ပါ။
+   `scripts/telemetry/reserve_ledger_digest.py` မှတဆင့် ဒိုင်ယာရီကို ဘေးမှာထားပါ။
+   စာရင်းစစ်များသည် XOR စုစုပေါင်းကို repo နှင့် ကွာခြားနိုင်သောကြောင့် ပိုင်ဆိုင်မှုလျှပ်တစ်ပြက်ရိုက်ချက်
+   CLI ကို ပြန်မကစားဘဲ လယ်ဂျာပုံဆွဲခြင်း။
+3. **ပြန်လည်သင့်မြတ်ရေးမှတ်စုကို ထုတ်ပြန်ပါ။** မြစ်ဝကျွန်းပေါ်ဒေသများကို အကျဉ်းချုပ်ဖော်ပြပါ။
+   ကိုးကားခြင်းအားဖြင့် `artifacts/finance/repo/<period>/treasury_reconciliation.md`
+   ပိုင်ဆိုင်မှုလျှပ်တစ်ပြက် hash၊ လယ်ဂျာအနှစ်ချုပ် hash နှင့် အကျုံးဝင်သောသဘောတူညီချက်များ။
+   သုံးသပ်သူများသည် အတည်ပြုနိုင်စေရန် ဘဏ္ဍာရေးအုပ်ချုပ်မှုခြေရာခံစနစ်မှ မှတ်စုကို ချိတ်ဆက်ပါ။
+   repo ထုတ်ဝေမှုကို အတည်ပြုခြင်းမပြုမီ ဘဏ္ဍာတိုက်လွှမ်းခြုံမှု။
 
-1. **Snapshot balances.** Use the `FindAssets` query that powers
-   `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) or the
-   `iroha_python` helper to export XOR balances for `ih58...`,
-   `ih58...`, and every desk account involved in the review. Store
-   the JSON under
-   `artifacts/finance/repo/<period>/treasury_assets.json` and record the git
-   commit/toolchain in the accompanying `README.md`.
-2. **Cross-check ledger projections.** Re-run
-   `sorafs reserve ledger --quote <...> --json-out ...` and normalise the output
-   via `scripts/telemetry/reserve_ledger_digest.py`. Place the digest next to
-   the asset snapshot so auditors can diff the XOR totals against the repo
-   ledger projection without replaying the CLI.
-3. **Publish the reconciliation note.** Summarise deltas in
-   `artifacts/finance/repo/<period>/treasury_reconciliation.md` by referencing:
-   the asset snapshot hash, the ledger digest hash, and the agreements covered.
-   Link the note from the finance governance tracker so reviewers can confirm
-   treasury coverage before approving the repo release.
+### 7.2 Drill & rollback rehearsal အထောက်အထား
 
-### 7.2 Drill & rollback rehearsal evidence
+လက်ခံမှုစံနှုန်းများသည် အဆင့်လိုက်ပြန်လှည့်မှုများနှင့် အဖြစ်အပျက်လေ့ကျင့်မှုများကိုလည်း တောင်းဆိုပါသည်။ တိုင်း၊
+လေ့ကျင့်မှု သို့မဟုတ် ပရမ်းပတာ အစမ်းလေ့ကျင့်မှုတွင် အောက်ပါအရာများကို စုဆောင်းရမည်-
 
-The acceptance criteria also demand staged rollbacks and incident drills. Every
-drill or chaos rehearsal must collect the following artefacts:
+1. `repo_runbook.md` အပိုင်း ၄-၅ တွင် အခင်းဖြစ်ရာ တပ်မှူးမှ လက်မှတ်ရေးထိုးထားသော စစ်ဆေးစာရင်းကိုလည်းကောင်း၊
+   ဘဏ္ဍာရေးကောင်စီ။
+2. အစမ်းလေ့ကျင့်မှုအတွက် CLI/SDK မှတ်တမ်းများ (`repo initiate|margin-call|unwind`) နှင့်
+   ပြန်လည်ဆန်းသစ်ထားသော ဘဝသံသရာ သက်သေလျှပ်တစ်ပြက်နှင့် သက်သေအထောက်အထား (§§§2.7–3.2) သိမ်းဆည်းထားသည်။
+   `artifacts/finance/repo/drills/<timestamp>/` အောက်တွင်။
+3. သတိပေးချက်မန်နေဂျာ သို့မဟုတ် ပေဂျာမှတ်တမ်းများ ထိုးသွင်းထားသော အချက်ပြမှုများနှင့် အဆိုပါ
+   အသိအမှတ်ပြုရေးလမ်းကြောင်း။ လေ့ကျင့်ရေးပစ္စည်းများဘေးတွင် စာသားမှတ်တမ်းကို ချပေးလိုက်ပါ။
+   အသုံးပြုသောအခါတွင် Alertmanager အသံတိတ် ID ကို ထည့်သွင်းပါ။
+4. `ops/drill-log.md` သည် GAR id ကိုရည်ညွှန်းခြင်း၊ hash နှင့် drill ကိုဖော်ပြခြင်း
+   ချတ်မှတ်တမ်းများကို မဖျက်ဘဲ အနာဂတ်စာရင်းစစ်များသည် လေ့ကျင့်မှုများကို ခြေရာခံနိုင်စေရန် အတွဲလိုက်လမ်းကြောင်း။
 
-1. `repo_runbook.md` Sections 4–5 checklist signed by the incident commander and
-   finance council.
-2. CLI/SDK logs for the rehearsal (`repo initiate|margin-call|unwind`) plus the
-   refreshed lifecycle proof snapshot and evidence manifest (§§2.7–3.2) stored
-   under `artifacts/finance/repo/drills/<timestamp>/`.
-3. Alertmanager or pager transcripts showing the injected signals and the
-   acknowledgement trail. Drop the transcript next to the drill artefacts and
-   include the Alertmanager silence ID when one was used.
-4. An `ops/drill-log.md` entry referencing the GAR id, manifest hash, and drill
-   bundle path so future audits can trace rehearsals without scraping chat logs.
+### 7.3 အုပ်ချုပ်မှုခြေရာခံကိရိယာ & doc တစ်ကိုယ်ရေသန့်ရှင်းရေး
 
-### 7.3 Governance tracker & doc hygiene
+- ဤစာရွက်စာတမ်း၊ `repo_runbook.md` နှင့် ဘဏ္ဍာရေးဆိုင်ရာ အုပ်ချုပ်မှုခြေရာခံကို သိမ်းဆည်းထားပါ
+  CLI/SDK သို့မဟုတ် runtime အပြုအမူ ပြောင်းလဲသည့်အခါတိုင်း lockstep၊ သုံးသပ်သူတွေက မျှော်လင့်ပါတယ်။
+  တိကျနေစေရန် လက်ခံမှုဇယား။
+- အထောက်အထားအစုံအလင်ကို ပူးတွဲပါ (`agreements.json`၊ အဆင့်လိုက်ညွှန်ကြားချက်များ၊ SSE
+  စာသားမှတ်တမ်းများ၊ ပြင်ဆင်သတ်မှတ်မှု လျှပ်တစ်ပြက်ရိုက်ချက်၊ ပြန်လည်ညှိနှိုင်းမှုများ၊ တူးဖော်မှုဆိုင်ရာ အထောက်အထားများနှင့် စမ်းသပ်မှု
+  မှတ်တမ်းများ) သုံးလတစ်ကြိမ် ပြန်လည်သုံးသပ်မှုတိုင်းအတွက် ခြေရာခံကိရိယာထံ။
+- ညှိနှိုင်းဆောင်ရွက်သည့်အခါ အကိုးအကား `docs/source/finance/settlement_iso_mapping.md`
+  ISO တံတားအော်ပရေတာများနှင့်အတူ စနစ်တစ်ခုဖြတ်ကျော်မှု ပြန်လည်သင့်မြတ်ရေးသည် ချိန်ညှိနေဆဲဖြစ်သည်။
 
-- Keep this document, `repo_runbook.md`, and the finance governance tracker in
-  lockstep whenever CLI/SDK or runtime behaviour changes; reviewers expect the
-  acceptance table to stay accurate.
-- Attach the full evidence bundle (`agreements.json`, staged instructions, SSE
-  transcripts, config snapshot, reconciliations, drill artefacts, and test
-  logs) to the tracker for every quarterly review.
-- Reference `docs/source/finance/settlement_iso_mapping.md` when coordinating
-  with ISO bridge operators so cross-system reconciliation remains aligned.
-
-By following this guide, operators satisfy the roadmap F1 acceptance bar:
-deterministic proofs are captured, tri-party and substitution flows are
-documented, and governance procedures (dual-control + incident logging) are
-codified in-tree.
+ဤလမ်းညွှန်ချက်ကို လိုက်နာခြင်းဖြင့်၊ အော်ပရေတာများသည် လမ်းပြမြေပုံ F1 လက်ခံမှုဘားကို ကျေနပ်စေသည်-
+အဆုံးအဖြတ် အထောက်အထားများကို ဖမ်းယူထားပြီး သုံးပါတီနှင့် အစားထိုး စီးဆင်းမှုများလည်း ရှိသည်။
+မှတ်တမ်းပြုစုထားပြီး အုပ်ချုပ်မှုလုပ်ထုံးလုပ်နည်းများ ( dual-control + အခင်းအကျင်းသစ်ခုတ်ခြင်း) တို့ဖြစ်သည်။
+သစ်ပင်တွင် ကုဒ်လုပ်ထားသည်။

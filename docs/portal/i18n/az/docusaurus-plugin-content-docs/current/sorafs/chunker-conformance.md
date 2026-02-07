@@ -8,53 +8,55 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Chunker Conformance Guide
 sidebar_label: Chunker Conformance
 description: Requirements and workflows for preserving the deterministic SF1 chunker profile across fixtures and SDKs.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-This guide codifies the requirements every implementation must follow to stay
-aligned with the SoraFS deterministic chunker profile (SF1). It also
-documents the regeneration workflow, signing policy, and verification steps so
-fixture consumers across SDKs remain in sync.
+Bu təlimat hər bir tətbiqin qalmaq üçün riayət etməli olduğu tələbləri kodlaşdırır
+SoraFS deterministik chunker profili (SF1) ilə uyğunlaşdırılmışdır. O da
+regenerasiya iş prosesini, imzalama siyasətini və yoxlama addımlarını belə sənədləşdirir
+SDK-larda qurğu istehlakçıları sinxron qalır.
 
-## Canonical Profile
+## Kanonik Profil
 
-- Profile handle: `sorafs.sf1@1.0.0`
-- Input seed (hex): `0000000000dec0ded`
-- Target size: 262 144 bytes (256 KiB)
-- Minimum size: 65 536 bytes (64 KiB)
-- Maximum size: 524 288 bytes (512 KiB)
-- Rolling polynomial: `0x3DA3358B4DC173`
-- Gear table seed: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- Profil dəstəyi: `sorafs.sf1@1.0.0`
+- Giriş toxumu (hex): `0000000000dec0ded`
+- Hədəf ölçüsü: 262144 bayt (256KiB)
+- Minimum ölçü: 65536 bayt (64KiB)
+- Maksimum ölçü: 524288 bayt (512KiB)
+- Rolling polinom: `0x3DA3358B4DC173`
+- Dişli masa toxumu: `sorafs-v1-gear`
+- Fasilə maskası: `0x0000FFFF`
 
-Reference implementation: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Any SIMD acceleration must produce identical boundaries and digests.
+İstinad tətbiqi: `sorafs_chunker::chunk_bytes_with_digests_profile`.
+İstənilən SIMD sürətləndirilməsi eyni sərhədlər və həzmlər yaratmalıdır.
 
-## Fixture Bundle
+## Armatur dəsti
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenerates the
-fixtures and emits the following files under `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` bərpa edir
+qurğular və `fixtures/sorafs_chunker/` altında aşağıdakı faylları yayır:
 
-- `sf1_profile_v1.{json,rs,ts,go}` — canonical chunk boundaries for Rust,
-  TypeScript, and Go consumers. Each file advertises the canonical handle as the
-  first (and only) entry in `profile_aliases`. The ordering is enforced by
-  `ensure_charter_compliance` and MUST NOT be altered.
-- `manifest_blake3.json` — BLAKE3-verified manifest covering every fixture file.
-- `manifest_signatures.json` — Council signatures (Ed25519) over the manifest
-  digest.
-- `sf1_profile_v1_backpressure.json` and raw corpora inside `fuzz/` —
-  deterministic streaming scenarios used by chunker back-pressure tests.
+- `sf1_profile_v1.{json,rs,ts,go}` - Rust üçün kanonik yığın sərhədləri,
+  TypeScript və Go istehlakçıları. Hər bir fayl kanonik sapı reklam edir
+  `profile_aliases`-də ilk (və yeganə) giriş. Sifariş tərəfindən icra edilir
+  `ensure_charter_compliance` və dəyişdirilməməlidir.
+- `manifest_blake3.json` — Hər bir qurğu faylını əhatə edən BLAKE3 tərəfindən təsdiqlənmiş manifest.
+- `manifest_signatures.json` - Manifest üzərində Şura imzaları (Ed25519)
+  həzm etmək.
+- `sf1_profile_v1_backpressure.json` və `fuzz/` daxilində xam korpus —
+  chunker geri təzyiq testləri tərəfindən istifadə edilən deterministik axın ssenariləri.
 
-### Signing Policy
+### İmzalama Siyasəti
 
-Fixture regeneration **must** include a valid council signature. The generator
-rejects unsigned output unless `--allow-unsigned` is passed explicitly (intended
-only for local experimentation). Signature envelopes are append-only and
-deduplicated per signer.
+Armaturun bərpası **gərək** etibarlı şura imzasını daxil etməlidir. Generator
+`--allow-unsigned` açıq şəkildə (nəzərdə tutulan) qəbul edilmədikdə imzasız çıxışı rədd edir
+yalnız yerli təcrübə üçün). İmza zərfləri yalnız əlavə olunur və
+hər imzalayan üçün təkrarlanır.
 
-To add a council signature:
+Şura imzası əlavə etmək üçün:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -62,33 +64,33 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verification
+## Doğrulama
 
-The CI helper `ci/check_sorafs_fixtures.sh` replays the generator with
-`--locked`. If fixtures drift or signatures are missing, the job fails. Use
-this script in nightly workflows and before submitting fixture changes.
+CI köməkçisi `ci/check_sorafs_fixtures.sh` ilə generatoru təkrarlayır
+`--locked`. Qurğular sürüşürsə və ya imzalar yoxdursa, iş uğursuz olur. istifadə edin
+bu skripti gecə iş axınlarında və qurğu dəyişikliklərini təqdim etməzdən əvvəl.
 
-Manual verification steps:
+Əllə yoxlama addımları:
 
-1. Run `cargo test -p sorafs_chunker`.
-2. Invoke `ci/check_sorafs_fixtures.sh` locally.
-3. Confirm `git status -- fixtures/sorafs_chunker` is clean.
+1. `cargo test -p sorafs_chunker`-i işə salın.
+2. Yerli olaraq `ci/check_sorafs_fixtures.sh` çağırın.
+3. `git status -- fixtures/sorafs_chunker`-in təmiz olduğunu təsdiq edin.
 
-## Upgrade Playbook
+## Kitabı təkmilləşdirin
 
-When proposing a new chunker profile or updating SF1:
+Yeni chunker profili təklif edərkən və ya SF1-i yeniləyərkən:
 
-See also: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) for
-metadata requirements, proposal templates, and validation checklists.
+Həmçinin bax: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) üçün
+metadata tələbləri, təklif şablonları və yoxlama siyahıları.
 
-1. Draft a `ChunkProfileUpgradeProposalV1` (see RFC SF‑1) with new parameters.
-2. Regenerate fixtures via `export_vectors` and record the new manifest digest.
-3. Sign the manifest with the required council quorum. All signatures must be
-   appended to `manifest_signatures.json`.
-4. Update affected SDK fixtures (Rust/Go/TS) and ensure cross-runtime parity.
-5. Regenerate fuzz corpora if parameters change.
-6. Update this guide with the new profile handle, seeds, and digest.
-7. Submit the change alongside updated tests and roadmap updates.
+1. Yeni parametrlərlə `ChunkProfileUpgradeProposalV1` (bax. RFC SF‑1) layihəsini hazırlayın.
+2. `export_vectors` vasitəsilə qurğuları bərpa edin və yeni manifest həzmini qeyd edin.
+3. Tələb olunan şura kvorumu ilə manifest imzalayın. Bütün imzalar olmalıdır
+   `manifest_signatures.json`-ə əlavə edilmişdir.
+4. Təsirə məruz qalmış SDK qurğularını (Rust/Go/TS) yeniləyin və iş vaxtı arası pariteti təmin edin.
+5. Parametrlər dəyişdikdə qeyri-səlis korpusu bərpa edin.
+6. Bu təlimatı yeni profil sapı, toxum və həzm ilə yeniləyin.
+7. Dəyişikliyi yenilənmiş testlər və yol xəritəsi yeniləmələri ilə birlikdə təqdim edin.
 
-Changes that affect chunk boundaries or digests without following this process
-are invalid and must not be merged.
+Bu prosesi izləmədən yığın sərhədlərinə və ya həzmlərə təsir edən dəyişikliklər
+etibarsızdır və birləşdirilməməlidir.

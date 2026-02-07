@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Node Operations Runbook
 sidebar_label: Node Operations Runbook
 description: Validate the embedded `sorafs-node` deployment inside Torii.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Keep both versions in sync until the Sphinx set is retired.
+::: Каноник эх сурвалжийг анхаарна уу
+`docs/source/sorafs/runbooks/sorafs_node_ops.md` толь. Сфинксийн багцыг ашиглах хүртэл хоёр хувилбарыг синхрончлолд байлга.
 :::
 
-## Overview
+## Тойм
 
-This runbook walks operators through validating an embedded `sorafs-node` deployment inside Torii. Each section maps directly to the SF-3 deliverables: pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
+Энэхүү runbook нь Torii дотор суулгагдсан `sorafs-node` суулгацыг баталгаажуулах замаар операторуудыг заадаг. Хэсэг бүр нь SF-3-ийн үр дүнг шууд харуулдаг: эргэх/татаж авах, сэргээх, дахин эхлүүлэх, квотоос татгалзах, PoR дээж авах.
 
-## 1. Prerequisites
+## 1. Урьдчилсан нөхцөл
 
-- Enable the storage worker in `torii.sorafs.storage`:
+- `torii.sorafs.storage`-д хадгалагчийг идэвхжүүлэх:
 
   ```toml
   [torii.sorafs.storage]
@@ -38,13 +40,13 @@ This runbook walks operators through validating an embedded `sorafs-node` deploy
   por_success_alpha = 0.25
   ```
 
-- Ensure the Torii process has read/write access to `data_dir`.
-- Confirm the node advertises the expected capacity via `GET /v1/sorafs/capacity/state` once a declaration is recorded.
-- When smoothing is enabled, dashboards expose both the raw and smoothed GiB·hour/PoR counters to highlight jitter-free trends alongside spot values.
+- Torii процесс нь `data_dir` руу унших/бичих эрхтэй эсэхийг шалгаарай.
+- Мэдэгдэл бичигдсэний дараа зангилаа хүлээгдэж буй хүчин чадлыг `GET /v1/sorafs/capacity/state`-ээр дамжуулан сурталчилж байгааг баталгаажуулна уу.
+- Гөлгөржүүлэх идэвхжсэн үед хяналтын самбар нь спот утгын хажуугаар чичиргээгүй чиг хандлагыг тодотгохын тулд түүхий болон жигдрүүлсэн GiB·цаг/PoR тоолуурыг хоёуланг нь ил гаргадаг.
 
-### CLI Dry Run (Optional)
+### CLI хуурай гүйлт (заавал биш)
 
-Before exposing HTTP endpoints you can sanity-check the storage backend with the bundled CLI.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+HTTP төгсгөлийн цэгүүдийг харуулахын өмнө та багцалсан CLI-ийн тусламжтайгаар санах ойн арын хэсгийг эрүүл мэндийн байдлыг шалгаж болно.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -59,11 +61,11 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --payload-out ./out/payload.bin
 ```
 
-The commands print Norito JSON summaries and refuse chunk-profile or digest mismatches, making them useful for CI smoke checks ahead of Torii wiring.【crates/sorafs_node/tests/cli.rs#L1】
+Командууд нь Norito JSON-ийн хураангуйг хэвлэж, хэсэгчилсэн профайл эсвэл таарахгүй байхаас татгалзаж, Torii утсыг холбохоос өмнө CI утаа шалгахад тустай болгодог.【crates/sorafs_node/tests/cli.rs#L1】
 
-### PoR Proof Rehearsal
+### PoR Баталгаажсан давтлага
 
-Operators can now replay governance-issued PoR artefacts locally before uploading them to Torii. The CLI reuses the same `sorafs-node` ingestion path, so local runs surface the exact validation errors that the HTTP API would return.
+Операторууд одоо Torii-д байршуулахаас өмнө засаглалаас олгосон PoR олдворуудыг дахин тоглуулах боломжтой. CLI нь ижил `sorafs-node` залгих замыг дахин ашигладаг тул локал гүйлтүүд нь HTTP API-ийн буцаах баталгаажуулалтын алдааг гаргадаг.
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest por \
@@ -73,21 +75,21 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
   --verdict ./fixtures/sorafs_manifest/por/verdict_v1.to
 ```
 
-The command emits a JSON summary (manifest digest, provider id, proof digest, sample count, optional verdict outcome). Provide `--manifest-id=<hex>` to ensure the stored manifest matches the challenge digest, and `--json-out=<path>` when you want to archive the summary with the original artefacts for audit evidence. Including `--verdict` lets you rehearse the entire challenge → proof → verdict loop offline before calling the HTTP API.
+Энэ тушаал нь JSON хураангуй (манифест дижест, үйлчилгээ үзүүлэгчийн ID, нотлох баримт, дээжийн тоо, нэмэлт шийдвэрийн үр дүн) гаргадаг. Хадгалсан манифест нь сорилтын тоймд таарч байгаа эсэхийг `--manifest-id=<hex>`, аудитын нотлох баримтын эх олдворын хамт хураангуйг архивлахыг хүсвэл `--json-out=<path>`-г оруулна уу. `--verdict`-г оруулснаар та HTTP API-г дуудахаасаа өмнө бүх сорилт → нотлох баримт → шийдвэрийн давталтыг офлайнаар давтах боломжийг олгоно.
 
-Once Torii is live you can retrieve the same artefacts via HTTP:
+Torii ажиллаж эхэлмэгц та HTTP-ээр дамжуулан ижил олдворуудыг татаж авах боломжтой:
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+Хоёр төгсгөлийн цэгийг суулгагдсан хадгалалтын ажилтан үйлчилдэг тул CLI утааны тест болон гарцын мэдрэгч нь синхрончлолд байдаг.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#1】L
 
-## 2. Pin → Fetch Round Trip
+## 2. Pin → Хоёр талын аялалыг татах
 
-1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. Submit the manifest with base64 encoding:
+1. Манифест + ачааны багц (жишээ нь `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`) үүсгэнэ үү.
+2. Манифестийг base64 кодчилолоор илгээнэ үү:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -95,8 +97,8 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      -d @pin_request.json
    ```
 
-   The request JSON must contain `manifest_b64` and `payload_b64`. A successful response returns `manifest_id_hex` and the payload digest.
-3. Fetch the pinned data:
+   JSON хүсэлт нь `manifest_b64` болон `payload_b64` агуулсан байх ёстой. Амжилттай хариу үйлдэл нь `manifest_id_hex` болон ачааллын мэдээг буцаана.
+3. Буулгасан өгөгдлийг дуудах:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -108,44 +110,44 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-   Base64-decode the `data_b64` field and verify it matches the original bytes.
+   Base64-`data_b64` талбарыг тайлж, анхны байттай таарч байгаа эсэхийг шалгана уу.
 
-## 3. Restart Recovery Drill
+## 3. Сэргээх дасгалыг дахин эхлүүлнэ үү
 
-1. Pin at least one manifest as above.
-2. Restart the Torii process (or the entire node).
-3. Re-submit the fetch request. The payload must still be retrievable and the returned digest must match the pre-restart value.
-4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the persisted manifests after the reboot.
+1. Дор хаяж нэг манифестийг дээрх шиг тогтооно.
+2. Torii процессыг (эсвэл бүхэл бүтэн зангилааг) дахин эхлүүлнэ үү.
+3. Татаж авах хүсэлтийг дахин илгээнэ үү. Ачааллыг сэргээх боломжтой хэвээр байх ёстой бөгөөд буцаасан мэдээ нь дахин эхлүүлэхийн өмнөх утгатай тохирч байх ёстой.
+4. `bytes_used` дахин ачаалсны дараа үргэлжилсэн манифестуудыг тусгаж байгааг баталгаажуулахын тулд `GET /v1/sorafs/storage/state`-г шалгана уу.
 
-## 4. Quota Rejection Test
+## 4. Квотоос татгалзах шалгалт
 
-1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
-2. Pin one manifest; the request should succeed.
-3. Attempt to pin a second manifest of similar size. Torii must reject the request with HTTP `400` and an error message containing `storage capacity exceeded`.
-4. Restore the normal capacity limit when finished.
+1. `torii.sorafs.storage.max_capacity_bytes`-г бага утгаар (жишээ нь нэг манифестын хэмжээ) түр бууруулна уу.
+2. Нэг манифест зүүх; хүсэлт амжилттай байх ёстой.
+3. Ижил хэмжээтэй хоёр дахь манифестийг бэхлэхийг оролдох. Torii нь HTTP `400` болон `storage capacity exceeded` агуулсан алдааны мессеж бүхий хүсэлтээс татгалзах ёстой.
+4. Дуусмагц хэвийн хүчин чадлын хязгаарыг сэргээнэ.
 
-## 5. Retention / GC Inspection (Read-only)
+## 5. Хадгалах / GC Inspection (Зөвхөн унших)
 
-1. Run a local retention scan against the storage directory:
+1. Хадгалах лавлахын эсрэг локал хадгалах сканыг ажиллуулна уу:
 
    ```bash
    iroha app sorafs gc inspect --data-dir ./storage/sorafs
    ```
 
-2. Inspect only expired manifests (dry-run only, no deletions):
+2. Зөвхөн хугацаа нь дууссан манифестуудыг шалгана уу (зөвхөн хуурай, устгахгүй):
 
    ```bash
    iroha app sorafs gc dry-run --data-dir ./storage/sorafs
    ```
 
-3. Use `--now` or `--grace-secs` to pin the evaluation window when comparing reports across hosts or incidents.
+3. Хостууд болон тохиолдлуудын тайлангуудыг харьцуулахдаа `--now` эсвэл `--grace-secs` ашиглан үнэлгээний цонхыг тогтооно.
 
-The GC CLI is intentionally read-only. Use it to capture retention deadlines and expired-manifest inventory for audit trails; do not remove data manually in production.
+GC CLI нь зөвхөн уншихад зориулагдсан. Хадгалах эцсийн хугацаа болон аудитын мөрийн хугацаа дууссан манифестийн бараа материалыг авахын тулд үүнийг ашиглах; үйлдвэрлэлд өгөгдлийг гараар устгаж болохгүй.
 
-## 6. PoR Sampling Probe
+## 6. PoR дээж авах датчик
 
-1. Pin a manifest.
-2. Request a PoR sample:
+1. Манифестыг бэхлэх.
+2. PoR дээжийг хүсэх:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -157,21 +159,21 @@ The GC CLI is intentionally read-only. Use it to capture retention deadlines and
      }'
    ```
 
-3. Verify the response contains `samples` with the requested count and that each proof validates against the stored manifest root.
+3. Хариулт нь хүссэн тоогоор `samples`-г агуулж байгаа бөгөөд нотлох баримт бүр хадгалагдсан манифест үндэстэй тулгаж байгаа эсэхийг шалгана уу.
 
-## 7. Automation Hooks
+## 7. Автоматжуулалтын дэгээ
 
-- CI / smoke tests can reuse the targeted checks added in:
+- CI / утааны туршилтууд нь дараахь зүйлд нэмсэн зорилтот шалгалтуудыг дахин ашиглах боломжтой.
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
   ```
 
-  which covers `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, and `por_sampling_returns_verified_proofs`.
-- Dashboards should track:
+  Энэ нь `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, `por_sampling_returns_verified_proofs`-ийг хамардаг.
+- Хяналтын самбар нь дараахь зүйлийг хянах ёстой.
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
-  - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
-  - Settlement publish attempts via `sorafs_node_deal_publish_total{result=success|failure}`
+  - `torii_sorafs_storage_pin_queue_depth` ба `torii_sorafs_storage_fetch_inflight`
+  - PoR амжилт/бүтэлгүйтлийн тоолуур `/v1/sorafs/capacity/state`-ээр гарч ирэв
+  - `sorafs_node_deal_publish_total{result=success|failure}`-ээр төлбөр тооцоо нийтлэх оролдлого
 
-Following these drills ensures the embedded storage worker can ingest data, survive restarts, respect configured quotas, and generate deterministic PoR proofs before the node advertises capacity to the wider network.
+Эдгээр дасгалуудыг дагаснаар суулгагдсан хадгалалтын ажилтан нь датаг залгих, дахин эхлүүлэх үед амьд үлдэх, тохируулсан квотыг хүндэтгэх, зангилаа өргөн сүлжээнд хүчин чадлаа сурталчлахаас өмнө тодорхой PoR нотолгоо үүсгэх боломжтой болно.

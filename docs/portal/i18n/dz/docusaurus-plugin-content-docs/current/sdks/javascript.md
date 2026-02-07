@@ -7,13 +7,15 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript SDK quickstart
 description: Build transactions, stream events, and drive Connect previews with `@iroha/iroha-js`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-`@iroha/iroha-js` is the canonical Node.js package for interacting with Torii. It
-bundles Norito builders, Ed25519 helpers, pagination utilities, and a resilient
-HTTP/WebSocket client so you can mirror the CLI flows from TypeScript.
+I18NI000000037X འདི་ Torii དང་ཅིག་ཁར་ འབྲེལ་བ་འཐབ་ནིའི་དོན་ལུ་ ཀེ་ནོ་ནིག་ནོ་ཌི་.ཇེ་ཨེསི་ ཐུམ་སྒྲིལ་ཨིན། འདི
+bundles I18NT0000002X བཟོ་སྐྲུན་པ་, Ed25519 རོགས་རམ་ ཤོག་ངོས་བཀོལ་སྤྱོད་དང་ བཟོད་བསྲན།
+HTTP/WebSocket མཁོ་སྤྲོད་པ་དེ་གིས་ དབྱེ་བ་ཡིག་གཟུགས་ལས་ CLI རྒྱུན་འགྲུལ་ཚུ་ མེ་ལོང་ནང་ མེ་ལོང་བཟོ་ཚུགས།
 
-## Installation
+## གཞི་བཙུགས་འབད་ནི།
 
 ```bash
 npm install @iroha/iroha-js
@@ -21,10 +23,10 @@ npm install @iroha/iroha-js
 npm run build:native
 ```
 
-The build step wraps `cargo build -p iroha_js_host`. Ensure the toolchain from
-`rust-toolchain.toml` is available locally before running `npm run build:native`.
+བཟོ་བསྐྲུན་གྱི་རིམ་པ་དེ་ `cargo build -p iroha_js_host`. ལག་ཆས་རིམ་སྒྲིག་འདི་ ལས་ངེས་གཏན་བཟོ།
+`rust-toolchain.toml` འདི་ `npm run build:native` གཡོག་བཀོལ་མ་འབད་བའི་ཧེ་མ་ ས་གནས་ནང་ ཐོབ་ཚུགས།
 
-## Key management
+## ལྡེ་མིག་འཛིན་སྐྱོང་པ།
 
 ```ts
 import {
@@ -45,10 +47,10 @@ const derived = publicKeyFromPrivate(privateKey);
 console.assert(Buffer.compare(derived, publicKey) === 0);
 ```
 
-## Build transactions
+## ཚོང་འབྲེལ།
 
-Norito instruction builders normalise identifiers, metadata, and quantities so
-encoded transactions match the Rust/CLI payloads.
+I18NT0000003X བཀོད་རྒྱ་བཟོ་མི་ཚུ་གིས་ ངོས་འཛིན་དང་ མེ་ཊ་ཌེ་ཊ་ དེ་ལས་ འབོར་ཚད་ཚུ་ སྤྱིར་བཏང་བཟོཝ་ཨིན།
+ཨིན་ཀོ་ཌི་འབད་ཡོད་པའི་ཚོང་འབྲེལ་ཚུ་ རཱསི་/སི་ཨེལ་ཨའི་ པེ་ལོཌི་ཚུ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
 ```ts
 import {
@@ -77,11 +79,11 @@ const { signedTransaction } = buildMintAndTransferTransaction({
 });
 ```
 
-## Torii client configuration
+## Torii མཁོ་སྤྲོད་པའི་རིམ་སྒྲིག་།
 
-`ToriiClient` accepts retry/timeout knobs that mirror `iroha_config`. Use
-`resolveToriiClientConfig` to merge a camelCase config object (normalize
-`iroha_config` first), env overrides, and inline options.
+I18NI000000041X གིས་ I18NI0000042X གིས་ retry/timeout knos དང་ལེན་འབདཝ་ཨིན། ལག་ལེན་འཐབ་ནི
+`resolveToriiClientConfig` རྔ་མོང་རིམ་སྒྲིག་དངོས་པོ་ (སྤྱིར་བཏང་བཟོ་ནི།
+`iroha_config` དང་པ་) env བསྐྱར་ལོག་དང་ ནང་ཐིག་གདམ་ཁ་ཚུ།
 
 ```ts
 import { ToriiClient, resolveToriiClientConfig } from "@iroha/iroha-js";
@@ -112,111 +114,61 @@ const torii = new ToriiClient(
 );
 ```
 
-Environment variables for local dev:
+ས་གནས་ཀྱི་ dev གི་དོན་ལུ་ མཐའ་འཁོར་གྱི་འགྱུར་ཅན་ཚུ།
 
-| Variable | Purpose |
-|----------|---------|
-| `IROHA_TORII_TIMEOUT_MS` | Request timeout (milliseconds). |
-| `IROHA_TORII_MAX_RETRIES` | Maximum retry attempts. |
-| `IROHA_TORII_BACKOFF_INITIAL_MS` | Initial retry backoff. |
-| `IROHA_TORII_BACKOFF_MULTIPLIER` | Exponential backoff multiplier. |
-| `IROHA_TORII_MAX_BACKOFF_MS` | Maximum retry delay. |
-| `IROHA_TORII_RETRY_STATUSES` | Comma-separated HTTP status codes to retry. |
-| `IROHA_TORII_RETRY_METHODS` | Comma-separated HTTP methods to retry. |
-| `IROHA_TORII_API_TOKEN` | Adds `X-API-Token`. |
-| `IROHA_TORII_AUTH_TOKEN` | Adds `Authorization: Bearer …` header. |
+| འགྱུར་ཅན་ | དམིགས་ཡུལ། |
+|-----------------------------------------------------------------------------------------------------------------------------------------
+| `IROHA_TORII_TIMEOUT_MS` | ཞུ་བ་འབད་བའི་དུས་ཚོད་ (milliseconds)། |
+| I18NI0000046X | མཐོ་ཤོས་ལོག་འབད་རྩོལ་བསྐྱེད་དོ། |
+| I18NI0000047X | འགོ་ཐོག་ལོག་འབད་ནི་གི་དཔའ་བཅམ། |
+| I18NI0000048X | བརྒྱུད་འཕྲིན་རྒྱབ་ལོག་བསྒྱུར་བཅོས། |
+| I18NI0000049X | བསྐྱར་ལོག་མཐོ་ཤོས་ཕྱིར་འགྱངས་འབད་རྩོལ་བསྐྱེད། |
+| `IROHA_TORII_RETRY_STATUSES` | ལོག་འབད་རྩོལ་བསྐྱེད་ནི་ལུ་ ཀེམ་-དབྱེ་ཕྱེ་འབད་ཡོད་པའི་ ཨེཆ་ཊི་ཊི་པི་གནས་རིམ་ཨང་རྟགས་ཚུ། |
+| `IROHA_TORII_RETRY_METHODS` | ལོག་འབད་རྩོལ་བསྐྱེད་ནི་ལུ་ མགྱོགས་དབྱེ་ཨེཆ་ཊི་ཊི་པི་ཐབས་ལམ་ཚུ་ཨིན། |
+| I18NI0000002X | `X-API-Token` ཁ་སྐོང་འབདཝ་ཨིན། |
+| `IROHA_TORII_AUTH_TOKEN` | I18NI0000005X མགོ་ཡིག་ཁ་སྐོང་འབདཝ་ཨིན། |
 
-Retry profiles mirror Android defaults and are exported for parity checks:
+བསྐྱར་ལོག་གསལ་སྡུད་ཚུ་གིས་ ཨེན་ཌོརཌི་སྔོན་སྒྲིག་ཚུ་ མེ་ལོང་དང་ ཆ་སྙོམས་ཞིབ་དཔྱད་ཚུ་གི་དོན་ལུ་ ཕྱིར་འདྲེན་འབདཝ་ཨིན།
 `DEFAULT_TORII_CLIENT_CONFIG`, `DEFAULT_RETRY_PROFILE_PIPELINE`,
-`DEFAULT_RETRY_PROFILE_STREAMING`. See `docs/source/sdk/js/torii_retry_policy.md`
-for the endpoint-to-profile mapping and the parameters governance audits during
+`DEFAULT_RETRY_PROFILE_STREAMING`. གཟིགས། `docs/source/sdk/js/torii_retry_policy.md`
+མཐའ་མཇུག་ལས་ གསལ་སྡུད་ཀྱི་སབ་ཁྲ་བཟོ་ནི་དང་ གཞུང་སྐྱོང་རྩིས་ཞིབ་ཀྱི་དོན་ལས་ ཚད་གཞི་ཚུ་གི་དོན་ལུ་ཨིན།
 JS4/JS7.
 
-## Iterable lists & pagination
+## བསྐྱར་བརྗོད་འབད་བཏུབ་པའི་ཐོ་ཡིག་དང་ རིམ།
 
-Pagination helpers mirror the Python SDK ergonomics for `/v1/accounts`,
-`/v1/domains`, `/v1/assets/definitions`, NFTs, balances, asset holders, and the
-account transaction history.
+འགྲུལ་བཞུད་ཀྱི་གྲོགས་རམ་པ་ཚུ་གིས་ I18NI000000060X, གི་དོན་ལུ་ Python SDK ergonomics འདི་ མེ་ལོང་ནང་ གསལ་སྟོན་འབདཝ་ཨིན།
+I18NI000000061X, `/v1/assets/definitions`, NFTs, balues, རྒྱུ་དངོས་འཛིན་མཁན་, དང་།
+རྩིས་ཁྲའི་ཚོང་འབྲེལ་གྱི་ལོ་རྒྱུས།
 
-```ts
-const { items, total } = await torii.listDomains({
-  limit: 25,
-  sort: [{ key: "id", order: "asc" }],
-});
-console.log(`first page out of ${total}`, items);
+I18NF0000022X
 
-for await (const account of torii.iterateAccounts({
-  pageSize: 50,
-  maxItems: 200,
-})) {
-  console.log(account.id);
-}
+## ཟུར་ཐོ་དང་ འཁྲུན་ཆོད་མེ་ཊ་ཌེ་ཊ་
 
-const defs = await torii.queryAssetDefinitions({
-  filter: { Eq: ["metadata.display_name", "Ticket"] },
-  sort: [{ key: "metadata.display_name", order: "desc" }],
-  fetchSize: 64,
-});
-console.log("filtered definitions", defs.items);
+ཕྱིར་གཏོང་འཐུས་ཀྱི་ལན་འདེབས་ཚུ་གིས་ མཐོ་རིམ་གྱི་ ལག་དེབ་མེ་ཊ་ཌེ་ཊ་ གདོང་ཁར་ གསལ་སྟོན་འབདཝ་ཨིན།
+I18NI000000063X, `policy_expires_at_ms`, I18NI000000065, I18NI000000066,
+I18NI000000067X, དང་ `remaining_amount` དེ་ རུལ་བའི་མཉམ་དུ་ལོག་ཡོད།
+ཐོ་བཀོད་འབདཝ་ལས་ ཌེཤ་བོརཌ་ཚུ་གིས་ བཙུགས་ཏེ་ཡོད་མི་ Norito གི་ འབབ་ཁུངས་ཚུ་ གསལ་སྟོན་འབད་མི་དགོ། གསརཔ་འདི།
+གྲོགས་རམ་པ་ (`deadline_kind`, I18NI0000000070X, I18NI0000000071X,
+I18NI000000072X) ཤུལ་མའི་དུས་ཡུན་ཚང་བའི་དུས་ཚོད་ (གསར་བསྐྲུན་ → སྲིད་བྱུས།
+→ལག་ཁྱེར་༽ དེ་འབདཝ་ལས་ འཐུས་ཅིག་ཡོད་པའི་སྐབས་ ཡུ་ཨའི་ ངོ་རྟགས་ཚུ་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ཉེན་བརྡ་འབད་ཚུགས།
+<24h ལྷག་ཡོད། ཨེསི་ཌི་ཀེ་
+`/v1/offline/allowances` གིས་ བརྡ་སྟོན་འབད་མི་ REST ཚགས་མ་ཚུ་ མེ་ལོང་:
+`certificateExpiresBeforeMs/AfterMs`, I18NI00000075,
+I18NI0000000076X, I18NI000000077X, I18NI0000000078X, དང་།
+I18NI000000079X / I18NI0000080X བུ་ལོན། ནུས་མེད་མཉམ་སྡེབ་ཚུ་(དོན་ལུ་དོན་ལུ།
+དཔེར་ན་ `onlyMissingVerdict` + `verdictIdHex`) འདི་ Torii གི་ཧེ་མ་ ཉེ་གནས་ལུ་ ངོས་ལེན་འབདཝ་ཨིན།
+ཟེར་སླབ་ཨིན།
 
-const assetId = "rose#wonderland#alice@test";
-const balances = await torii.listAccountAssets("alice@test", {
-  limit: 10,
-  assetId,
-});
-const txs = await torii.listAccountTransactions("alice@test", {
-  limit: 5,
-  assetId,
-});
-const holders = await torii.listAssetHolders("rose#wonderland", {
-  limit: 5,
-  assetId,
-});
-console.log(balances.items, txs.items, holders.items);
-```
+I18NF0000023X
 
-## Offline allowances & verdict metadata
+## ཕྱིར་ཐིག་མཐོ་རིམ་ (གནད་ཚིག + ཐོ་འགོད་)།
 
-Offline allowance responses expose the enriched ledger metadata up-front —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` are returned alongside the raw
-record so dashboards don’t have to decode the embedded Norito payloads. The new
-countdown helpers (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) highlight the next expiring deadline (refresh → policy
-→ certificate) so UI badges can warn operators whenever an allowance has
-<24 h remaining. The SDK
-mirrors the REST filters exposed by `/v1/offline/allowances`:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, and the
-`requireVerdict` / `onlyMissingVerdict` booleans. Invalid combinations (for
-example `onlyMissingVerdict` + `verdictIdHex`) are rejected locally before Torii
-is called.
-
-```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
-```
-
-## Offline top-ups (issue + register)
-
-Use the top-up helpers when you want to issue a certificate and immediately
-register it on-ledger. The SDK verifies the issued and registered certificate
-IDs match before returning, and the response includes both payloads. There is
-no dedicated top-up endpoint; the helper chains the issue + register calls. If
-you already have a signed certificate, call `registerOfflineAllowance` (or
-`renewOfflineAllowance`) directly.
+ཁྱོད་ཀྱིས་ལག་ཁྱེར་བྱིན་དགོ་པའི་སྐབས་ མཐོ་ཚད་གྲོགས་རམ་པ་ཚུ་ལག་ལེན་འཐབ།
+ཡིག་ཚང་ནང་ཐོ་བཀོད་འབད། ཨེསི་ཌི་ཀེ་གིས་ བཏོན་ཡོད་པའི་དང་ ཐོ་བཀོད་འབད་ཡོད་པའི་ལག་ཁྱེར་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
+ལོག་མ་འབད་བའི་ཧེ་མ་ ཨའི་ཌི་ཚུ་མཐུན་སྒྲིག་འབདཝ་ཨིནམ་དང་ ལན་ནང་ པེ་ལོཌི་གཉིས་ཆ་ར་ཚུདཔ་ཨིན། ཡོདཔ༌ཨིན
+མཐོ་རིམ་གྱི་མཇུག་བསྡུའི་ས་ཚིགས་མེད། གྲོགས་རམ་པ་འདི་གིས་ གནད་དོན་ + ཐོ་བཀོད་ཁ་པར་ཚུ་ རིམ་སྒྲིག་འབདཝ་ཨིན། གལ་སྲིད
+ཁྱོད་ལུ་ཧེ་མ་ལས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ལག་ཁྱེར་ཅིག་ཡོདཔ་ཨིན། `registerOfflineAllowance` (ཡང་ན་ ཡང་ན་)
+`renewOfflineAllowance` ཐད་ཀར་ ཐད་ཀར་.
 
 ```ts
 const topUp = await torii.topUpOfflineAllowance({
@@ -238,11 +190,11 @@ const renewed = await torii.topUpOfflineAllowanceRenewal(
 console.log(renewed.registration.certificate_id_hex);
 ```
 
-## Torii queries & streaming (WebSockets)
+## Torii འདྲི་དཔྱད་དང་རྒྱུན་སྤེལ་ (ཝེབ་སོ་ཀེཊི་ཚུ།)
 
-Query helpers expose status, Prometheus metrics, telemetry snapshots, and event
-streams using the Norito filter grammar. Streaming automatically upgrades to
-WebSockets and resumes when the retry budget allows.
+འདྲི་དཔྱད་གྲོགས་རམ་པ་ཚུ་གིས་ གནས་ཚད་ཕྱིར་བཏོན་འབདཝ་ཨིན།
+Norito ཚགས་མ་ཡིག་གཟུགས་ལག་ལེན་འཐབ་ཐོག་ལས་ རྒྱུན་ལམ་ཚུ། ལུ་ རང་བཞིན་གྱིས་ ཡར་བསྐྱེད་འབད་དོ།
+ཝེབ་སོ་ཀེཊི་ཚུ་དང་ བསྐྱར་ཚོད་འཆར་དངུལ་གྱིས་ གནང་བ་བྱིན་པའི་སྐབས་ སླར་འབྱུང་འགོ་བཙུགསཔ་ཨིན།
 
 ```ts
 const status = await torii.getSumeragiStatus();
@@ -262,18 +214,18 @@ for await (const event of torii.streamEvents({
 abort.abort(); // closes the underlying WebSocket cleanly
 ```
 
-Use `streamBlocks`, `streamTransactions`, or `streamTelemetry` for the other
-WebSocket endpoints. All streaming helpers surface retry attempts, so hook the
-`onReconnect` callback to feed dashboards and alerting.
+`streamBlocks`, I18NI0000086X, ཡང་ན་ I18NI0000000087X འདི་གཞན་གྱི་དོན་ལུ་ལག་ལེན་འཐབ།
+ཝེབ་སོ་ཀེཊི་མཐའ་ཐིག་ཚུ། རྒྱུན་སྤེལ་གྱི་གྲོགས་རམ་པ་ཆ་མཉམ་གྱིས་ བསྐྱར་ལོག་འབད་ནི་གི་དཔའ་བཅམ་དོ་ཡོདཔ་ལས་ དེ་གིས་ ཧུཀ་འབདཝ་ཨིན།
+I18NI000000088X བརྡ་བཀོད་དང་ཉེན་བརྡ་ཚུ་ལུ་ལོག་འབོད་བརྡ་འབདཝ་ཨིན།
 
-## Explorer snapshots & QR payloads
+## འཚོལ་ཞིབ་པ་པར་ཆས་དང་ QR པེ་ལོསི།
 
-Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
-`/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
-same snapshots that power the portal. `getExplorerMetrics()` normalises the
-payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need IH58 (preferred)/sora (second-best) literals plus inline
-SVG for share buttons.
+འཚོལ་ཞིབ་ཀྱི་བརྡ་འཕྲིན་གྱིས་ `/v1/explorer/metrics` དང་ གི་དོན་ལུ་ ཡིག་དཔར་རྐྱབ་མི་གྲོགས་རམ་པ་བྱིནམ་ཨིན།
+I18NI000000090X མཐའ་མཚམས་ཚུ་ དེ་ལས་ ཌེཤ་བོརཌི་ཚུ་གིས་ བསྐྱར་རྩེད་འབད་ཚུགས།
+དེ་དང་འདྲ་བའི་པར་བརྙན་དེ་གིས་ དྲྭ་ཚིགས་ལུ་དབང་ཚད་ཡོདཔ་ཨིན། `getExplorerMetrics()` སྤྱིར་བཏང་བཟོཝ་ཨིན།
+འགྲུལ་ལམ་འདི་ལྕོགས་མིན་བཟོ་བའི་སྐབས་ པེ་ལོཌི་དང་ `null` སླར་ལོག་འབདཝ་ཨིན། དེ་དང་མཉམ་དུ་བསྡམས།
+I18NI000000093X ཁྱོད་ལུ་ IH58 (དགའ་གདམ་)/སོ་ར་ (ངོ་མ) དང་ ནང་ཐིག་ཚུ་དགོཔ་ཨིན།
+བགོ་བཤའ་ཨེབ་རྟ་ཚུ་གི་དོན་ལུ་ SVG.
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -297,20 +249,20 @@ console.log(
 );
 ```
 
-Passing `addressFormat: "compressed"` mirrors Explorer’s default compressed
-selectors; omit the override for the preferred IH58 output or request `ih58_qr`
-when you need the QR-safe variant. The compressed literal is the second-best
-Sora-only option for UX. The helper always returns the canonical identifier,
-the selected literal, and metadata (network prefix, QR version/modules, error
-correction tier, and inline SVG), so CI/CD can publish the same payloads that
-the Explorer surfaces without calling bespoke converters.
+`addressFormat: "compressed"` བརྒྱུད་དེ་ Explorer གི་སྔོན་སྒྲིག་བསྡམ་བཞག་ཡོདཔ།
+འདམ་ཁ་རྐྱབ་མི་ཚུ། དང་འདོད་ཡོད་པའི་ IH58 ཐོན་འབྲས་ཡང་ན་ ཞུ་བ་ IH58 གི་དོན་ལུ་ བཀག་ཆ་འབད་མི་འདི་ ཕྱིར་བཏོན་འབད།
+ཁྱོད་ལུ་ QR-safe དབྱེ་བ་དགོཔ་སྐབས། བསྡམས་པའི་ཚིག་འདི་ དྲག་ཤོས་གཉིས་པ་ཨིན།
+UX གི་དོན་ལུ་ སོ་ར་རྐྱངམ་ཅིག་གི་གདམ་ཁ། གྲོགས་རམ་པ་དེ་གིས་ ཨ་རྟག་ར་ ཀེ་ནོ་ནིག་ངོས་འཛིན་པ་སླར་ལོག་འབདཝ་ཨིན།
+སེལ་འཐུ་འབད་ཡོད་པའི་ཚིག་དོན་དང་ མེ་ཊ་ཌེ་ཊ་ (ཡོངས་འབྲེལ་སྔོན་སྒྲིག་ ཀིའུ་ཨར་ཐོན་རིམ་/ཚད་གཞི་ འཛོལ་བ།
+ནོར་བཅོས་འབད་ནིའི་རིམ་པ་ དེ་ལས་ ནང་ཐིག་ཨེསི་ཝི་ཇི་) དེ་འབདཝ་ལས་ སི་ཨའི་/སི་ཌི་གིས་ དེ་བཟུམ་མའི་ པེ་ལོཌི་ཅོག་འཐདཔ་ཚུ་ དཔར་བསྐྲུན་འབད་ཚུགས།
+བརྟག་ཞིབ་ཀྱི་ཁ་ཐོག་འདི་ བེ་སི་པོཀ་གཞི་བསྒྱུར་འབད་མི་ཚུ་ལུ་ འབོཝ་ཨིན།
 
-## Connect sessions & queueing
+## ལཱ་ཡུན་དང་གྱལ་རིམ་མཐུད།
 
-The Connect helpers mirror `docs/source/connect_architecture_strawman.md`. The
-fastest path to a preview-ready session is `bootstrapConnectPreviewSession`,
-which stitches together deterministic SID/URI generation and the Torii
-registration call.
+མཐུད་བྱེད་པ་དེ་གིས་ `docs/source/connect_architecture_strawman.md` མེ་ལོང་། ཚིག༌ཕྲད
+སྔོན་ལྟ་གྲ་སྒྲིག་ཡོད་པའི་ལཱ་ཡུན་ལུ་མགྱོགས་ཤོས་འདི་ I18NI000000097X ཨིན།
+འདི་ཡང་ གཅིག་ཁར་བསྡོམས་ཏེ་ SID/URI དང་ I18NT0000012X ཚུ་གཅིག་ཁར་བསྡོམས་ཏེ་ཡོདཔ་ཨིན།
+ཐོ་བཀོད་ཁ་པར་ཨང་།
 
 ```ts
 import {
@@ -333,105 +285,55 @@ console.log("wallet QR", preview.walletUri);
 console.log("Connect tokens", tokens?.wallet, tokens?.app);
 ```
 
-- Pass `register: false` when you only need deterministic URIs for QR/deeplink
-  previews.
-- `generateConnectSid` stays available when you need to derive session ids
-  without minting URIs.
-- Directional keys and ciphertext envelopes come from the native bridge; when
-  unavailable the SDK falls back to the JSON codec and throws
+- ཁྱོད་ལུ་ QR/deeplink གི་དོན་ལུ་ གཏན་འབེབས་ཀྱི་ཡུ་ཨར་ཨའི་ཚུ་རྐྱངམ་ཅིག་དགོཔ་ད་ `register: false` འདི་ བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+  སྔོན་ལྟ་ཚུ།
+- ཁྱོད་ཀྱིས་ ལཱ་ཡུན་ཨའི་ཌི་ཚུ་ བཏོན་དགོཔ་ད་ I18NI00000099 འཐོབ་ཚུགསཔ་ཨིན།
+  URIs མ་བཙུགས་པར་།
+- ཕྱོགས་སྟོན་ལྡེ་མིག་དང་ སི་ཕར་ཊེགསི་ ཡིག་ཤུབས་ཚུ་ ས་གནས་ཀྱི་ཟམ་ལས་འོངམ་ཨིན། ནམ༌
+  འཐོབ་མ་ཚུགས་པའི་ ཨེསི་ཌི་ཀེ་འདི་ ཇེ་ཨེསི་ཨོ་ཨེན་ ཀོ་ཌེཀ་ལུ་ལོག་འགྱོ་སྟེ་ བཀོ་ནི་ལུ་ འཐོབ་མ་ཚུགས།
   `ConnectQueueError.bridgeUnavailable`.
-- Offline buffers are stored as Norito `.to` blobs in IndexedDB. Monitor queue
-  state via the emitted `ConnectQueueError.overflow(limit)` /
-  `.expired(ttlMs)` errors and feed `connect.queue_depth` telemetry as outlined
-  in the roadmap.
+- ཨོཕ་ལིན་བཱ་ཕར་ཚུ་ I18NT000000006X I18NI000001010101010 འདི་ IndexedDB ནང་ལུ་ གསོག་འཇོག་འབད་ཡོདཔ་ཨིན། བལྟ་རྟོག་འབད་ནི།
+  བཙན་འཕྲོག་ཐོག་ལས་ `ConnectQueueError.overflow(limit)` / མངའ་སྡེ་
+  `.expired(ttlMs)` འཛོལ་བ་དང་ `connect.queue_depth` བཀོད་སྒྲིག་འབད་ཡོདཔ་བཟུམ་སྦེ་ བརྒྱུད་འཕྲིན་གཏང་།
+  ལམ་སྟོན་ནང་།
 
-### Connect registry & policy snapshots
+### ཐོ་བཀོད་དང་སྲིད་བྱུས་པར་རིས།
 
-Platform operators can introspect and update the Connect registry without
-leaving Node.js. `iterateConnectApps()` pages through the registry, while
-`getConnectStatus()` and `getConnectAppPolicy()` expose the runtime counters and
-current policy envelope. `updateConnectAppPolicy()` accepts camelCase fields,
-so you can stage the same JSON payload that Torii expects.
+སྟེགས་རིས་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མཐུད་ལམ་ཐོ་བཀོད་འདི་ མེད་པར་ བཙུགས་ནི་དང་དུས་མཐུན་བཟོ་ཚུགས།
+བཏོན་གཏང་ནི་.js. ཐོ་བཀོད་བརྒྱུད་དེ་ `iterateConnectApps()` ཤོག་ལེབ་ཚུ་
+`getConnectStatus()` དང་ `getConnectAppPolicy()` རན་ཊའིམ་ གྱངས་ཁ་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+ད་ལྟའི་སྲིད་བྱུས་ཡིག་ཤུབས་ཁང་། `updateConnectAppPolicy()` རྔ་མོང་ས་ཁོངས་འདི་ངོས་ལེན་འབདཝ་ཨིན།
+དེ་འབདཝ་ལས་ ཁྱོད་ཀྱིས་ Torii རེ་བ་བསྐྱེད་མི་ JSON པེ་ལོཌ་གཅིགཔོ་འདི་ འཁྲབ་སྟོན་འབད་ཚུགས།
 
-```ts
-const status = await torii.getConnectStatus();
-console.log("connect enabled:", status?.enabled ?? false);
-console.log("active sessions:", status?.sessionsActive ?? 0);
-console.log("buffered bytes:", status?.totalBufferBytes ?? 0);
+I18NF0000028X
 
-for await (const app of torii.iterateConnectApps({ limit: 100 })) {
-  console.log(app.appId, app.namespaces, app.policy?.relayEnabled ? "relay" : "wallet-only");
-}
+ཞུ་ཡིག་མ་བཙུགས་པའི་ཧེ་མ་ ཨ་རྟག་ར་ `getConnectStatus()` པར་ཚུ་བཏབ་དགོ།
+འགྱུར་བ།—གཞུང་སྐྱོང་ཞིབ་དཔྱད་ཐོ་ཡིག་ནང་ སྲིད་བྱུས་དུས་མཐུན་བཟོ་ནི་འགོ་བཙུགས་པའི་ སྒྲུབ་བྱེད་དགོཔ་ཨིན།
+གྲུ་གཟིངས་ཀྱི་ད་ལྟོའི་ཚད་གཞི་ལས་།
 
-const policy = await torii.getConnectAppPolicy();
-if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
-  await torii.updateConnectAppPolicy({
-    wsPerIpMaxSessions: 5,
-    pingIntervalMs: policy.pingIntervalMs ?? 30_000,
-    pingMissTolerance: policy.pingMissTolerance ?? 3,
-  });
-}
-```
+### ཝེབ་སོ་ཀེཊི་ ཌའི་ལིང་མཐུད།
 
-Always capture the latest `getConnectStatus()` snapshot before applying
-mutations—the governance checklist requires evidence that policy updates start
-from the fleet’s current limits.
+`ToriiClient.openConnectWebSocket()` གིས་ ཁྲིམས་ལུགས་འདི་བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན།
+`/v1/connect/ws` URL (`sid`, I18NI000000113X, དང་ ཊོ་ཀེན་ཚད་བཟུང་ཚུ་རྩིས་ཏེ་) ཡར་འཕེལ་ཚུ།
+`http→ws` / `https→wss`, དང་ ཝེབ་སོ་ཀེཊི་གང་རུང་ཅིག་ལུ་ མཐའ་མཇུག་གི་ཡུ་ཨར་ཨེལ་ལུ་ སྤྲོད་དགོ།
+ལག་ལེན་ཁྱོད་ཀྱིས་བཀྲམ་སྤེལ་འབད་ཡོདཔ། བརའུ་ཟར་གྱིས་ རང་བཞིན་གྱིས་ ཡོངས་ཁྱབ་འདི་ ལོག་ལག་ལེན་འཐབ།
+`WebSocket`. Node.js འབོད་བརྡ་གཏང་མི་ཚུ་གིས་ I18NI000000117X བཟུམ་གྱི་ བཟོ་བསྐྲུན་པ་ཅིག་སྤྲོད་དགོ།
 
-### Connect WebSocket dialling
+I18NF0000029X
 
-`ToriiClient.openConnectWebSocket()` assembles the canonical
-`/v1/connect/ws` URL (including `sid`, `role`, and token parameters), upgrades
-`http→ws` / `https→wss`, and hands the final URL to whichever WebSocket
-implementation you supply. Browsers automatically reuse the global
-`WebSocket`. Node.js callers should pass a constructor such as `ws`:
+ཁྱོད་ལུ་ཡུ་ཨར་ཨེལ་རྐྱངམ་ཅིག་དགོ་པའི་སྐབས་ `torii.buildConnectWebSocketUrl(params)` ཡང་ན་ ལུ་ཁ་པར་གཏང་།
+མཐོ་རིམ་གནས་རིམ་ `buildConnectWebSocketUrl(baseUrl, params)` གྲོགས་རམ་འབད་མི་དང་ ལོག་སྟེ་ལག་ལེན་འཐབ།
+སྲོལ་སྒྲིག་སྐྱེལ་འདྲེན་/གྲལ་ཐིག་ནང་ཡིག་རྒྱུན་གྲུབ་འབྲས་ཐོན་ཡོདཔ།
 
-```ts
-import WebSocket from "ws";
-import { ToriiClient } from "@iroha/iroha-js";
+CLI-oriented དཔེ་ཚད་ཆ་ཚང་འཚོལ་དོ་ཡོདཔ་ཨིན་ན? ཚིག༌ཕྲད
+[སྔོན་ལྟའི་བཟོ་ཐབས་འབྲེལ་མཐུད་](./recipes/javascript-connect-preview.md) ནང་ a ཚུད་ཡོད།
+འགྲུལ་ལམ་གྱི་ས་ཁྲ་འདི་ བཀྲམ་སྤེལ་འབད་ཚུགས་པའི་ འགྲུལ་ལམ་གྱི་ ལམ་སྟོན་དང་ ཊེ་ལི་མི་ཊི་གི་ལམ་སྟོན།
+མཐུད་ལམ་གྲལ་ཐིག་ + ཝེབ་སོ་ཀེཊི་ཕོལཔ་འདི་ ཡིག་ཐོག་ལུ་བཀོད་དོ།
 
-const torii = new ToriiClient(process.env.IROHA_TORII_URL ?? "https://torii.nexus.example");
-const preview = await torii.createConnectSessionPreview({ chainId: "sora-mainnet" });
-const session = await torii.createConnectSession({ sid: preview.sidBase64Url });
+### གྱལ་རིམ་བརྡ་འཕྲིན་དང་ཉེན་བརྡ།
 
-const socket = torii.openConnectWebSocket({
-  sid: session.sid,
-  role: "wallet",
-  token: session.token_wallet,
-  WebSocketImpl: WebSocket,
-  protocols: ["iroha-connect"],
-});
-
-socket.addEventListener("message", (event) => {
-  console.log("Connect payload", event.data);
-});
-socket.addEventListener("close", () => {
-  console.log("Connect socket closed");
-});
-
-socket.binaryType = "arraybuffer";
-socket.addEventListener("message", (event) => {
-  if (typeof event.data === "string") {
-    const control = JSON.parse(event.data);
-    console.log("[ws] control", control.kind);
-    return;
-  }
-  pendingFrames.enqueue(new Uint8Array(event.data));
-});
-```
-
-When you only need the URL, call `torii.buildConnectWebSocketUrl(params)` or the
-top-level `buildConnectWebSocketUrl(baseUrl, params)` helper and reuse the
-resulting string in a custom transport/queue.
-
-Looking for a complete CLI-oriented sample? The
-[Connect preview recipe](./recipes/javascript-connect-preview.md) includes a
-runnable script plus telemetry guidance that mirrors the roadmap deliverable for
-documenting the Connect queue + WebSocket flow.
-
-### Queue telemetry & alerting
-
-Wire queue metrics directly into the helper surfaces so dashboards can mirror
-the roadmap KPIs.
+ཐགཔ་གི་གྱལ་རིམ་ཚུ་ ཐད་ཀར་དུ་ གྲོགས་རམ་གྱི་ཁ་ཐོག་ལུ་ གློག་ཐག་ཚུ་གིས་ མེ་ལོང་ནང་ འབད་ཚུགས།
+the rop map KPIs.
 
 ```ts
 import { bootstrapConnectPreviewSession, ConnectQueueError } from "@iroha/iroha-js";
@@ -455,17 +357,17 @@ async function dialWithTelemetry(client: ToriiClient) {
 }
 ```
 
-`ConnectQueueError#toConnectError()` converts queue failures into the generic
-`ConnectError` taxonomy so shared HTTP/WebSocket interceptors can emit the
-standard `connect.queue_depth`, `connect.queue_overflow_total`, and
-`connect.queue_expired_total` metrics referenced throughout the roadmap.
+`ConnectQueueError#toConnectError()` གྱལ་རིམ་འཐུས་ཤོར་ཚུ་སྤྱིར་བཏང་ལུ་གཞི་བསྒྱུར་འབདཝ་ཨིན།
+`ConnectError` བརྗེ་སོར་འབད་མི་ HTTP/WebSocket བར་ཆད་ཚུ་གིས་ བརྗེ་སོར་འབད་ཚུགས།
+ཚད་ལྡན་ `connect.queue_depth`, `connect.queue_overflow_total`, དང་།
+`connect.queue_expired_total` ལམ་གྱི་ས་ཁྲ་ནང་ལུ་ གཞི་བསྟུན་འབད་ཡོདཔ་ཨིན།
 
-## Streaming watchers & event cursors
+## རྒྱུན་སྤེལ་བལྟ་མི་དང་ བྱུང་ལས་འོད་རྟགས་ཚུ།
 
-`ToriiClient.streamEvents()` exposes `/v1/events/sse` as an async iterator with automatic
-retries, so Node/Bun CLIs can tail pipeline activity the same way the Rust CLI does.
-Persist the `Last-Event-ID` cursor alongside your runbook artefacts so operators can
-resume a stream without skipping events when a process restarts.
+`ToriiClient.streamEvents()` རང་བཞིན་གྱིས་ `/v1/events/sse` རང་བཞིན་དང་གཅིག་ཁར་ཨ་སིན་བསྐྱར་ལོག་འབད་མི་ཅིག་སྦེ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+retries, དེ་འབདཝ་ལས་ Node/Bun CLIs གིས་ མཇུག་མཐའི་ཆུ་གཡུར་ལས་རིམ་ཚུ་ རཱསི་ཊི་སི་ཨེལ་ཨའི་གིས་འབད་དོ་བཟུམ་སྦེ་ ཅོག་འཐདཔ་འབད་ཚུགས།
+ཁྱོད་ཀྱི་ རན་བུཀ་ ཅ་རྙིང་ཚུ་དང་གཅིག་ཁར་ `Last-Event-ID` འོད་རྟགས་འདི་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འབད་ཚུགས།
+ལས་སྦྱོར་ཅིག་ལོག་འགོ་བཙུགས་པའི་སྐབས་ བྱུང་ལས་ཚུ་ མ་མཆོང་པར་ རྒྱུན་ལམ་ཅིག་ ལོག་འགོ་བཙུགས།
 
 ```ts
 import fs from "node:fs/promises";
@@ -495,35 +397,33 @@ for await (const event of torii.streamEvents({
 }
 ```
 
-- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
-  `STREAM_FILTER_JSON` to replay the same filters the CLI accepts.
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
-  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
-  for a smoke test.
-- `ToriiClient.streamSumeragiStatus()` mirrors the same interface for
-  `/v1/sumeragi/status/sse` so consensus telemetry can be tailed separately, and the
-  iterator honours `Last-Event-ID` the same way.
-- See `javascript/iroha_js/recipes/streaming.mjs` for a turnkey CLI (cursor persistence,
-  env-var filter overrides, and `extractPipelineStatusKind` logging) used in the JS4
-  streaming/WebSocket roadmap deliverable.
+- `PIPELINE_STATUS` (དཔེར་ན་ `Pending`, `Applied`, ཡང་ན་ I18NI000000131X) ཡང་ན་ གཞི་སྒྲིག་འབད།
+  `STREAM_FILTER_JSON` གིས་ སི་ཨེལ་ཨའི་གིས་ ངོས་ལེན་འབད་མི་ ཚགས་མ་གཅིགཔོ་འདི་ བསྐྱར་རྩེད་འབད་ནི་ལུ་ཨིན།
+- I18NI000000133X གིས་ བསྐྱར་ལོག་འབད་མི་འདི་ གསོན་པོ་སྦེ་བཞགཔ་ཨིན།
+  བརྡ་རྟགས་ཐོབ་ཡོད། ཁྱོད་ལུ་འགོ་ཐོག་བྱུང་རིམ་དག་པ་ཅིག་རྐྱངམ་ཅིག་དགོ་པའི་སྐབས་ `STREAM_MAX_EVENTS=25` བརྒྱུད་དེ་འབད།
+  དུ་ཁ་བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ཨིན།
+- I18NI000000135X གིས་ ངོས་འདྲ་བ་གཅིག་པ་ལུ་ མེ་ལོང་བཟོཝ་ཨིན།
+  `/v1/sumeragi/status/sse` དེ་འབདཝ་ལས་ མོས་མཐུན་གྱི་བརྡ་འཕྲིན་འདི་ སོ་སོ་སྦེ་ མཇུག་བསྡུཝ་ཨིན།
+  iterator གིས་ I18NI000000137X ལུ་གུས་ཞབས་འབདཝ་ཨིན།
+- ལཱའིཊི་ཀི་སི་ཨེལ་ཨའི་ (ད་རེས་ ད་ལྟོའི་གནས་སྟངས་, ,
+  env-var ཚགས་མ་བརྒལ་ནི་དང་ `extractPipelineStatusKind` དྲན་ཐོ་) ཇེ་ཨེསི་༤ ནང་ལག་ལེན་འཐབ་ཡོདཔ།
+  streaming/WeSocket wave srope བཀྲམ་སྤེལ་འབད་བཏུབ།
 
-## UAID portfolios & Space Directory
+## UAID ཡིག་ཆའི་ཡིག་ཆའི་སྣོད་ཐོ།
 
-The Space Directory APIs surface the Universal Account ID (UAID) lifecycle. The
-helpers accept `uaid:<hex>` literals or raw 64-hex digests (LSB=1) and
-canonicalise them before submitting requests:
+གནམ་སྟོང་སྣོད་ཐོ་ཨེ་པི་ཨའི་ཚུ་གིས་ ཡོངས་ཁྱབ་རྩིས་ཐོ་ཨའི་ཌི་ (ཡུ་ཨེ་ཨའི་ཌི་) མི་ཚེ་འཁོར་རིམ་འདི་ ཁ་ཐོག་ལུ་ ཁ་ཐོག་ལུ་འཐོནམ་ཨིན། ཚིག༌ཕྲད
+གྲོགས་རམ་པ་ཚུ་གིས་ `uaid:<hex>` ཡིག་འབྲུ་ཚུ་ཡང་ན་ ཧེགསི་ ༦༤-ཧེགསི་ བཞུ་བཅུག་མི་ (LSB=1) དང་།
+ཞུ་བ་མ་ཕུལ་བའི་ཧེ་མ་ དེ་ཚུ་ ཁྲིམས་མཐུན་བཟོ་ནི།
 
-- `getUaidPortfolio(uaid, { assetId })` aggregates balances per dataspace,
-  grouping asset holdings by canonical account IDs; pass `assetId` to filter the
-  portfolio down to a single asset instance.
-- `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
-  binding (`addressFormat: "compressed"` returns the `sora…` literals).
-- `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
-  lifecycle status, and bound accounts for auditing.
-
-For operator evidence packs, manifest publish/revoke flows, and SDK migration
-guidance, follow the Universal Account Guide (`docs/source/universal_accounts_guide.md`)
-alongside these client helpers so the portal and source documentation remain in sync.
+- I18NI000000141X གནད་སྡུད་ས་སྟོང་རེ་ལུ་ ལྷག་ལུས་ཚུ་ བསྡོམས་རྩིས་འབདཝ་ཨིན།
+  ཀེ་ནོ་ནིག་རྩིས་ཐོའི་ཨའི་ཌི་ཚུ་གིས་ བདག་དབང་གི་ བདག་དབང་ཚུ་ སྡེ་ཚན་བཟོ་ནི། འདི་ཚགས་མ་འབད་ནིའི་དོན་ལུ་ `assetId`
+  spired of sesigh ཅིག་ལུ་མར་འབབ་ཨིན།
+- I18NI000000143X གནད་སྡུད་ས་སྟོང་ ↔ རྩིས་ཐོ་ཆ་མཉམ་གྲངས་རྩིས་འབདཝ་ཨིན།
+  བཱའིན་ཌིང་ (`addressFormat: "compressed"` གིས་ `sora…` ཚིག་དོན་ཚུ་སླར་ལོག་འབདཝ་ཨིན།)
+- I18NI0000000146X གིས་ ལྕོགས་གྲུབ་རེ་རེ་བཞིན་ གསལ་སྟོན་འབདཝ་ཨིན།
+  ཚེ་སྲོག་གི་གནས་རིམ་དང་ རྩིས་ཞིབ་འབད་ནིའི་དོན་ལུ་ མཐའ་མཚམས་ཀྱི་རྩིས་ཁྲ་ཚུ།བཀོལ་སྤྱོད་པའི་སྒྲུབ་བྱེད་ཐུམ་སྒྲིལ་ཚུ་གི་དོན་ལུ་ དཔར་བསྐྲུན་/ཆ་མེད་གཏང་ནི་གི་རྒྱུན་རིམ་ཚུ་གསལ་སྟོན་འབད་ཞིནམ་ལས་ ཨེསི་ཌི་ཀེ་གནས་སྤོ།
+ལམ་སྟོན་, ཡོངས་ཁྱབ་རྩིས་ཁྲའི་ལམ་སྟོན་ (`docs/source/universal_accounts_guide.md`) ལུ་རྗེས་སུ་འབྲང་།
+མཁོ་སྤྲོད་འབད་མི་གྲོགས་རམ་པ་ཚུ་དང་གཅིག་ཁར་ དྲྭ་ཚིགས་དང་འབྱུང་ཁུངས་ཡིག་ཆ་ཚུ་ མཉམ་འབྱུང་ནང་ལུསཔ་ཨིན།
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -544,11 +444,11 @@ const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
 console.log("manifests", manifests.manifests[0].manifest.entries.length);
 ```
 
-Operators can also rotate manifests or execute emergency deny-wins flows without
-dropping to the CLI. Both helpers accept an optional `{ signal }` object so
-long-running submissions can be cancelled with `AbortController`; non-object
-options or non-`AbortSignal` inputs raise a synchronous `TypeError` before the
-request hits Torii:
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གསལ་སྟོན་ཚུ་ཡང་ བསྒྱིར་ཚུགས་ནི་དང་ ཡང་ན་ གློ་བུར་གྱི་ གློ་བུར་གྱི་རྒྱལ་ཁ་ཐོབ་མི་ཚུ་ མེད་པའི་ བསྒྱིར་ཚུགས།
+CLI ལུ་བཀོག་བཞགཔ་ཨིན། གྲོགས་རམ་པ་གཉིས་ཆ་ར་གིས་ གདམ་ཁ་ཅན་གྱི་ `{ signal }` དངོས་པོ་ཅིག་ དང་ལེན་འབདཝ་ཨིན།
+ཡུན་རིངམོ་སྦེ་ གཡོག་བཀོལ་མི་ ཞུ་ཡིག་ཚུ་ `AbortController` གིས་ ཆ་མེད་གཏང་ཚུགས། དངོས་པོ་མ་ཡིན་པ།
+གདམ་ཁ་ ཡང་ན་ non-I18NI0000150X ཨིན་པུཊི་ཚུ་གིས་ མཉམ་འབྱུང་ `TypeError` འདི་ གོང་ལས་ ཡར་སེང་འབདཝ་ཨིན།
+redity hits Torii:
 
 ```ts
 import { promises as fs } from "node:fs";
@@ -583,45 +483,45 @@ await torii.revokeSpaceDirectoryManifest(
 );
 ```
 
-`publishSpaceDirectoryManifest()` accepts either raw manifest JSON (matching the
-fixtures under `fixtures/space_directory/`) or any object that serialises to the
-same structure. `privateKey`, `privateKeyHex`, or `privateKeyMultihash` map to
-the `ExposedPrivateKey` field Torii expects and default to the `ed25519`
-algorithm when no prefix is supplied. Both requests return once Torii enqueues
-the instruction (`202 Accepted`), at which point the ledger will emit the
-matching `SpaceDirectoryEvent`.
+`publishSpaceDirectoryManifest()` གིས་ ཇེ་ཨེསི་ཨོ་ཨེན་ (མཐུན་སྒྲིག་འབད་དོ་ཡོདཔ་ཨིན་) སྔོ་ལྗང་ཅན་གང་རུང་ཅིག་ གསལ་སྟོན་འབདཝ་ཨིན།
+`fixtures/space_directory/` གི་འོག་ལུ་སྒྲིག་བཀོད་ཚུ་) ཡང་ན་ དངོས་པོ་གང་རུང་ཅིག་ལུ་ རིམ་སྒྲིག་འབདཝ་ཨིན།
+གཅིག་པའི་གཞི་བཀོད། `privateKey`, `privateKeyHex`, ཡང་ན་ I18NI000000156X
+`ExposedPrivateKey` རེ་བ་དང་ `ed25519` ལུ་སྔོན་སྒྲིག་འབད་ནི།
+སྔོན་འཇུག་མ་བྱིན་པའི་སྐབས། ཞུ་བ་གཉིས་ཆ་ར་ I18NT0000016X enqueue ཚུ་ཚར་གཅིག་སླར་ལོག་འབདཝ་ཨིན།
+བཀོད་སྒྲིག་ (`202 Accepted`) དེའི་སྐབས་ ལེཌ་ཇར་གྱིས་ ཕྱིར་འཐེན་འབད་འོང་།
+མཐུན་སྒྲིག་ `SpaceDirectoryEvent`.
 
-## Governance & ISO bridge
+## གཞུང་སྐྱོང་དང་ ISO ཟམ་པ།
 
-`ToriiClient` exposes the governance APIs for inspecting contracts, staging
-proposals, submitting ballots (plain or ZK), rotating the council, and calling
+I18NI000000161X གཞུང་སྐྱོང་ཨེ་པི་ཨའེ་ཚུ་ གན་རྒྱ་ཚུ་བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ འགྲེམ་སྟོན་འབདཝ་ཨིན།
+གྲོས་འཆར་ཚུ་ ཚོགས་རྒྱན་ཚུ་ ཕུལ་ཞིནམ་ལས་ (གཙང་མ་ཡང་ན་ ZK) ཚོགས་སྡེ་འདི་ བསྒྱིར་ཞིནམ་ལས་ ཁ་པར་བཏང་ནི།
 `governanceFinalizeReferendumTyped` /
-`governanceEnactProposalTyped` without hand-written DTOs. ISO&nbsp;20022 helpers
-follow the same pattern via `buildPacs008Message`/`buildPacs009Message` and the
-`submitIso*`/`waitForIsoMessageStatus` trio.
+`governanceEnactProposalTyped` ལགཔ་གིས་བྲིས་ཡོད་པའི་ ཌི་ཊི་ཨོ་ཚུ་མེདཔ་ཨིན། ISO ༢༠༠༢༢ རོགས་སྐྱོར།
+`buildPacs008Message`/I18NI000000165X བརྒྱུད་དེ་ དཔེ་རིས་གཅིག་པ།
+`submitIso*`/`waitForIsoMessageStatus` སུམ་སི།
 
-See the [governance & ISO bridge recipe](./recipes/javascript-governance-iso.md)
-for CLI-ready samples plus pointers back to the full field guide in
+བལྟ། [གཞུང་སྐྱོང་དང་ ISO ཟམ་པའི་བཟོ་ཐབས་](./recipes/javascript-governance-iso.md)
+གི་དོན་ལུ་ CLI-red དཔེ་ཚད་ཚུ་ 2 ནང་ ས་སྒོ་ཆ་ཚང་ལམ་སྟོན་པ་ལུ་ ལོག་སྟེ་ དཔག་བྱེད་འབད།
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## RBC sampling & delivery evidence
+## RBC དཔེ་ཚད་དང་ བསྐྱེལ་འདྲེན་གྱི་བདེན་ཁུངས།
 
-The JS roadmap also requires Roadrunner Block Commitment (RBC) sampling so operators can
-prove that the block they fetched through Sumeragi matches the chunk proofs they verify.
-Use the built-in helpers instead of building payloads by hand:
+ཇེ་ཨེསི་ལམ་སྟོན་འདི་ཡང་ རོ་ཌི་རཱན་བཱོཀ་ཁས་བླངས་ (RBC) དགོཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ འབད་ཚུགས།
+Sumeragi བརྒྱུད་དེ་ཁོང་གིས་བདེན་དཔང་འབད་མི་ ཆ་ཤས་བདེན་ཁུངས་ཚུ་དང་མཐུན་སྒྲིག་ཡོདཔ་སྦེ་བདེན་དཔང་འབདཝ་ཨིན།
+ལགཔ་གིས་ གླ་ཆ་རྐྱབ་ནིའི་ཚབ་ལུ་ ནང་འཁོད་གྲོགས་རམ་པ་ཚུ་ ལག་ལེན་འཐབ།
 
-1. `getSumeragiRbcSessions()` mirrors `/v1/sumeragi/rbc/sessions`, and
-   `findRbcSamplingCandidate()` auto-selects the first delivered session with a block hash
-   (the integration suite falls back to it whenever
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` is unset).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` normalises `{blockHash,height,view}`
-   plus optional `{count,seed,apiToken}` overrides so malformed hex or negative integers never
-   reach Torii.
-3. `sampleRbcChunks()` POSTs the request to `/v1/sumeragi/rbc/sample`, returning chunk proofs
-   and Merkle paths (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) you should archive with
-   the rest of your adoption evidence.
-4. `getSumeragiRbcDelivered(height, view)` captures the cohort’s delivery metadata so auditors
-   can replay the proof end-to-end.
+1. `getSumeragiRbcSessions()` `/v1/sumeragi/rbc/sessions`, དང་།
+   `findRbcSamplingCandidate()` རང་བཞིན་-སེལ་འཐུ་འབདཝ་ཨིན། དང་པ་ བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ལཱ་ཡུན་འདི་ སྡེབ་ཚན་ཧེཤ་དང་གཅིག་ཁར་ སེལ་འཐུ་འབདཝ་ཨིན།
+   །མཉམ་པའི་ཆ་ཚན་འདི་ག་དུས་ལུ་ལོག་ལྷོདཔ་ཨིན།
+   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` མ་སྒྲིག་པས།)
+2. `ToriiClient.buildRbcSampleRequest(session, overrides)` སྤྱིར་བཏང་ང་ཡི་`{blockHash,height,view}`
+   གདམ་ཁ་ཅན་གྱི་ `{count,seed,apiToken}` འདི་ བརྒལ་འགྱོཝ་ལས་ ཧེགསི་ཡང་ན་ ངན་པའི་ཧྲིལ་གྲངས་ཚུ་ ནམ་ཡང་ ནམ་ཡང་མ་བྱུང་པས།
+   Torii ལུ་ལྷོད་ཡོདཔ།
+3. I18NI000000176X POSTs `/v1/sumeragi/rbc/sample` ལུ་ཞུ་བ་འབདཝ་ཨིན།
+   དང་ མེར་ཀལ་ལམ་ཚུ་ (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) ཁྱོད་ཀྱིས་ཡིག་མཛོད་དང་གཅིག་ཁར་ གཏན་མཛོད་འབད་དགོ།
+   ཁྱོད་ཀྱི་ངོས་ལེན་གྱི་སྒྲུབ་བྱེད་གཞན་ཚུ།
+4. `getSumeragiRbcDelivered(height, view)` གིས་ སྡེ་ཚན་གྱི་བཀྲམ་སྤེལ་གྱི་མེ་ཊ་ཌེ་ཊ་འདི་ རྩིས་ཞིབ་པ་ཚུ་ བཟུང་དོ་ཡོདཔ་ཨིན།
+   མཐའ་མཇུག་ལས་མཇུག་ཚུན་ཚོད་ བདེན་ཁུངས་འདི་ ལོག་གཏང་ཚུགས།
 
 ```js
 import assert from "node:assert";
@@ -655,23 +555,23 @@ console.log(
 );
 ```
 
-Persist both responses under the artefact root you submit to governance. Override the
-auto-selected session via `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`
-whenever you need to probe a specific block, and treat failures to fetch RBC snapshots as a
-pre-flight gating error rather than silently downgrading to direct mode.
+ཁྱོད་ཀྱིས་ གཞུང་སྐྱོང་ལུ་ཕུལ་མི་ དངོས་པོ་རྩ་བའི་འོག་ལུ་ ལན་གཉིས་ཆ་རང་ བླུགས། དཀའ་སྤྱད་འབད།
+རང་བཞིན་སེལ་འཐུ་འབད་ཡོད་པའི་ལཱ་ཡུན་ `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'` བརྒྱུད་དེ།
+ཁྱོད་ཀྱིས་ དམིགས་བསལ་གྱི་བཀག་ཆ་ཅིག་ འཚོལ་ཞིབ་འབད་དགོཔ་ད་ དེ་ལས་ RBC གི་པར་ཚུ་ འཐོབ་མ་ཚུགས་པའི་ འཐུས་ཤོར་ཚུ་ བརྩི་འཇོག་འབད་དགོ།
+ཐད་ཀར་གྱི་ཐབས་ལམ་ལུ་ ཁུ་སིམ་སིམ་སྦེ་ མར་ཕབ་འབད་ནི་ལས་ འཕུར་འགྲུལ་གྱི་ཧེ་མའི་ གཱ་ཊིང་འཛོལ་བ་།
 
-## Testing & CI
+## བརྟག་དཔྱད་དང་སི་ཨའི།
 
-1. Cache cargo and npm artifacts.
-2. Run `npm run build:native`.
-3. Execute `npm test` (or `node --test` for smoke jobs).
+༡ འདྲ་མཛོད་དང་ npm ཅ་ལག་ཚུ།
+2. `npm run build:native` རྒྱུགས།
+༣ ཐལཝ་གི་ལཱ་གཡོག་གི་དོན་ལུ་ `npm test` (ཡང་ན་ `node --test`) ལག་ལེན་འཐབ་དགོ།
 
-The reference GitHub Actions workflow lives in
+གཞི་བསྟུན་ GitHub Actions ལཱ་གི་རྒྱུན་རིམ་འདི་ ༢༠༠༨ ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
 `docs/source/examples/iroha_js_ci.md`.
 
-## Next steps
+## ཤུལ་མམ་གྱི་གོམ་པ།
 
-- Review the generated types in `javascript/iroha_js/index.d.ts`.
-- Explore the recipes under `javascript/iroha_js/recipes/`.
-- Pair `ToriiClient` with the Norito quickstart to inspect payloads alongside
-  SDK calls.
+- `javascript/iroha_js/index.d.ts` ནང་ བཟོ་བཏོན་འབད་ཡོད་པའི་དབྱེ་བ་བསྐྱར་ཞིབ་འབད།
+- `javascript/iroha_js/recipes/` འོག་ལུ་ཡོད་པའི་བཟའ་ཐབས་ཚུ་འཚོལ་ཞིབ་འབད།
+- Pair `ToriiClient` དང་མཉམ་དུ་ I18NT000000007X མཉམ་དུ་ པེ་ལོཌ་ཚུ་ བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ མགྱོགས་འགོ་བཙུགས་ཡོདཔ།
+  SDK འབོད་བརྡ་ཚུ།

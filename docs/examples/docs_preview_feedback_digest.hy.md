@@ -7,17 +7,18 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4b1191d3475126df594d0f9f81d91f8ebbcd002c74a1f4d4176f2f42a59ca885
 source_last_modified: "2025-12-29T18:16:35.070397+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Feedback Digest (Template)
+# Docs Portal Preview Feedback Digest (Կաղապար)
 
-Use this template when summarising a preview wave for governance, release
-reviews, or `status.md`. Copy the Markdown into the tracking ticket, replace
-placeholders with real data, and attach the JSON summary exported via
-`npm run --prefix docs/portal preview:log -- --summary --summary-json`. The
-`preview:digest` helper (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
-generates the metrics section shown below so you only need to fill in the
-highlights/actions/artefacts rows.
+Օգտագործեք այս ձևանմուշը կառավարման, թողարկման նախադիտման ալիքն ամփոփելիս
+ակնարկներ, կամ `status.md`: Պատճենեք Markdown-ը հետևելու տոմսի մեջ, փոխարինեք
+տեղապահներ իրական տվյալներով և կցեք JSON ամփոփագիրը, որն արտահանվում է միջոցով
+`npm run --prefix docs/portal preview:log -- --summary --summary-json`. Այն
+`preview:digest` օգնական (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
+ստեղծում է ստորև ներկայացված չափումների բաժինը, այնպես որ դուք միայն պետք է լրացնեք
+ընդգծում/գործողություններ/արտեֆակտ տողեր:
 
 ```markdown
 ## Wave preview-<tag> feedback digest (YYYY-MM-DD)
@@ -45,5 +46,5 @@ highlights/actions/artefacts rows.
 
 ```
 
-Keep each digest with the invite-tracking ticket so reviewers and governance can
-replay the evidence trail without digging through CI logs.
+Պահպանեք յուրաքանչյուր ամփոփագիր հրավերի հետագծման տոմսով, որպեսզի վերանայողները և ղեկավարությունը կարողանան
+վերարտադրել ապացույցների հետքը՝ առանց CI տեղեկամատյանները փորելու:

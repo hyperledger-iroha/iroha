@@ -6,29 +6,30 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 04e4cf26ed0ce9f9782be8aae9d16425a7a87fdbd1986cbcbca68a27ba0a3afe
 source_last_modified: "2026-01-03T18:07:57.038859+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Crypto Dependency Audits
+# کریپٹو انحصار آڈٹ
 
-## Streebog (`streebog` crate)
+## اسٹری بوگ (`streebog` کریٹ)
 
-- **Version in tree:** `0.11.0-rc.2` vendored under `vendor/streebog` (used when the `gost` feature is enabled).
-- **Consumer:** `crates/iroha_crypto::signature::gost` (HMAC-Streebog DRBG + message hashing).
-- **Status:** Release-candidate only. No non-RC crate currently offers the required API surface,
-  so we mirror the crate in-tree for auditability while we track upstream for a final release.
-- **Review checkpoints:**
-  - Verified hash output against the Wycheproof suite and TC26 fixtures via
-    `cargo test -p iroha_crypto --features gost` (see `crates/iroha_crypto/tests/gost_wycheproof.rs`).
+- درخت میں ** ورژن: ** `0.11.0-rc.2` `vendor/streebog` کے تحت وینڈر کیا گیا (جب `gost` خصوصیت فعال ہوجائے تو استعمال کیا جاتا ہے)۔
+- ** صارف: ** `crates/iroha_crypto::signature::gost` (HMAC-Streebog DRBG + میسج ہیشنگ)۔
+- ** حیثیت: ** صرف ریلیز-مینڈیٹیٹ۔ کوئی غیر آر سی کریٹ فی الحال مطلوبہ API سطح کی پیش کش نہیں کرتا ہے ،
+  لہذا ہم آڈیٹیبلٹی کے لئے کریٹ ان ٹری کا آئینہ دار ہیں جبکہ ہم حتمی ریلیز کے لئے اپ اسٹریم کو ٹریک کرتے ہیں۔
+- ** جائزہ چوکیوں: **
+  - وائچ پروف سویٹ اور ٹی سی 26 فکسچر کے خلاف تصدیق شدہ ہیش آؤٹ پٹ
+    `cargo test -p iroha_crypto --features gost` (`crates/iroha_crypto/tests/gost_wycheproof.rs` دیکھیں)۔
   - `cargo bench -p iroha_crypto --bench gost_sign --features gost`
-    exercises Ed25519/Secp256k1 alongside every TC26 curve with the current dependency.
+    موجودہ انحصار کے ساتھ ہر TC26 وکر کے ساتھ ساتھ ED25519/SECP256K1 کی مشقیں۔
   - `cargo run -p iroha_crypto --bin gost_perf_check --features gost`
-    compares the fresher measurements against the checked-in medians (use `--summary-only` in CI, add
-    `--write-baseline crates/iroha_crypto/benches/gost_perf_baseline.json` when rebaselining).
-  - `scripts/gost_bench.sh` wraps the bench + check flow; pass `--write-baseline` to update the JSON.
-    See `docs/source/crypto/gost_performance.md` for the end-to-end workflow.
-- **Mitigations:** `streebog` is only ever invoked through deterministic wrappers that zeroise keys;
-  the signer hedges nonces with OS entropy to avoid catastrophic RNG failure.
-- **Next actions:** Follow RustCrypto’s streebog `0.11.x` release; once the tag lands, treat the
-  upgrade as a standard dependency bump (verify checksum, review the diff, record provenance, and
-  drop the vendored mirror).
+    چیک ان میڈینز کے خلاف تازہ پیمائش کا موازنہ کریں (CI میں `--summary-only` استعمال کریں ،
+    `--write-baseline crates/iroha_crypto/benches/gost_perf_baseline.json` جب بازآبادکاری کرتے ہو)۔
+  - `scripts/gost_bench.sh` بینچ + چیک فلو کو لپیٹتا ہے۔ JSON کو اپ ڈیٹ کرنے کے لئے `--write-baseline` پاس کریں۔
+    اختتام سے آخر میں ورک فلو کے لئے `docs/source/crypto/gost_performance.md` دیکھیں۔
+۔
+  تباہ کن آر این جی کی ناکامی سے بچنے کے لئے دستخط کنندہ او ایس اینٹروپی کے ساتھ نونیسس ​​کو ہیج کرتا ہے۔
+۔ ایک بار ٹیگ اترنے کے بعد ، سلوک کریں
+  ایک معیاری انحصار بمپ کے طور پر اپ گریڈ کریں (چیکسم کی تصدیق کریں ، مختلف ، ریکارڈ پروویژن ، اور جائزہ لیں
+  وینڈرڈ آئینہ چھوڑیں)۔

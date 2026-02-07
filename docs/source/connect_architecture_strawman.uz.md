@@ -7,30 +7,31 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a1a6bcc6bca3d7f70b82e35734b71d706ac46d8dc9c728351fabbd8a61dd3f31
 source_last_modified: "2026-01-05T09:28:12.003461+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Connect Session Architecture Strawman (Swift / Android / JS)
+# Ulanish sessiyasi arxitekturasi Strawman (Swift / Android / JS)
 
-This strawman proposal outlines the shared design for Nexus Connect workflows
-across the Swift, Android, and JavaScript SDKs. It is intended to support the
-Feb 2026 cross-SDK workshop and capture open questions before implementation.
+Ushbu strawman taklifi Nexus Connect ish oqimlari uchun umumiy dizaynni tavsiflaydi
+Swift, Android va JavaScript SDK-larida. ni qo'llab-quvvatlash uchun mo'ljallangan
+2026   fevral SDK bo‘yicha seminar va amalga oshirishdan oldin ochiq savollarni yozib oling.
 
-> Last updated: 2026-01-29  
-> Authors: Swift SDK Lead, Android Networking TL, JS Lead  
-> Status: Draft for council review (threat model + data retention alignment added 2026-03-12)
+> Oxirgi yangilangan: 29.01.2026  
+> Mualliflar: Swift SDK Lead, Android Networking TL, JS Lead  
+> Holat: kengash ko‘rib chiqish loyihasi (tahdid modeli + ma’lumotlarni saqlash moslashuvi 2026-03-12 qo‘shilgan)
 
-## Goals
+## Maqsadlar
 
-1. Align wallet ↔ dApp session lifecycle, including connection bootstrapping,
-   approvals, signing requests, and teardown.
-2. Define the Norito envelope schema (open/approve/sign/control) shared by all
-   SDKs and ensure parity with `connect_norito_bridge`.
-3. Split responsibilities between transport (WebSocket/WebRTC), encryption
-   (Norito Connect frames + key exchange), and application layers (SDK facades).
-4. Ensure deterministic behaviour across desktop/mobile platforms, including
-   offline buffering and reconnection.
+1. Hamyonni ↔ dApp seansining hayot aylanishini, jumladan ulanishni yuklash,
+   tasdiqlash, imzolash so'rovlari va parchalanish.
+2. Hamma tomonidan ulashiladigan Norito konvert sxemasini (ochish/tasdiqlash/imzolash/nazorat qilish) belgilang
+   SDK va `connect_norito_bridge` bilan paritetni ta'minlang.
+3. Tashish (WebSocket/WebRTC), shifrlash o'rtasida mas'uliyatni taqsimlash
+   (Norito Ulanish ramkalari + kalit almashinuvi) va dastur qatlamlari (SDK jabhalari).
+4. Ish stoli/mobil platformalarida, jumladan, deterministik xatti-harakatni ta'minlash
+   oflayn buferlash va qayta ulanish.
 
-## Session Lifecycle (High-Level)
+## Seansning hayot aylanishi (yuqori daraja)
 
 ```
 ┌────────────┐      ┌─────────────┐      ┌────────────┐
@@ -56,363 +57,342 @@ Feb 2026 cross-SDK workshop and capture open questions before implementation.
       │ 6. control frames for reject/close, error propagation, heartbeats.
 ```
 
-## Envelope/Norito Schema
+## Konvert/Norito sxemasi
 
-All SDKs MUST use the canonical Norito schema defined in `connect_norito_bridge`:
+Barcha SDKlar `connect_norito_bridge` da belgilangan kanonik Norito sxemasidan foydalanishi SHART:
 
-- `EnvelopeV1` (open / approve / sign / control)
-- `ConnectFrameV1` (ciphertext frames w/ AEAD payload)
-- Control codes:
-  - `open_ext` (metadata, permissions)
-  - `approve_ext` (account, permissions, proofs, signature)
+- `EnvelopeV1` (ochish / tasdiqlash / imzolash / boshqarish)
+- `ConnectFrameV1` (AEAD foydali yuki bilan shifrlangan matnli ramkalar)
+- Boshqarish kodlari:
+  - `open_ext` (metadata, ruxsatlar)
+  - `approve_ext` (hisob, ruxsatlar, dalillar, imzo)
   - `reject`, `close`, `ping/pong`, `error`
 
-Swift previously shipped placeholder JSON encoders (`ConnectCodec.swift`). As of Apr 2026 the SDK
-always uses the Norito bridge and fails closed when the XCFramework is missing, but this strawman
-still captures the mandate that led to the bridge integration:
+Swift oldindan jo'natilgan to'ldiruvchi JSON enkoderlari (`ConnectCodec.swift`). 2026 yil aprel holatiga ko'ra SDK
+har doim Norito ko'prigidan foydalanadi va XCFramework yo'qolganda yopilmaydi, lekin bu strawman
+hali ham ko'prik integratsiyasiga olib kelgan mandatni egallab turibdi:
 
-| Function | Description | Status |
+| Funktsiya | Tavsif | Holati |
 |----------|-------------|--------|
-| `connect_norito_encode_control_open_ext` | dApp open frame | Implemented in bridge |
-| `connect_norito_encode_control_approve_ext` | Wallet approval | Implemented |
-| `connect_norito_encode_envelope_sign_request_tx/raw` | Sign requests | Implemented |
-| `connect_norito_encode_envelope_sign_result_ok/err` | Sign results | Implemented |
-| `connect_norito_decode_*` | Parsing for wallets/dApps | Implemented |
+| `connect_norito_encode_control_open_ext` | dApp ochiq ramka | Ko'prikda amalga oshirildi |
+| `connect_norito_encode_control_approve_ext` | Hamyonni tasdiqlash | Amalga oshirildi |
+| `connect_norito_encode_envelope_sign_request_tx/raw` | Imzo so'rovlari | Amalga oshirildi |
+| `connect_norito_encode_envelope_sign_result_ok/err` | Natijalarni imzolash | Amalga oshirildi |
+| `connect_norito_decode_*` | Hamyonlar/dApps uchun tahlil qilish | Amalga oshirildi |
 
-### Required Work
+### Majburiy ish
 
-- Swift: Replace placeholder `ConnectCodec` JSON helpers with bridge calls and surface
-  typed wrappers (`ConnectFrame`, `ConnectEnvelope`) using the shared Norito types. ✅ (Apr 2026)
-- Android/JS: Ensure the same wrappers exist; align error codes and metadata keys.
-- Shared: Document encryption (X25519 key exchange, AEAD) with consistent key derivation
-  per Norito spec, and provide sample integration tests using the Rust bridge.
+- Swift: `ConnectCodec` JSON yordamchilarini ko'prik qo'ng'iroqlari va sirt bilan almashtiring
+  umumiy Norito turlaridan foydalangan holda yoziladigan o'ramlar (`ConnectFrame`, `ConnectEnvelope`). ✅ (2026 yil aprel)
+- Android/JS: bir xil o'ramlar mavjudligiga ishonch hosil qiling; xato kodlari va metadata kalitlarini tekislang.
+- Umumiy: doimiy kalit hosilasi bilan hujjat shifrlash (X25519 kalit almashinuvi, AEAD)
+  Norito spetsifikatsiyasi bo'yicha va Rust ko'prigi yordamida namunaviy integratsiya testlarini taqdim eting.
 
-## Transport Contract
+## Transport shartnomasi- Asosiy transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
+- Majburiy emas kelajak: WebRTC (TBD) - boshlang'ich strawman uchun imkoniyatdan tashqarida.
+- Qayta ulanish strategiyasi: to'liq jitter bilan eksponensial orqaga qaytish (baza 5s, maksimal 60s); Swift, Android va JS bo'ylab umumiy konstantalar, shuning uchun qayta urinishlar oldindan aytish mumkin bo'lib qoladi.
+- Ping/pong kadansi: qayta ulanishdan oldin uchta o'tkazib yuborilgan tennis uchun tolerantlik bilan 30s yurak urishi; JS brauzerni qisqartirish qoidalarini qondirish uchun minimal intervalni 15 soniyagacha qisqartiradi.
+- Ilgaklar: Android hamyoni SDK uyg'onish uchun ixtiyoriy FCM integratsiyasini taqdim etadi, JS esa so'rovga asoslangan bo'lib qoladi (brauzerni surish ruxsatlari uchun hujjatlashtirilgan cheklovlar).
+- SDK majburiyatlari:
+  - Ping/pong yurak urishlarini saqlang (mobil telefonda batareyalarni zaryadsizlantirishdan saqlaning).
+  - Oflayn rejimda chiquvchi kadrlarni buferlash (chegaralangan navbat, dApp uchun davom etadi).
+- Voqealar oqimining API-ni taqdim eting (Swift Combine `AsyncStream`, Android Flow, JS async iter).
+- Ilgaklarni sirtdan ulang va qo'lda qayta obuna bo'lishiga ruxsat bering.
+- Telemetriya redaktsiyasi: faqat sessiya darajasidagi hisoblagichlarni chiqaradi (`sid` xesh, yo'nalish,
+  ketma-ketlik oynasi, navbat chuqurligi) Connect telemetriyasida hujjatlashtirilgan tuzlar bilan
+  rahbar; sarlavhalar/kalitlar hech qachon jurnallarda yoki disk raskadrovka satrlarida ko'rinmasligi kerak.
 
-- Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
-- Optional future: WebRTC (TBD) – out of scope for initial strawman.
-- Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
-- Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.
-- Push hooks: Android wallet SDK exposes optional FCM integration for wake-ups, while JS stays polling-based (documented limitations for browser push permissions).
-- SDK responsibilities:
-  - Maintain ping/pong heartbeats (avoid draining batteries on mobile).
-  - Buffer outgoing frames when offline (bounded queue, persisted for dApp).
-- Provide event stream API (Swift Combine `AsyncStream`, Android Flow, JS async iter).
-- Surface reconnect hooks and allow manual re-subscribe.
-- Telemetry redaction: only emit session-level counters (`sid` hash, direction,
-  sequence window, queue depth) with salts documented in the Connect telemetry
-  guide; headers/keys must never appear in logs or debug strings.
+## Shifrlash va kalitlarni boshqarish
 
-## Encryption & Key Management
+### Seans identifikatorlari va tuzlari
 
-### Session identifiers & salts
+- `sid` `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` dan olingan 32 baytli identifikator.  
+  DApps uni `/v1/connect/session` ga qo'ng'iroq qilishdan oldin hisoblab chiqadi; hamyonlar buni `approve` ramkalarida aks ettiradi, shuning uchun har ikki tomon ham jurnallar va telemetriyani doimiy ravishda kaliti mumkin.
+- Xuddi shu tuz har bir kalit hosila bosqichini oziqlantiradi, shuning uchun SDK hech qachon xost platformasidan olingan entropiyaga tayanmaydi.
 
-- `sid` is a 32-byte identifier derived from `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
-  DApps compute it before calling `/v1/connect/session`; wallets echo it in `approve` frames so both sides can key journals and telemetry consistently.
-- The same salt feeds every key-derivation step so SDKs never rely on entropy harvested from the host platform.
+### Efemer kalit bilan ishlash
 
-### Ephemeral key handling
-
-- Every session uses fresh X25519 key material.  
-  Swift stores it in the Keychain/Secure Enclave via `ConnectCrypto`, Android wallets default to StrongBox (falling back to TEE-backed keystores), and JS requires a secure-context WebCrypto instance or the native `iroha_js_host` plug-in.
-- Open frames include the dApp ephemeral public key plus an optional attestation bundle. Wallet approvals return the wallet public key and any hardware attestation needed for compliance flows.
-- Attestation payloads follow the accepted schema:  
+- Har bir seans yangi X25519 kalit materialidan foydalanadi.  
+  Swift uni `ConnectCrypto` orqali Keychain/Secure Enclave-da saqlaydi, Android hamyonlari sukut bo'yicha StrongBox (TEE tomonidan qo'llab-quvvatlanadigan kalit do'konlariga tushadi) va JS xavfsiz kontekstli WebCrypto nusxasini yoki mahalliy `iroha_js_host` plaginini talab qiladi.
+- Ochiq ramkalar dApp efemer ochiq kaliti va ixtiyoriy attestatsiya to'plamini o'z ichiga oladi. Hamyonni tasdiqlash hamyonning ochiq kalitini va muvofiqlik oqimi uchun zarur bo‘lgan har qanday apparat sertifikatini qaytaradi.
+- Attestatsiyaning foydali yuklari qabul qilingan sxema bo'yicha:  
   `attestation { platform, evidence_b64, statement_hash }`.  
-  Browsers may omit the block; native wallets include it whenever hardware-backed keys are in use.
+  Brauzerlar blokni o'tkazib yuborishi mumkin; mahalliy hamyonlar uni apparat kalitlari ishlatilayotganda o'z ichiga oladi.
 
-### Directional keys & AEAD
+### Yo'nalish tugmalari va AEAD
 
-- Shared secrets are expanded with HKDF-SHA256 (via the Rust bridge helpers) and domain-separated info strings:
-  - `iroha-connect|k_app` → app→wallet traffic.
-  - `iroha-connect|k_wallet` → wallet→app traffic.
-- AEAD is ChaCha20-Poly1305 for the v1 envelope (`connect_norito_bridge` exposes helpers on every platform).  
-  Associated data equals `("connect:v1", sid, dir, seq_le, kind=ciphertext)` so tampering on headers is detected.
-- Nonces are derived from the 64-bit sequence counter (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Shared helper tests ensure BigInt/UInt conversions behave identically across SDKs.
+- Umumiy sirlar HKDF-SHA256 (Rust ko'prigi yordamchilari orqali) va domendan ajratilgan ma'lumotlar qatorlari bilan kengaytirilgan:
+  - `iroha-connect|k_app` → ilova→hamyon trafiki.
+  - `iroha-connect|k_wallet` → hamyon → ilova trafiki.
+- AEAD v1 konvert uchun ChaCha20-Poly1305 (`connect_norito_bridge` har bir platformada yordamchilarni ko'rsatadi).  
+  Bog'langan ma'lumotlar `("connect:v1", sid, dir, seq_le, kind=ciphertext)` ga teng, shuning uchun sarlavhalarni buzish aniqlanadi.
+- Nonces 64-bitli ketma-ketlik hisoblagichidan (`nonce[0..4]=0`, `nonce[4..12]=seq_le`) olingan. Birgalikda yordamchi testlar BigInt/UInt konversiyalari SDKlarda bir xil harakat qilishini ta'minlaydi.
 
-### Rotation & recovery handshake
+### Aylantirish va tiklash qo'l siqish- Aylanish ixtiyoriy bo‘lib qoladi, lekin protokol aniqlangan: ketma-ketlik hisoblagichlari o‘rash himoyasiga yaqinlashganda dApps `Control::RotateKeys` ramkasini chiqaradi, hamyonlar yangi ochiq kalit va imzolangan tasdiq bilan javob beradi va har ikki tomon ham sessiyani yopmasdan darhol yangi yo‘nalish kalitlarini chiqaradi.
+- Hamyon tomonidagi kalit yo‘qolishi bir xil qo‘l siqishni va undan so‘ng `resume` boshqaruvini ishga tushiradi, shuning uchun dApps eskirgan kalitga mo‘ljallangan keshlangan shifrlangan matnni tozalashni biladi.
 
-- Rotation remains optional but the protocol is defined: dApps emit a `Control::RotateKeys` frame when sequence counters approach the wrap guard, wallets respond with the new public key plus a signed acknowledgement, and both sides immediately derive new directional keys without closing the session.
-- Wallet-side key loss triggers the same handshake followed by a `resume` control so dApps know to flush cached ciphertext that targeted the retired key.
+Tarixiy CryptoKit zaxiralari uchun `docs/connect_swift_ios.md` ga qarang; Kotlin va JS `docs/connect_kotlin_ws*.md` ostida mos havolalarga ega.
 
-For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS have matching references under `docs/connect_kotlin_ws*.md`.
+## Ruxsatlar va dalillar
 
-## Permissions & Proofs
-
-- Permission manifests must round-trip through the shared Norito struct exported by the bridge.  
-  Fields:
-  - `methods` — verbs (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
-  - `events` — subscriptions the dApp is allowed to attach to.  
-  - `resources` — optional account/asset filters so wallets can scope access.  
-  - `constraints` — chain ID, TTL, or custom policy knobs that the wallet enforces before signing.
-- Compliance metadata rides alongside permissions:
-  - Optional `attachments[]` contain Norito attachment references (KYC bundles, regulator receipts).  
-  - `compliance_manifest_id` ties the request to a previously approved manifest so operators can audit provenance.
-- Wallet responses use the agreed codes:
+- Ruxsat manifestlari ko'prik orqali eksport qilingan umumiy Norito tuzilmasi bo'ylab aylanib chiqishi kerak.  
+  Maydonlar:
+  - `methods` — fe'llar (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
+  - `events` — dApp ilovasini biriktirishga ruxsat berilgan obunalar.  
+  - `resources` - ixtiyoriy hisob/aktiv filtrlari, shuning uchun hamyonlar kirishni qamrab oladi.  
+  - `constraints` - zanjir identifikatori, TTL yoki maxsus siyosat tugmalari hamyon imzolashdan oldin amalga oshiradi.
+- Ruxsatlar bilan bir qatorda muvofiqlik metama'lumotlari:
+  - Majburiy emas `attachments[]` Norito biriktirma havolalarini o'z ichiga oladi (KYC to'plamlari, regulyator kvitantsiyalari).  
+  - `compliance_manifest_id` so'rovni avval tasdiqlangan manifest bilan bog'laydi, shuning uchun operatorlar kelib chiqishini tekshirishlari mumkin.
+- Hamyon javoblari kelishilgan kodlardan foydalanadi:
   - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
-  Each may carry a `localized_message` for UI hints plus a machine-readable `reason_code`.
-- Approval frames include the selected account/controller, permission echo, proof bundle (ZK proof or attestation), and any policy toggles (e.g., `offline_queue_enabled`).  
-  Rejections mirror the same schema with empty `proof` but still record the `sid` for auditability.
+  Ularning har birida UI ko‘rsatmalari uchun `localized_message` hamda mashinada o‘qiladigan `reason_code` bo‘lishi mumkin.
+- Tasdiqlash ramkalari tanlangan hisob/nazoratchi, ruxsat aks-sadosi, isbot to‘plami (ZK isboti yoki attestatsiyasi) va har qanday siyosat o‘tish tugmalarini (masalan, `offline_queue_enabled`) o‘z ichiga oladi.  
+  Rad etishlar bir xil sxemani bo'sh `proof` bilan aks ettiradi, ammo audit uchun `sid` ni yozib oladi.
 
-## SDK Facades
+## SDK jabhalari
 
-| SDK | Proposed API | Notes |
+| SDK | Taklif etilgan API | Eslatmalar |
 |-----|--------------|-------|
-| Swift | `ConnectClient`, `ConnectSession`, `ConnectRequest`, `ConnectApproval` | Replace placeholders with typed wrappers + async streams. |
-| Android | Kotlin coroutines + sealed classes for frames | Align with Swift structure for portability. |
-| JS | Async iterators + TypeScript enums for frame kinds | Provide bundler-friendly SDK (browser/node). |
+| Swift | `ConnectClient`, `ConnectSession`, `ConnectRequest`, `ConnectApproval` | To'ldirgichlarni yozilgan o'ramlar + sinxron oqimlar bilan almashtiring. |
+| Android | Kotlin coroutines + ramkalar uchun muhrlangan sinflar | Portativlik uchun Swift tuzilishi bilan tekislang. |
+| JS | Async iteratorlar + ramka turlari uchun TypeScript raqamlari | Bundler uchun qulay SDK (brauzer/tugun) taqdim eting. |
 
-### Common behaviours
-
-- `ConnectSession` orchestrates lifecycle:
-  1. Establish WebSocket, perform handshake.
-  2. Exchange open/approve frames.
-  3. Handle sign requests/responses.
-  4. Emit events to application layer.
-- Provide high-level helpers:
+### Umumiy xatti-harakatlar- `ConnectSession` hayot aylanishini tartibga soladi:
+  1. WebSocket-ni o'rnating, qo'l siqishni bajaring.
+  2. Ochiq/tasdiqlovchi kadrlarni almashish.
+  3. Belgi so'rovlarini/javoblarini ko'rib chiqing.
+  4. Ilova qatlamiga hodisalarni chiqarish.
+- Yuqori darajadagi yordamchilarni taqdim eting:
   - `requestSignature(tx, metadata)`
   - `approveSession(account, permissions)`
   - `reject(reason)`
-  - `cancelRequest(hash)` – emits a control frame acknowledged by the wallet.
-- Error handling: map Norito error codes to SDK-specific errors; include
-  domain-specific codes for UI using the shared taxonomy (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`). Swift's baseline implementation + telemetry guide lives in [`connect_error_taxonomy.md`](connect_error_taxonomy.md) and is the reference for Android/JS parity.
-- Emit telemetry hooks for queue depth, reconnect counts, and request latency (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
+  - `cancelRequest(hash)` - hamyon tomonidan tan olingan boshqaruv ramkasini chiqaradi.
+- Xatolarni qayta ishlash: Norito xato kodlarini SDK-ga xos xatolarga xaritalash; o'z ichiga oladi
+  umumiy taksonomiyadan foydalangan holda UI uchun domenga xos kodlar (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, I180NI08000). Swiftning asosiy amaliyoti + telemetriya qoʻllanmasi [`connect_error_taxonomy.md`](connect_error_taxonomy.md) da ishlaydi va Android/JS pariteti uchun maʼlumotnoma hisoblanadi.
+- Navbat chuqurligi uchun telemetriya ilgaklarini chiqaring, hisoblarni qayta ulash va so'rovning kechikishi (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
  
-## Sequence Numbers & Flow Control
+## Tartib raqamlari va oqimni boshqarish
 
-- Each direction keeps a dedicated 64-bit `sequence` counter that starts at zero when the session opens. The shared helper types clamp increments and trigger a `ConnectError.sequenceOverflow` + key-rotation handshake well before the counter would wrap.
-- Nonces and associated data reference the sequence number, so duplicates can be rejected without parsing payloads. SDKs must store `{sid, dir, seq, payload_hash}` in their journals to make deduplication deterministic across reconnects.
-- Wallets advertise back-pressure via a logical window (`FlowControl` control frames). DApps dequeue only when a window token is available; wallets emit new tokens after processing ciphertext to keep pipelines bounded.
-- Resume negotiation is explicit: both sides emit `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` after reconnecting so observers can verify how much data was re-sent and whether journals contain gaps.
-- Conflicts (e.g., two payloads with the same `(sid, dir, seq)` but different hashes) escalate to `ConnectError.Internal` and force a new `sid` to avoid silent divergence.
+- Har bir yo'nalishda seans ochilganda noldan boshlanadigan 64 bitli `sequence` hisoblagichi mavjud. Birgalikda yordamchi turlari qisqichlarni qisadi va hisoblagich o'ralishidan ancha oldin `ConnectError.sequenceOverflow` + tugmani aylantirish bilan qo'l siqishni ishga tushiradi.
+- Nonces va tegishli ma'lumotlar ketma-ketlik raqamiga ishora qiladi, shuning uchun dublikatlarni foydali yuklarni tahlil qilmasdan rad etish mumkin. SDK'lar `{sid, dir, seq, payload_hash}` ni o'z jurnallarida saqlashi kerak, bu qayta ulanishlar bo'ylab detuplikatsiyani aniqlaydi.
+- Hamyonlar mantiqiy oyna orqali orqa bosimni reklama qiladi (`FlowControl` boshqaruv ramkalari). DApps faqat oyna tokeni mavjud bo'lganda navbatdan chiqariladi; hamyonlar quvurlarni chegaralangan holda saqlash uchun shifrlangan matnni qayta ishlagandan keyin yangi tokenlarni chiqaradi.
+- Muzokaralarni davom ettirish aniq: har ikki tomon qayta ulangandan so'ng `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` chiqaradi, shunda kuzatuvchilar qancha ma'lumot qayta yuborilganligini va jurnallarda bo'shliqlar mavjudligini tekshirishlari mumkin.
+- Mojarolar (masalan, bir xil `(sid, dir, seq)`, lekin turli xil xeshlarga ega ikkita foydali yuk) `ConnectError.Internal` darajasiga ko'tariladi va jim ajralishning oldini olish uchun yangi `sid` ni majburlaydi.
 
-## Threat model and data retention alignment
+## Tahdid modeli va ma'lumotlarni saqlash moslashuvi- **Ko'rib chiqilgan sirtlar:** WebSocket transporti, Norito ko'prik kodlash/dekodlash,
+  jurnal qat'iyligi, telemetriya eksportchilari va ilovalarga qaragan qayta qo'ng'iroqlar.
+- **Asosiy maqsadlar:** sessiya sirlarini himoya qilish (X25519 kalitlari, olingan AEAD kalitlari,
+  nonce/sequence counters) jurnallar/telemetriyadagi oqishlardan, qayta o'ynashni oldini olish va
+  pasaytirish hujumlari, jurnallar va anomaliya hisobotlarini majburiy saqlash.
+- **Kodifikatsiyalangan yumshatish choralari:**
+  - Jurnallar faqat shifrlangan matndan iborat; saqlangan metadata xeshlar, uzunlik bilan cheklangan
+    maydonlar, vaqt belgilari va tartib raqamlari.
+  - Telemetriya foydali yuklari har qanday sarlavha/foydali kontentni o'zgartiradi va faqat o'z ichiga oladi
+    `sid` plyus agregat hisoblagichlarning tuzlangan xeshlari; tahrirlash roʻyxati ulashildi
+    audit pariteti uchun SDKlar o'rtasida.
+  - Sessiya jurnallari sukut bo'yicha 7 kundan keyin aylantiriladi va eskiradi. Hamyonlar ochiladi
+    `connectLogRetentionDays` tugmasi (SDK standart 7) va xatti-harakatni hujjatlashtiring
+    shuning uchun tartibga solinadigan joylashtirishlar qattiqroq oynalarni o'rnatishi mumkin.
+  - Bridge API-dan noto'g'ri foydalanish (bog'lanishlar etishmayotgan, shifrlangan matn, noto'g'ri ketma-ketlik)
+    xom yuklarni yoki kalitlarni aks ettirmasdan yozilgan xatolarni qaytaradi.
 
-- **Surfaces considered:** WebSocket transport, Norito bridge encode/decode,
-  journal persistence, telemetry exporters, and app-facing callbacks.
-- **Primary goals:** protect session secrets (X25519 keys, derived AEAD keys,
-  nonce/sequence counters) from leaks in logs/telemetry, prevent replay and
-  downgrade attacks, and bound retention of journals and anomaly reports.
-- **Mitigations codified:**
-  - Journals carry ciphertext only; metadata stored is limited to hashes, length
-    fields, timestamps, and sequence numbers.
-  - Telemetry payloads redacts any header/payload content and includes only
-    salted hashes of `sid` plus aggregate counters; redaction checklist shared
-    between SDKs for audit parity.
-  - Session logs are rotated and age out after 7 days by default. Wallets expose
-    a `connectLogRetentionDays` knob (SDK default 7) and document the behaviour
-    so regulated deployments can pin stricter windows.
-  - Bridge API misuse (missing bindings, corrupt ciphertext, invalid sequence)
-    returns typed errors without echoing raw payloads or keys.
+Tekshiruvdan kutilayotgan savollar `docs/source/sdk/swift/connect_workshop.md` da kuzatiladi
+va kengash bayonnomasida hal qilinadi; bir marta yopilgan somonchi bo'ladi
+loyihadan qabul qilingangacha ko'tariladi.
 
-Pending questions from review are tracked in `docs/source/sdk/swift/connect_workshop.md`
-and will be resolved in the council minutes; once closed the strawman will be
-promoted from draft to accepted.
+## Oflayn buferlash va qayta ulanishlar
 
-## Offline Buffering & Reconnections
+### Jurnal shartnomasi
 
-### Journaling contract
-
-Every SDK maintains an append-only journal per session so the dApp and wallet
-can queue frames while offline, resume without data loss, and provide evidence
-for telemetry. The contract mirrors the Norito bridge types so the same byte
-representation survives across the mobile/JS stacks.
-
-- Journals live under a hashed session identifier (`sha256(sid)`), producing two
-  files per session: `app_to_wallet.queue` and `wallet_to_app.queue`. Swift uses
-  a sandboxed file wrapper, Android stores the files via `Room`/`FileChannel`,
-  and JS writes to IndexedDB; all formats are binary and endian-stable.
-- Each record serialises as `ConnectJournalRecordV1`:
+Har bir SDK har bir seansda faqat qo'shimchalar jurnalini yuritadi, shuning uchun dApp va hamyon
+oflayn holatda freymlarni navbatga qo‘yishi, ma’lumotlarni yo‘qotmasdan davom ettirishi va dalillar keltirishi mumkin
+telemetriya uchun. Shartnoma Norito ko'prik turlarini aks ettiradi, shuning uchun bir xil bayt
+vakillik mobil/JS steklarida saqlanib qoladi.- Jurnallar xeshlangan sessiya identifikatori (`sha256(sid)`) ostida yashaydi, ikkitasini chiqaradi
+  har bir sessiya uchun fayllar: `app_to_wallet.queue` va `wallet_to_app.queue`. Swift foydalanadi
+  sandboxed fayl o'rami, Android fayllarni `Room`/`FileChannel` orqali saqlaydi,
+  va JS IndexedDB ga yozadi; barcha formatlar ikkilik va endian-barqaror.
+- Har bir yozuv `ConnectJournalRecordV1` sifatida seriyalanadi:
   - `direction: u8` (`0 = app→wallet`, `1 = wallet→app`)
   - `sequence: u64`
-  - `payload_hash: [u8; 32]` (Blake3 of ciphertext + headers)
+  - `payload_hash: [u8; 32]` (Blake3 shifrlangan matn + sarlavhalar)
   - `ciphertext_len: u32`
   - `received_at_ms: u64`
   - `expires_at_ms: u64`
-  - `ciphertext: [u8; ciphertext_len]` (exact Norito frame already AEAD-wrapped)
-- Journals store ciphertext verbatim. We never re-encrypt the payload; AEAD
-  headers already authenticate direction keys, so persistence reduces to
-  fsyncing the appended record.
-- A `ConnectQueueState` struct in memory mirrors the file metadata (depth,
-  bytes used, oldest/newest seq). It feeds the telemetry exporters and the
-  `FlowControl` helper.
-- Journals cap at 32 frames / 1 MiB by default; hitting the cap evicts the
-  oldest entries (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
-  overrides these defaults per deployment.
-- Journals retain data for 24 h (`expires_at_ms`). Background GC removes stale
-  segments eagerly so the on-disk footprint stays bounded.
-- Crash safety: append, fsync, and update the memory mirror _before_ notifying
-  the caller. On startup, SDKs scan the directory, validate record checksums,
-  and rebuild `ConnectQueueState`. Corruption causes the offending record to be
-  skipped, flagged via telemetry, and optionally quarantined for support dumps.
-- Because ciphertext already satisfies the Norito privacy envelope, the only
-  additional metadata recorded is the hashed session id. Apps wanting extra
-  privacy can opt into `telemetry_opt_in = false`, which stores journals but
-  redacts queue-depth exports and disables sharing hashed `sid` in logs.
-- SDKs expose `ConnectQueueObserver` so wallets/dApps can inspect queue depth,
-  drains, and GC outcomes; this hook feeds status UIs without parsing logs.
+  - `ciphertext: [u8; ciphertext_len]` (aniq Norito ramkasi allaqachon AEAD bilan o'ralgan)
+- Jurnallar shifrlangan matnni so'zma-so'z saqlaydi. Biz hech qachon foydali yukni qayta shifrlaymiz; AEAD
+  sarlavhalar allaqachon yo'nalish tugmachalarini autentifikatsiya qiladi, shuning uchun qat'iylik kamayadi
+  qo'shilgan yozuvni sinxronlash.
+- Xotiradagi `ConnectQueueState` strukturasi fayl metama'lumotlarini aks ettiradi (chuqurlik,
+  bayt ishlatilgan, eng qadimgi/yangi ketma-ketlik). U telemetriya eksport qiluvchilarni va
+  `FlowControl` yordamchi.
+- Jurnallar hajmi sukut bo'yicha 32 kvadrat / 1MiB; qalpoqchani urib chiqarib yuboradi
+  eng qadimgi yozuvlar (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
+  har bir joylashtirish uchun ushbu standart sozlamalarni bekor qiladi.
+- Jurnallar ma'lumotlarni 24 soat davomida saqlaydi (`expires_at_ms`). Fon GC eskirganini olib tashlaydi
+  segmentlarni ishtiyoq bilan ajratadi, shuning uchun diskdagi iz chegaralangan bo'lib qoladi.
+- Avariya xavfsizligi: xabar berishdan oldin xotira oynasini qo'shing, fsync va yangilang
+  qo'ng'iroq qiluvchi. Ishga tushganda, SDK katalogni skanerlaydi, nazorat summalarini qayd qiladi,
+  va `ConnectQueueState` ni qayta tiklang. Korruptsiya huquqbuzarlik rekordini keltirib chiqaradi
+  o'tkazib yuborilgan, telemetriya orqali belgilab qo'yilgan va ixtiyoriy ravishda qo'llab-quvvatlash chiqindilari uchun karantinga qo'yilgan.
+- Chunki shifrlangan matn allaqachon Norito maxfiylik konvertini qondiradi, yagona
+  qayd etilgan qo'shimcha metama'lumotlar xeshlangan sessiya identifikatoridir. Qo'shimcha talab qiladigan ilovalar
+  maxfiylik jurnallarni saqlaydigan `telemetry_opt_in = false` ni tanlashi mumkin, ammo
+  navbat chuqurligi eksportini o'zgartiradi va jurnallarda xeshlangan `sid` almashishni o'chiradi.
+- SDKlar `ConnectQueueObserver` ni ochib beradi, shuning uchun hamyonlar/dApps navbat chuqurligini tekshirishi mumkin,
+  drenajlar va GC natijalari; bu ilgak UI statuslarini jurnallarni tahlil qilmasdan beradi.
 
-### Replay & resume semantics
+### Semantikani takrorlang va davom ettiring
 
-1. When reconnecting, SDKs emit `Control::Resume` with `{seq_app_max,
-   seq_wallet_max, queued_app, queued_wallet, journal_hash}`. The hash is the
-   Blake3 digest of the append-only journal so mismatched peers can detect drift.
-2. The receiving peer compares the resume payload with its state, requests
-   retransmission when gaps exist, and acknowledges replayed frames via
+1. Qayta ulanganda, SDK `{seq_app_max bilan `Control::Resume` chiqaradi,
+   seq_wallet_max, queued_app, queued_wallet, journal_hash}`. Xesh - bu
+   Faqat qo'shimchalar uchun jurnalning Bleyk3 dayjesti, shuning uchun mos kelmaydigan tengdoshlar driftni aniqlay oladi.
+2. Qabul qiluvchi tengdosh rezyume yukini uning holati, so'rovlari bilan taqqoslaydi
+   bo'shliqlar mavjud bo'lganda qayta uzatish va takrorlangan kadrlarni orqali tan oladi
    `Control::ResumeAck`.
-3. Replayed frames always respect insertion order (`sequence` then write-time).
-   Wallet SDKs MUST apply back-pressure by issuing `FlowControl` tokens (also
-   journaled) so dApps cannot flood the queue while offline.
-4. Journals store ciphertext verbatim, so replay simply pumps the recorded bytes
-   back through the transport and decoder. No per-SDK re-encoding is allowed.
+3. Qayta tinglangan kadrlar har doim kiritish tartibiga rioya qiladi (`sequence` keyin yozish vaqti).
+   Wallet SDK’lari `FlowControl` tokenlarini chiqarish orqali teskari bosimni qo‘llashi SHART (shuningdek,
+   jurnali) shuning uchun dApps oflayn rejimda navbatni to'ldira olmaydi.
+4. Jurnallar shifrlangan matnni so'zma-so'z saqlaydi, shuning uchun takrorlash oddiygina yozilgan baytlarni pompalaydi.
+   transport va dekoder orqali orqaga. Har bir SDK uchun qayta kodlashga ruxsat berilmaydi.
 
-### Reconnection flow
+### Qayta ulanish oqimi1. Transport WebSocket-ni qayta tiklaydi va yangi ping oralig'i bo'yicha muzokaralar olib boradi.
+2. dApp hamyonning orqa bosimiga rioya qilgan holda navbatda turgan kadrlarni tartibda takrorlaydi
+   (`ConnectSession.nextControlFrame()` `FlowControl` tokenlarini beradi).
+3. Hamyon buferlangan natijalarni parolini hal qiladi, ketma-ketlik monotonligini tekshiradi va
+   tasdiqlar/natijalar kutilayotgan takrorlanadi.
+4. Ikkala tomon ham `seq_app_max`, `seq_wallet_max`, `seq_app_max`,
+   va telemetriya uchun navbat chuqurligi.
+5. Ikki nusxadagi ramkalar (mos keladigan `sequence` + `payload_hash`) tan olinadi va o'chiriladi; ziddiyatlar `ConnectError.Internal` ni ko'taradi va seansni majburiy qayta ishga tushirishni boshlaydi.
 
-1. Transport re-establishes WebSocket and negotiates new ping interval.
-2. dApp replays queued frames in order, respecting back-pressure from wallet
-   (`ConnectSession.nextControlFrame()` yields `FlowControl` tokens).
-3. Wallet decrypts buffered results, verifies sequence monotonicity, and
-   replays pending approvals/results.
-4. Both sides emit a `resume` control summarising `seq_app_max`, `seq_wallet_max`,
-   and queue depths for telemetry.
-5. Duplicate frames (matching `sequence` + `payload_hash`) are acknowledged and dropped; conflicts raise `ConnectError.Internal` and trigger a forced session restart.
+### Muvaffaqiyatsizlik rejimlari
 
-### Failure modes
+- Agar sessiya eskirgan deb hisoblansa (`offline_timeout_ms`, standart 5 daqiqa),
+  buferlangan ramkalar tozalanadi va SDK `ConnectError.sessionExpired` ni ko'taradi.
+- Jurnal buzilgan taqdirda, SDKlar bitta Norito dekodini tuzatishga harakat qiladi; yoqilgan
+  muvaffaqiyatsizlik ular jurnalni tashlab, `connect.queue_repair_failed` telemetriyasini chiqaradi.
+- Ketma-ketlik mos kelmasligi `ConnectError.replayDetected` ni ishga tushiradi va yangisini majburlaydi
+  qo'l siqish (sessiyani yangi `sid` bilan qayta boshlash).
 
-- If the session is considered stale (`offline_timeout_ms`, default 5 minutes),
-  buffered frames are purged and the SDK raises `ConnectError.sessionExpired`.
-- In case of journal corruption, SDKs attempt a single Norito decode repair; on
-  failure they drop the journal and emit `connect.queue_repair_failed` telemetry.
-- Sequence mismatch triggers `ConnectError.replayDetected` and forces a fresh
-  handshake (session restart with new `sid`).
+### Oflayn buferlash rejasi va operator boshqaruvlari
 
-### Offline buffering plan & operator controls
+Seminarning topshirilishi hujjatlashtirilgan rejani talab qiladi, shuning uchun har bir SDK bir xil yuboriladi
+oflayn xatti-harakatlar, tuzatish oqimi va dalillar yuzasi. Quyidagi reja
+Swift (`ConnectSessionDiagnostics`), Androidda keng tarqalgan
+(`ConnectDiagnosticsSnapshot`) va JS (`ConnectQueueInspector`).
 
-The workshop deliverable requires a documented plan so every SDK ships the same
-offline behaviour, remediation flow, and evidence surfaces. The plan below is
-common across Swift (`ConnectSessionDiagnostics`), Android
-(`ConnectDiagnosticsSnapshot`), and JS (`ConnectQueueInspector`).
-
-| State | Trigger | Automatic response | Manual override | Telemetry flag |
-|-------|---------|--------------------|-----------------|----------------|
-| `Healthy` | Queue usage < `disk_watermark_warn` (default 60 %) and `ttl_ok` | None | N/A | `connect.queue_state=\"healthy\"` |
-| `Throttled` | Usage ≥ `disk_watermark_warn` or retries > 5/min | Pause new sign requests, emit flow-control tokens at half rate | Apps may call `clearOfflineQueue(.app|.wallet)`; SDK re-hydrates state from peer once online | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` gauge |
-| `Quarantined` | Usage ≥ `disk_watermark_drop` (default 85 %), corruption detected twice, or `offline_timeout_ms` exceeded | Stop buffering, raise `ConnectError.QueueQuarantined`, require operator acknowledgement | `ConnectSessionDiagnostics.forceReset()` deletes journals after exporting bundle | `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` counter |
-
-- Thresholds live in `ConnectFeatureConfig` (`disk_watermark_warn`,
-  `disk_watermark_drop`, `max_disk_bytes`, `offline_timeout_ms`). When a host
-  omits a value, SDKs fall back to their defaults and log a warning so configs
-  can be audited from telemetry.
-- SDKs expose `ConnectQueueObserver` plus diagnostics helpers:
-  - Swift: `ConnectSessionDiagnostics.snapshot()` yields `{state, depth, bytes,
-    reason}` and `exportJournalBundle(url:)` persists both queues for support.
+| Davlat | Trigger | Avtomatik javob | Qo'lda bekor qilish | Telemetriya bayrog'i |
+|-------|---------|-------------------|-----------------|----------------|
+| `Healthy` | Navbatdan foydalanish  5/min | Yangi belgi so'rovlarini to'xtating, oqimni boshqarish tokenlarini yarim tezlikda chiqaring | Ilovalar `clearOfflineQueue(.app|.wallet)` deb nomlanishi mumkin; SDK re-hydrates holatini tengdoshidan bir marta onlayn | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` o'lchagich |
+| `Quarantined` | Foydalanish ≥ `disk_watermark_drop` (standart 85%), buzilish ikki marta aniqlandi yoki `offline_timeout_ms` oshib ketdi | Buferlashni to'xtating, `ConnectError.QueueQuarantined` ko'taring, operator tasdiqini talab qiling | `ConnectSessionDiagnostics.forceReset()` | to'plamini eksport qilgandan keyin jurnallarni o'chiradi `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` hisoblagich |- Eshiklar `ConnectFeatureConfig` da yashaydi (`disk_watermark_warn`,
+  `disk_watermark_drop`, `max_disk_bytes`, `offline_timeout_ms`). Uy egasi bo'lganda
+  qiymatni o'tkazib yuborsa, SDK'lar sukut bo'yicha qaytadi va konfiguratsiyalar uchun ogohlantirishni qayd qiladi
+  telemetriyadan tekshirish mumkin.
+- SDKlar `ConnectQueueObserver` va diagnostika yordamchilarini ko'rsatadi:
+  - Swift: `ConnectSessionDiagnostics.snapshot()` `{holat, chuqurlik, baytlar,
+    sabab}` and `exportJournalBundle(url:)` qoʻllab-quvvatlash uchun ikkala navbatda ham davom etadi.
   - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
-  - JS: `ConnectQueueInspector.read()` returns the same struct and a blob handle
-    that UI code can upload to Torii support tools.
-- When an app toggles `offline_queue_enabled=false`, SDKs immediately drain and
-  purge both journals, mark the state as `Disabled`, and emit a terminal
-  telemetry event. The user-facing preference is mirrored in the Norito
-  approval frame so peers know whether they can resume buffered frames.
-- Operators run `connect queue inspect --sid <sid>` (CLI wrapper around the SDK
-  diagnostics) during chaos tests; this command prints the state transitions,
-  watermark history, and resume evidence so governance reviews do not depend on
-  platform-specific tooling.
+  - JS: `ConnectQueueInspector.read()` bir xil struktura va blob tutqichini qaytaradi
+    bu UI kodi Torii qo'llab-quvvatlash vositalariga yuklanishi mumkin.
+- Ilova `offline_queue_enabled=false` ni o'zgartirganda, SDK darhol o'chib ketadi va
+  ikkala jurnalni tozalang, holatni `Disabled` deb belgilang va terminalni chiqaring
+  telemetriya hodisasi. Foydalanuvchiga qaragan afzallik Norito da aks ettirilgan
+  tasdiqlash ramkasi, shuning uchun tengdoshlar buferlangan freymlarni davom ettirish mumkinligini bilishadi.
+- Operatorlar `connect queue inspect --sid <sid>` (SDK atrofidagi CLI paketi) ni ishga tushiradilar.
+  diagnostika) xaos testlari paytida; bu buyruq holat o'tishlarini chop etadi,
+  suv belgisi tarixi va dalillarni davom ettiring, shuning uchun boshqaruv sharhlari bunga bog'liq emas
+  platformaga xos asboblar.
 
-### Evidence bundle workflow
+### Dalillar to'plamining ish jarayoni
 
-Support and compliance teams rely on deterministic evidence when auditing
-offline behaviour. Each SDK therefore implements the same three-step export:
+Yordam va muvofiqlik guruhlari audit paytida deterministik dalillarga tayanadi
+oflayn xatti-harakatlar. Shuning uchun har bir SDK bir xil uch bosqichli eksportni amalga oshiradi:
 
-1. `exportJournalBundle(..)` writes `{app_to_wallet,wallet_to_app}.queue` plus a
-   manifest describing the build hash, feature flags, and disk watermarks.
-2. `exportQueueMetrics(..)` emits the last 1 000 telemetry samples so dashboards
-   can be reconstructed offline. Samples include the hashed session id when the
-   user opted in.
-3. The CLI helper zips both exports and attaches a signed Norito metadata file
-   (`ConnectQueueEvidenceV1`) so Torii ingest can archive the bundle in SoraFS.
+1. `exportJournalBundle(..)` yozadi `{app_to_wallet,wallet_to_app}.queue` plus a
+   qurilish xeshini, xususiyat bayroqlarini va diskdagi suv belgilarini tavsiflovchi manifest.
+2. `exportQueueMetrics(..)` oxirgi 1000 ta telemetriya namunalarini chiqaradi, shuning uchun asboblar paneli
+   oflayn rejimda qayta qurish mumkin. Namunalar xeshlangan sessiya identifikatorini o'z ichiga oladi
+   foydalanuvchi ro'yxatdan o'tdi.
+3. CLI yordamchisi ikkala eksportni ham ziplaydi va imzolangan Norito metamaʼlumotlar faylini biriktiradi.
+   (`ConnectQueueEvidenceV1`) shuning uchun Torii qabul qilish paketni SoraFS da arxivlashi mumkin.
 
-Bundles that fail validation are rejected with `connect.evidence_invalid`
-telemetry so the SDK team can reproduce and patch the exporter.
+Tekshirish muvaffaqiyatsiz bo'lgan to'plamlar `connect.evidence_invalid` bilan rad etiladi
+telemetriya, shuning uchun SDK jamoasi eksportchini qayta ishlab chiqarishi va tuzatishi mumkin.
 
-## Telemetry & Diagnostics
-
-- Emit Norito JSON events via shared OpenTelemetry exporters. Mandatory metrics:
-  - `connect.queue_depth{direction}` (gauge) fed by `ConnectQueueState`.
-  - `connect.queue_bytes{direction}` (gauge) for disk-backed footprint.
-  - `connect.queue_dropped_total{reason}` (counter) for `overflow|ttl|repair`.
-  - `connect.offline_flush_total{direction}` (counter) increments when queues
-    drain without transport; failures increment `connect.offline_flush_failed`.
+## Telemetriya va diagnostika- Umumiy OpenTelemetry eksportchilari orqali Norito JSON hodisalarini emitent. Majburiy ko'rsatkichlar:
+  - `ConnectQueueState` tomonidan oziqlangan `connect.queue_depth{direction}` (o'lchagich).
+  - `connect.queue_bytes{direction}` (o'lchagich) diskda qo'llab-quvvatlanadigan iz uchun.
+  - `overflow|ttl|repair` uchun `connect.queue_dropped_total{reason}` (hisoblagich).
+  - `connect.offline_flush_total{direction}` (hisoblagich) navbatda turganda oshadi
+    transportsiz drenajlash; nosozliklar ortishi `connect.offline_flush_failed`.
   - `connect.replay_success_total`/`connect.replay_error_total`.
-  - `connect.resume_latency_ms` histogram (time between reconnect and steady
-    state) plus `connect.resume_attempts_total`.
-  - `connect.session_duration_ms` histogram (per completed session).
-  - `connect.error` structured events with `code`, `fatal`, `telemetry_profile`.
-- Exporters MUST attach `{platform, sdk_version, feature_hash}` labels so
-  dashboards can split by SDK build. The hashed `sid` is optional and only
-  emitted when telemetry opt-in is true.
-- SDK-level hooks surface the same events so apps can export more detail:
-  - Swift: `ConnectSession.addObserver(_:) -> ConnectEvent`.
+  - `connect.resume_latency_ms` gistogrammasi (qayta ulanish va barqaror
+    davlat) plus `connect.resume_attempts_total`.
+  - `connect.session_duration_ms` gistogrammasi (tugallangan sessiya uchun).
+  - `connect.error` tuzilgan voqealar `code`, `fatal`, `telemetry_profile`.
+- Eksportchilar `{platform, sdk_version, feature_hash}` yorliqlarini shunday qilib qo'yishlari SHART
+  asboblar paneli SDK tuzilishi bo'yicha bo'linishi mumkin. Xeshlangan `sid` ixtiyoriy va faqat
+  telemetriyaga kirish rost bo'lganda chiqariladi.
+- SDK darajasidagi ilgaklar bir xil hodisalarni yuzaga keltiradi, shuning uchun ilovalar batafsil ma'lumotlarni eksport qilishi mumkin:
+  - Tezkor: `ConnectSession.addObserver(_:) -> ConnectEvent`.
   - Android: `Flow<ConnectEvent>`.
-  - JS: async iterator or callback.
-- CI gating: Swift jobs run `make swift-ci`, Android uses `./gradlew sdkConnectCi`,
-  and JS runs `npm run test:connect` so telemetry/dashboards remain green before
-  merging Connect changes.
-- Structured logs include the hashed `sid`, `seq`, `queue_depth`, and `sid_epoch`
-  values so operators can correlate client issues. Journals that fail repair emit
-  `connect.queue_repair_failed{reason}` events plus an optional crash dump path.
+  - JS: asinxron iterator yoki qayta qo'ng'iroq qilish.
+- CI gating: Swift vazifalari `make swift-ci` bilan ishlaydi, Android `./gradlew sdkConnectCi` dan foydalanadi,
+  va JS `npm run test:connect` ishlaydi, shuning uchun telemetriya/boshqaruv paneli oldin yashil bo'lib qoladi.
+  birlashtirish Connect o'zgarishlar.
+- Strukturaviy jurnallarga xeshlangan `sid`, `seq`, `queue_depth` va `sid_epoch` kiradi.
+  operatorlar mijozlar muammolarini o'zaro bog'lashlari uchun qiymatlar. Ta'mirlash muvaffaqiyatsiz bo'lgan jurnallar chiqaradi
+  `connect.queue_repair_failed{reason}` hodisalari, shuningdek, ixtiyoriy halokat yoʻli.
 
-### Telemetry hooks & governance evidence
+### Telemetriya ilgaklari va boshqaruv dalillari
 
-- `connect.queue_state` doubles as the roadmap risk indicator. Dashboards group
-  by `{platform, sdk_version}` and render time-in-state so governance can sample
-  monthly drill evidence before approving staged rollouts.
-- `connect.queue_watermark` and `connect.queue_bytes` feed the Connect risk score
-  (`risk.connect.offline_buffer`), which automatically pages SRE when more than
-  5 % of sessions spend >10 minutes in `Throttled`.
-- Exporters attach `feature_hash` to every event so auditor tooling can confirm
-  that the Norito codec + offline plan match the reviewed build. SDK CI fails
-  fast when telemetry reports an unknown hash.
-- The strawman still requires a threat-model appendix; when metrics exceed the
-  policy thresholds, SDKs emit `connect.policy_violation` events summarising the
-  offending sid (hashed), state, and resolved action (`drain|purge|quarantine`).
-- Evidence captured via `exportQueueMetrics` lands in the same SoraFS namespace
-  as the Connect runbook artefacts so council reviewers can trace every drill
-  back to specific telemetry samples without requesting internal logs.
+- `connect.queue_state` yo'l xaritasi xavf ko'rsatkichi sifatida ikki barobar. Boshqaruv paneli guruhi
+  `{platform, sdk_version}` tomonidan va shtatdagi vaqtni ko'rsating, shunda boshqaruv namuna olishi mumkin
+  bosqichli ishlab chiqarishni tasdiqlashdan oldin oylik burg'ulash dalillari.
+- `connect.queue_watermark` va `connect.queue_bytes` Connect xavf reytingini beradi
+  (`risk.connect.offline_buffer`), SRE dan ortiq bo'lganda avtomatik ravishda sahifalarni ochadi
+  Seanslarning 5% `Throttled` da >10 daqiqa vaqt sarflaydi.
+- Eksportchilar `feature_hash` ni har bir hodisaga biriktiradilar, shunda auditor asboblari tasdiqlaydi.
+  Norito kodek + oflayn rejasi ko'rib chiqilgan tuzilishga mos keladi. SDK CI muvaffaqiyatsiz tugadi
+  telemetriya noma'lum xesh haqida xabar berganida tez.
+- Somonchi hali ham tahdid modeli qo'shimchasini talab qiladi; ko'rsatkichlar oshib ketganda
+  siyosat chegaralari, SDKlar `connect.policy_violation` hodisalarini chiqaradi
+  qoidabuzar sid (xeshlangan), holat va hal qilingan harakat (`drain|purge|quarantine`).
+- `exportQueueMetrics` orqali olingan dalillar bir xil SoraFS nom maydoniga tushadi
+  Connect runbook artefaktlari sifatida kengash sharhlovchilari har bir mashqni kuzatishi mumkin
+  ichki jurnallarni talab qilmasdan muayyan telemetriya namunalariga qaytish.
 
-## Frame Ownership & Responsibilities
+## Ramkaga egalik va mas'uliyat| Ramka / Boshqarish | Egasi | Domen ketma-ketligi | Jurnal davom etdimi? | Telemetriya belgilari | Eslatmalar |
+|----------------|-------|-----------------|-------------------|------------------|-------|
+| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | Metadata + ruxsat bitmapini olib yuradi; hamyonlar so'rovlar oldidan so'nggi ochilganni takrorlaydi. |
+| `Control::Approve` | Hamyon | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | Hisob, dalillar, imzolarni o'z ichiga oladi. Bu yerda meta-maʼlumotlar versiyasi oʻsishi qayd etilgan. |
+| `Control::Reject` | Hamyon | `seq_wallet` | ✅ | `event=reject`, `reason` | Ixtiyoriy mahalliylashtirilgan xabar; dApp kutilayotgan belgi so'rovlarini o'chirib tashlaydi. |
+| `Control::Close` (init) | dApp | `seq_app` | ✅ | `event=close`, `initiator=app` | Hamyon o'zining `Close` bilan tan oladi. |
+| `Control::Close` (ack) | Hamyon | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | Yirtilishni tasdiqlaydi; GC ikkala tomon ham freymni saqlab qolganda jurnallarni olib tashlaydi. |
+| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | Takroriy nizolarni aniqlash uchun foydali yuk xeshi qayd etildi. |
+| `SignResult` | Hamyon | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | Imzolangan baytlarning BLAKE3 xeshini o'z ichiga oladi; muvaffaqiyatsizliklar `ConnectError.Signing` ni oshiradi. |
+| `Control::Error` | Hamyon (ko'pchilik) / dApp (transport) | mos keladigan egasi domeni | ✅ | `event=error`, `code` | Fatal xatolar seansni qayta boshlashga majbur qiladi; telemetriya belgilari `fatal=true`. |
+| `Control::RotateKeys` | Hamyon | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | Yangi yo'nalish tugmachalarini e'lon qiladi; dApp `RotateKeysAck` (ilova tomonida jurnal) bilan javob beradi. |
+| `Control::Resume` / `ResumeAck` | Ikkala | faqat mahalliy domen | ✅ | `event=resume`, `direction=app|wallet` | Navbat chuqurligi + ketma-ketlik holatini umumlashtiradi; xashed jurnali dayjest tashxisga yordam beradi. |
 
-| Frame / Control | Owner | Sequence domain | Journal persisted? | Telemetry labels | Notes |
-|-----------------|-------|-----------------|--------------------|------------------|-------|
-| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | Carries metadata + permission bitmap; wallets replay the latest open before prompts. |
-| `Control::Approve` | Wallet | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | Includes account, proofs, signatures. Metadata version increments recorded here. |
-| `Control::Reject` | Wallet | `seq_wallet` | ✅ | `event=reject`, `reason` | Optional localized message; dApp drops pending sign requests. |
-| `Control::Close` (init) | dApp | `seq_app` | ✅ | `event=close`, `initiator=app` | Wallet acknowledges with its own `Close`. |
-| `Control::Close` (ack) | Wallet | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | Confirms teardown; GC removes journals once both sides persist the frame. |
-| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | Payload hash recorded for replay conflict detection. |
-| `SignResult` | Wallet | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | Includes BLAKE3 hash of signed bytes; failures raise `ConnectError.Signing`. |
-| `Control::Error` | Wallet (most) / dApp (transport) | matching owner domain | ✅ | `event=error`, `code` | Fatal errors force session restart; telemetry marks `fatal=true`. |
-| `Control::RotateKeys` | Wallet | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | Announces new direction keys; dApp replies with `RotateKeysAck` (journaled on app side). |
-| `Control::Resume` / `ResumeAck` | Both | local domain only | ✅ | `event=resume`, `direction=app|wallet` | Summarises queue depth + seq state; hashed journal digest aids diagnosis. |
+- Yo'nalish shifrlash kalitlari har bir rol uchun simmetrik bo'lib qoladi (`app→wallet`, `wallet→app`).
+  Hamyonni aylantirish takliflari `Control::RotateKeys` va dApps orqali e'lon qilinadi.
+  `Control::RotateKeysAck` chiqarish orqali tan oling; ikkala ramka ham diskka tegishi kerak
+  Qayta o'ynash bo'shliqlarini oldini olish uchun tugmalarni almashtirishdan oldin.
+- Metadata ilovasi (piktogrammalar, mahalliylashtirilgan nomlar, muvofiqlik dalillari) tomonidan imzolangan
+  hamyon va dApp tomonidan keshlangan; yangilanishlar yangi tasdiqlash ramkasini talab qiladi
+  oshirilgan `metadata_version`.
+- Yuqoridagi egalik matritsasi SDK hujjatlaridan olingan, shuning uchun CLI/web/automation
+  mijozlar bir xil shartnoma va asboblar standartlariga rioya qilishadi.
 
-- Directional cipher keys remain symmetric per role (`app→wallet`, `wallet→app`).
-  Wallet rotation proposals are advertised via `Control::RotateKeys`, and dApps
-  acknowledge by emitting `Control::RotateKeysAck`; both frames must hit disk
-  before keys swap to avoid replay gaps.
-- Metadata attachment (icons, localized names, compliance proofs) is signed by
-  the wallet and cached by the dApp; updates require a fresh approval frame with
-  incremented `metadata_version`.
-- Ownership matrix above is referenced from SDK docs so CLI/web/automation
-  clients follow the same contract and instrumentation defaults.
+## Ochiq savollar
 
-## Open Questions
+1. **Session kashfiyoti**: WalletConnect kabi QR kodlari / tarmoqdan tashqari qo‘l siqish kerakmi? (Kelajakdagi ish.)
+2. **Multisig**: Ko‘p belgilarni tasdiqlash qanday ifodalanadi? (Bir nechta imzoni qo'llab-quvvatlash uchun belgi natijasini kengaytiring.)
+3. **Muvofiqlik**: Qaysi maydonlar tartibga solinadigan oqimlar uchun majburiydir (har bir yo‘l xaritasi bo‘yicha)? (Muvofiqlik bo'yicha guruh ko'rsatmalarini kuting.)
+4. **SDK packaging**: Umumiy kodni (masalan, Norito Connect kodeklari) platformalararo qutiga kiritishimiz kerakmi? (TBD.)
 
-1. **Session discovery**: Do we need QR codes / out-of-band handshake like WalletConnect? (Future work.)
-2. **Multisig**: How are multi-sign approvals represented? (Extend sign result to support multiple signatures.)
-3. **Compliance**: Which fields are mandatory for regulated flows (per roadmap)? (Await compliance team guidance.)
-4. **SDK packaging**: Should we factor shared code (e.g., Norito Connect codecs) into a cross-platform crate? (TBD.)
-
-## Next Steps
-
-- Circulate this strawman to the SDK council (Feb 2026 meeting).
-- Collect feedback on open questions and update doc accordingly.
-- Schedule implementation breakdown per SDK (Swift IOS7, Android AND7, JS Connect milestones).
-- Track progress via roadmap hot list; update `status.md` once strawman is ratified.
+## Keyingi qadamlar- Bu somonni SDK kengashiga yuboring (2026 yil fevral yig'ilishi).
+- Ochiq savollar bo'yicha fikr-mulohazalarni to'plang va shunga mos ravishda hujjatni yangilang.
+- SDK bo'yicha amalga oshirishni rejalashtirish (Swift IOS7, Android AND7, JS Connect bosqichlari).
+- Yo'l xaritasi issiq ro'yxati orqali taraqqiyotni kuzatib boring; strawman ratifikatsiya qilingandan so'ng `status.md` yangilang.

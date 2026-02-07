@@ -4,60 +4,62 @@ direction: ltr
 source: docs/portal/docs/devportal/torii-rpc-overview.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Resumen de Norito-RPC
+# Resumo de Norito-RPC
 
-Norito-RPC es el transporte binario para las APIs de Torii. Reutiliza las mismas rutas HTTP que `/v1/pipeline` pero intercambia cargas enmarcadas por Norito que incluyen hashes de esquema y checksums. Usalo cuando necesites respuestas deterministas y validadas o cuando las respuestas JSON del pipeline se vuelvan un cuello de botella.
+Norito-RPC é o transporte binário para as APIs de Torii. Reutiliza as mesmas rotas HTTP que `/v1/pipeline`, mas alterna cargas marcadas por Norito que incluem hashes de esquema e somas de verificação. Usado quando você precisa de respostas deterministas e validadas ou quando as respostas JSON do pipeline são retornadas para um copo de garrafa.
 
-## Por que cambiar?
-- El enmarcado determinista con CRC64 y hashes de esquema reduce errores de decodificacion.
-- Los helpers Norito compartidos entre SDKs te permiten reutilizar tipos existentes del modelo de datos.
-- Torii ya etiqueta las sesiones Norito en telemetria, asi que los operadores pueden monitorear la adopcion con los paneles provistos.
+## Por que mudar?
+- O determinista marcado com CRC64 e hashes de esquema reduzem erros de decodificação.
+- Os auxiliares Norito compartilhados entre SDKs permitem reutilizar tipos existentes no modelo de dados.
+- Torii e marque as sessões Norito em telemetria, para que os operadores possam monitorar a adoção com os painéis fornecidos.
 
-## Como hacer una solicitud
+## Como fazer uma solicitação
 
 ```bash
 curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
-1. Serializa tu payload con el codec Norito (`iroha_client`, helpers del SDK o `norito::to_bytes`).
-2. Envia la solicitud con `Content-Type: application/x-norito`.
-3. Solicita una respuesta Norito usando `Accept: application/x-norito`.
-4. Decodifica la respuesta con el helper de SDK correspondiente.
+1. Serialize sua carga útil com o codec Norito (`iroha_client`, ajudantes do SDK ou `norito::to_bytes`).
+2. Envie a solicitação com `Content-Type: application/x-norito`.
+3. Solicite uma resposta Norito usando `Accept: application/x-norito`.
+4. Decodificar a resposta com o auxiliar do SDK correspondente.
 
-Guia por SDK:
-- **Rust**: `iroha_client::Client` negocia Norito automaticamente cuando estableces el header `Accept`.
+Guia do SDK:
+- **Rust**: `iroha_client::Client` negocia Norito automaticamente quando estabelece o cabeçalho `Accept`.
 - **Python**: usa `NoritoRpcClient` de `iroha_python.norito_rpc`.
-- **Android**: usa `NoritoRpcClient` y `NoritoRpcRequestOptions` en el SDK de Android.
-- **JavaScript/Swift**: los helpers se rastrean en `docs/source/torii/norito_rpc_tracker.md` y llegaran como parte de NRPC-3.
+- **Android**: usa `NoritoRpcClient` e `NoritoRpcRequestOptions` no SDK do Android.
+- **JavaScript/Swift**: os auxiliares são rastreados em `docs/source/torii/norito_rpc_tracker.md` e transferidos como parte do NRPC-3.
 
-## Ejemplo de consola Try It
+## Exemplo de console Try It
 
-El portal de desarrolladores incluye un proxy Try It para que los revisores puedan reproducir payloads Norito sin escribir scripts a medida.
+O portal de desenvolvimento inclui um proxy Try It para que os revisores possam reproduzir cargas úteis Norito sem escrever scripts conforme necessário.
 
-1. [Inicia el proxy](./try-it.md#start-the-proxy-locally) y define `TRYIT_PROXY_PUBLIC_URL` para que los widgets sepan a donde enviar el trafico.
-2. Abre la tarjeta **Try it** en esta pagina o el panel `/reference/torii-swagger` y selecciona un endpoint como `POST /v1/pipeline/submit`.
-3. Cambia el **Content-Type** a `application/x-norito`, elige el editor **Binary** y sube `fixtures/norito_rpc/transfer_asset.norito` (o cualquier payload listado en `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
-4. Proporciona un bearer token via el widget OAuth device-code o el campo de token manual (el proxy acepta overrides `X-TryIt-Auth` cuando se configura con `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
-5. Envia la solicitud y verifica que Torii refleje el `schema_hash` listado en `fixtures/norito_rpc/schema_hashes.json`. Los hashes coincidentes confirman que el encabezado Norito sobrevivio el salto navegador/proxy.
+1. [Inicie o proxy](./try-it.md#start-the-proxy-locally) e defina `TRYIT_PROXY_PUBLIC_URL` para que os widgets se espalhem para onde enviar o tráfego.
+2. Abra a tarjeta **Try it** nesta página ou no painel `/reference/torii-swagger` e selecione um endpoint como `POST /v1/pipeline/submit`.
+3. Mude o **Content-Type** para `application/x-norito`, escolha o editor **Binary** e sube `fixtures/norito_rpc/transfer_asset.norito` (ou qualquer carga útil listada em `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
+4. Proporcione um token de portador por meio do widget OAuth device-code ou do campo de token manual (o proxy aceita substitui `X-TryIt-Auth` quando configurado com `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
+5. Envie a solicitação e verifique se Torii reflete o `schema_hash` listado em `fixtures/norito_rpc/schema_hashes.json`. Os hashes coincidentes confirmam que o encabezado Norito sobrevive ao salto navegador/proxy.
 
-Para evidencia del roadmap, combina la captura de pantalla de Try It con una ejecucion de `scripts/run_norito_rpc_fixtures.sh --note "<ticket>"`. El script envuelve `cargo xtask norito-rpc-verify`, escribe el resumen JSON en `artifacts/norito_rpc/<timestamp>/` y captura los mismos fixtures que consumio el portal.
+Para evidenciar o roteiro, combine a captura de tela de Try It com uma execução de `scripts/run_norito_rpc_fixtures.sh --note "<ticket>"`. O script envolve `cargo xtask norito-rpc-verify`, escreve o currículo JSON em `artifacts/norito_rpc/<timestamp>/` e captura os mesmos fixtures que consomem o portal.
 
-## Resolucion de problemas
+## Resolução de problemas
 
-| Sintoma | Donde aparece | Causa probable | Solucion |
+| Sintoma | Donde aparece | Causa provável | Solução |
 | --- | --- | --- | --- |
-| `415 Unsupported Media Type` | Respuesta de Torii | Falta o es incorrecto el header `Content-Type` | Define `Content-Type: application/x-norito` antes de enviar el payload. |
-| `X-Iroha-Error-Code: schema_mismatch` (HTTP 400) | Cuerpo/headers de respuesta de Torii | El hash del esquema de fixtures difiere del build de Torii | Regenera fixtures con `cargo xtask norito-rpc-fixtures` y confirma el hash en `fixtures/norito_rpc/schema_hashes.json`; usa fallback JSON si el endpoint aun no habilito Norito. |
-| `{"error":"origin_forbidden"}` (HTTP 403) | Respuesta del proxy Try It | La solicitud provino de un origen que no esta listado en `TRYIT_PROXY_ALLOWED_ORIGINS` | Agrega el origen del portal (por ejemplo, `https://docs.devnet.sora.example`) a la variable de entorno y reinicia el proxy. |
-| `{"error":"rate_limited"}` (HTTP 429) | Respuesta del proxy Try It | La cuota por IP excedio el presupuesto de `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` | Incrementa el limite para pruebas internas de carga o espera hasta que la ventana se reinicie (consulta `retryAfterMs` en la respuesta JSON). |
-| `{"error":"upstream_timeout"}` (HTTP 504) o `{"error":"upstream_error"}` (HTTP 502) | Respuesta del proxy Try It | Torii agoto el tiempo o el proxy no pudo alcanzar el backend configurado | Verifica que `TRYIT_PROXY_TARGET` sea accesible, revisa la salud de Torii o reintenta con un `TRYIT_PROXY_TIMEOUT_MS` mayor. |
+| `415 Unsupported Media Type` | Resposta de Torii | Falta ou está incorreto o cabeçalho `Content-Type` | Defina `Content-Type: application/x-norito` antes de enviar a carga útil. |
+| `X-Iroha-Error-Code: schema_mismatch` (HTTP400) | Cuerpo/headers de resposta de Torii | O hash do esquema de luminárias difere da construção de Torii | Regenera fixtures com `cargo xtask norito-rpc-fixtures` e confirma o hash em `fixtures/norito_rpc/schema_hashes.json`; usa JSON substituto se o endpoint não estiver habilitado para Norito. |
+| `{"error":"origin_forbidden"}` (HTTP403) | Resposta do proxy Try It | A solicitação de uma origem que não esteja listada em `TRYIT_PROXY_ALLOWED_ORIGINS` | Agregue a origem do portal (por exemplo, `https://docs.devnet.sora.example`) à variável de ambiente e reinicie o proxy. |
+| `{"error":"rate_limited"}` (HTTP429) | Resposta do proxy Try It | A cota por IP excede o pressuposto de `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` | Aumente o limite para testes internos de carga ou espere até que a janela seja reiniciada (consulte `retryAfterMs` na resposta JSON). |
+| `{"error":"upstream_timeout"}` (HTTP 504) ou `{"error":"upstream_error"}` (HTTP 502) | Resposta do proxy Try It | Torii aguardo o tempo ou o proxy não posso alcançar o backend configurado | Verifique se `TRYIT_PROXY_TARGET` é acessível ao mar, revise a saúde de Torii ou tente novamente com um `TRYIT_PROXY_TIMEOUT_MS` maior. |
 
-Mas diagnosticos de Try It y consejos de OAuth viven en [`devportal/try-it.md`](./try-it.md#norito-rpc-samples).
+Mas diagnósticos de Try It e conselhos de OAuth vivem em [`devportal/try-it.md`](./try-it.md#norito-rpc-samples).
 
-## Recursos adicionales
+## Recursos adicionais
 - RFC de transporte: `docs/source/torii/norito_rpc.md`
-- Resumen ejecutivo: `docs/source/torii/norito_rpc_brief.md`
-- Tracker de acciones: `docs/source/torii/norito_rpc_tracker.md`
-- Instrucciones del proxy Try-It: `docs/portal/docs/devportal/try-it.md`
+- Currículo executivo: `docs/source/torii/norito_rpc_brief.md`
+- Rastreador de ações: `docs/source/torii/norito_rpc_tracker.md`
+- Instruções do proxy Try-It: `docs/portal/docs/devportal/try-it.md`

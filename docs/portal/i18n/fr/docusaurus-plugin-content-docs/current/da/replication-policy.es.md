@@ -4,61 +4,59 @@ direction: ltr
 source: docs/portal/docs/da/replication-policy.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note Fuente canonica
-Refleja `docs/source/da/replication_policy.md`. Mantenga ambas versiones en
+Refleja `docs/source/da/replication_policy.md`. Mantenga ambas versions fr
 :::
 
-# Politica de replicacion de Data Availability (DA-4)
+# Politique de réplication de la disponibilité des données (DA-4)
 
-_Estado: En progreso -- Responsables: Core Protocol WG / Storage Team / SRE_
+_État : En progreso -- Responsables : Core Protocol WG / Storage Team / SRE_
 
-El pipeline de ingesta DA ahora aplica objetivos de retencion deterministas para
-cada clase de blob descrita en `roadmap.md` (workstream DA-4). Torii rechaza
-persistir envelopes de retencion provistos por el caller que no coincidan con la
-politica configurada, garantizando que cada nodo validador/almacenamiento retiene
-el numero requerido de epocas y replicas sin depender de la intencion del emisor.
+Le pipeline d'ingesta DA maintenant appliqué aux objectifs de rétention déterminés pour
+Chaque classe de blob est décrite dans `roadmap.md` (flux de travail DA-4). Torii rechaza
+persister les enveloppes de rétention réservées à l'appelant qui ne coïncide pas avec la
+politique configurée, garantizando que cada nodo validador/almacenamiento retiene
+le nombre requis d’époques et de répliques ne dépend pas de l’intention de l’émetteur.
 
-## Politica por defecto
+## Politique par défaut
 
-| Clase de blob | Retencion hot | Retencion cold | Replicas requeridas | Clase de almacenamiento | Tag de gobernanza |
-|--------------|---------------|----------------|---------------------|-------------------------|-------------------|
-| `taikai_segment` | 24 horas | 14 dias | 5 | `hot` | `da.taikai.live` |
-| `nexus_lane_sidecar` | 6 horas | 7 dias | 4 | `warm` | `da.sidecar` |
-| `governance_artifact` | 12 horas | 180 dias | 3 | `cold` | `da.governance` |
-| _Default (todas las demas clases)_ | 6 horas | 30 dias | 3 | `warm` | `da.default` |
+| Classe de blob | Rétention chaude | Rétention à froid | Répliques requises | Classe de stockage | Étiquette de gouvernement |
+|--------------|---------------|----------------|---------------------|------------------------------|-------------------|
+| `taikai_segment` | 24 heures | 14 jours | 5 | `hot` | `da.taikai.live` |
+| `nexus_lane_sidecar` | 6 heures | 7 jours | 4 | `warm` | `da.sidecar` |
+| `governance_artifact` | 12 heures | 180 jours | 3 | `cold` | `da.governance` |
+| _Par défaut (toutes les classes)_ | 6 heures | 30 jours | 3 | `warm` | `da.default` |Ces valeurs sont incrustan en `torii.da_ingest.replication_policy` et sont appliquées à
+todas las sollicitudes `/v1/da/ingest`. Torii réécrire les manifestes avec le profil de
+retenir l'impôt et émettre une publicité lorsque les appelants entrent des valeurs
+Il n'y a aucune coïncidence pour que les opérateurs détectent des SDK désactualisés.
 
-Estos valores se incrustan en `torii.da_ingest.replication_policy` y se aplican a
-todas las solicitudes `/v1/da/ingest`. Torii reescribe manifests con el perfil de
-retencion impuesto y emite una advertencia cuando los callers entregan valores
-no coincidentes para que los operadores detecten SDKs desactualizados.
+### Classes de disponibilité Taikai
 
-### Clases de disponibilidad Taikai
+Les manifestes d'enrutamiento Taikai (`taikai.trm`) déclarent un
+`availability_class` (`hot`, `warm`, ou `cold`). Torii application politique
+correspondant avant le chunking pour que les opérateurs puissent intensifier le
+conteo de répliques pour stream sans éditer la table globale. Valeurs par défaut :
 
-Los manifests de enrutamiento Taikai (`taikai.trm`) declaran un
-`availability_class` (`hot`, `warm`, o `cold`). Torii aplica la politica
-correspondiente antes del chunking para que los operadores puedan escalar el
-conteo de replicas por stream sin editar la tabla global. Defaults:
+| Classe de disponibilité | Rétention chaude | Rétention à froid | Répliques requises | Classe de stockage | Étiquette de gouvernement |
+|------------------------------|---------------|----------------|---------------------|-------------------------|-------------------|
+| `hot` | 24 heures | 14 jours | 5 | `hot` | `da.taikai.live` |
+| `warm` | 6 heures | 30 jours | 4 | `warm` | `da.taikai.warm` |
+| `cold` | 1 heure | 180 jours | 3 | `cold` | `da.taikai.archive` |
 
-| Clase de disponibilidad | Retencion hot | Retencion cold | Replicas requeridas | Clase de almacenamiento | Tag de gobernanza |
-|-------------------------|---------------|----------------|---------------------|-------------------------|-------------------|
-| `hot` | 24 horas | 14 dias | 5 | `hot` | `da.taikai.live` |
-| `warm` | 6 horas | 30 dias | 4 | `warm` | `da.taikai.warm` |
-| `cold` | 1 hora | 180 dias | 3 | `cold` | `da.taikai.archive` |
+Les pistes fausses utilisent `hot` par défaut pour les transmissions en vivo
+retengan la politique plus forte. Surcrire les valeurs par défaut via
+`torii.da_ingest.replication_policy.taikai_availability` si su red usa objectifs
+différentes.
 
-Las pistas faltantes usan `hot` por defecto para que las transmisiones en vivo
-retengan la politica mas fuerte. Sobrescriba los defaults via
-`torii.da_ingest.replication_policy.taikai_availability` si su red usa objetivos
-diferentes.
-
-## Configuracion
-
-La politica vive bajo `torii.da_ingest.replication_policy` y expone un template
-*default* mas un arreglo de overrides por clase. Los identificadores de clase no
-son sensibles a mayus/minus y aceptan `taikai_segment`, `nexus_lane_sidecar`,
-`governance_artifact`, o `custom:<u16>` para extensiones aprobadas por gobernanza.
-Las clases de almacenamiento aceptan `hot`, `warm`, o `cold`.
+## ConfigurationLa politique vive sous `torii.da_ingest.replication_policy` et expose un modèle
+*par défaut* mais un paramètre de remplacement par classe. Los identificadores de classe no
+fils sensibles à mayus/minus et aceptan `taikai_segment`, `nexus_lane_sidecar`,
+`governance_artifact`, ou `custom:<u16>` pour extensions approuvées par le gouvernement.
+Les classes de stockage acceptent `hot`, `warm` ou `cold`.
 
 ```toml
 [torii.da_ingest.replication_policy.default_retention]
@@ -78,12 +76,12 @@ storage_class = "hot"
 governance_tag = "da.taikai.live"
 ```
 
-Deje el bloque intacto para usar los defaults listados arriba. Para endurecer
-una clase, actualice el override correspondiente; para cambiar la base de nuevas
-clases, edite `default_retention`.
+Deje el bloque intacto para usar los defaults listados arriba. Para endurant
+une classe, actualise le remplacement du correspondant ; pour changer la base de nouvelles
+classes, édition `default_retention`.
 
-Las clases de disponibilidad Taikai pueden sobrescribirse de forma independiente
-via `torii.da_ingest.replication_policy.taikai_availability`:
+Les classes de disponibilité Taikai peuvent être inscrites de manière indépendante
+via `torii.da_ingest.replication_policy.taikai_availability` :
 
 ```toml
 [[torii.da_ingest.replication_policy.taikai_availability]]
@@ -96,32 +94,30 @@ storage_class = "cold"
 governance_tag = "da.taikai.archive"
 ```
 
-## Semantica de enforcement
+## Sémantique d'application
 
-- Torii reemplaza el `RetentionPolicy` provisto por el usuario con el perfil
-  impuesto antes del chunking o la emision de manifests.
-- Los manifests preconstruidos que declaran un perfil de retencion distinto se
-  rechazan con `400 schema mismatch` para que los clientes obsoletos no puedan
-  debilitar el contrato.
-- Cada evento de override se registra (`blob_class`, politica enviada vs esperada)
-  para exponer callers no conformes durante el rollout.
+- Torii remplace le `RetentionPolicy` à condition que l'utilisateur contienne le profil
+  impuesto avant le chunking ou l’émission de manifestes.
+- Les manifestes préconstruits qui déclarent un profil de rétention distinct se
+  rechazan avec `400 schema mismatch` pour que les clients obsolètes ne puissent pas
+  débiliter le contrat.
+- Chaque événement de dérogation est enregistré (`blob_class`, politique enviée ou attendue)
+  pour les appelants exponeurs non conformes lors du déploiement.
 
-Ver [Plan de ingesta de Data Availability](ingest-plan.md) (checklist de validacion)
-para el gate actualizado que cubre el enforcement de retencion.
+Ver [Plan de ingesta de Data Availability](ingest-plan.md) (liste de contrôle de validation)
+pour la porte actualisée qui cubre l'application de la rétention.
 
-## Flujo de re-replicacion (seguimiento DA-4)
+## Flux de réplication (suite à DA-4)L’application de la détention n’est que la première étape. Les opérateurs tambien deben
+vérifier que les manifestations en vivo et les ordres de réplication se maintiennent
+alignés avec la politique configurée pour que SoraFS puisse re-répliquer les blobs
+hors du cumul de forme automatique.
 
-El enforcement de retencion es solo el primer paso. Los operadores tambien deben
-probar que los manifests en vivo y las ordenes de replicacion se mantienen
-alineados con la politica configurada para que SoraFS pueda re-replicar blobs
-fuera de cumplimiento de forma automatica.
-
-1. **Vigile el drift.** Torii emite
-   `overriding DA retention policy to match configured network baseline` cuando
-   un caller envia valores de retencion desactualizados. Empareje ese log con
-   la telemetria `torii_sorafs_replication_*` para detectar faltantes de replica
-   o redeploys demorados.
-2. **Diferencie intencion vs replicas en vivo.** Use el nuevo helper de auditoria:
+1. **Vigile el drift.** Torii émet
+   `overriding DA retention policy to match configured network baseline` quand
+   un appelant envoie des valeurs de rétention désactualisées. Empareje ese log con
+   la télémétrie `torii_sorafs_replication_*` pour détecter les défauts de réplique
+   o redéploye les demorados.
+2. **Différence d'intention par rapport aux répliques en vivo.** Utilisez le nouvel assistant d'auditoire :
 
    ```bash
    cargo xtask da-replication-audit \
@@ -131,29 +127,27 @@ fuera de cumplimiento de forma automatica.
      --json-out artifacts/da/replication_audit.json
    ```
 
-   El comando carga `torii.da_ingest.replication_policy` desde la configuracion
-   provista, decodifica cada manifest (JSON o Norito), y opcionalmente empareja
-   payloads `ReplicationOrderV1` por digest de manifest. El resumen marca dos
-   condiciones:
+   La commande charge `torii.da_ingest.replication_policy` depuis la configuration
+   provista, décodifier chaque manifeste (JSON ou Norito), et éventuellement empareja
+   charges utiles `ReplicationOrderV1` pour le résumé du manifeste. El CV marca dos
+   conditions:
 
-   - `policy_mismatch` - el perfil de retencion del manifest diverge de la
-     politica impuesta (esto no deberia ocurrir salvo que Torii este mal
-     configurado).
-   - `replica_shortfall` - la orden de replicacion en vivo solicita menos replicas
-     que `RetentionPolicy.required_replicas` o entrega menos asignaciones que su
-     objetivo.
+   - `policy_mismatch` - le profil de rétention du manifeste diverge de la
+     politique impuesta (esto no deberia ocurrir salvo que Torii este mal
+     configuré).
+   - `replica_shortfall` - l'ordre de réplication en vivo demande moins de répliques
+     que `RetentionPolicy.required_replicas` ou entrega moins d'attributions que vous
+     objectif.Un statut de sortie sans zéro indique un actif faible pour l'automatisation
+   CI/on-call peut paginer immédiatement. Ajouter le rapport JSON au paquet
+   `docs/examples/da_manifest_review_template.md` pour les votes du Parlement.
+3. **Dispare re-replicacion.** Lorsque l'auditoire signale un échec, il émet un
+   nouvelle `ReplicationOrderV1` via les outils de gouvernance décrits en
+   [Marché de capacité de stockage SoraFS](../sorafs/storage-capacity-marketplace.md)
+   et vuelva à exécuter la salle jusqu'à ce que l'ensemble des répliques soit converti. Para
+   remplacements d'urgence, empareje la sortie de la CLI avec `iroha app da prove-availability`
+   pour que les SRE puissent référencer le même résumé et les preuves PDP.
 
-   Un status de salida no cero indica un faltante activo para que la automatizacion
-   CI/on-call pueda paginar de inmediato. Adjunte el reporte JSON al paquete
-   `docs/examples/da_manifest_review_template.md` para votos del Parlamento.
-3. **Dispare re-replicacion.** Cuando la auditoria reporte un faltante, emita una
-   nueva `ReplicationOrderV1` via las herramientas de gobernanza descritas en
-   [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md)
-   y vuelva a ejecutar la auditoria hasta que el set de replicas converja. Para
-   overrides de emergencia, empareje la salida de la CLI con `iroha app da prove-availability`
-   para que SREs puedan referenciar el mismo digest y evidencia PDP.
-
-La cobertura de regresion vive en
-`integration_tests/tests/da/replication_policy.rs`; la suite envia una politica de
-retencion no coincidente a `/v1/da/ingest` y verifica que el manifest obtenido
-expone el perfil impuesto en lugar de la intencion del caller.
+La couverture de régression vive en
+`integration_tests/tests/da/replication_policy.rs` ; la suite envoie une politique de
+la rétention ne coïncide pas avec `/v1/da/ingest` et vérifie que le manifeste obtenu
+expose le profil impuesto à l’endroit de l’intention de l’appelant.

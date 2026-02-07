@@ -4,69 +4,71 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Relatorio de calibracao de moderacao de IA (2026-02)
-summary: Dataset de calibracao base, thresholds e scoreboard para o primeiro release de governanca MINFO-1.
+عنوان: AI اعتدال پسند انشانکن رپورٹ (2026-02)
+خلاصہ: پہلی MINFO-1 گورننس کی رہائی کے لئے بیس انشانکن ڈیٹاسیٹ ، حد اور اسکور بورڈ۔
 ---
 
-# Relatorio de calibracao de moderacao de IA - Fevereiro 2026
+# AI اعتدال پسند انشانکن رپورٹ - فروری 2026
 
-Este relatorio empacota os artefatos de calibracao iniciais para **MINFO-1**. O
-dataset, o manifest e o scoreboard foram produzidos em 2026-02-05, revisados pelo
-conselho do Ministerio em 2026-02-10 e ancorados no DAG de governanca na altura
-`912044`.
+اس رپورٹ میں ** MINFO-1 ** کے ابتدائی انشانکن نمونے کو پیک کیا گیا ہے۔ اے
+ڈیٹاسیٹ ، منشور اور اسکور بورڈ 2026-02-05 کو تیار کیا گیا ، اس کا جائزہ لیا گیا
+2026-02-10 کو وزارت کی کونسل اور اس وقت گورننس ڈی اے جی میں لنگر انداز
+`912044`۔
 
-## Manifest do dataset
+## ڈیٹاسیٹ منشور
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- ** ڈیٹاسیٹ حوالہ: ** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- ** سلگ: ** `ai-moderation-calibration-202602`
+- ** اندراجات: ** منشور 480 ، حصہ 12،800 ، میٹا ڈیٹا 920 ، آڈیو 160
+- ** لیبل مکس: ** سیف 68 ٪ ، مشتبہ 19 ٪ ، 13 ٪ بڑھاو
+- ** نمونہ ڈائجسٹ: ** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- ** تقسیم: ** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-O manifest completo fica em `docs/examples/ai_moderation_calibration_manifest_202602.json`
-e contem a assinatura de governanca e o hash do runner capturado no momento do
-release.
+مکمل منشور `docs/examples/ai_moderation_calibration_manifest_202602.json` پر ہے
+اور اس کے وقت گورننس کے دستخط اور رنر ہیش پر مشتمل ہے
+ریلیز
 
-## Resumo do scoreboard
+## اسکور بورڈ کا خلاصہ
 
-As calibracoes rodaram com opset 17 e o pipeline de seed deterministica. O
-JSON completo do scoreboard (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
-registra os hashes e digests de telemetry; a tabela abaixo destaca as metricas mais
-importantes.
+انشانکن اوپٹ 17 اور ڈٹرمینسٹک بیج پائپ لائن کے ساتھ چلتے تھے۔ اے
+مکمل اسکور بورڈ JSON (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
+ٹیلی میٹری ہیش اور ہضم ریکارڈ کرتا ہے۔ نیچے دیئے گئے جدول میں سب سے زیادہ روشنی ڈالی گئی ہے
+اہم
 
-| Modelo (familia) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
-| --------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ماڈل (فیملی) | بریئر | ECE | auroc | صحت سے متعلق@قرنطین | یاد@اسکیلیٹ |
+| ----------------- | ----- | --- | ----- | ---------------------- | ----------------- |
+| وٹ-ایچ/14 سیفٹی (وژن) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
+| llava-1.6 34b سیفٹی (ملٹی موڈل) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
+| ادراک کا جوڑا (ادراک) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
 
-Metricas combinadas: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. A distribuicao de
-vereditos na janela de calibracao foi pass 91.2%, quarantine 6.8%,
-escalate 2.0%, alinhada com as expectativas de politica registradas no resumo do
-manifest. O backlog de falsos positivos permaneceu em zero, e o drift score (7.1%)
-ficou bem abaixo do limiar de alerta de 20%.
+مشترکہ میٹرکس: `Brier = 0.126` ، `ECE = 0.034` ، `AUROC = 0.982`۔ کی تقسیم
+انشانکن ونڈو میں فیصلے 91.2 ٪ ، سنگرودھ 6.8 ٪ ،
+2.0 ٪ کو بڑھاوا دیں ، کے خلاصے میں درج پالیسی توقعات کے ساتھ منسلک
+منشور جھوٹے مثبت کا بیک بلاگ صفر پر رہا ، اور بڑھے ہوئے اسکور (7.1 ٪)
+20 ٪ الرٹ حد سے نیچے تھا۔
 
-## Thresholds e sign-off
+## حد اور سائن آف
 
 - `thresholds.quarantine = 0.42`
 - `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+- گورننس موومنٹ: `MINFO-2026-02-07`
+- `ministry-council-seat-03` کے ذریعہ `2026-02-10T11:33:12Z` پر دستخط کریں
 
-CI armazenou o bundle assinado em `artifacts/ministry/ai_moderation/2026-02/`
-junto com os binarios do moderation runner. O digest do manifest e os hashes do
-scoreboard acima devem ser referenciados durante auditorias e apelacoes.
+سی آئی نے دستخط شدہ بنڈل کو `artifacts/ministry/ai_moderation/2026-02/` میں محفوظ کیا
+اعتدال پسند رنر بائنریز کے ساتھ۔ منشور کا ہضم اور اس کے ہیشوں
+آڈٹ اور اپیلوں کے دوران مذکورہ بالا اسکور بورڈ کا حوالہ دیا جانا چاہئے۔
 
-## Dashboards e alertas
+## ڈیش بورڈز اور الرٹس
 
-SREs de moderacao devem importar o dashboard Grafana em
-`dashboards/grafana/ministry_moderation_overview.json` e as regras de alerta do
-Prometheus em `dashboards/alerts/ministry_moderation_rules.yml` (a cobertura de
-tests fica em `dashboards/alerts/tests/ministry_moderation_rules.test.yml`). Esses
-artefatos emitem alertas para ingest stalls, drift spikes e crescimento da fila de
-quarantine, atendendo aos requisitos de monitoramento indicados na
-[AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+اعتدال پسند ایس آر ای کو Grafana ڈیش بورڈ میں درآمد کرنا چاہئے
+`dashboards/grafana/ministry_moderation_overview.json` اور الرٹ کے قواعد
+Prometheus `dashboards/alerts/ministry_moderation_rules.yml` میں (کی کوریج
+ٹیسٹ `dashboards/alerts/tests/ministry_moderation_rules.test.yml` پر ہے)۔ یہ
+نمونے لگانے والے اسٹالز ، بڑھے ہوئے اسپائکس اور قطار میں اضافے کے لئے انتباہات جاری کرتے ہیں۔
+سنگرودھ ، نگرانی کی ضروریات کو پورا کرنا
+[AI اعتدال رنر کی تفصیلات] (../../ministry/ai-moderation-runner.md)۔

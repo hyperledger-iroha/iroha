@@ -6,20 +6,21 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 5e0e4f16000f6a578fe9c9d6e204c01087e987ac3b46d70537a15b072df48a13
 source_last_modified: "2026-01-03T18:08:01.373878+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Compiler Error Codes
+# Kotodama Коды ошибок компилятора
 
-The Kotodama compiler emits stable error codes so that tooling and CLI users can
-quickly understand the cause of a failure. Use `koto_compile --explain <code>`
-to print the corresponding hint.
+Компилятор Kotodama выдает стабильные коды ошибок, поэтому пользователи инструментов и CLI могут
+быстро понять причину неисправности. Используйте `koto_compile --explain <code>`
+чтобы напечатать соответствующую подсказку.
 
-| Code  | Description | Typical Fix |
+| Код | Описание | Типичное исправление |
 |-------|-------------|-------------|
-| `E0001` | Branch target is out of range for the IVM jump encoding. | Split very large functions or reduce inlining so basic block distances stay within ±1 MiB. |
-| `E0002` | Call sites reference a function that was never defined. | Check for typos, visibility modifiers, or feature flags that removed the callee. |
-| `E0003` | Durable state syscalls were emitted without ABI v1 enabled. | Set `CompilerOptions::abi_version = 1` or add `meta { abi_version: 1 }` inside the `seiyaku` contract. |
-| `E0004` | Asset-related syscalls received non-literal pointers. | Use `account_id(...)`, `asset_definition(...)`, etc., or pass 0 sentinels for host defaults. |
-| `E0005` | `for`-loop initializer is more complex than supported today. | Move complex setup before the loop; only simple `let`/expression initialisers are currently accepted. |
-| `E0006` | `for`-loop step clause is more complex than supported today. | Update the loop counter with a simple expression (e.g. `i = i + 1`). |
+| `E0001` | Цель ветвления находится вне диапазона кодировки перехода IVM. | Разделите очень большие функции или уменьшите встраивание, чтобы базовые расстояния между блоками оставались в пределах ±1 МБ. |
+| `E0002` | Сайты вызовов ссылаются на функцию, которая никогда не была определена. | Проверьте наличие опечаток, модификаторов видимости или флагов функций, из-за которых был удален вызываемый абонент. |
+| `E0003` | Системные вызовы устойчивого состояния были отправлены без включения ABI v1. | Установите `CompilerOptions::abi_version = 1` или добавьте `meta { abi_version: 1 }` внутри контракта `seiyaku`. |
+| `E0004` | Системные вызовы, связанные с активами, получили небуквальные указатели. | Используйте `account_id(...)`, `asset_definition(...)` и т. д. или передайте 0 контрольных значений для значений хоста по умолчанию. |
+| `E0005` | `E0001` X-цикла более сложен, чем поддерживается сегодня. | Переместить сложную настройку перед циклом; В настоящее время принимаются только простые инициализаторы `let`/выражений. |
+| `E0006` | Предложение шага цикла `for` более сложное, чем поддерживается сегодня. | Обновите счетчик цикла, используя простое выражение (например, `i = i + 1`). |

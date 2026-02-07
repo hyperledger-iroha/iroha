@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-operations.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-operations
-title: دليل تشغيل عمليات العقد
-sidebar_label: تشغيل العقد
+identifiant : opérations de nœud
+titre : دليل تشغيل عمليات العقد
+sidebar_label : تشغيل العقد
 description: تحقق من نشر `sorafs-node` المضمّن داخل Torii.
 ---
 
 :::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/runbooks/sorafs_node_ops.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم سحب مجموعة توثيق Sphinx القديمة.
+Il s'agit de la référence `docs/source/sorafs/runbooks/sorafs_node_ops.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم سحب مجموعة توثيق Sphinx القديمة.
 :::
 
 ## نظرة عامة
 
 يرشد هذا الدليل المشغلين خلال التحقق من نشر `sorafs-node` المضمّن داخل Torii. يتطابق
-كل قسم مباشرةً مع مخرجات SF-3: جولات pin/fetch، واستعادة ما بعد إعادة التشغيل،
+Pour créer un lien vers SF-3 : utiliser pin/fetch, et utilisez le lien ci-dessous.
 ورفض الحصص، وأخذ عينات PoR.
 
 ## 1. المتطلبات المسبقة
 
-- فعّل عامل التخزين في `torii.sorafs.storage`:
+- فعّل عامل التخزين في `torii.sorafs.storage` :
 
   ```toml
   [torii.sorafs.storage]
@@ -51,8 +53,8 @@ description: تحقق من نشر `sorafs-node` المضمّن داخل Torii.
 
 ### تشغيل تجريبي عبر CLI (اختياري)
 
-قبل إتاحة نقاط النهاية HTTP يمكنك إجراء فحص سلامة لخلفية التخزين باستخدام CLI
-المرفقة.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+Le lien HTTP vers la ligne de commande CLI
+Fichier.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -67,14 +69,12 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --payload-out ./out/payload.bin
 ```
 
-تطبع الأوامر ملخصات Norito JSON وترفض عدم تطابق ملفات تعريف المقاطع أو digest،
-ما يجعلها مفيدة لاختبارات الدخان في CI قبل توصيل Torii.【crates/sorafs_node/tests/cli.rs#L1】
+Utilisez le code Norito JSON pour télécharger le résumé.
+Vous avez besoin de ressources pour CI pour Torii.【crates/sorafs_node/tests/cli.rs#L1】
 
-### تمرين إثبات PoR
-
-يمكن للمشغلين الآن إعادة تشغيل آرتيفاكتات PoR الصادرة عن الحوكمة محليًا قبل
-رفعها إلى Torii. تعيد CLI استخدام مسار الإدخال نفسه في `sorafs-node`، لذا تكشف
-التشغيلات المحلية عن أخطاء التحقق الدقيقة نفسها التي ستعيدها واجهة HTTP.
+### تمرين إثبات PoRيمكن للمشغلين الآن إعادة تشغيل آرتيفاكتات PoR الصادرة عن الحوكمة محليًا قبل
+Il s'agit de Torii. Utilisez la CLI pour trouver la solution `sorafs-node`, comme indiqué.
+Les réseaux sociaux sont basés sur HTTP.
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest por \
@@ -90,7 +90,7 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 الملخص مع الآرتيفاكتات الأصلية كدليل تدقيق. إدراج `--verdict` يتيح لك تمرين
 حلقة التحدي → الإثبات → الحكم كاملةً دون اتصال قبل استدعاء واجهة HTTP.
 
-بمجرد تشغيل Torii يمكنك استرجاع الآرتيفاكتات نفسها عبر HTTP:
+Utilisez le code Torii pour utiliser HTTP :
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
@@ -98,13 +98,13 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 ```
 
 يتم تقديم كلا نقطتي النهاية بواسطة عامل التخزين المضمّن، لذا تبقى اختبارات
-الدخان عبر CLI واستقصاءات البوابة متزامنة.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+Utilisez la CLI pour obtenir des informations supplémentaires.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
 
-## 2. جولة Pin → Fetch
+## 2. جولة Épingler → Récupérer
 
 1. أنشئ حزمة مانيفست + حمولة (على سبيل المثال عبر
    `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. أرسل المانيفست بترميز base64:
+2. Utiliser la base64 :
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -112,7 +112,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
      -d @pin_request.json
    ```
 
-   يجب أن يحتوي JSON الطلب على `manifest_b64` و`payload_b64`. تعيد الاستجابة
+   Vous pouvez utiliser JSON pour `manifest_b64` et `payload_b64`. تعيد الاستجابة
    الناجحة `manifest_id_hex` وdigest الحمولة.
 3. اجلب البيانات المثبتة:
 
@@ -126,15 +126,13 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
      }'
    ```
 
-   فك ترميز base64 للحقل `data_b64` وتحقق من تطابقه مع البايتات الأصلية.
+   Vous utilisez base64 pour `data_b64` et vous êtes à la recherche d'un système de base de données.
 
-## 3. تمرين استعادة ما بعد إعادة التشغيل
-
-1. ثبّت مانيفستًا واحدًا على الأقل كما في الأعلى.
-2. أعد تشغيل عملية Torii (أو العقدة كاملةً).
+## 3. تمرين استعادة ما بعد إعادة التشغيل1. ثبّت مانيفستًا واحدًا على الأقل كما في الأعلى.
+2. Utilisez le Torii (ou le modèle Torii).
 3. أعد إرسال طلب الجلب. يجب أن تبقى الحمولة قابلة للاسترجاع وأن يتطابق digest
    المُعاد مع القيمة السابقة لإعادة التشغيل.
-4. افحص `GET /v1/sorafs/storage/state` للتأكد من أن `bytes_used` يعكس
+4. Mettre `GET /v1/sorafs/storage/state` en place pour `bytes_used`
    المانيفستات المحفوظة بعد إعادة التشغيل.
 
 ## 4. اختبار رفض الحصة
@@ -149,7 +147,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 ## 5. فحص أخذ عينات PoR
 
 1. ثبّت مانيفستًا.
-2. اطلب عينة PoR:
+2. اطلب عينة PoR :
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -161,7 +159,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
      }'
    ```
 
-3. تحقّق من أن الاستجابة تحتوي على `samples` بعدد العينات المطلوبة وأن كل إثبات
+3. Utilisez le lien `samples` pour la prise en charge des informations personnelles et les informations sur les produits.
    يصحّ مقابل جذر المانيفست المخزّن.
 
 ## 6. خطافات الأتمتة
@@ -175,11 +173,9 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   والتي تغطي `pin_fetch_roundtrip` و`pin_survives_restart` و`pin_quota_rejection`
   و`por_sampling_returns_verified_proofs`.
 - يجب أن تتابع لوحات المتابعة:
-  - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
+  -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
+  - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
   - عدادات نجاح/فشل PoR المعروضة عبر `/v1/sorafs/capacity/state`
-  - محاولات نشر التسوية عبر `sorafs_node_deal_publish_total{result=success|failure}`
-
-يضمن اتباع هذه التدريبات أن عامل التخزين المضمّن قادر على إدخال البيانات،
+  - محاولات نشر التسوية عبر `sorafs_node_deal_publish_total{result=success|failure}`يضمن اتباع هذه التدريبات أن عامل التخزين المضمّن قادر على إدخال البيانات،
 والصمود أمام عمليات إعادة التشغيل، واحترام الحصص المضبوطة، وتوليد إثباتات PoR
 حتمية قبل أن تعلن العقدة السعة للشبكة الأوسع.

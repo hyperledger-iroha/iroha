@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Registrar dominio e cunhar ativos
-description: Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+سلگ:/نوریٹو/مثالوں/رجسٹر اور ٹکسال
+عنوان: ڈومین اور ٹکسال کے اثاثے رجسٹر کریں
+تفصیل: اجازت نامہ ڈومین تخلیق ، اثاثوں کی رجسٹریشن ، اور عین مطابق ٹکسال کا مظاہرہ کرتا ہے۔
+ماخذ: کریٹس/IVM/دستاویزات/مثالوں/13_register_and_mint.ko
 ---
 
-Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
+اجازت نامہ ڈومین تخلیق ، اثاثوں کی رجسٹریشن ، اور عین مطابق ٹکسال کا مظاہرہ کرتا ہے۔
 
-## Roteiro do livro razao
+## لیجر اسکرپٹ
 
-- Garanta que a conta de destino (por exemplo `ih58...`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
-- Invoque o entrypoint `register_and_mint` para criar a definicao do ativo ROSE e cunhar 250 unidades para Alice em uma unica transacao.
-- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` para confirmar que a cunhagem foi bem-sucedida.
+- اس بات کو یقینی بنائیں کہ ہدف اکاؤنٹ (مثال کے طور پر `ih58...`) موجود ہے ، ہر SDK کوئیک اسٹارٹ میں کنفیگریشن مرحلے کی عکس بندی کرتا ہے۔
+- ایک ہی لین دین میں ایلس کے لئے روز اثاثہ تعریف اور ٹکسال 250 یونٹ بنانے کے لئے انٹری پوائنٹ `register_and_mint` کی انووک کریں۔
+- ٹکسنگ کامیاب ہونے کی تصدیق کرنے کے لئے `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس چیک کریں۔
 
-## Guias de SDK relacionados
+## متعلقہ SDK گائیڈز
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [مورچا SDK کوئیک اسٹارٹ] (/sdks/rust)
+- [ازگر ایس ڈی کے کوئیک اسٹارٹ] (/sdks/python)
+- [جاوا اسکرپٹ SDK کوئیک اسٹارٹ] (/sdks/javascript)
 
-[Baixe a fonte Kotodama](/norito-snippets/register-and-mint.ko)
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

@@ -4,90 +4,80 @@ direction: rtl
 source: docs/portal/docs/soranet/testnet-rollout.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: testnet-rollout
-title: Rollout do testnet do SoraNet (SNNet-10)
-sidebar_label: Rollout do testnet (SNNet-10)
-description: Plano de ativacao por fases, kit de onboarding e gates de telemetria para promocoes de testnet do SoraNet.
+المعرف: testnet-rollout
+العنوان: الطرح التجريبي لشبكة SoraNet (SNNet-10)
+Sidebar_label: الطرح التجريبي لـ testnet (SNNet-10)
+الوصف: خطة تنشيط الخطوات ومجموعة أدوات الصعود وبوابات القياس عن بعد للترويج لاختبار شبكة SoraNet.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha o plano de rollout SNNet-10 em `docs/source/soranet/testnet_rollout_plan.md`. Mantenha ambas as copias sincronizadas.
+:::ملاحظة فونتي كانونيكا
+هذه الصفحة مخصصة لخطة الطرح SNNet-10 في `docs/source/soranet/testnet_rollout_plan.md`. Mantenha ambas as copias sincronzadas.
 :::
 
-SNNet-10 coordena a ativacao em etapas do overlay de anonimato do SoraNet em toda a rede. Use este plano para traduzir o bullet do roadmap em deliverables concretos, runbooks e gates de telemetria para que cada operator entenda as expectativas antes de SoraNet virar o transporte padrao.
+يقوم SNNet-10 بالتنسيق مع أجزاء التراكب المجهولة لـ SoraNet في جميع أنحاء العالم. استخدم هذه الخطة لتداول أو خريطة الطريق من خلال التسليمات الملموسة ودفاتر التشغيل وبوابات القياس عن بعد حتى يتوقع كل مشغل ما يتوقعه قبل SoraNet من فتح أو نقل البضائع.
 
-## Fases de lancamento
-
-| Fase | Cronograma (alvo) | Escopo | Artefatos obrigatorios |
+## Fases de lancamento| فاس | كرونوجراما (الفو) | اسكوبو | أرتيفاتوس أوبريجاتوريوس |
 |-------|-------------------|-------|--------------------|
-| **T0 - Testnet fechado** | Q4 2026 | 20-50 relays em >=3 ASNs operados por contribuidores core. | Testnet onboarding kit, smoke suite de guard pinning, baseline de latencia + metricas de PoW, log de brownout drill. |
-| **T1 - Beta publica** | Q1 2027 | >=100 relays, guard rotation habilitada, exit bonding enforced, SDK betas padrao em SoraNet com `anon-guard-pq`. | Onboarding kit atualizado, checklist de verificacao de operadores, SOP de publicacao de directory, pacote de dashboards de telemetria, relatorios de rehearsal de incidentes. |
-| **T2 - Mainnet padrao** | Q2 2027 (condicionado a completar SNNet-6/7/9) | Rede de producao padrao em SoraNet; transports obfs/MASQUE e enforcement de PQ ratchet habilitados. | Minutas de aprovacao de governance, procedimento de rollback direct-only, alarmes de downgrade, relatorio assinado de metricas de sucesso. |
+| **T0 - رسالة Testnet** | الربع الرابع 2026 | 20-50 مرحلات م > = 3 عمليات ASN للمساهمين الأساسيين. | مجموعة أدوات التثبيت من Testnet، مجموعة تثبيت الحماية من الدخان، خط الأساس لوقت الاستجابة + مقاييس إثبات العمل، سجل الحفر البنيوي. |
+| **T1 - بيتا بوبليكا** | الربع الأول 2027 | >= 100 مرحلات، وإمكانية دوران الحراسة، وفرض ربط الخروج، وإصدارات SDK التجريبية في SoraNet com `anon-guard-pq`. | تم تحديث مجموعة أدوات الإعداد، وقائمة التحقق من المشغلين، ونشر الدليل SOP، وحزمة لوحات القياس عن بعد، وعلاقات التدريب على الأحداث. |
+| **T2 - بادراو مينت** | الربع الثاني من عام 2027 (الشروط الكاملة لـ SNNet-6/7/9) | إعادة إنتاج الملف على SoraNet؛ ينقل الكائنات/القناع ويطبق أدوات PQ السقاطة المؤهلة. | محضر الموافقة على الإدارة، وإجراءات التراجع بشكل مباشر فقط، وتنبيهات التخفيض، وإيقاف علاقة مقاييس النجاح. |
 
-Nao ha **caminho de salto** - cada fase deve entregar a telemetria e os artefatos de governance da etapa anterior antes da promocao.
+Nao ha **caminho de salto** - يجب على كل شخص أن يدخل بسهولة إلى القياس عن بعد وأدوات الإدارة من المرحلة السابقة للترويج.
 
 ## Kit de onboarding do testnet
 
-Cada operador de relay recebe um pacote deterministico com os seguintes arquivos:
+سيتلقى كل مشغل مرحل حزمة حتمية من خلال الملفات التالية:| ارتيفاتو | وصف |
+|----------|------------|
+| `01-readme.md` | ملخص ونقاط الاتصال والكرونوجرام. |
+| `02-checklist.md` | قائمة مراجعة ما قبل الرحلة (الأجهزة، وإمكانية الوصول إلى الشبكة، وسياسة التحقق من الحماية). |
+| `03-config-example.toml` | قم بتكوين الحد الأدنى من التتابع + مُنسق SoraNet الذي يدعم كتل التوافق الخاصة بـ SNNet-9، بما في ذلك الكتلة `guard_directory` التي تعمل على إصلاح التجزئة من خلال لقطة الحماية الأخيرة. |
+| `04-telemetry.md` | إرشادات لربط لوحات المعلومات بمقاييس الخصوصية في SoraNet وحدود التنبيه. |
+| `05-incident-playbook.md` | إجراء الاستجابة للانقطاع/التخفيض مع مصفوفة التصعيد. |
+| `06-verification-report.md` | النموذج الذي يكتمل فيه المشغلون ويتطورون عند إجراء اختبارات الدخان. |
 
-| Artefato | Descricao |
-|----------|-------------|
-| `01-readme.md` | Resumo, pontos de contato e cronograma. |
-| `02-checklist.md` | Checklist de pre-flight (hardware, network reachability, verificacao de guard policy). |
-| `03-config-example.toml` | Configuracao minima de relay + orchestrator SoraNet alinhada aos compliance blocks do SNNet-9, incluindo um bloco `guard_directory` que fixa o hash do ultimo guard snapshot. |
-| `04-telemetry.md` | Instrucoes para ligar os dashboards de privacy metrics do SoraNet e os thresholds de alerta. |
-| `05-incident-playbook.md` | Procedimento de resposta a brownout/downgrade com matriz de escalonamento. |
-| `06-verification-report.md` | Template que os operadores completam e devolvem quando os smoke tests passam. |
+تم عرض نسخة حية على `docs/examples/soranet_testnet_operator_kit/`. كل ترقية تم تحديثها أو عدة; أرقام النسخ مصاحبة للحالة (على سبيل المثال، `testnet-kit-vT0.1`).
 
-Uma copia renderizada vive em `docs/examples/soranet_testnet_operator_kit/`. Cada promocao atualiza o kit; numeros de versao acompanham a fase (por exemplo, `testnet-kit-vT0.1`).
+لمشغلي النشر التجريبي (T1)، أو موجز موجز في `docs/source/soranet/snnet10_beta_onboarding.md`، المتطلبات الأساسية، وقياس القياس عن بعد، وتدفق البث، ودعم مجموعة أدوات التحديد ومساعدي التحقق.
 
-Para operadores de beta publica (T1), o brief conciso em `docs/source/soranet/snnet10_beta_onboarding.md` resume prerequisitos, entregaveis de telemetria e o fluxo de envio, apontando para o kit deterministico e para os helpers de validacao.
+`cargo xtask soranet-testnet-feed` يوجه تغذية JSON التي تجمع قائمة الترويج وقائمة المرحلات وعلاقة المقاييس وأدلة التدريبات وتجزئة الملحقات المرجعية لقالب بوابة المرحلة. قم بتجميع سجلات الحفر والمرفقات مع `cargo xtask soranet-testnet-drill-bundle` أولاً لتسجيل الخلاصة `drill_log.signed = true`.
 
-`cargo xtask soranet-testnet-feed` gera o feed JSON que agrega a janela de promocao, roster de relays, relatorio de metricas, evidencias de drills e hashes de anexos referenciados pelo template de stage-gate. Assine os drill logs e anexos com `cargo xtask soranet-testnet-drill-bundle` primeiro para que o feed registre `drill_log.signed = true`.
+## مقاييس النجاحالترويج بين الوجهتين المسورتين للقياس عن بعد التالي، يتم تجميعهما بدون حد أدنى من فترتين:
 
-## Metricas de sucesso
+- `soranet_privacy_circuit_events_total`: 95% من الدوائر مكتملة مع أحداث انقطاع التيار الكهربائي أو الرجوع إلى إصدار أقدم؛ تبقى نسبة 5% محدودة من عرض PQ.
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: =99% في بداية العام لمدة 3 ثوانٍ؛ ريبورتادا عبر `soranet_privacy_throttles_total{scope="congestion"}`.
+- زمن الاستجابة (المئوي 95) للتوقيت: <200 مللي ثانية عندما تكون الدوائر مبنية بالكامل، يتم التقاطها عبر `soranet_privacy_rtt_millis{percentile="p95"}`.
 
-A promocao entre fases fica gated na seguinte telemetria, coletada por no minimo duas semanas:
+قوالب لوحات المعلومات والتنبيهات الحية في `dashboard_templates/` و`alert_templates/`؛ قم بمسح مخزن القياس عن بعد الخاص بك وقم بإضافة فحوصات الخيط إلى CI. استخدم `cargo xtask soranet-testnet-metrics` لإدارة العلاقة الحكيمة قبل طلب الترويج.
 
-- `soranet_privacy_circuit_events_total`: 95% dos circuits completam sem eventos de brownout ou downgrade; os 5% restantes ficam limitados pela oferta de PQ.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: <1% das fetch sessions por dia acionam brownout fora de drills planejados.
-- `soranet_privacy_gar_reports_total`: variancia dentro de +/-10% do mix esperado de categorias GAR; picos devem ser explicados por updates de policy aprovados.
-- Taxa de sucesso de tickets PoW: >=99% dentro da janela alvo de 3 s; reportada via `soranet_privacy_throttles_total{scope="congestion"}`.
-- Latencia (95th percentile) por regiao: <200 ms quando circuits estiverem totalmente construidos, capturada via `soranet_privacy_rtt_millis{percentile="p95"}`.
+سيتم إرسال بوابة المرحلة التالية إلى `docs/source/soranet/snnet10_stage_gate_template.md`، والتي ستتيح لك صيغة Markdown للنسخ على `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`.
 
-Templates de dashboards e alertas vivem em `dashboard_templates/` e `alert_templates/`; espelhe-os no seu repositorio de telemetria e adicione-os a checks de lint do CI. Use `cargo xtask soranet-testnet-metrics` para gerar o relatorio voltado a governance antes de solicitar a promocao.
+## قائمة التحقق
 
-Submissoes de stage-gate devem seguir `docs/source/soranet/snnet10_stage_gate_template.md`, que aponta para o formulario Markdown pronto para copiar em `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`.
+يجب على المشغلين التحرك أو المتابعة قبل الدخول بكل خطوة:- [x] تم الإعلان عن التتابع مع مظروف القبول الفعلي.
+- [x] اختبار دخان دوران الحرس (`tools/soranet-relay --check-rotation`) أبروفادو.
+- [x] `guard_directory` يتزامن مع `GuardDirectorySnapshotV2` الأحدث و `expected_directory_hash_hex` مع ملخص اللجنة (أو بدء التشغيل أو ترحيل التسجيل أو التحقق من صحة التجزئة).
+- [x] مقاييس PQ السقاطة (`sorafs_orchestrator_pq_ratio`) تعمل على بقاء العتبات أعلى من أجل طلب سريع.
+- [x] يتوافق تكوين GAR مع العلامة الأحدث (إصدار كتالوج SNNet-9).
+- [x] محاكاة إنذار الرجوع إلى إصدار أقدم (هواة التجميع المحظوظين، ترقبوا التنبيه لمدة 5 دقائق).
+- [x] يتم تنفيذ Drill PoW/DoS من خلال مستندات التخفيف.
 
-## Checklist de verificacao
+لا يشتمل هذا القالب المسبق على مجموعة أدوات الإعداد. المشغلون يصنفون ضمن العلاقة الكاملة مع مكتب المساعدة للحوكمة قبل تلقي اعتمادات الإنتاج.
 
-Os operadores devem assinar o seguinte antes de entrar em cada fase:
+## إعداد التقارير الإلكترونية المتعلقة بالحوكمة
 
-- [x] Relay advert assinado com o admission envelope atual.
-- [x] Guard rotation smoke test (`tools/soranet-relay --check-rotation`) aprovado.
-- [x] `guard_directory` aponta para o artefato `GuardDirectorySnapshotV2` mais recente e `expected_directory_hash_hex` coincide com o committee digest (o startup do relay registra o hash validado).
-- [x] Metricas de PQ ratchet (`sorafs_orchestrator_pq_ratio`) permanecem acima dos thresholds alvo para a fase solicitada.
-- [x] Config de compliance GAR corresponde ao tag mais recente (ver catalogo SNNet-9).
-- [x] Simulacao de alarme de downgrade (desativar collectors, esperar alerta em 5 min).
-- [x] Drill PoW/DoS executado com etapas de mitigacao documentadas.
+- **التحكم في التغيير:** الترويج لطلب موافقة مجلس الإدارة على التسجيل في محضر الاستشارة وإرفاق صفحة الحالة.
+- **ملخص الحالة:** نشر تحديثات متتالية لعدوى المرحلات ونسبة PQ وأحداث التوقف وعناصر العمل المعلقة (مخزنة في `docs/source/status/soranet_testnet_digest.md` عند بدء الإيقاع).
+- **عمليات التراجع:** بالإضافة إلى خطة التراجع التي تم تنفيذها لاستعادة الصفحة السابقة لمدة 30 دقيقة، بما في ذلك إبطال DNS/حماية ذاكرة التخزين المؤقت وقوالب اتصالات عملاء com.
 
-Um template pre-preenchido esta incluido no kit de onboarding. Os operadores submetem o relatorio completo ao helpdesk de governance antes de receber credenciais de producao.
+## دعم الأصول- `cargo xtask soranet-testnet-kit [--out <dir>]` هو عبارة عن مجموعة أدوات الإعداد `xtask/templates/soranet_testnet/` للتوجيه العلوي (`docs/examples/soranet_testnet_operator_kit/` الافتراضي).
+- يستخدم `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` كمقاييس نجاح SNNet-10 ويصدر نسبة النجاح/الفشل التي تم إنشاؤها لمراجعة الإدارة. لقطة للمثال الحي في `docs/examples/soranet_testnet_metrics_sample.json`.
+- قوالب Grafana وAlertmanager الحية في `dashboard_templates/soranet_testnet_overview.json` و`alert_templates/soranet_testnet_rules.yml`؛ انسخ نظام التشغيل إلى مخزن القياس عن بعد أو قم بتوصيل فحوصات الوبر في CI.
+- قالب الاتصال للرجوع إلى إصدار أقدم لرسائل SDK/البوابة الموجودة في `docs/source/soranet/templates/downgrade_communication_template.md`.
+- ملخصات الحالة الأسبوعية ستستخدم `docs/source/status/soranet_testnet_weekly_digest.md` كصيغة Canonica.
 
-## Governance e reporting
-
-- **Change control:** promocoes exigem aprovacao do Governance Council registrada nas minutes do conselho e anexada a pagina de status.
-- **Status digest:** publicar atualizacoes semanais resumindo contagem de relays, ratio PQ, incidentes de brownout e action items pendentes (armazenado em `docs/source/status/soranet_testnet_digest.md` quando a cadencia comecar).
-- **Rollbacks:** manter um plano de rollback assinado que retorne a rede para a fase anterior em 30 minutos, incluindo invalidacao de DNS/guard cache e templates de comunicacao com clients.
-
-## Supporting assets
-
-- `cargo xtask soranet-testnet-kit [--out <dir>]` materializa o kit de onboarding de `xtask/templates/soranet_testnet/` para o diretorio alvo (default `docs/examples/soranet_testnet_operator_kit/`).
-- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` avalia as metricas de sucesso SNNet-10 e emite um relatorio pass/fail estruturado para revisoes de governance. Um snapshot de exemplo vive em `docs/examples/soranet_testnet_metrics_sample.json`.
-- Templates de Grafana e Alertmanager vivem em `dashboard_templates/soranet_testnet_overview.json` e `alert_templates/soranet_testnet_rules.yml`; copie-os no repositorio de telemetria ou conecte-os aos checks de lint do CI.
-- O template de comunicacao de downgrade para mensagens de SDK/portal reside em `docs/source/soranet/templates/downgrade_communication_template.md`.
-- Weekly status digests devem usar `docs/source/status/soranet_testnet_weekly_digest.md` como forma canonica.
-
-Pull requests devem atualizar esta pagina junto com qualquer mudanca de artefatos ou telemetria para que o rollout plan se mantenha canonico.
+يجب أن يتم تحديث هذه الصفحة جنبًا إلى جنب مع أي تعديلات فنية أو قياسات عن بعد حتى يتم الحفاظ على خطة الطرح الأساسية.

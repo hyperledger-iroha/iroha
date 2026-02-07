@@ -6,17 +6,18 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a3158cd70a42104bacaafc520fdcc10e20e3bc347d895be448fcb10da4f668bd
 source_last_modified: "2026-01-03T18:08:01.692664+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha 3 Bench Suite
+# Iroha Набор из 3 скамеек
 
-The Iroha 3 bench suite times the hot paths we rely on during staking, fee
-charging, proof verification, scheduling, and proof endpoints. It runs as an
-`xtask` command with deterministic fixtures (fixed seeds, fixed key material,
-and stable request payloads) so results are reproducible across hosts.
+Пакет Iroha 3 умножает количество горячих путей, на которые мы полагаемся во время ставок, комиссию
+взимание платы, проверка подтверждения, планирование и конечные точки подтверждения. Он работает как
+Команда `xtask` с детерминированными приспособлениями (фиксированные начальные значения, фиксированный материал ключа,
+и стабильные полезные данные запросов), поэтому результаты воспроизводятся на разных хостах.
 
-## Running the suite
+## Запуск пакета
 
 ```bash
 cargo xtask i3-bench-suite \
@@ -29,41 +30,41 @@ cargo xtask i3-bench-suite \
   --allow-overwrite
 ```
 
-Flags:
+Флаги:
 
-- `--iterations` controls iterations per scenario sample (default: 64).
-- `--sample-count` repeats each scenario to compute the median (default: 5).
-- `--json-out|--csv-out|--markdown-out` choose output artifacts (all optional).
-- `--threshold` compares medians against the baseline bounds (set `--no-threshold`
-  to skip).
-- `--flamegraph-hint` annotates the Markdown report with the `cargo flamegraph`
-  command to profile a scenario.
+- `--iterations` управляет итерациями для каждого примера сценария (по умолчанию: 64).
+- `--sample-count` повторяет каждый сценарий для вычисления медианы (по умолчанию: 5).
+- `--json-out|--csv-out|--markdown-out` выбирает выходные артефакты (все необязательно).
+- `--threshold` сравнивает медианы с базовыми границами (установите `--no-threshold`
+  пропустить).
+- `--flamegraph-hint` аннотирует отчет Markdown с помощью `cargo flamegraph`.
+  команда для профилирования сценария.
 
-CI glue lives in `ci/i3_bench_suite.sh` and defaults to the paths above; set
-`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` to tune runtime in nightlies.
+CI-клей находится в `ci/i3_bench_suite.sh` и по умолчанию использует указанные выше пути; набор
+`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` для настройки времени выполнения в ночных играх.
 
-## Scenarios
+## Сценарии
 
-- `fee_payer` / `fee_sponsor` / `fee_insufficient` — payer vs sponsor debit
-  and shortfall rejection.
-- `staking_bond` / `staking_slash` — bond/unbond queue with and without
-  slashing.
+- `fee_payer` / `fee_sponsor` / `fee_insufficient` — дебет плательщика против спонсора
+  и отказ от дефицита.
+- `staking_bond` / `staking_slash` — связывание/отвязывание очереди с и без
+  рубящий.
 - `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` —
-  signature verification over commit certificates, JDG attestations, and bridge
-  proof payloads.
-- `commit_cert_assembly` — digest assembly for commit certificates.
-- `access_scheduler` — conflict-aware access-set scheduling.
-- `torii_proof_endpoint` — Axum proof endpoint parsing + verification round trip.
+  проверка подписи по сертификатам фиксации, аттестациям JDG и мосту
+  доказательства полезной нагрузки.
+- `commit_cert_assembly` — сборка дайджеста для сертификатов фиксации.
+- `access_scheduler` — планирование набора доступа с учетом конфликтов.
+- `torii_proof_endpoint` — анализ конечной точки с доказательством Axum + проверка туда и обратно.
 
-Every scenario records median nanoseconds per iteration, throughput, and a
-deterministic allocation counter for quick regressions. Thresholds live in
-`benchmarks/i3/thresholds.json`; bump bounds there when hardware changes and
-commit the new artifact alongside a report.
+В каждом сценарии фиксируются медианные наносекунды на итерацию, пропускную способность и
+детерминированный счетчик распределения для быстрой регрессии. Пороги живут в
+`benchmarks/i3/thresholds.json`; границы там, когда оборудование меняется и
+зафиксируйте новый артефакт вместе с отчетом.
 
-## Troubleshooting
+## Устранение неполадок
 
-- Pin CPU frequency/governor when collecting evidence to avoid noisy regressions.
-- Use `--no-threshold` for exploratory runs, then re-enable once the baseline is
-  refreshed.
-- To profile a single scenario, set `--iterations 1` and re-run under
+- Зафиксируйте частоту/регулятор процессора при сборе данных, чтобы избежать шумных регрессий.
+- Используйте `--no-threshold` для исследовательских запусков, затем снова включите, как только базовый уровень будет достигнут.
+  освеженный.
+- Чтобы профилировать один сценарий, установите `--iterations 1` и повторите запуск под
   `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`.

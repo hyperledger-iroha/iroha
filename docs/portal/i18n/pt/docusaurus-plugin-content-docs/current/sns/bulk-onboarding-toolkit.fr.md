@@ -4,51 +4,53 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Source canonique
-Cette page reflete `docs/source/sns/bulk_onboarding_toolkit.md` afin que les
-operateurs externes voient la meme guidance SN-3b sans cloner le depot.
+:::nota Fonte canônica
+Esta página reflete `docs/source/sns/bulk_onboarding_toolkit.md` afin que les
+operadores externos voient la meme guide SN-3b sans clonar le depot.
 :::
 
-# Toolkit d'onboarding massif SNS (SN-3b)
+# Kit de ferramentas de integração do maciço SNS (SN-3b)
 
-**Reference roadmap:** SN-3b "Bulk onboarding tooling"  
-**Artefacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**Roteiro de referência:** SN-3b "Ferramentas de integração em massa"  
+**Artefatos:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
 `docs/portal/scripts/sns_bulk_release.sh`
 
-Les grands registrars preparent souvent des centaines de registrations `.sora` ou
-`.nexus` avec les memes approbations de gouvernance et rails de settlement.
-Fabriquer des payloads JSON a la main ou relancer la CLI ne scale pas, donc SN-3b
-livre un builder deterministe CSV vers Norito qui prepare des structures
-`RegisterNameRequestV1` pour Torii ou la CLI. L'helper valide chaque ligne en
-amont, emet a la fois un manifeste agrege et du JSON delimite par nouvelles
-lignes optionnel, et peut soumettre les payloads automatiquement tout en
-enregistrant des recus structures pour les audits.
+Os grandes registradores preparam o recebimento das centenas de registros `.sora` ou
+`.nexus` com memes de aprovação de governo e trilhos de liquidação.
+Crie payloads JSON para o principal ou relance a CLI sem escala, doc SN-3b
+livre um construtor determinista CSV versão Norito que prepara estruturas
+`RegisterNameRequestV1` para Torii ou CLI. L'helper valide cada linha em
+amont, emet a la fois un manifeste agrege et du JSON delimitate par nouvelles
+linhas opcionais, e você pode adicionar cargas úteis automaticamente a todos
+registrador de estruturas de recusa para auditorias.
 
-## 1. Schema CSV
+## 1. Esquema CSV
 
-Le parseur exige la ligne d'en-tete suivante (l'ordre est flexible):
+O analisador exige a seguinte linha de texto (a ordem é flexível):
 
-| Colonne | Requis | Description |
-|---------|--------|-------------|
-| `label` | Oui | Libelle demande (casse mixte acceptee; l'outil normalise selon Norm v1 et UTS-46). |
-| `suffix_id` | Oui | Identifiant numerique de suffixe (decimal ou `0x` hex). |
-| `owner` | Oui | Chaine AccountId (IH58 literal; optional @domain hint) pour le proprietaire de l'enregistrement. |
-| `term_years` | Oui | Entier `1..=255`. |
-| `payment_asset_id` | Oui | Actif de settlement (par exemple `xor#sora`). |
-| `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites natives de l'actif. |
-| `settlement_tx` | Oui | Valeur JSON ou chaine litterale decrivant la transaction de paiement ou hash. |
-| `payment_payer` | Oui | AccountId qui a autorise le paiement. |
-| `payment_signature` | Oui | JSON ou chaine litterale contenant la preuve de signature du steward ou de la tresorerie. |
-| `controllers` | Optionnel | Liste separee par point-virgule ou virgule des adresses de compte controller. Par defaut `[owner]` si omis. |
-| `metadata` | Optionnel | JSON inline ou `@path/to/file.json` fournissant des hints de resolver, des enregistrements TXT, etc. Par defaut `{}`. |
-| `governance` | Optionnel | JSON inline ou `@path` pointant vers un `GovernanceHookV1`. `--require-governance` impose cette colonne. |
+| Coluna | Requisitos | Descrição |
+|--------|--------|-------------|
+| `label` | Oui | Libelle demande (casse mixte acceptee; l'outil normalize de acordo com Norm v1 e UTS-46). |
+| `suffix_id` | Oui | Identificador numérico do sufixo (decimal ou `0x` hex). |
+| `owner` | Oui | Cadeia AccountId (literal IH58; dica opcional @domain) para o proprietário do registro. |
+| `term_years` | Oui | Nível `1..=255`. |
+| `payment_asset_id` | Oui | Ato de liquidação (por exemplo `xor#sora`). |
+| `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites nativos do ativo. |
+| `settlement_tx` | Oui | Valor JSON ou cadeia literária descritiva da transação de pagamento ou hash. |
+| `payment_payer` | Oui | AccountId permite autorizar o pagamento. |
+| `payment_signature` | Oui | JSON ou cadeia literária contém a pré-assinatura do administrador ou da tesouraria. |
+| `controllers` | Opcional | Lista separada por ponto-virgule ou virgule des endereços de controlador de conta. Por padrão `[owner]` se omitido. |
+| `metadata` | Opcional | JSON embutido ou `@path/to/file.json` fornece dicas de resolução, registros TXT, etc. Por padrão `{}`. |
+| `governance` | Opcional | JSON embutido ou `@path` apontando para `GovernanceHookV1`. `--require-governance` impõe esta coluna. |
 
-Toute colonne peut referencer un fichier externe en prefixant la valeur de cellule
-par `@`. Les chemins sont resolus relativement au fichier CSV.
+Todas as colunas podem referenciar um arquivo externo prefixando o valor da célula
+par `@`. Os caminhos são resolvidos em arquivo CSV.
 
-## 2. Executer l'helper
+## 2. Executor e ajudante
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -56,16 +58,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-Options cles:
+Arquivos de opções:
 
-- `--require-governance` rejette les lignes sans hook de gouvernance (utile pour
-  les encheres premium ou les affectations reservees).
-- `--default-controllers {owner,none}` decide si les cellules controllers vides
-  retombent sur le compte owner.
-- `--controllers-column`, `--metadata-column`, et `--governance-column` permettent
+- `--require-governance` rejeita as linhas sem gancho de governo (utilizado para
+  les encheres premium ou les afectations reservees).
+- `--default-controllers {owner,none}` decidir si les cellules controllers vis
+  retombent sur le compte proprietário.
+- `--controllers-column`, `--metadata-column` e `--governance-column` permitidos
   de renommer les colonnes optionnelles lors d'exports amont.
 
-En cas de succes le script ecrit un manifeste agrege:
+Em caso de sucesso, o script escreveu um manifesto agregado:
 
 ```json
 {
@@ -100,11 +102,9 @@ En cas de succes le script ecrit un manifeste agrege:
     "suffix_breakdown": {"1":118,"42":2}
   }
 }
-```
-
-Si `--ndjson` est fourni, chaque `RegisterNameRequestV1` est aussi ecrit comme un
-document JSON sur une ligne afin que les automatisations puissent streamer les
-requetes directement vers Torii:
+```Se `--ndjson` é fornecido, cada `RegisterNameRequestV1` também é escrito como um
+documento JSON em uma linha para que as automatizações possam ser transmitidas
+receitas diretamente para Torii:
 
 ```bash
 jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
@@ -116,12 +116,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. Soumissions automatisees
+## 3. Soumissions automatizados
 
-### 3.1 Mode Torii REST
+### 3.1 Modo Torii REST
 
-Specifiez `--submit-torii-url` plus `--submit-token` ou `--submit-token-file` pour
-pousser chaque entree du manifeste directement vers Torii:
+Especifique `--submit-torii-url` plus `--submit-token` ou `--submit-token-file` para
+pressione cada entrada do manifesto diretamente para Torii:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -132,19 +132,19 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- L'helper emet un `POST /v1/sns/registrations` par requete et s'arrete au premier
-  erreur HTTP. Les reponses sont ajoutees au log comme enregistrements NDJSON.
-- `--poll-status` re-interroge `/v1/sns/registrations/{selector}` apres chaque
-  soumission (jusqu'a `--poll-attempts`, defaut 5) pour confirmer que
-  l'enregistrement est visible. Fournissez `--suffix-map` (JSON de `suffix_id`
-  vers des valeurs "suffix") pour que l'outil derive les litteraux
-  `{label}.{suffix}` pour le polling.
-- Ajustables: `--submit-timeout`, `--poll-attempts`, et `--poll-interval`.
+- O ajudante emet un `POST /v1/sns/registrations` par requete et s'arrete au premier
+  erro HTTP. As respostas são adicionadas ao log como registros NDJSON.
+- `--poll-status` re-interroge `/v1/sns/registrations/{selector}` após cada
+  soumissão (apenas `--poll-attempts`, padrão 5) para confirmar que
+  o registro está visível. Fournissez `--suffix-map` (JSON de `suffix_id`
+  vers des valeurs "suffix") para que a utilidade derive dos literários
+  `{label}.{suffix}` para pesquisa.
+- Ajustáveis: `--submit-timeout`, `--poll-attempts` e `--poll-interval`.
 
-### 3.2 Mode iroha CLI
+### 3.2 Modo iroha CLI
 
-Pour faire passer chaque entree du manifeste par la CLI, fournissez le chemin du
-binaire:
+Para fazer com que cada entrada do manifesto seja feita pela CLI, forneça o caminho do
+binário:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -154,20 +154,20 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Les controllers doivent etre des entrees `Account` (`controller_type.kind = "Account"`)
-  car la CLI expose uniquement des controllers bases sur des comptes.
-- Les blobs metadata et governance sont ecrits dans des fichiers temporaires par
-  requete et transmis a `iroha sns register --metadata-json ... --governance-json ...`.
-- Le stdout et stderr de la CLI ainsi que les codes de sortie sont journalises;
-  les codes non zero interrompent l'execution.
+- Os controladores devem ter entradas `Account` (`controller_type.kind = "Account"`)
+  Car la CLI expõe apenas bases de controladores nas contas.
+- Os metadados e a governança dos blobs são escritos nos arquivos temporários
+  receba e transmita para `iroha sns register --metadata-json ... --governance-json ...`.
+- O stdout e o stderr da CLI, assim como os códigos de surtida são registrados;
+  os códigos diferentes de zero interromperam a execução.
 
 Les deux modes de soumission peuvent fonctionner ensemble (Torii et CLI) pour
-croiser les deployments du registrar ou repeter des fallbacks.
+cruzar as implantações do registrador ou repetir os substitutos.
 
 ### 3.3 Recus de soumission
 
-Quand `--submission-log <path>` est fourni, le script ajoute des entrees NDJSON
-capturant:
+Quando `--submission-log <path>` é fornecido, o script adicionado às entradas NDJSON
+capturante:
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -175,18 +175,18 @@ capturant:
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-Les reponses Torii reussies incluent des champs structures extraits de
-`NameRecordV1` ou `RegisterNameResponseV1` (par exemple `record_status`,
+As respostas Torii reussies incluem extratos de estruturas de campeões de
+`NameRecordV1` ou `RegisterNameResponseV1` (por exemplo `record_status`,
 `record_pricing_class`, `record_owner`, `record_expires_at_ms`,
-`registry_event_version`, `suffix_id`, `label`) afin que les dashboards et les
-reports de gouvernance puissent parser le log sans inspecter du texte libre.
-Joignez ce log aux tickets registrar avec le manifeste pour une evidence
-reproductible.
+`registry_event_version`, `suffix_id`, `label`) para que os painéis e os
+relatórios de governo podem analisar o log sem inspecionar o texto livre.
+Acesse este registrador de tickets com o manifesto para uma evidência
+reproduzível.
 
-## 4. Automatisation de release du portail
+## 4. Automatização de lançamento do portal
 
-Les jobs CI et portail appellent `docs/portal/scripts/sns_bulk_release.sh`, qui
-encapsule l'helper et stocke les artefacts sous
+Les jobs CI e portal recorrente `docs/portal/scripts/sns_bulk_release.sh`, aqui
+encapsular o ajudante e armazenar os artefatos sous
 `artifacts/sns/releases/<timestamp>/`:
 
 ```bash
@@ -200,27 +200,25 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-Le script:
-
-1. Construit `registrations.manifest.json`, `registrations.ndjson`, et copie le
-   CSV original dans le repertoire de release.
-2. Soumet le manifeste via Torii et/ou la CLI (quand configure), en ecrivant
-   `submissions.log` avec les recus structures ci-dessus.
-3. Emet `summary.json` decrivant la release (chemins, URL Torii, chemin CLI,
-   timestamp) afin que l'automatisation du portail puisse uploader le bundle vers
+O script:1. Construa `registrations.manifest.json`, `registrations.ndjson` e copie-o
+   CSV original no repertório de lançamento.
+2. Envie o manifesto via Torii e/ou CLI (quando configurar), e crie-o
+   `submissions.log` com estruturas recus ci-dessus.
+3. Emet `summary.json` descritivo da liberação (caminhos, URL Torii, caminho CLI,
+   timestamp) após a automação do portal poder fazer o upload do pacote versão
    le stockage d'artefacts.
-4. Produit `metrics.prom` (override via `--metrics`) contenant des compteurs
-   au format Prometheus pour le total de requetes, la distribution des suffixes,
-   les totaux d'asset et les resultats de soumission. Le JSON resume pointe vers
-   ce fichier.
+4. Produto `metrics.prom` (substituir via `--metrics`) contendo os computadores
+   no formato Prometheus para o total de solicitações, distribuição de sufixos,
+   os totais de ativos e os resultados de submissão. Le JSON resume pointe vers
+   este arquivo.
 
-Les workflows archivent simplement le repertoire de release comme un seul artefact,
-qui contient desormais tout ce dont la gouvernance a besoin pour l'audit.
+Os fluxos de trabalho arquivam simplesmente o repertório de lançamento como um único artefato,
+qui contém desormais tout ce dont la gouvernance a besoin pour l'audit.
 
-## 5. Telemetrie et dashboards
+## 5. Telemetria e painéis
 
-Le fichier de metriques genere par `sns_bulk_release.sh` expose les series
-suivantes:
+O arquivo de métricas gerado por `sns_bulk_release.sh` expõe as séries
+seguintes:
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -231,41 +229,39 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-Injectez `metrics.prom` dans votre sidecar Prometheus (par exemple via Promtail ou
-un import batch) pour aligner registrars, stewards et pairs de gouvernance sur
-l'avancement en masse. Le tableau Grafana
-`dashboards/grafana/sns_bulk_release.json` visualise les memes donnees avec des
+Injete `metrics.prom` em seu sidecar Prometheus (por exemplo, via Promtail ou
+um lote de importação) para registradores de alinhadores, administradores e pares de governo em
+avanço em massa. O quadro Grafana
+`dashboards/grafana/sns_bulk_release.json` visualize os memes dados com des
 panneaux pour les comptes par suffixe, le volume de paiement et les ratios de
-reussite/echec des soumissions. Le tableau filtre par `release` pour que les
-auditeurs puissent se concentrer sur une seule execution CSV.
+reussite/echec des soumissions. O filtro da tabela par `release` para que
+os auditores podem se concentrar em um único CSV de execução.
 
-## 6. Validation et modes d'echec
+## 6. Validação e modos de verificação
 
-- **Normalisation des labels:** les entrees sont normalisees avec Python IDNA plus
-  lowercase et filtres de caracteres Norm v1. Les labels invalides echouent vite
+- **Normalização de rótulos:** as entradas são normalizadas com Python IDNA plus
+  minúsculas e filtros de caracteres Norm v1. Les rótulos invalidos ecoam vite
   avant tout appel reseau.
-- **Garde-fous numeriques:** suffix ids, term years, et pricing hints doivent
-  rester dans les bornes `u16` et `u8`. Les champs de paiement acceptent des
-  entiers decimaux ou hex jusqu'a `i64::MAX`.
-- **Parsing metadata ou governance:** le JSON inline est parse directement; les
-  references a des fichiers sont resolues relativement a l'emplacement du CSV.
-  Les metadata non-objet produisent une erreur de validation.
-- **Controllers:** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (par exemple `ih58...;ih58...`) quand vous deleguez a des
-  acteurs non owner.
+- **Números importantes:** ids de sufixo, anos de mandato e dicas de preços fornecidas
+  rester nos bornes `u16` e `u8`. Os campos de pagamento aceitam des
+  inteiros decimais ou hexadecimais apenas `i64::MAX`.
+- **Análise de metadados ou governança:** o JSON inline é analisado diretamente; os
+  referências a arquivos são resoluções relativas à localização do CSV.
+  Os metadados não objetos produzem um erro de validação.
+- **Controladores:** as células vêem o respeito `--default-controllers`. Fournissez
+  des listes explícitas (por exemplo `ih58...;ih58...`) quando você delega a des
+  atores não proprietários.
 
-Les echecs sont signales avec des numeros de ligne contextuels (par exemple
-`error: row 12 term_years must be between 1 and 255`). Le script sort avec le
-code `1` sur erreurs de validation et `2` lorsque le chemin CSV manque.
+Les echecs são sinalizados com números de linha contextuais (por exemplo
+`error: row 12 term_years must be between 1 and 255`). O script classifica com ele
+código `1` em erros de validação e `2` ao clicar no caminho CSV manualmente.
 
-## 7. Tests et provenance
+## 7. Testes e proveniência
 
-- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` couvre le parsing CSV,
-  l'emission NDJSON, l'enforcement governance, et les chemins de soumission CLI ou Torii.
-- L'helper est du Python pur (aucune dependance additionnelle) et tourne partout
-  ou `python3` est disponible. L'historique des commits est suivi aux cotes de la
-  CLI dans le depot principal pour la reproductibilite.
-
-Pour les runs de production, joignez le manifeste genere et le bundle NDJSON au
-ticket du registrar afin que les stewards puissent rejouer les payloads exacts
-soumis a Torii.
+- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` permite a análise de CSV,
+  a emissão NDJSON, a governança de aplicação e os caminhos de emissão CLI ou Torii.
+- O ajudante é o Python pur (nenhuma adição de dependência) e parte do caminho
+  ou `python3` está disponível. L'historique des commits est suivi aux cotes de la
+  CLI no depósito principal para reprodução.Para as execuções de produção, junte-se ao gene manifesto e ao pacote NDJSON au
+ticket du registrador para que os administradores possam refazer as cargas exatas
+sou um Torii.

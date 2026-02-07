@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w0-summary
-title: Resumo de feedback do meio do W0
-sidebar_label: Feedback W0 (meio)
-description: Checkpoints, achados e acoes de meio de onda para a onda de preview de mantenedores core.
+идентификатор: предварительный просмотр-обратная связь-w0-сводка
+title: Резюме обратной связи на сайте W0
+Sidebar_label: Обратная связь W0 (meio)
+описание: Контрольно-пропускные пункты, места и места для предварительного просмотра ядра управления.
 ---
 
-| Item | Detalhes |
+| Товар | Подробности |
 | --- | --- |
-| Onda | W0 - Mantenedores core |
-| Data do resumo | 2025-03-27 |
-| Janela de revisao | 2025-03-25 -> 2025-04-08 |
-| Participantes | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Tag de artefato | `preview-2025-03-24` |
+| Онда | W0 — Ядро Мантенедорес |
+| Данные для резюме | 2025-03-27 |
+| Джанела де ревизао | 25.03.2025 -> 08.04.2025 |
+| Участники | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, наблюдаемость-01 |
+| Артефато | `preview-2025-03-24` |
 
-## Destaques
+## Дестак
 
-1. **Fluxo de checksum** - Todos os reviewers confirmaram que `scripts/preview_verify.sh`
-   teve sucesso contra o par descriptor/archive compartilhado. Nenhum override manual foi
-   necessario.
-2. **Feedback de navegacao** - Dois problemas menores de ordenacao do sidebar foram
-   registrados (`docs-preview/w0 #1-#2`). Ambos foram encaminhados para Docs/DevRel e nao
-   bloqueiam a onda.
-3. **Paridade de runbooks SoraFS** - sorafs-ops-01 pediu links cruzados mais claros entre
-   `sorafs/orchestrator-ops` e `sorafs/multi-source-rollout`. Issue de acompanhamento aberta;
+1. **Fluxo de checksum** — все рецензенты подтверждают `scripts/preview_verify.sh`.
+   вам удастся добиться успеха в сравнении с дескриптором/архивом. Ручное переопределение Nenhum
+   необходимо.
+2. **Отзыв о навигации** — проблемы с отображением заказа на боковой панели.
+   зарегистрированный (`docs-preview/w0 #1-#2`). Наш форум посвящен документам/DevRel и nao
+   заблокировать онду.
+3. **Paridade de runbooks SoraFS** — sorafs-ops-01 pediu links cruzados mais claros entre
+   `sorafs/orchestrator-ops` и `sorafs/multi-source-rollout`. Выпуск acompanhamento aberta;
    tratar antes de W1.
-4. **Revisao de telemetria** - observability-01 confirmou que `docs.preview.integrity`,
-   `TryItProxyErrors` e os logs do proxy Try-it ficaram verdes; nenhum alerta disparou.
+4. **Пересмотр телеметрии** - наблюдаемость-01 подтверждает `docs.preview.integrity`,
+   `TryItProxyErrors` e журналы ОС делают прокси. Попробуйте ficaram verdes; nenhum alerta disparou.
 
-## Itens de acao
+## Итенс де акао
 
-| ID | Descricao | Responsavel | Status |
+| удостоверение личности | Описание | Ответственный | Статус |
 | --- | --- | --- | --- |
-| W0-A1 | Reordenar entradas do sidebar do devportal para destacar docs focados em reviewers (`preview-invite-*` agrupados). | Docs-core-01 | Concluido - o sidebar agora lista os docs de reviewers de forma contigua (`docs/portal/sidebars.js`). |
-| W0-A2 | Adicionar link cruzado explicito entre `sorafs/orchestrator-ops` e `sorafs/multi-source-rollout`. | Sorafs-ops-01 | Concluido - cada runbook agora aponta para o outro para que operadores vejam ambos os guias durante rollouts. |
-| W0-A3 | Compartilhar snapshots de telemetria + bundle de queries com o tracker de governanca. | Observability-01 | Concluido - bundle anexado ao `DOCS-SORA-Preview-W0`. |
+| W0-A1 | Измените порядок входов на боковую панель портала для предоставления документов рецензентам (`preview-invite-*`). | Документы-core-01 | Заключение — на боковой панели находится список документов рецензентов по форме продолжения (`docs/portal/sidebars.js`). |
+| П0-А2 | Дополнительная ссылка явная ссылка между `sorafs/orchestrator-ops` и `sorafs/multi-source-rollout`. | Сорафс-ОПС-01 | Вывод: каждый runbook должен быть готов к завершению, чтобы операторы могли выполнять развертывания в течение длительного времени. |
+| W0-A3 | Сохраняйте снимки телеметрии + пакет запросов с помощью трекера управления. | Наблюдательность-01 | Вывод — комплект, прикрепленный к `DOCS-SORA-Preview-W0`. |
 
-## Resumo de encerramento (2025-04-08)
+## Резюме энсерраменто (08.04.2025)
 
-- Todos os cinco reviewers confirmaram a conclusao, limparam builds locais e sairam da janela
-  de preview; as revogacoes de acesso ficaram registradas em `DOCS-SORA-Preview-W0`.
-- Nenhum incidente ou alerta ocorreu durante a onda; os dashboards de telemetria ficaram
+- Все пять рецензентов подтверждают заключение, улучшают расположение и выбирают место для работы.
+  предварительный просмотр; как отозван доступ к зарегистрированному номеру `DOCS-SORA-Preview-W0`.
+- Немедленное происшествие или предупреждение об опасности в течение длительного времени; OS Dashboards de Telemetria Ficaram
   verdes durante todo o periodo.
-- As acoes de navegacao + links cruzados (W0-A1/A2) estao implementadas e refletidas nos docs
-  acima; a evidencia de telemetria (W0-A3) esta anexada ao tracker.
-- Bundle de evidencia arquivado: screenshots de telemetria, confirmacoes de convite e este
-  resumo estao linkados no issue do tracker.
+- В качестве навигационных + ссылки на крестики (W0-A1/A2) уже реализованы и отражены в документах.
+  асима; Телеметрическое подтверждение (W0-A3) является присоединенным к трекеру.
+- Пакет архивных доказательств: скриншоты телеметрии, подтверждения осуждения и признания
+  резюме estao linkados без проблем, сделайте трекер.
 
-## Proximos passos
+## Проксимос пассос
 
-- Implementar os itens de acao do W0 antes de abrir W1.
-- Obter aprovacao legal e um slot de staging para o proxy, depois seguir os passos de preflight
-  da onda de parceiros descritos no [preview invite flow](../../preview-invite-flow.md).
+- Внедрите условия, необходимые для W0 до начала W1.
+- Получите юридическое подтверждение и промежуточный слот для прокси-сервера, чтобы обеспечить предполетные проходы.
+  da onda de parceiros descritos no [предварительный поток приглашений] (../../preview-invite-flow.md).
 
-_Este resumo esta linkado a partir do [preview invite tracker](../../preview-invite-tracker.md) para
-manter o roadmap DOCS-SORA rastreavel._
+_Эсте резюме есть ссылка на [предварительный трекер приглашений] (../../preview-invite-tracker.md) для
+Мантер или дорожная карта DOCS-SORA rastreavel._

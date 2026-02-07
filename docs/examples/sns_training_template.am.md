@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: dd9da5045f5f40dbc31837145ad13bf79b4d751b0803c0b6d69bab49885ed1b4
 source_last_modified: "2025-12-29T18:16:35.079313+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Slide Template
+# የኤስኤንኤስ ስልጠና ስላይድ አብነት
 
-This Markdown outline mirrors the slides that facilitators should adapt for
-their language cohorts. Copy these sections into Keynote/PowerPoint/Google
-Slides and localise the bullet points, screenshots, and diagrams as needed.
+ይህ የማርክታውን ንድፍ አመቻቾች መላመድ ያለባቸውን ስላይዶች ያንጸባርቃል
+የቋንቋ ጓዶቻቸው። እነዚህን ክፍሎች ወደ Keynote/PowerPoint/Google ይቅዱ
+እንደ አስፈላጊነቱ የነጥብ ነጥቦቹን ፣ ቅጽበታዊ ገጽ እይታዎችን እና ሥዕላዊ መግለጫዎችን ያንሸራትቱ እና አካባቢያዊ ያድርጓቸው።
 
-## Title slide
-- Program: “Sora Name Service onboarding”
-- Subtitle: specify suffix + cycle (e.g., `.sora — 2026‑03`)
-- Presenters + affiliations
+## ርዕስ ስላይድ
+- ፕሮግራም: "የሶራ ስም አገልግሎት በመሳፈር ላይ"
+- የትርጉም ጽሑፍ፡ ቅጥያ + ዑደት ይግለጹ (ለምሳሌ፡ I18NI0000002X)
+- አቅራቢዎች + ትስስር
 
-## KPI orientation
-- Screenshot or embed of `docs/portal/docs/sns/kpi-dashboard.md`
-- Bullet list explaining suffix filters, ARPU table, freeze tracker
-- Callouts for exporting PDF/CSV
+## የ KPI አቀማመጥ
+- የ `docs/portal/docs/sns/kpi-dashboard.md` ቅጽበታዊ ገጽ እይታ ወይም መክተት
+- የቅጥያ ማጣሪያዎችን የሚያብራራ የነጥብ ዝርዝር ፣ የ ARPU ጠረጴዛ ፣ የቀዘቀዘ መከታተያ
+- ፒዲኤፍ/CSV ወደ ውጭ ለመላክ ጥሪዎች
 
-## Manifest lifecycle
-- Diagram: registrar → Torii → governance → DNS/gateway
-- Steps referencing `docs/source/sns/registry_schema.md`
-- Example manifest excerpt with annotations
+## የህይወት ዑደትን ያሳያል
+- ሥዕላዊ መግለጫ: ሬጅስትራር → Torii → አስተዳደር → ዲ ኤን ኤስ / ጌትዌይ
+- `docs/source/sns/registry_schema.md` የሚያመለክቱ ደረጃዎች
+- ምሳሌ አንጸባራቂ ማብራሪያ ከ ማብራሪያዎች ጋር
 
-## Dispute and freeze drills
-- Flow diagram for guardian intervention
-- Checklist referencing `docs/source/sns/governance_playbook.md`
-- Example freeze ticket timeline
+## ሙግት እና ልምምዶችን ያቀዘቅዙ
+- ለአሳዳጊ ጣልቃገብነት ፍሰት ንድፍ
+- የማረጋገጫ ዝርዝር `docs/source/sns/governance_playbook.md`
+- ምሳሌ የቀዘቀዙ ቲኬቶች የጊዜ መስመር
 
-## Annex capture
-- Command snippet showing `cargo xtask sns-annex ... --portal-entry ...`
-- Reminder to archive Grafana JSON under `artifacts/sns/regulatory/<suffix>/<cycle>/`
-- Link to `docs/source/sns/reports/.<suffix>/<cycle>.md`
+## አባሪ ቀረጻ
+- የትእዛዝ ቅንጣቢ `cargo xtask sns-annex ... --portal-entry ...` ያሳያል
+- Grafana JSON በ `artifacts/sns/regulatory/<suffix>/<cycle>/` ስር ለማስቀመጥ አስታዋሽ
+- ወደ `docs/source/sns/reports/.<suffix>/<cycle>.md` አገናኝ
 
-## Next steps
-- Training feedback link (see `docs/examples/sns_training_eval_template.md`)
-- Slack/Matrix channel handles
-- Upcoming milestone dates
+## ቀጣይ እርምጃዎች
+- የስልጠና ግብረ-መልስ አገናኝ (`docs/examples/sns_training_eval_template.md` ይመልከቱ)
+- Slack/Matrix ሰርጥ መያዣዎች
+- መጪ ወሳኝ ቀናት

@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8b937a75e50aa77c02fcab0a11dae1b1cc182f88c179d6f90aa69181afa80d1b
 source_last_modified: "2026-01-05T18:22:23.394597+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Integrating NoritoBridgeKit in an Xcode iOS Project
+## 在 Xcode iOS 項目中集成 NoritoBridgeKit
 
-This guide shows how to integrate the Rust Norito bridge (XCFramework) and the Swift wrappers into an iOS app, then exchange Iroha Connect frames over WebSocket using the same Norito codecs as the Rust host.
+本指南介紹如何將 Rust Norito 橋 (XCFramework) 和 Swift 包裝器集成到 iOS 應用程序中，然後使用與 Rust 主機相同的 Norito 編解碼器通過 WebSocket 交換 Iroha Connect 幀。
 
-Prerequisites
-- A NoritoBridge.xcframework zip (built by CI workflow) and the Swift helper `NoritoBridgeKit.swift` (copy the version under `examples/ios/NoritoDemo/Sources` if you are not consuming the demo project directly).
-- Xcode 15+, iOS 13+ target.
+先決條件
+- NoritoBridge.xcframework zip（由 CI 工作流程構建）和 Swift 助手 `NoritoBridgeKit.swift`（如果您不直接使用演示項目，請複制 `examples/ios/NoritoDemo/Sources` 下的版本）。
+- Xcode 15+、iOS 13+ 目標。
 
-Option A: Swift Package Manager (recommended)
-1) Publish a binary SPM using the `Package.swift.template` in `crates/connect_norito_bridge/` (fill URL and checksum from CI).
-2) In Xcode: File → Add Packages… → Enter the SPM repo URL → Add the `NoritoBridge` product to your target.
-3) Add `NoritoBridgeKit.swift` to your app target (drag into your project, ensure “Copy if needed” is ticked).
+選項 A：Swift 包管理器（推薦）
+1) 使用 `crates/connect_norito_bridge/` 中的 `Package.swift.template` 發布二進制 SPM（填寫來自 CI 的 URL 和校驗和）。
+2) 在 Xcode 中：文件 → 添加軟件包… → 輸入 SPM 存儲庫 URL → 將 `NoritoBridge` 產品添加到您的目標。
+3) 將 `NoritoBridgeKit.swift` 添加到您的應用程序目標（拖到您的項目中，確保勾選“如果需要則復制”）。
 
-Option B: CocoaPods
-1) Create a Podspec from `NoritoBridge.podspec.template` (fill the `s.source` zip URL).
-2) `pod trunk push NoritoBridge.podspec`.
-3) In your Podfile: `pod 'NoritoBridge'` → `pod install`.
-4) Add `NoritoBridgeKit.swift` to your app target.
+選項 B：CocoaPods
+1) 從 `NoritoBridge.podspec.template` 創建 Podspec（填寫 `s.source` zip URL）。
+2) `pod trunk push NoritoBridge.podspec`。
+3) 在你的 Podfile 中：`pod 'NoritoBridge'` → `pod install`。
+4) 將 `NoritoBridgeKit.swift` 添加到您的應用程序目標。
 
-Imports
+進口
 ```swift
 import Foundation
 import CryptoKit               // ChaChaPoly / HKDF
@@ -37,11 +38,11 @@ import NoritoBridge            // Clang module from the XCFramework
 // Ensure NoritoBridgeKit.swift is part of the target
 ```
 
-### Bootstrapping a Connect session
+### 引導連接會話
 
-`ConnectClient` handles the WebSocket, while `ConnectSession` orchestrates control
-frames and ciphertext envelopes. The snippet below shows how a dApp would open a session,
-derive Connect keys, and wait for an approval response.
+`ConnectClient` 處理 WebSocket，而 `ConnectSession` 協調控制
+幀和密文信封。下面的代碼片段展示了 dApp 如何打開會話，
+派生連接密鑰，並等待批准響應。
 
 ```swift
 let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
@@ -76,10 +77,10 @@ Task {
 }
 ```
 
-### Sending ciphertext frames (sign requests, etc.)
+### 發送密文幀（簽名請求等）
 
-When the dApp needs to request a signature it uses the Norito bridge helpers to encode
-an envelope, encrypts the payload with ChaChaPoly, and wraps it in a `ConnectFrame`.
+當 dApp 需要請求籤名時，它使用 Norito 橋助手進行編碼
+一個信封，使用 ChaChaPoly 加密有效負載，並將其包裝在 `ConnectFrame` 中。
 
 ```swift
 let bridge = NoritoBridgeKit()
@@ -101,9 +102,9 @@ let frame = ConnectFrame(sessionID: sessionID,
 try await connectClient.send(frame: frame)
 ```
 
-`ConnectAEAD.header` / `ConnectAEAD.nonce` are convenience helpers (see the snippet in
-`docs/connect_swift_ios.md`) built from the shared `connect:v1` header definition. They
-are easy to inline if you prefer not to add another utility:
+`ConnectAEAD.header` / `ConnectAEAD.nonce` 是方便的助手（請參閱
+`docs/connect_swift_ios.md`) 從共享 `connect:v1` 標頭定義構建。他們
+如果您不想添加其他實用程序，則很容易內聯：
 
 ```swift
 enum ConnectAEAD {
@@ -127,11 +128,11 @@ enum ConnectAEAD {
 }
 ```
 
-### Receiving / decrypting frames
+### 接收/解密幀
 
-`ConnectSession` already exposes `nextEnvelope()`, which decrypts payloads when direction
-keys are configured. If you need manual access (for example to match an existing decoder
-pipeline), you can call the lower-level helper:
+`ConnectSession` 已經暴露了 `nextEnvelope()`，它在定向時解密有效負載
+鍵已配置。如果您需要手動訪問（例如匹配現有解碼器
+pipeline），您可以調用較低級別的幫助程序：
 
 ```swift
 func decryptFrame(_ frame: ConnectFrame,
@@ -150,24 +151,24 @@ func decryptFrame(_ frame: ConnectFrame,
 }
 ```
 
-`NoritoBridgeKit` also exposes helpers such as `decodeCiphertextFrame`, `decodeEnvelopeJson`,
-and `decodeSignResultAlgorithm` for debugging or interoperability testing. For production
-apps, rely on `ConnectSession` and `ConnectEnvelope` so behaviour matches the Rust and
-Android SDKs exactly.
+`NoritoBridgeKit` 還公開了幫助程序，例如 `decodeCiphertextFrame`、`decodeEnvelopeJson`、
+和 `decodeSignResultAlgorithm` 用於調試或互操作性測試。用於生產
+應用程序，依賴 `ConnectSession` 和 `ConnectEnvelope`，因此行為與 Rust 和
+確切地說是 Android SDK。
 
-## CI validation
+## CI 驗證
 
-- Before publishing updated bridge artifacts or pushing Connect integrations, run:
+- 在發布更新的橋接工件或推送 Connect 集成之前，運行：
 
   ```bash
   make swift-ci
   ```
 
-  The target validates fixture parity, checks the dashboard feeds, and renders the CLI
-  summaries locally. In Buildkite the same workflow depends on metadata keys such as
-  `ci/xcframework-smoke:<lane>:device_tag`; confirm the metadata is present after editing
-  pipelines or agent tags so dashboards can attribute results to the correct simulator or
-  StrongBox lane.
-- If the command fails, follow the parity playbook (`docs/source/swift_parity_triage.md`)
-  and inspect the rendered `mobile_ci` output to identify which lane requires regeneration
-  or incident follow-up before retrying.
+  目標驗證夾具奇偶性、檢查儀表板源並呈現 CLI
+  本地總結。在 Buildkite 中，相同的工作流程取決於元數據鍵，例如
+  `ci/xcframework-smoke:<lane>:device_tag`；確認編輯後元數據存在
+  管道或代理標籤，以便儀表板可以將結果歸因於正確的模擬器或
+  保險箱巷。
+- 如果命令失敗，請遵循奇偶校驗手冊 (`docs/source/swift_parity_triage.md`)
+  並檢查渲染的 `mobile_ci` 輸出以確定哪個通道需要再生
+  或重試之前的事件跟進。

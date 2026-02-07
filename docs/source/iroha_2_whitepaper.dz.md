@@ -7,241 +7,232 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a4e8824c128b9f2a34262a5c9bc09f6b2cd790a0561aa083fa18a987accd7004
 source_last_modified: "2026-01-22T16:26:46.570053+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Iroha v2.0
 
-Hyperledger Iroha v2 is a deterministic, Byzantine fault tolerant distributed ledger that emphasises a
-modular architecture, strong defaults, and approachable APIs. The platform ships as a set of Rust crates
-that can be embedded into bespoke deployments or used together to operate a production blockchain network.
+Hyperledger Iroha v2 ནི་ ཐག་གཅོད་ཅིག་ཨིན།
+མཐུན་རྐྱེན་བཟོ་བཀོད། སྟེགས་བུ་འདི་ Rust crets ཆ་ཚན་སྦེ་ གྲུ་ཚུ་ཡོདཔ་ཨིན།
+དེ་ཡང་ བེ་སི་པོག་བཀྲམ་སྤེལ་ནང་ བཙུགས་ཚུགས་ནི་དང་ ཡང་ན་ བཟོ་བསྐྲུན་བཀག་ཆའི་ཡོངས་འབྲེལ་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ གཅིག་ཁར་ལག་ལེན་འཐབ་བཏུབ།
 
 ---
 
-## 1. Overview
+## 1. སྤྱི་དོན།
 
-Iroha 2 continues the design philosophy introduced with Iroha 1: provide a curated collection of
-capabilities out of the box so operators can stand up a network without writing large amounts of custom
-code. The v2 release consolidates the execution environment, consensus pipeline, and data model into a
-single cohesive workspace.
+Iroha 2 འཕྲོ་མཐུད་དེ་ Iroha གིས་ ངོ་སྤྲོད་འབད་མི་ བཟོ་བཀོད་ནང་དོན་རིག་པ་འདི་ འཕྲོ་མཐུད་དེ་རང་ བསྡུ་སྒྲིག་འབད་དེ་ཡོདཔ་ཨིན།
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ལམ་ལུགས་སྦོམ་མ་བྲིས་པར་ ཡོངས་འབྲེལ་ནང་ ལོང་སྟེ་སྡོད་ཚུགས།
+ཨང་རྟགས། v2 བཏོན་མི་འདི་གིས་ ལག་ལེན་འཐབ་སའི་མཐའ་འཁོར་དང་ མོས་མཐུན་གྱི་ ཆུ་ལམ་ དེ་ལས་ གནས་སྡུད་དཔེ་ཚད་ཚུ་ མཉམ་སྡེབ་འབདཝ་ཨིན།
+རྐྱང་པའི་གཅིག་མཐུན་གྱི་ལཱ་གི་ས་སྒོ་།
 
-The v2 line is designed for organisations that want to operate their own permissioned or consortium
-blockchains. Each deployment runs its own consensus network, maintains independent governance, and can tailor
-configuration, genesis data, and upgrade cadence without depending on third parties. The shared workspace
-allows multiple independent networks to build against the exact same codebase while choosing the features and
-policies that match their use cases.
+v2 གྲལ་ཐིག་འདི་ ཁོང་རའི་གནང་བ་ཡང་ན་ མཐུན་སྒྲིག་ལག་ལེན་འཐབ་དགོ་མནོ་མི་ ལས་སྡེ་ཚུ་གི་དོན་ལུ་ བཟོ་བཀོད་འབད་ཡོདཔ་ཨིན།
+blobkchas. བཀྲམ་སྤེལ་རེ་རེ་གིས་ རང་སོའི་མོས་མཐུན་ཡོངས་འབྲེལ་འགོ་འདྲེན་འཐབ་སྟེ་ རང་དབང་ཅན་གྱི་གཞུང་སྐྱོང་བཞག་ཚུགསཔ་མ་ཚད་ བཟོ་ཚུགས།
+རིམ་སྒྲིག་དང་ རིགས་མཚན་གནས་སྡུད་ དེ་ལས་ མི་ངོ་གཞན་ཚུ་ལུ་གཞི་བཞག་སྟེ་ ཡར་འཕར་མ་འབད་བའི་ ཡར་འཕར་གྱི་ ཚད་གཞི་ཚུ། རུབ་སྤྱོད་ཀྱི་ལཱ་གི་ས་སྒོ་ཚུ།
+ཁྱད་རྣམ་ཚུ་གདམ་ཁ་རྐྱབ་པའི་སྐབས་ རང་དབང་ཅན་གྱི་ཡོངས་འབྲེལ་ལེ་ཤ་ཅིག་གིས་ གསང་ཡིག་གཞི་རྟེན་གཅིག་པ་ལུ་གདོང་ལན་འབད་བཅུགཔ་ཨིན།
+ཁོང་གི་ལག་ལེན་གྱི་གནད་དོན་ཚུ་དང་མཐུན་པའི་སྲིད་བྱུས།
 
-Both Iroha 2 and SORA Nexus (Iroha 3) run the same Iroha Virtual Machine (IVM). Developers can author Kotodama
-contracts once and deploy them across self-hosted networks or the global Nexus ledger without recompiling or
-forking the execution environment.
-### 1.1 Relationship to the Hyperledger ecosystem
+Hyperledger དང་ SORA Nexus (Iroha 3) གཉིས་ཆ་ར་གིས་ Iroha བརྡ་དོན་འཕྲུལ་ཆས་ (IVM) འདི་ གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན། གོང་འཕེལ་གཏང་མི་ཚུ་གིས་ རྩོམ་པ་པོ་ Kotodama གིས་ རྩོམ་པ་པོ།
+གན་རྒྱ་ཚུ་ ཚར་གཅིག་དང་ རང་གིས་ ཧོསཊི་ཡོངས་འབྲེལ་ ཡང་ན་ འཛམ་གླིང་ཡོངས་ཁྱབ་ཀྱི་ Nexus རྩིས་ཁྲ་ནང་ ལོག་སྟེ་ ག་བསྡུར་མ་འབད་བར་ བཀྲམ་སྤེལ་འབདཝ་ཨིན།
+བཀོལ་སྤྱོད་མཐའ་འཁོར་འདི་ ཕོརཔ།
+### 1.1 འབྲེལ་བའི་Hyperledger སྐྱེ་ལྡན་ལམ་ལུགས།
 
-Iroha components are designed to interoperate with other Hyperledger projects. Consensus, data-model, and
-serialization crates can be reused in composite stacks or alongside Fabric, Sawtooth, and Besu deployments.
-Common tooling—such as Norito codecs and governance manifests—helps keep interfaces consistent across the
-ecosystem while allowing Iroha to provide an opinionated default implementation.
+Iroha ཆ་ཤས་ཚུ་ Hyperledger ལས་འགུལ་གཞན་ཚུ་དང་ ཕན་ཚུན་འབྲེལ་བ་འཐབ་ནིའི་དོན་ལུ་ བཟོ་བཀོད་འབད་ཡོདཔ་ཨིན། མོས་མཐུན་དང་ གནས་སྡུད་-དཔེ་ཚད་ དང་།
+རིམ་སྒྲིག་ཀྲེཊ་འདི་ ཀམ་པོ་སིཊ་བང་རིམ་ནང་ ཡང་ན་ ཕེ་རིཀ་དང་ སའུ་ཊུཊ་ དེ་ལས་ བེ་སུ་བཀྲམ་སྤེལ་ཚུ་དང་གཅིག་ཁར་ ལོག་སྟེ་ལག་ལེན་འཐབ་བཏུབ།
+སྤྱིར་བཏང་ལག་ཆས་ཚུ་—དཔེར་ན་ Norito གསང་ཡིག་དང་ གཞུང་སྐྱོང་གསལ་སྟོན་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+བསམ་འཆར་ཅན་གྱི་སྔོན་སྒྲིག་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ Iroha འབད་བཅུག་པའི་སྐབས་ སྐྱེ་ལྡན་རིམ་ལུགས་འདི་ཨིན།
 
-### 1.2 Client libraries and SDKs
+### ༡.༢ མཁོ་མངགས་དཔེ་མཛོད་དང་ཨེས་ཌི་ཀེ་ཚུ།
 
-To ensure first-class mobile and web experiences, the project publishes maintained SDKs:
+དབྱེ་རིམ་དང་པའི་འཕྲུལ་རིག་དང་ཝེབ་ཀྱི་ཉམས་མྱོང་ཚུ་ངེས་གཏན་བཟོ་ནི་ལུ་ ལས་འགུལ་འདི་གིས་ རྒྱུན་སྐྱོང་འབད་ཡོད་པའི་ཨེསི་ཌི་ཀེ་ཚུ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
 
-- `IrohaSwift` for iOS and macOS clients, integrating Metal/NEON acceleration behind deterministic fallbacks.
-- `iroha_js` for JavaScript and TypeScript applications, including Kaigi builders and Norito helpers.
-- `iroha_python` for Python integrations, with HTTP, WebSocket, and telemetry support.
-- `iroha_cli` for terminal-driven administration and scripting.
+- iOS དང་ macOS མཁོ་སྤྲོད་འབད་མི་ཚུ་གི་དོན་ལུ་ `IrohaSwift` གིས་ གཏན་འབེབས་ཀྱི་ ཕོལ་བེག་ཚུ་གི་རྒྱབ་ཁར་ ལྕགས་རིགས་/NEON མགྱོགས་ཚད་མཉམ་བསྡོམས་འབདཝ་ཨིན།
+- ཇ་བ་ཨིསི་ཀིརིཔཊི་དང་ ཊའིཊི་ཨིསི་ཀིརིཔ་གློག་རིམ་ཚུ་གི་དོན་ལུ་ ཀ་གི་བཟོ་བསྐྲུན་པ་དང་ Norito གྲོགས་རམ་པ་ཚུ་རྩིས་ཏེ་ `iroha_js` ཨིན།
+- `iroha_python` པའི་ཐཱོན་མཉམ་བསྡོམས་ཚུ་གི་དོན་ལུ་ ཨེཆ་ཊི་ཊི་པི་ ཝེབ་སོ་ཀེཊི་ དེ་ལས་ ཊེ་ལི་མི་ཊི་རྒྱབ་སྐྱོར་ཚུ་དང་གཅིག་ཁར་ཨིན།
+- ཊར་མི་ནཱལ་-བཏང་ཡོད་པའི་བདག་སྐྱོང་དང་ ཡིག་གཟུགས་ཚུ་གི་དོན་ལུ་ `iroha_cli` ཨིན།
 
-languages and platforms.
+སྐད་ཡིག་དང་སྟེགས་བུ།
 
-### 1.3 Design principles
+### 1.3 བཟོ་བཀོད་ཀྱི་གཞི་རྩ།- ** Determinism དང་པ་:** མཐུད་མཚམས་རེ་རེ་གིས་ གསང་གྲངས་འགྲུལ་ལམ་གཅིགཔོ་ཚུ་ལག་ལེན་འཐབ་ཞིནམ་ལས་ གྲུབ་འབྲས་གཅིག་མཚུངས་སྦེ་བྱིན་ཡོདཔ་ཨིན།
+  ཨིན་པུཊི་ཚུ། SIMD/CUDA/NEON འགྲུལ་ལམ་ཚུ་ ཁྱད་རྣམ་-gated དང་ གཏན་འཁེལ་གྱི་ འཇལ་ཚད་ལག་ལེན་འཐབ་མི་ཚུ་ལུ་ ལོག་འགྱོཝ་ཨིན།
+- **བག་ལེབ་ཀྱི་ མཐུན་རྐྱེན་:** ཡོངས་འབྲེལ་དང་ མོས་མཐུན་ ལག་ལེན་ བརྒྱུད་འཕྲིན་ དེ་ལས་ གསོག་འཇོག་རེ་རེ་བཞིན་དུ་ བློ་གཏད་ནང་ ཐད་རི་འབའ་རི་ སྡོདཔ་ཨིན།
+  དེ་འབདཝ་ལས་ བཀང་མི་ཚུ་གིས་ བང་རིམ་ཆ་མཉམ་མ་འབག་པར་ ཆ་ཚན་ཆུང་བ་ཚུ་ ངོས་ལེན་འབད་ཚུགས།
+- **Explicit རིམ་སྒྲིག་:** སྤྱོད་ལམ་གྱི་མཛུབ་མོ་ཚུ་ `iroha_config` བརྒྱུད་དེ་ ཕྱིར་འཐེན་འབདཝ་ཨིན། ཁོར་ཡུག སོར་གྲང་།
+  གོང་འཕེལ་གཏང་མི་སྟབས་བདེ་ལུ་ཚད་འཛིན་འབད་ཡོདཔ།
+- **Secure freess:** ཀེན་ནོ་ཀཱལ་ཀོ་ཌེཀསི་དང་ དམ་དམ་གྱི་དཔག་བྱེད་ཨེ་བི་ཨའི་ བཀག་དམ་ དེ་ལས་ ཐོན་རིམ་འབད་ཡོད་པའི་གསལ་སྟོན་ཚུ་གིས་ བཟོཝ་ཨིན།
+  ཕར་ཚུར་ཡོངས་འབྲེལ་ཡར་འཕེལ་ཚུ་ སྔོན་དཔག་འབད་བཏུབ།
 
-- **Determinism first:** Every node executes the same code paths and produces the same results given the same
-  inputs. SIMD/CUDA/NEON paths are feature-gated and fall back to deterministic scalar implementations.
-- **Composable modules:** Networking, consensus, execution, telemetry, and storage each live in dedicated
-  crates so embedders can adopt subsets without carrying the entire stack.
-- **Explicit configuration:** Behavioural knobs are surfaced through `iroha_config`; environment toggles are
-  limited to developer conveniences.
-- **Secure defaults:** Canonical codecs, strict pointer ABI enforcement, and versioned manifests make
-  cross-network upgrades predictable.
+## 2. སྟེགས་རིས་བཟོ་བཀོད།
 
-## 2. Platform architecture
+### 2.1 ནུམ་གྲུབ་ཀྱི་གྲུབ་ཚུལ།
 
-### 2.1 Node composition
+Iroha གིས་ མཉམ་འབྲེལ་ཞབས་ཏོག་ལེ་ཤ་ཅིག་གཡོག་བཀོལཝ་ཨིན།
 
-An Iroha node runs several cooperating services:
+- **Torii (`iroha_torii`)** གིས་ ཨེཆ་ཊི་ཊི་པི་/ཝེབ་སོ་ཀེཊི་ཨེ་པི་ཨའི་ཨེསི་འདི་ ཚོང་འབྲེལ་དང་ འདྲི་དཔྱད་ རྒྱུན་སྤེལ་གྱི་བྱུང་ལས་ དེ་ལས་ དེ་ལས་ ཕྱིར་གསལ་འབདཝ་ཨིན།
+  ཊེ་ལི་མི་ཊི་ (`/v1/...` མཐའ་མཚམས་)།
+- **Core (`iroha_core`)** བདེན་དཔྱད་དང་ མོས་མཐུན་ ལག་ལེན་ འཛིན་སྐྱོང་ གཞུང་སྐྱོང་ དེ་ལས་ མངའ་སྡེ་འཛིན་སྐྱོང་ཚུ་ མཉམ་འབྲེལ་འབདཝ་ཨིན།
+- **Sumeragi (`iroha_core::sumeragi`)** གིས་ མཐོང་སྣང་བསྒྱུར་བཅོས་ཚུ་དང་གཅིག་ཁར་ NPoS-red མོས་མཐུན་གྱི་པའིཔ་འདི་ ལག་ལེན་འཐབ་ཨིན།
+  བློ་གཏད་ཅན་གྱི་རྒྱང་བསྒྲགས་གནས་སྡུད་ཐོབ་ཚུགསཔ་དང་ ལག་ཁྱེར་ཚུ་འབདཝ་ཨིན། བལྟ།
+  [Sumeragi མོས་མཐུན་ལམ་སྟོན་](./sumeragi.md) ཁ་གསལ་གྱི་དོན་ལུ།
+- **ཀུ་ར་ (`iroha_core::kura`)** གིས་ རྟག་བརྟན་གྱི་ ཀེ་ནོ་ནིག་སྡེབ་ཚན་ཚུ་ སིལ་ཀར་ཚུ་ ལོག་ཐོབ་ནི་དང་ ཌིཀསི་གུ་ དཔང་པོའི་མེ་ཊ་ཌེ་ཊ་ཚུ་ སླར་ལོག་འབདཝ་ཨིན།
+- **འཛམ་གླིང་མངའ་སྡེ་མཐོང་སྣང་ (`iroha_core::state`)** གིས་ བདེན་དཔྱད་ཀྱི་དོན་ལུ་ལག་ལེན་འཐབ་མི་ དབང་ཚད་ཅན་གྱི་དྲན་ཚད་ཀྱི་པར་ལེན་འདི་ གསོག་འཇོག་འབདཝ་ཨིན།
+  དང་ འདྲི་དཔྱད་ཚུ།
+- **Iroha བརྡ་དོན་འཕྲུལ་ཆས་ (`ivm`)** གིས་ Kotodama བཱའིཊི་ཀོཌི་ (`.to`) ལག་ལེན་འཐབ་ཨིནམ་དང་ དཔག་བྱེད་ཨེ་བི་ཨའི་སྲིད་བྱུས་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+- **Norito (`crates/norito`)** གིས་ on-wire དབྱེ་བ་རེ་རེ་གི་དོན་ལུ་ གཏན་འབེབས་གཉིས་ལྡན་དང་ JSON རིམ་སྒྲིག་བྱིནམ་ཨིན།
+- **ཊེ་ལི་མི་ཊི་ (`iroha_telemetry`)** ཕྱིར་འདྲེན་ Prometheus མེཊིཀསི་དང་ གཞི་བཀོད་འབད་ཡོད་པའི་དྲན་ཐོ་བཀོད་ནི་ དེ་ལས་ རྒྱུན་སྤེལ་གྱི་བྱུང་ལས་ཚུ་ ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+- **P2P (`iroha_p2p`)** གིས་ མཉམ་རོགས་ཀྱི་བར་ན་ འགོས་དང་ ཊོ་པོ་ལོ་ཇི་ དེ་ལས་ ཉེན་སྲུང་མཐུད་ལམ་ཚུ་ འཛིན་སྐྱོང་འཐབ་ཨིན།
 
-- **Torii (`iroha_torii`)** exposes HTTP/WebSocket APIs for transactions, queries, streaming events, and
-  telemetry (`/v1/...` endpoints).
-- **Core (`iroha_core`)** coordinates validation, consensus, execution, governance, and state management.
-- **Sumeragi (`iroha_core::sumeragi`)** implements the NPoS-ready consensus pipeline with view changes,
-  reliable broadcast data availability, and commit certificates. See the
-  [Sumeragi consensus guide](./sumeragi.md) for details.
-- **Kura (`iroha_core::kura`)** persists canonical blocks, recovery sidecars, and witness metadata on disk.
-- **World State View (`iroha_core::state`)** stores the authoritative in-memory snapshot used for validation
-  and queries.
-- **Iroha Virtual Machine (`ivm`)** executes Kotodama bytecode (`.to`) and enforces the pointer ABI policy.
-- **Norito (`crates/norito`)** provides deterministic binary and JSON serialization for every on-wire type.
-- **Telemetry (`iroha_telemetry`)** exports Prometheus metrics, structured logging, and streaming events.
-- **P2P (`iroha_p2p`)** manages gossip, topology, and secure connections between peers.
+### ༢.༢ འབྲེལ་མཐུན་དང་ ས་ཁོངས།
 
-### 2.2 Networking and topology
+Iroha མཉམ་རོགས་ཀྱིས་ ཁས་བླངས་འབད་ཡོད་པའི་གནས་སྟངས་ལས་ བྱུང་མི་ གོ་རིམ་ཅན་གྱི་ ཊོ་པོ་ལོ་ཇི་ཅིག་ བདག་འཛིན་འཐབ་ཨིན། མོས་མཐུན་སྐོར་རིམ་རེ་རེར་འདམ་ཁ་རེ་རེ་བཞིན་འགོ་ཁྲིད།
+ཆ་ཚན་དང་ པོརོག་སི་མཇུག་ དེ་ལས་ ཆ་ཚན་བི་ བདེན་དཔྱད་འབད་མི་ བདེན་དཔྱད་འབད་ནི། ཚོང་འབྲེལ་ཚུ་ Norito-encoded འཕྲིན་དོན་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་ ཁ་བསྡམས་ཡོདཔ་ཨིན།
+འགོ་ཁྲིདཔ་གིས་ གྲོས་འཆར་ནང་ མ་བཙུགས་པའི་ཧེ་མ། བཀག་ཆ་དང་རྒྱབ་སྐྱོར།
+སྒྲུབ་བྱེད་ཚུ་གིས་ དྲང་བདེན་གྱི་ མཉམ་རོགས་ ག་ར་ལུ་ ལྷོད་ཚུགས་དོ་ཡོདཔ་ལས་ ཡོངས་འབྲེལ་གྱི་ མཐའ་མཚམས་འོག་ལུ་ཡང་ གནས་སྡུད་ཐོབ་ཚུགསཔ་བཟོ་ཚུགས། བསྒྱུར་བཅོས། བསྒྱིར།
+འགོ་ཁྲིད་ཀྱི་དུས་ཚོད་མེད་པའི་སྐབས་ འགོ་ཁྲིད་དང་ ཁས་བླངས་བཀག་སྡོམ་རེ་རེ་གིས་ འབག་ཚུགས་པའི་ ལག་ཁྱེར་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+མཉམ་རོགས་ཆ་མཉམ་གྱིས་ལག་ལེན་འཐབ་མི་ ཀེནོ་ནིཀ་མིང་རྟགས་ཆ་ཚན་ཚུ།
 
-Iroha peers maintain an ordered topology derived from committed state. Each consensus round selects a leader,
-validating set, proxy tail, and Set B validators. Transactions are gossiped using Norito-encoded messages
-before the leader bundles them into a proposal. Reliable broadcast guarantees that blocks and supporting
-evidence reach all honest peers, ensuring data availability even under network churn. View changes rotate
-leadership when deadlines are missed, and commit certificates ensure that every committed block carries the
-canonical signature set used by all peers.
+### ༢.༣ ཡིག་བརྙན།
 
-### 2.3 Cryptography
+`iroha_crypto` crate ནུས་ཤུགས་ལྡེ་མིག་འཛིན་སྐྱོང་དང་ ཧ་ཤིང་ དེ་ལས་ མཚན་རྟགས་བདེན་དཔྱད་ཚུ་:- Ed25519 འདི་ སྔོན་སྒྲིག་བདེན་བཤད་ལྡེ་མིག་འཆར་གཞི་ཨིན།
+- གདམ་ཁའི་རྒྱབ་ཐག་ཚུ་ཡང་ Secp256k1 དང་ TC26 GOST དེ་ལས་ BLS (བདེན་དཔང་འབད་ནིའི་དོན་ལུ་) དང་ ML-DSA གྲོགས་རམ་པ་ཚུ་ཨིན།
+- བརྒྱུད་འཕྲིན་རྒྱུན་ལམ་ཚུ་ ཆ་སྒྲིག་འབད་དེ་ Ed25519 ངོ་རྟགས་ཆ་སྒྲིག་འབད་དེ་ Kyber-based HPKE དང་ Norito རྒྱུན་ལམ་ཚུ་ ཉེན་སྲུང་འབད་ནིའི་དོན་ལུ་ཨིན།
+- ཧ་ཤིང་རྒྱུན་རིམ་ཆ་མཉམ་གྱིས་ ལཱ་གི་ས་སྒོ་དང་གཅིག་ཁར་ གཏན་འབེབས་ལག་ལེན་འཐབ་ཐངས་ (SHA-2, SHA-3, Blake2, Poseidon2) ལག་ལེན་འཐབ་ཨིན།
+  རྩིས་ཞིབ་ཚུ་ `docs/source/crypto/dependency_audits.md` ནང་།
 
-The `iroha_crypto` crate powers key management, hashing, and signature verification:
+### 2.4 རྒྱུན་སྐྱོང་དང་ལག་ལེན་ཟམ་པ།
 
-- Ed25519 is the default validator key scheme.
-- Optional backends include Secp256k1, TC26 GOST, BLS (for aggregate attestations), and ML-DSA helpers.
-- Streaming channels pair Ed25519 identities with Kyber-based HPKE to secure Norito streaming sessions.
-- All hashing routines use deterministic implementations (SHA-2, SHA-3, Blake2, Poseidon2) with workspace
-  audits documented in `docs/source/crypto/dependency_audits.md`.
+- **Norito རྒྱུན་སྤེལ་ (`iroha_core::streaming`, `norito::streaming`)** གིས་ གཏན་འབེབས་དང་གསང་བཟོས་བརྡ་བརྒྱུད་བྱིནམ་ཨིན།
+  དང་ ལཱ་ཡུན་གྱི་ པར་ཚུ་དང་ ཨེཆ་པི་ཀེ་ཨི་ལྡེ་མིག་བསྒྱིར་ནི་ དེ་ལས་ ཊེ་ལི་མི་ཊི་ཧུཀ་ཚུ་ཡོད་པའི་ གནད་སྡུད་རྒྱུ་ལམ་ཚུ་ཨིན་པས། ཀའི་གི་ཚོགས་འདུ་དང་།
+  གསང་བའི་སྒྲུབ་བྱེད་སྤོ་བཤུད་ཚུ་གིས་ ལམ་འདི་ལག་ལེན་འཐབ་ཨིན།
+- **མཐུད་ལམ་ཟམ་ (`connect_norito_bridge`)** གིས་ སྟེགས་བུ་ཨེསི་ཌི་ཀེ་ཨེསི་ནུས་ཤུགས་འབད་མི་ སི་ཨེ་བི་ཨའི་ ཁ་ཐོག་ཅིག་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  (Swift, Kotlin/Android) གིས་ རསཊ་ མཁོ་མངགས་འབད་མི་ཚུ་ ཁ་དོག་འོག་ལུ་ ལོག་སྟེ་ལག་ལེན་འཐབ་པའི་སྐབས་ཨིན།
+- **ISO 20022 ཟམ་ (`iroha_torii::iso20022_bridge`)** གཞི་བསྒྱུར་གྱིས་ ལྟ་རྟོག་འབད་མི་ དངུལ་སྤྲོད་བརྡ་འཕྲིན་ཚུ་ Norito ནང་ལུ།
+  ཚོང་འབྲེལ་ཚུ་ མོས་མཐུན་དང་ ཡང་ན་ བདེན་དཔྱད་ཚུ་ མ་བརྒལ་བར་ དངུལ་འབྲེལ་གྱི་ལཱ་ཚུ་དང་གཅིག་ཁར་ ཕན་ཚུན་འབྲེལ་བ་འཐབ་ཚུགསཔ་བཟོ་ནི།
+- ཟམ་པ་ཆ་མཉམ་གྱིས་ གཏན་འབེབས་ Norito གླ་ཆ་ཚུ་ ཉམས་སྲུང་འབད་དེ་ཡོདཔ་ལས་ མར་འབབ་ལམ་ལུགས་ཚུ་གིས་ གནས་སྟངས་འགྱུར་བ་ཚུ་ བདེན་དཔྱད་འབད་ཚུགས།
 
-### 2.4 Streaming and application bridges
+## 3. གནད་སྡུད་དཔེ་ཚད།
 
-- **Norito streaming (`iroha_core::streaming`, `norito::streaming`)** provides deterministic, encrypted media
-  and data channels with session snapshots, HPKE key rotation, and telemetry hooks. Kaigi conferencing and
-  confidential evidence transfers use this lane.
-- **Connect bridge (`connect_norito_bridge`)** exposes a C ABI surface that powers platform SDKs
-  (Swift, Kotlin/Android) while reusing the Rust clients under the hood.
-- **ISO 20022 bridge (`iroha_torii::iso20022_bridge`)** converts regulated payment messages into Norito
-  transactions, enabling interoperability with financial workflows without bypassing consensus or validation.
-- All bridges preserve deterministic Norito payloads so downstream systems can verify state transitions.
+`iroha_data_model` cret གིས་ ལག་དེབ་དངོས་པོ་དང་ བཀོད་རྒྱ་ འདྲི་དཔྱད་དང་ བྱུང་ལས་ཆ་མཉམ་ ངེས་འཛིན་འབདཝ་ཨིན། གཙོ་བསྟེན།
 
-## 3. Data model
+- **མངའ་ཁོངས་དང་རྩིས་ཐོ་ དེ་ལས་ རྒྱུ་དངོས་** ཀེན་ནོ་ནཱལ་ཨའི་ཨེཆ་༥༨ རྩིས་ཐོ་ཨའི་ཌི་ཚུ་ (དགའ་གདམ་) ལག་ལེན་འཐབ། `name@domain` འགྲུལ་ལམ་ཅིག་སྦེ་ལུས།
+  alias གསལ་ཏོག་ཏོ་སྦེ་བཀྲམ་སྤེལ་འབད་མི། མེ་ཊ་ཌེ་ཊ་འདི་ གཏན་འབེབས་ (`Metadata` སབ་ཁྲ་) ཨིན། ཨང་གྲངས་ཀྱི་རྒྱུ་དངོས་ཚུ་ གཏན་འཇགས་ས་ཚིགས་ལུ་རྒྱབ་སྐྱོར་འབད་ནི།
+  བཀོལ་སྤྱོད་ཚུ།; NFTs གིས་ བར་འདུར་རི་ གཞི་བཀོད་ཀྱི་ མེ་ཊ་ཌེ་ཊ་ འབག་འགྱོཝ་ཨིན།
+- **འགན་ཁུར་དང་གནང་བ་** ཐད་ཀར་ལག་ལེན་པ་ཞིབ་དཔྱད་ཚུ་ལུ་སབ་ཁྲ་བཟོ་མི་ Kotodama-notaned ཊོ་ཀེན་ཚུ་ལག་ལེན་འཐབ།
+- **Triggers** (དུས་ཚོད་གཞི་བཞག་སྟེ་ བཀག་ཆ་གཞི་བཞག་ ཡང་ན་ སྔོན་བཤད་འབད་མི་) གིས་ རིམ་སྒྲིག་བརྒྱུད་དེ་ གཏན་འབེབས་བཟོ་ནིའི་ཚོང་འབྲེལ་ཚུ་ བཏོནམ་ཨིན།
+  བསྟར་སྤྱོད་པ།
+- **ལས་སྣ་ཚུ་** རྒྱུན་ལམ་བརྒྱུད་དེ་ Torii དང་ མེ་ལོང་ཁས་བླངས་ཅན་གྱི་གནས་སྟངས་འགྱུར་བ་ཚུ་ གསང་བའི་གནས་ཚུལ་ཚུ་ དང་།
+  གཞུང་སྐྱོང་གི་བྱ་བ་ཚུ།
+- **ཚོང་འབྲེལ་དང་ བཀག་ཆ་ དེ་ལས་ གསལ་སྟོན་ཚུ་** འདི་ Norito-encoded (`SignedTransaction`, `SignedBlockWire`) དང་མཉམ་དུ།
+  ཐོན་རིམ་གསལ་པོ་ མགོ་ཡིག་ཚུ་ མདུན་སྐྱོད་འབད་བཏུབ་པའི་ ཌི་ཀོ་ཌིང་ངེས་གཏན་བཟོ་ནི།
+- **ཐབས་བྱུས་** ལག་ལེན་པའི་གནད་སྡུད་དཔེ་ཚད་བརྒྱུད་དེ་འབྱུངམ་ཨིན་: བཀོལ་སྤྱོད་པ་ཚུ་གིས་ སྲོལ་སྒྲིག་བཀོད་རྒྱ་ཚུ་བཀོད་ཚུགས།
+  ཆ་འཇོག་དང་ ཚད་བཟུང་ཚུ་ གཏན་འབེབས་བཟོ་ནིའི་ཉམས་སྲུང་འབད་བའི་སྐབས་ཨིན།
+- **མཛོད་ཁང་ (`RepoInstruction`)** གིས་ བཱན་ཌིང་ གཏན་འབེབས་བཟོ་ནིའི་འཆར་གཞི་ (བཀོད་ཁྱབ་དང་ གསལ་སྟོན་ཚུ་ དང་།
+  རྒྱུ་དངོས་ཚུ་) དེ་འབདཝ་ལས་ གོ་རིམ་སྣ་ཚོགས་ཀྱི་ བསྐོར་ར་ཚུ་ གཞུང་སྐྱོང་གནང་བ་ཐོག་ལས་ རིམ་སྒྲིག་ནང་ འཛིན་སྐྱོང་འཐབ་ཚུགས།
+- **མོས་མཐུན་གྱི་ ཅ་རྙིང་**—དཔེར་ན་ ལག་ཁྱེར་དང་ དཔང་པོ་ཐོ་ཡིག་ཚུ་བཟུམ་སྦེ་—གནས་སྡུད་དཔེ་ཚད་དང་ གནས་སྡང་ཚུ་ གནས་ཏེ་ཡོདཔ་ཨིན།
+  གསེར་གྱི་བརྟག་དཔྱད་ཚུ་བརྒྱུད་དེ་ `iroha_core`, Torii, དང་ SDKs ཚུ་གི་བར་ན་ མཐུན་སྒྲིག་འབད་ནི་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+- **བདེན་བཤད་ཐོ་བཀོད་དང་བྱུང་ལས་** བཟུང་ཡོད་པའི་ རྒྱུ་དངོས་འགྲེལ་བཤད་ཚུ་ བདེན་དཔྱད་འབད་མི་ལྡེ་མིག་ ཁས་བླངས་ཚུ།
+  ཀླད་ཀོར་དང་ བྱུང་རིམ་གྱི་ འབབ་ཁུངས་ (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`) དེ་འབདཝ་ལས་ གསང་བའི་རྒྱུན་འགྲུལ་ཚུ།
+  གནས་སྡུད་ཧ་ཅང་མ་བཏོན་པར་ རྩིས་ཞིབ་འབད་ཚུགས།
 
-The `iroha_data_model` crate defines all ledger objects, instructions, queries, and events. Highlights:
+## 4. བརྒྱུད་འཕྲིན་གྱི་འཚོ་བའི་སྐོར།1. **ཨེ་བྷི་:** Torii གིས་ Norito པེ་ལོཌི་ ཞིབ་དཔྱད་མཚན་རྟགས་ ཊི་ཊི་ཨེལ་ དེ་ལས་ ཚད་ཀྱི་ཚད་གཞི་ཚུ་ ཌི་ཀོམ་འབདཝ་ཨིན།
+   ས་གནས་ནང་ ཚོང་འབྲེལ།
+2. **Gossip:** ཚོང་འབྲེལ་འདི་ ཊོ་པོ་ལོ་ཇི་ནང་ལུ་ ཁྱབ་སྤེལ་འབདཝ་ཨིན། མཉམ་རོགས་ཚུ་གིས་ ཧ་ཤི་གིས་ འབད་ཞིནམ་ལས་ འཛུལ་ཞུགས་བསྐྱར་ལོག་འབདཝ་ཨིན།
+   བརྟག་དཔྱད།
+༣. **གདམ་ཁ་:** ད་ལྟོའི་འགོ་ཁྲིདཔ་གིས་ མཇུག་བསྡུའི་ཆ་ཚན་ལས་ ཚོང་འབྲེལ་ཚུ་ འཐེན་ཞིནམ་ལས་ མངའ་སྡེ་མེད་པའི་བདེན་དཔྱད་འབདཝ་ཨིན།
+4. **Statefulf dismines:** དུས་ཐུང་ Kotodama ནང་ན་ འདེམས་ངོ་ཚོང་འབྲེལ་ཚུ་ ལག་ལེན་འཐབ་ཨིན།
+   བཀོད་སྒྲིག་འབད་ཡོད་པའི་བཀོད་རྒྱ་ཚུ། འཁྲུག་རྩོད་ཚུ་ཡང་ན་ ལམ་ལུགས་འགལ་བ་ཚུ་ གཏན་འབེབས་སྦེ་ བཀོག་བཞག་ཡོདཔ་ཨིན།
+5. **Trigger དངོས་པོ་:** སྐོར་ཐེངས་ནང་ཡོད་པའི་ དུས་ཚོད་བཀོད་ཡོད་པའི་ འབྱུང་ཁུངས་ཚུ་ ནང་འཁོད་ཚོང་འབྲེལ་ལུ་ བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན།
+   དང་ མདོང་ལམ་གཅིག་ལག་ལེན་འཐབ་སྟེ་ བདེན་དཔྱད་འབད་ཡོདཔ།
+༦. **གྲོས་འཆར་གྱི་བསྡམ་བཞག་:** བཀག་ཆ་ཚད་གཞི་ཚུ་ལྷོད་པའི་སྐབས་ ཡང་ན་ དུས་ཚོད་རྫོགས་པའི་སྐབས་ འགོ་ཁྲིདཔ་གིས་ Norito-encoded ཅིག་བཏོན་གཏངམ་ཨིན།
+   `BlockCreated` འཕྲིན་དོན་།
+7. **བདེན་དཔྱད་:** བདེན་དཔྱད་ཆ་ཚན་ནང་ བདེན་དཔྱད་འབད་མི་ གཞི་སྒྲིག་ལོག་སྟེ་གཡོག་བཀོལ་མི་ མངའ་སྡེ་/གནས་སྟངས་ཞིབ་དཔྱད་ཚུ་ ནང་། མཐར་འཁྱོལ་བའི་མཉམ་རོགས་མིང་རྟགས་བཀོད་པ།
+   `BlockSigned` འཕྲིན་དོན་ཚུ་དང་ དེ་ཚུ་ གཏན་འབེབས་བཟོ་མི་ བསྡུ་སྒྲིག་འབད་མི་ ཆ་ཚན་ལུ་བཞག།
+8. **Commit:** བསྡུ་གསོག་འབད་མི་ཅིག་གིས་ ཀེ་ནོ་ནིག་མིང་རྟགས་ཆ་ཚན་འདི་བསྡུ་ཞིནམ་ལས་ ཁས་བླངས་ལག་ཁྱེར་ཅིག་བསྡུ་སྒྲིག་འབདཝ་ཨིན།
+   `BlockCommitted` གིས་ རྒྱང་བསྒྲགས་འབད་དེ་ ས་གནས་ནང་ བཀག་ཆ་འདི་ མཐའ་དཔྱད་འབདཝ་ཨིན།
+༩.*ལག་ལེན་:** མཉམ་རོགས་ཀྱིས་ ཀུ་ར་ནང་ སྡེབ་ཚན་ཐོ་བཀོད་འབད་ མངའ་སྡེ་དུས་མཐུན་ཚུ་ འཇུག་སྤྱོད་འབད།
+   མེམ་པུལ་ལས་ ཚོང་འབྲེལ་དང་ ཊོ་པོ་ལོ་ཇི་གི་འགན་ཁུར་ཚུ་ བསྒྱིར་ཡོདཔ་ཨིན།
 
-- **Domains, accounts, and assets** use canonical IH58 account IDs (preferred); `name@domain` remains a routing
-  alias when explicitly supplied. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
-  operations; NFTs carry arbitrary structured metadata.
-- **Roles and permissions** use Norito-enumerated tokens that map directly to executor checks.
-- **Triggers** (time-based, block-based, or predicate-driven) emit deterministic transactions via the on-chain
-  executor.
-- **Events** stream via Torii and mirror committed state transitions, including confidential flows and
-  governance actions.
-- **Transactions, blocks, and manifests** are Norito-encoded (`SignedTransaction`, `SignedBlockWire`) with
-  explicit version headers, ensuring forward-extendable decoding.
-- **Customisation** happens through the executor data model: operators may register custom instructions,
-  permissions, and parameters while preserving determinism.
-- **Repositories (`RepoInstruction`)** allow bundling deterministic upgrade plans (executors, manifests, and
-  assets) so multi-step rollouts can be managed on-chain with governance approval.
-- **Consensus artifacts**—such as commit certificates and witness lists—reside in the data model and
-  round-trip through golden tests to guarantee compatibility between `iroha_core`, Torii, and SDKs.
-- **Confidential registries and events** capture shielded asset descriptors, verifier keys, commitments,
-  nullifiers, and event payloads (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`) so confidential flows
-  remain auditable without leaking plaintext data.
+སླར་གསོ་ལམ་ལུགས་ཚུ་གིས་ སྡེབ་ཚན་ཚུ་ བརླག་སྟོར་ཞུགས་མི་ཚུ་ ལོག་སྤེལ་ནི་ལུ་ གཏན་འབེབས་རྒྱང་བསྒྲགས་ལག་ལེན་འཐབ་ཨིནམ་དང་ བསྒྱུར་བཅོས་ཚུ་ བསྒྱིར་བའི་འགོ་ཁྲིད་ལུ་བལྟ།
+དུས་ཚོད་ཀྱི་དུས་ཚོད་ལུ་ལྷོདཔ་ཨིན། སི་ཌི་ཀར་དང་ ཊེ་ལི་མི་ཊི་ཚུ་གིས་ མོས་མཐུན་གྱི་གྲུབ་འབྲས་ འགྱུར་བཅོས་འགྱོ་སྟེ་ བརྟག་དཔྱད་ཀྱི་ ཤེས་རྟོགས་ཚུ་ བྱིནམ་ཨིན།
 
-## 4. Transaction lifecycle
+## 5. གན་ཡིག་དང་ལག་ལེན།
 
-1. **Admission:** Torii decodes the Norito payload, checks signatures, TTL, and size limits, then enqueues the
-   transaction locally.
-2. **Gossip:** The transaction propagates across the topology; peers deduplicate by hash and repeat admission
-   checks.
-3. **Selection:** The current leader pulls transactions from the pending set and performs stateless validation.
-4. **Stateful simulation:** Candidate transactions execute inside a transient `StateBlock`, invoking IVM or
-   built-in instructions. Conflicts or rule violations are dropped deterministically.
-5. **Trigger materialisation:** Scheduled triggers due in the round are converted into internal transactions
-   and validated using the same pipeline.
-6. **Proposal sealing:** When block limits are reached or timeouts expire, the leader emits a Norito-encoded
-   `BlockCreated` message.
-7. **Validation:** Peers in the validating set re-run stateless/stateful checks. Successful peers sign
-   `BlockSigned` messages and forward them to the deterministic collector set.
-8. **Commit:** A collector assembles a commit certificate once it collects the canonical signature set,
-   broadcasts `BlockCommitted`, and finalises the block locally.
-9. **Application:** All peers record the block in Kura, apply state updates, emit telemetry/events, purge
-   committed transactions from the mempool, and rotate topology roles.
+གན་ཡིག་ཚུ་ Iroha བརྡ་དོན་འཕྲུལ་ཆས་ (IVM) གུ་གཡོག་བཀོལཝ་ཨིན།
 
-Recovery paths use deterministic broadcast to retransmit missing blocks, and view changes rotate leadership
-when deadlines lapse. Sidecars and telemetry provide diagnostic insights without mutating consensus results.
+- **Kotodama** མཐོ་རིམ་ `.ko` གིས་ གཏན་འབེབས་བཟོ་མི་འདི་གིས་ གཏན་འབེབས་ `.to` bytecode.
+- **pointer ABI བཀག་ཆ་འབད་** གིས་ བདེན་དཔྱད་འབད་ཡོད་པའི་དཔག་བྱེད་དབྱེ་བ་ཚུ་བརྒྱུད་དེ་ ཧོསིཊི་དྲན་ཚད་དང་གཅིག་ཁར་ གན་རྒྱ་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+  Syscall ཁ་ཐོག་འདི་ `ivm/docs/syscalls.md` ནང་ལུ་གསལ་བཀོད་འབད་ཡོདཔ་ཨིན། ABI ཐོ་ཡིག་འདི་ ཧ་ཤེསཔ་དང་ ཐོན་རིམ་འབད་ཡོདཔ་ཨིན།
+- **Syscalls དང་ hosts** cover ledger state འཛུལ་སྤྱོད་ འགོ་འབྱེད་དུས་ཚོད་ གསང་བའི་གནའ་བོ། ཀ་གི་བརྡ་འབྲེལ།
+  flow, དང་ གཏན་འབེབས་ཀྱི་གང་བྱུང་།
+- **Built-in བཀོལ་སྤྱོད་པ་** འཕྲོ་མཐུད་དེ་ Iroha རྒྱུ་དངོས་དང་ རྩིས་ཐོ་ དེ་ལས་ གནང་བ་གི་དོན་ལུ་ དམིགས་བསལ་བཀོད་རྒྱ་ (ISI) ཚུ་ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན།
+  དང་ གཞུང་སྐྱོང་ལས་སྣ། སྲོལ་སྒྲིག་ལག་ལེན་འཐབ་མི་ཚུ་གིས་ Norito གི་ལས་རིམ་ཚུ་ལུ་ གུས་བཏུད་འབད་བའི་སྐབས་ བཀོད་རྒྱ་ཆ་ཚན་འདི་ རྒྱ་སྐྱེད་འབད་ཚུགས།
+- **བདེན་བཤད་ཀྱི་ཁྱད་རྣམ་**—སྤོ་བཤུད་འབད་ཡོད་པའི་གནས་སོར་དང་བདེན་དཔྱད་ཐོ་བཀོད་ཚུ་—ལག་ལེན་པ་བརྒྱུད་དེ་ གསལ་སྟོན་འབདཝ་ཨིན།
+  བཀོད་རྒྱ་དང་ པོ་སི་ཌོན་ཁས་བླངས་ཡོད་པའི་ ཧོསཊི་ཚུ་གིས་ བདེན་དཔྱད་འབད་ཡོདཔ།
 
-## 5. Smart contracts and execution
+## 6. གསོག་འཇོག་དང་གནས་ཚུལ།- **Kura block stark** གིས་ མཐའ་དཔྱད་བཀག་ཆ་རེ་རེ་ལུ་ `SignedBlockWire` གིས་ Norito མགོ་ཡིག་དང་གཅིག་ཁར་ བྲིས་ཡོདཔ་ཨིན།
+  ཀེ་ནོ་ནིག་མགོ་ཡིག་དང་ ཚོང་འབྲེལ་ ལག་ཁྱེར་ཚུ་ དེ་ལས་ དཔང་པོ་གི་གནས་སྡུད་གཅིག་ཁར་ཨིན།
+- **འཛམ་གླིང་གནས་སྟངས་མཐོང་སྣང་** གིས་ མགྱོགས་དྲགས་འདྲི་དཔྱད་ཚུ་གི་དོན་ལུ་ དྲན་ཚད་ནང་ དབང་ཚད་ཅན་གྱི་གནས་སྟངས་འདི་ བཞགཔ་ཨིན། གཏན་འབེབས་པར་བཏབ་པ་དང་།
+  མདོང་ལམ་གྱི་ཟུར་འཁོར་ (`pipeline/sidecars.norito` + `pipeline/sidecars.index`) རྒྱབ་སྐྱོར་སླར་གསོ་དང་རྩིས་ཞིབ་ཚུ།
+- **མངའ་སྡེ་རིམ་པ་** གིས་ གཏན་འབེབས་བཟོ་བའི་སྐབས་ བཀྲམ་སྤེལ་སྦོམ་ཚུ་གི་དོན་ལུ་ ཚ་དྲོད་/བསིལ་དྲོད་བར་བཅད་འབད་བཅུགཔ་ཨིན།
+  བདེན་དཔྱད་འབད་ནི།
+- **Sync དང་ replay** བདེན་བཤད་ལམ་ལུགས་གཅིག་ལག་ལེན་འཐབ་སྟེ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་བཀག་ཆ་ཚུ་ གནས་སྟངས་ནང་ལོག་འགྱོ། བློ་སེམས།
+  བརྡ་བརྒྱུད་ཚུ་གིས་ མཉམ་རོགས་ཚུ་གིས་ བློ་གཏད་ཅན་གྱི་གསོག་འཇོག་ལུ་བརྟེན་མ་དགོ་པར་ ཁྱིམ་ཚང་ཚུ་ལས་ གནས་སྡུད་མེད་མི་ཚུ་ ལོག་ཐོབ་ཚུགས་པའི་ ངེས་གཏན་བཟོཝ་ཨིན།
 
-Smart contracts run on the Iroha Virtual Machine (IVM):
+## 7. གཞུང་སྐྱོང་དང་དཔལ་འབྱོར།
 
-- **Kotodama** compiles high-level `.ko` sources into deterministic `.to` bytecode.
-- **Pointer ABI enforcement** ensures contracts interact with host memory through validated pointer types.
-  Syscall surfaces are described in `ivm/docs/syscalls.md`; the ABI list is hashed and versioned.
-- **Syscalls and hosts** cover ledger state access, trigger scheduling, confidential primitives, Kaigi media
-  flows, and deterministic randomness.
-- **Built-in executor** continues to support Iroha Special Instructions (ISI) for asset, account, permission,
-  and governance operations. Custom executors can extend the instruction set while honouring Norito schemas.
-- **Confidential features**—including shielded transfers and verifier registries—are exposed via executor
-  instructions and validated by hosts with Poseidon commitments.
+- ཨོན་ཨོན་རིམ་སྒྲིག་ཚད་གཞི་ (`SetParameter`) མོས་མཐུན་དུས་ཚོད་དང་ མེམ་པུལ་ཚད་གཞི་ ཊེ་ལི་མི་ཊི་ མཐུད་བྱེད་ བརྒྱུད་འཕྲིན་ བུནཌི་ དང་།
+  དང་ཁྱད་ཆོས་དར་ཆ་ཚུ་ཡོདཔ་ཨིན། `kagami` གིས་བཟོ་བཏོན་འབད་ཡོད་པའི་ Genesis མངོན་གསལ་ཚུ་ འགོ་ཐོག་རིམ་སྒྲིག་འདི་གཞི་བཙུགས་འབདཝ་ཨིན།
+- **Kaigi** བཀོད་རྒྱ་ཚུ་གིས་ མཉམ་འབྲེལ་གྱི་ལཱ་ཡུན་ཚུ་ འཛིན་སྐྱོང་འཐབ་ (གསར་བསྐྲུན་/མཉམ་སྦྲེལ་/མཇུག་/མཇུག་) དང་ Norito རྒྱུན་སྤེལ་འབད་ནི་ཨིན།
+  ལག་ལེན་གྱི་གནད་དོན་ཚུ་ལུ་ གྲོས་འཛོམས་ནང་ བརྒྱུད་འཕྲིན་བཏང་ཡོདཔ།
+- **ཧི་ཇི་རི**
+  སྲིད་བྱུས་དང་ འཐུས་བསྒྱུར་ (Q16 གཏན་འཇགས་ཨང་རྩིས་)། སྒྲུབ་བྱེད་ཀྱི་མངོན་རྟགས་དང་ ཞིབ་དཔྱད་ས་ཚིགས་ དེ་ལས་ མིང་གཏམ་ཚུ།
+  ཐོ་བཀོད་ཚུ་ རིམ་སྒྲིག་འབད་དེ་ཡོདཔ་ད་ བལྟ་རྟོག་པ་གི་གསལ་སྡུད་ཚུ་གིས་ འོང་འབབ་ཀྱི་འབྱུང་ཁུངས་འདི་ འཛིན་སྐྱོང་འཐབ་ཨིན།
+- **NPoS ཐབས་ལམ་** (ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ལུ་) གིས་ ཉམས་སྲུང་འབད་བའི་སྐབས་ ཝི་ཨར་ཨེཕ་-རྒྱབ་སྐྱོར་ཡོད་པའི་བཙག་འཐུའི་སྒོ་སྒྲིག་དང་ ལྗིད་ཚད་ཅན་གྱི་ཚོགས་ཆུང་ཚུ་ལག་ལེན་འཐབ་ཨིན།
+  གཏན་འབེབས་རིམ་སྒྲིག་སྔོན་སྒྲིག་ཚུ།
+- **གསང་བའི་ཐོ་བཀོད་ཚུ་** ཀླད་ཀོར་ཤེས་ཡོན་བདེན་བཤད་ལྡེ་མིག་དང་ ཚེ་སྲོག་འཁོར་རིམ་ཚུ་ དེ་ལས་ ཁས་བླངས་ཚུ་ འཛིན་སྐྱོང་འབད།
+  ལྕགས་ཐག་བཏང་བའི་བཞུར།
 
-## 6. Storage and persistence
+## 8. མཁོ་མངགས་ཀྱི་ཉམས་མྱོང་དང་ལག་ཆས།
 
-- **Kura block store** writes each finalised block as a `SignedBlockWire` payload with a Norito header, keeping
-  canonical headers, transactions, commit certificates, and witness data together.
-- **World State View** keeps the authoritative state in memory for fast queries. Deterministic snapshots and
-  pipeline sidecars (`pipeline/sidecars.norito` + `pipeline/sidecars.index`) support recovery and audits.
-- **State tiering** allows hot/cold partitioning for large deployments while preserving deterministic
-  validation.
-- **Sync and replay** load committed blocks back into state using the same validation rules. Deterministic
-  broadcast ensures peers can recover missing data from neighbours without relying on trusted storage.
+- **Torii API** གིས་ ཚོང་འབྲེལ་དང་ འདྲི་དཔྱད་ བྱུང་ལས་རྒྱུན་ལམ་ཚུ་ བརྒྱུད་འཕྲིན་ དེ་ལས་ བརྒྱུད་འཕྲིན་ དེ་ལས་ ཨར་ཊི་ཨེསི་ཊི་དང་ ཝེབ་སོ་ཀེཊི་ངོས་འདྲ་བ་ཚུ་ བྱིནམ་ཨིན།
+  གཞུང་སྐྱོང་མཇུག་བསྡུ། JSON པར་བརྙན་ཚུ་ Norito ལས་འཆར་ལས་འབྱུང་ཡོདཔ་ཨིན།
+- **CLI ལག་ཆས་** (`iroha_cli`, Hyperledger) གིས་ བདག་སྐྱོང་དང་ མཉམ་རོགས་ ཌེཤ་བོརཌ་ དེ་ལས་ མདོང་ལམ་ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
+  ཞིབ་དཔྱད།
+- **ཇེ་ནིསི་ལག་ཆས་** (`kagami`) གིས་ Norito-ཨེན་ཀོཌི་འབད་ཡོད་པའི་གསལ་སྟོན་ཚུ་ བདེན་དཔྱད་འབད་མི་ལྡེ་མིག་དངོས་པོ་དང་ རིམ་སྒྲིག་འབདཝ་ཨིན།
+  ཊེམ་པེལེཊི་ཚུ།
+- **SDKs** (Swift, JS/TS, Python) གིས་ བཀོད་རྒྱ་དང་ འདྲི་དཔྱད་ འབྱུང་ཁུངས་ དེ་ལས་ བརྒྱུད་འཕྲིན་ཚུ་ལུ་ བརྡ་བཀོད་ཀྱི་ འཛུལ་སྤྱོད་བྱིནམ་ཨིན།
+- **ཡིག་གཟུགས་དང་སི་ཨའི་ཧུཀ་** ནང་ན་ `scripts/` རང་བཞིན་ཌེཤ་བོརཌི་བདེན་དཔྱད་དང་ ཀོ་ཌེཀ་བསྐྱར་བཟོ་དང་ དུ་བ།
+  བརྟག་དཔྱད་ཚུ།
 
-## 7. Governance and economics
+## 9. ལས་དོན་དང་བཟོད་བསྲན་དང་ལམ་ལུགས།- ད་ལྟའི་ མདོང་ལམ་དམིགས་ཚད་ **20,000 tps** འདི་ **2–3 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 སྐར་མ** བཀག་སྡོམ་གྱི་ཡོངས་འབྲེལ་འོག་གི་བཀག་སྡོམ་དུས་ཚོད་དང་བཅས་ཡོད།
+  གནས་སྟངས་ཚུ་ མཚན་རྟགས་བདེན་དཔྱད་དང་ ཐག་བཅད་པའི་དུས་ཚོད་བཀོད་ཐོག་ལས་ རྒྱབ་སྐྱོར་འབད་ཡོདཔ།
+- **Telemetry** གིས་ Prometheus གི་ མོས་མཐུན་དུས་ཚོད་ཚུ་གི་དོན་ལུ་ མེ་ཊིག་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  Kaigi ལག་ལེན་དང་ ཧི་ཇི་རི་མིང་གཏམ་གྱི་དུས་མཐུན།
+- ** འགྱུར་ལྡོག་ཁྱད་རྣམ་** ཚུ་ནང་ གཏན་འབེབས་གནས་སྡུད་ཐོབ་ཚུགས་མི་དང་ སླར་གསོ་འབད་མི་ ཟུར་འཁོར་ ཊོ་པོ་ལོ་ཇི་བསྒྱིར་ཚད་ དེ་ལས་ ཚུདཔ་ཨིན།
+  རིམ་སྒྲིག་འབད་བཏུབ་པའི་མཐོང་སྣང་/བསྒྱུར་བཅོས་འབད་ནི།
+- མ་འོངས་པའི་ལམ་སྟོན་གྱི་ མཐོ་རིམ་གྱི་ མཐོ་ཚད་ (I 18NI00000104X) གིས་ Nexus གནས་སྡུད་ས་སྟོང་ཚུ་གུ་ལཱ་འབད་དེ་ གསང་བ་ཡར་དྲག་གཏང་ནི།
+  ལག་ཆས་དང་ རྒྱ་ཆེ་བའི་ མཐུན་རྐྱེན་གྱི་ མགྱོགས་ཚད་ གཏན་འབེབས་ཐོན་འབྲས་ཚུ་ ཉམས་སྲུང་འབད་ནི།
 
-- On-chain parameters (`SetParameter`) control consensus timers, mempool limits, telemetry knobs, fee bands,
-  and feature flags. Genesis manifests generated by `kagami` install the initial configuration.
-- **Kaigi** instructions manage collaborative sessions (create/join/leave/end) and feed Norito streaming
-  telemetry for conferencing use cases.
-- **Hijiri** provides deterministic peer and account reputation, integrating with consensus, admission
-  policies, and fee multipliers (Q16 fixed-point math). Evidence manifests, checkpoints, and reputation
-  registries are committed on-chain, and observer profiles govern receipt provenance.
-- **NPoS mode** (when enabled) uses VRF-backed election windows and stake-weighted committees while preserving
-  deterministic configuration defaults.
-- **Confidential registries** govern zero-knowledge verifier keys, proof lifecycles, and commitments for
-  shielded flows.
+## 10. བཀོལ་སྤྱོད་དང་བཀོལ་སྤྱོད།
 
-## 8. Client experience and tooling
+- **དངོས་པོ་:** Dockerfiles, Nix flake, དང་ `cargo` ལཱ་གི་རྒྱུན་རིམ་ཚུ་གིས་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་བཟོ་བསྐྲུན་འབདཝ་ཨིན། `kagami` བཏོལ།
+  རིགས་བརྒྱུད་ཚུ་ གསལ་སྟོན་དང་ བདེན་དཔྱད་ལྡེ་མིག་ དེ་ལས་ དཔེ་མཚོན་གཉིས་ཆ་རའི་དོན་ལུ་ རིམ་སྒྲིག་འབདཝ་ཨིན།
+- **རང་གིས་རང་གིས་ མཉམ་འབྲེལ་པ་ཚུ་:* བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཁོང་རའི་མཉམ་རོགས་ཆ་ཚན་དང་ འཛུལ་ཞུགས་ཀྱི་ལམ་ལུགས་ དེ་ལས་ ཡར་འཕར་གྱི་མ་དངུལ་ཚུ་ འཛིན་སྐྱོང་འཐབ་ཨིན། ཚིག༌ཕྲད
+  ལས་ཀའི་ས་སྟོང་གིས་ རང་དབང་ཅན་གྱི་ Iroha 2 ཡོངས་འབྲེལ་ཚུ་ མཉམ་འབྲེལ་མེད་པར་ མཉམ་སྡེབ་འབད་དེ་ མཉམ་སྡེབ་འབད་དེ་ མཉམ་བསྡོམས་འབད་དེ་ བརྗེ་སོར་རྐྱངམ་ཅིག་ བརྗེ་སོར་འབདཝ་ཨིན།
+  ཡར་རྒྱུན་ཨང་རྟགས་ཨང་།
+- **རིམ་སྒྲིག་མི་ཚེ་འཁོར་རིམ་:** `iroha_config` ལག་ལེན་པ་གིས་ → ངོ་མ་→ སྔོན་སྒྲིག་བང་རིམ་ཚུ་བསལ་ཞིནམ་ལས་ མཛུབ་མོ་ག་ར་ངེས་གཏན་བཟོཝ་ཨིན།
+  གསལ་ཏོག་ཏོ་དང་ ཐོན་རིམ་ཚད་འཛིན་འབད་ཡོདཔ། `SetParameter` བཀོད་རྒྱ་ཚུ་བརྒྱུད་དེ་ གཡོག་བཀོལ་བའི་བསྒྱུར་བཅོས་ཚུ་ཨིན།
+- **བལྟ་རྟོག་འབད་ཚུགསཔ་:** `iroha_telemetry` ཕྱིར་འདྲེན་ Prometheus མེ་ཊིསི་དང་ གཞི་བཀོད་དྲན་ཐོ་ཚུ་ དེ་ལས་ ཌེཤ་བོརཌི་གནད་སྡུད་ཚུ་ཞིབ་དཔྱད་འབད་ཡི།
+  སི་ཨའི་ཡིག་གཟུགས་ (`ci/check_swift_dashboards.sh`, `scripts/render_swift_dashboards.sh`, by
+  Norito). འགོ་འབྱེད་དང་ མོས་མཐུན་ དེ་ལས་ ཧི་ཇི་རི་ལས་རིམ་ཚུ་ ཐོག་ལས་ ཐོབ་ཚུགས།
+  ཝེབ་སོ་ཀེཊི་, དང་ Norito གིས་ pacemaker backpressure དང་ཅིག་ཁར་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
+  དཀའ་ངལ་སེལ་ཐབས་ལུ་ telementy.
+- **བརྟག་དཔྱད་:** `cargo test --workspace`, མཉམ་བསྡོམས་བརྟག་དཔྱད་ (`integration_tests/`), སྐད་ཡིག་ཨེསི་ཌི་ཀེ་ཆ་ཊིསི་, དང་།
+  Norito གསེར་གྱི་བརྟན་བཞུགས་ཀྱིས་ གཏན་འབེབས་རིང་ལུགས་སྲུང་སྐྱོབ་འབདཝ་ཨིན། དཔག་བྱེད་ ABI དང་ syscall ཐོ་ཡིག་ དེ་ལས་ གཞུང་སྐྱོང་གི་ གསལ་སྟོན་ཚུ་ཡོདཔ་ཨིན།
+  གསེར་གྱི་བརྟག་དཔྱད།
+- **སླར་གསོ་:** ཀུ་ར་ཟུར་ཁའི་ཀར་ཚུ་ གཏན་འབེབས་བསྐྱར་རྩེད་འབད་ནི་ དེ་ལས་ རྒྱང་བསྒྲགས་མཉམ་འབྱུང་འབད་མི་ མཛུབ་གནོན་ཚུ་ ཌིཀསི་ལས་སླར་ལོག་འབད་བཅུགཔ་ཨིན།
+  །ཡང་ན་མཉམ་པར་བསྟན། ཧི་ཇི་རི་གི་ཞིབ་དཔྱད་ས་ཚིགས་དང་ གཞུང་སྐྱོང་མངོན་གསལ་ཚུ་གིས་ བསྟར་སྤྱོད་འབད་ནིའི་དོན་ལུ་ རྩིས་ཞིབ་འབད་བཏུབ་པའི་ པར་ཚུ་བྱིནམ་ཨིན།
 
-- **Torii API** offers REST and WebSocket interfaces for transactions, queries, event streams, telemetry, and
-  governance endpoints. JSON projections are derived from Norito schemas.
-- **CLI tooling** (`iroha_cli`, `iroha_monitor`) covers administration, live peer dashboards, and pipeline
-  inspection.
-- **Genesis tooling** (`kagami`) generates Norito-encoded manifests, validator key material, and configuration
-  templates.
-- **SDKs** (Swift, JS/TS, Python) provide idiomatic access to instructions, queries, triggers, and telemetry.
-- **Scripts and CI hooks** inside `scripts/` automate dashboard validation, codec regeneration, and smoke
-  tests.
+# ཚིག་མཛོད་པ།
 
-## 9. Performance, resilience, and roadmap
-
-- The current pipeline targets **20,000 tps** with **2–3 second** block times under favourable network
-  conditions, backed by batch signature verification and deterministic scheduling.
-- **Telemetry** exposes Prometheus metrics for consensus timers, mempool occupancy, block propagation health,
-  Kaigi usage, and Hijiri reputation updates.
-- **Resilience features** include deterministic data availability, recovery sidecars, topology rotation, and
-  configurable view/change thresholds.
-- Future roadmap milestones (see `roadmap.md`) continue work on Nexus data spaces, enhanced confidential
-  tooling, and broader hardware acceleration while preserving deterministic outputs.
-
-## 10. Operations and deployment
-
-- **Artifacts:** Dockerfiles, Nix flake, and `cargo` workflows support reproducible builds. `kagami` emits
-  genesis manifests, validator keys, and example configs for both permissioned and NPoS deployments.
-- **Self-hosted networks:** Operators manage their own peer sets, admission rules, and upgrade cadence. The
-  workspace supports many independent Iroha 2 networks co-existing without coordination, sharing only the
-  upstream code.
-- **Configuration lifecycle:** `iroha_config` resolves user → actual → defaults layers, ensuring every knob is
-  explicit and version-controlled. Runtime changes flow through `SetParameter` instructions.
-- **Observability:** `iroha_telemetry` exports Prometheus metrics, structured logs, and dashboard data checked
-  by CI scripts (`ci/check_swift_dashboards.sh`, `scripts/render_swift_dashboards.sh`,
-  `scripts/check_swift_dashboard_data.py`). Streaming, consensus, and Hijiri events are available over
-  WebSocket, and `scripts/sumeragi_backpressure_log_scraper.py` correlates pacemaker backpressure with
-  telemetry for troubleshooting.
-- **Testing:** `cargo test --workspace`, integration tests (`integration_tests/`), language SDK suites, and
-  Norito golden fixtures protect determinism. Pointer ABI, syscall lists, and governance manifests have
-  dedicated golden tests.
-- **Recovery:** Kura sidecars, deterministic replay, and broadcast sync allow nodes to recover state from disk
-  or peers. Hijiri checkpoints and governance manifests provide auditable snapshots for compliance.
-
-# Glossary
-
-For terminology referenced in this document, consult the project-wide glossary at
-<https://docs.iroha.tech/reference/glossary.html>.
+ཡིག་ཆ་འདི་ནང་གཞི་བཞག་པའི་མིང་ཚིག་གི་དོན་ལུ་ ལས་འགུལ་གྱི་ཁྱབ་ཚིག་འདི་ ༡ ལུ་བལྟ་དགོ།
+.

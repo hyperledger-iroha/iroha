@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2ecdf23dc61024ae4c509806700773d9b34ddd36076c1182cbeccd3654b29144
 source_last_modified: "2026-01-05T18:22:23.392202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Client Examples (TypeScript and Kotlin)
+## Iroha མཁོ་སྤྲོད་འབད་མི་དཔེ་ཚུ་ (TypeScript དང་ Kotlin)།
 
-This document shows minimal client-side snippets implementing v0 rules:
-- AEAD AAD binds outer header (version, sid, dir, seq, kind=Ciphertext).
-- Nonce derived from `seq` (12-byte IETF nonce: 0x00000000 || seq_le).
-- Post‑Approve control frames (Close/Reject) sent encrypted.
+ཡིག་ཆ་འདི་གིས་ ཝི་༠ ལམ་ལུགས་ཚུ་ལག་ལེན་འཐབ་མི་ མཁོ་སྤྲོད་པ་-ཕྱོགས་ཀྱི་ ཆ་ཤས་ཚུ་སྟོནམ་ཨིན།
+- AEAD AAD གིས་ཕྱི་ཁའི་མགོ་ཡིག་ (ཐོན་རིམ་, སིཌི་ ཌིར་, སེག་, རིགས་=སི་ཕར་ཊེགསི་) མཐུད།
+- `seq` (12-byteF nonce: 0x000000000 || seq_le) ལས་བྱུང་བའི་མིན་པ།
+- བརྡ་བཀོད་-ཚད་འཛིན་གཞི་ཁྲམ་ཚུ་ (ཁ་བསྡམ་/བཀག་ཆ་) གསང་བཟོས་འབད་ཡོདཔ།
 
-These are illustrative; hardening/production checks omitted.
+འདི་ཚུ་ དཔེ་སྟོན་ཚུ་ཨིན། སྲ་བརྟན་/བཟོ་བསྐྲུན་ཞིབ་དཔྱད་ཚུ་བཏོན་བཏང་ཡོདཔ།
 
-### TypeScript (libsodium + WebCrypto)
+### དབྱེ་བ་ཡིག་གཟུགས་ (libsdium + ཝེབ་ཀིརིཔ་ཊོ)།
 
-Dependencies: `libsodium-wrappers` (X25519, BLAKE2b, ChaCha20‑Poly1305), WebCrypto (HKDF‑SHA‑256).
+བརྟེན་པ་: I18NI000000005X (X25519, BLAKE20, ChaCha20‐Poly1305), ཝེབ་ཀིརིཔ་ཊོ་ (HKDF‐SHA‐‐1256).
 
 ```ts
 import sodium from 'libsodium-wrappers';
@@ -99,13 +100,11 @@ async function openEnvelope(k: Uint8Array, sid: Uint8Array, dir: 'A2W'|'W2A', se
 })();
 ```
 
-### Kotlin (JDK 11 + BouncyCastle)
+###
 
-Dependencies:
+བརྟེན་པ།
 
-```kotlin
-dependencies { implementation("org.bouncycastle:bcprov-jdk15on:1.78.1") }
-```
+I18NF0000002X
 
 ```kotlin
 import java.security.*
@@ -199,7 +198,7 @@ fun main() {
 }
 ```
 
-Notes:
-- Client computes `sid` (32 bytes; base64url/hex) and POSTs it to `/v1/connect/session` to obtain one‑time tokens; server echoes `sid`. Join WS with `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>`.
-- After keys exist (Approve), send Close/Reject in encrypted payloads.
-- Dedupe keys and `seq` must be monotonic per direction for app/wallet frames; `Envelope.seq == frame.seq`. Server events use a separate server-side sequence and are excluded from AEAD/dedupe.
+དྲན་ཐོ།
+- མཁོ་སྤྲོད་འབད་མི་ཚུ་གིས་ I18NI000000006X (bytes; base64url/hex) དང་ POSTs དེ་ལས་ I18NI0000000007X ལུ་ I18NI0000000007X ལུ་ ཊོ་ཀེན་གཅིག་ཐོབ་ནིའི་དོན་ལུ་; སར་བར་གྱི་བསྐྱར་སྒྲ་ `sid`. I18NI000000009X ཡང་ན་ I18NI000000010X དང་མཉམ་དུ་ WS དང་མཉམ་དུ་ཞུ།
+- ལྡེ་མིག་ཚུ་ཡོད་པའི་སྐབས་ (ཆ་འཇོག་འབད་ཞིནམ་ལས་) ཁ་བསྡམས་/བཀག་ཆ་འབད་ གསང་བཟོས་འབད་ཡོད་པའི་ པེ་ལོཌི་ཚུ་ནང་ གཏང་།
+- ལྡེ་མིག་ཚུ་ དང་ `seq` འདི་ གློག་རིམ་/དངུལ་གྱི་གཞི་ཁྲམ་ཚུ་གི་དོན་ལུ་ གློག་རིམ་རེ་ལུ་ མོ་ནོ་ཊོ་ནིག་དགོཔ་ཨིན། `Envelope.seq == frame.seq`. སར་བར་བྱུང་ལས་ཚུ་གིས་ སར་བར་གྱི་ཕྱོགས་སོ་སོ་ཅིག་ལག་ལེན་འཐབ་ཨིནམ་དང་ AEAD/dedupe ལས་ཕྱིར་བཏོན་འབདཝ་ཨིན།

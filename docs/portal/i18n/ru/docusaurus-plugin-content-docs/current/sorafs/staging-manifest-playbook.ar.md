@@ -4,26 +4,28 @@ direction: ltr
 source: docs/portal/docs/sorafs/staging-manifest-playbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: دليل مانيفست الـstaging
-sidebar_label: دليل مانيفست الـstaging
-description: قائمة تحقق لتمكين ملف chunker المصادق عليه برلمانياً على نشرات Torii الخاصة بـ staging.
+идентификатор: промежуточный манифест-плейбук
+Название: دليل مانيفست الـstaging
+Sidebar_label: دليل مانيفست الـstaging
+описание: قائمة تحقق لتمكين ملف chunker المصادق عليه برلمانياً على نشرات Torii الخاصة Постановка.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. احرص على إبقاء نسخة Docusaurus ونسخة Markdown القديمة متطابقتين حتى يتم إيقاف مجموعة Sphinx بالكامل.
+:::примечание
+Был установлен `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Для этого используйте Docusaurus и используйте Markdown для получения дополнительной информации. Создан Сфинкс.
 :::
 
 ## نظرة عامة
 
-يرشد هذا الدليل إلى تمكين ملف chunker المصادق عليه برلمانياً في نشر Torii الخاص بـ staging قبل ترقية التغيير إلى الإنتاج. يفترض أن ميثاق حوكمة SoraFS تم التصديق عليه وأن الـ fixtures المعتمدة متاحة داخل المستودع.
+Он был убит Джоном Чанкером в 2007 году в 18NT00000006X. Он организовал постановку спектакля "Старый мир". يفترض أن ميثاق حوكمة SoraFS تم التصديق عليه وأن الـ светильники المعتمدة متاحة داخل المستودع.
 
-## 1. المتطلبات المسبقة
+## 1. Настройки
 
-1. زامن الـ fixtures المعتمدة والتواقيع:
+1. Матчи предстоящих матчей:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -32,8 +34,8 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
    ci/check_sorafs_fixtures.sh
    ```
 
-2. حضّر دليل أظرف القبول الذي يقرأه Torii عند الإقلاع (مسار مثال): `/var/lib/iroha/admission/sorafs`.
-3. تأكد من أن إعدادات Torii تفعّل مخبأ discovery وتطبيق القبول:
+2. Установите флажок Torii для подключения (отсутствие): `/var/lib/iroha/admission/sorafs`.
+3. Вызовите Torii для обнаружения открытия:
 
    ```toml
    [torii.sorafs.discovery]
@@ -53,40 +55,40 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
 
 ## 2. نشر أظرف القبول
 
-1. انسخ أظرف قبول المزوّدين المعتمدة إلى الدليل المشار إليه في `torii.sorafs.discovery.admission.envelopes_dir`:
+1. Установите флажок для подключения к сети `torii.sorafs.discovery.admission.envelopes_dir`:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. أعد تشغيل Torii (أو أرسل SIGHUP إذا كانت أداة التحميل تدعم إعادة التحميل الفورية).
+2. Установите флажок Torii (зарегистрируйтесь в SIGHUP для проверки работоспособности системы). الفورية).
 3. راقب السجلات لرسائل القبول:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. التحقق من انتشار discovery
+## 3. Открытие нового открытия
 
-1. انشر حمولة provider advert الموقعة (بايتات Norito) الناتجة عن خط المزوّد:
+1. Чтобы просмотреть рекламу поставщика услуг (بايتات Norito), выполните следующие действия:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. استعلم عن نقطة discovery وتأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:
+2. Результаты открытия, сделанные в ходе исследования, посвященного исследованию:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   تأكد من أن `profile_aliases` تتضمن `"sorafs.sf1@1.0.0"` كأول إدخال.
+   Он был установлен на `profile_aliases` и `"sorafs.sf1@1.0.0"` на сервере.
 
-## 4. اختبار نقاط نهاية manifest وplan
+## 4. Создание манифеста и плана
 
-1. اجلب بيانات manifest الوصفية (يتطلب stream token إذا كان القبول مفعّلًا):
+1. Манифест اجلب بيانات الوصفية (токен потока يتطلب إذا كان القبول مفعّلًا):
 
    ```bash
    sorafs-fetch \
@@ -97,25 +99,25 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
      --json-out=reports/staging_manifest.json
    ```
 
-2. افحص إخراج JSON وتحقق من:
-   - أن `chunk_profile_handle` يساوي `sorafs.sf1@1.0.0`.
-   - أن `manifest_digest_hex` يطابق تقرير الحتمية.
-   - أن `chunk_digests_blake3` تتطابق مع الـ fixtures المعاد توليدها.
+2. Загрузить JSON-файл:
+   - Вместо `chunk_profile_handle` или `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` находится в режиме ожидания.
+   - أن `chunk_digests_blake3` تتطابق مع الـ светильники المعاد توليدها.
 
-## 5. فحوصات التليمترية
+## 5. Свободное время
 
-- تأكد من أن Prometheus يعرض مقاييس الملف الجديد:
+- Сообщение от Prometheus в случае необходимости:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- يجب أن تعرض لوحات المتابعة مزوّد staging تحت الاسم المستعار المتوقع وأن تبقى عدادات brownout عند الصفر أثناء تفعيل الملف.
+- Он выступил в роли режиссера в постановке спектакля "Старый мир" и "Санкт-Петербург". Произошло отключение электроэнергии в штатном режиме.
 
-## 6. الجاهزية للإطلاق
+## 6. Устранение неполадок
 
-1. التقط تقريرًا مختصرًا يتضمن عناوين URL ومعرّف manifest ولقطة التليمترية.
-2. شارك التقرير في قناة Nexus rollout مع نافذة التفعيل المخطط لها في الإنتاج.
-3. انتقل إلى قائمة التحقق الخاصة بالإنتاج (Section 4 في `chunker_registry_rollout_checklist.md`) بعد موافقة أصحاب المصلحة.
+1. Создайте URL-адрес манифеста, созданного для проверки.
+2. Выполните развертывание Nexus для последующего обновления.
+3. Выполните процедуру проверки подлинности (Раздел 4 в `chunker_registry_rollout_checklist.md`). المصلحة.
 
-الحفاظ على هذا الدليل محدثًا يضمن أن كل إطلاق لـ chunker/admission يتبع نفس الخطوات الحتمية بين staging والإنتاج.
+الحفاظ على هذا الدليل محدثًا يضمن أن كل إطلاق لـ chunker/admission يتبع نفس الخطوات Он организовал постановку «Игры».

@@ -7,83 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 26e6f90205e98b5db87d442eb7e4e7691cce47e1c33ef3d11c9bfba25269294e
 source_last_modified: "2026-01-14T17:53:24.552406+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Documentation
+# Iroha დოკუმენტაცია
 
 日本語版の概要は [`README.ja.md`](./README.ja.md) を参照してください。
 
-The workspace ships two release lines from the same codebase: **Iroha 2** (self-hosted deployments) and
-**Iroha 3 / SORA Nexus** (the single global Nexus ledger). Both reuse the same Iroha Virtual Machine (IVM) and
-Kotodama toolchain, so contracts and bytecode remain portable between deployment targets. Documentation applies
-to both unless otherwise noted.
+სამუშაო სივრცე აგზავნის გამოშვების ორ ხაზს ერთიდაიგივე კოდის ბაზიდან: **Iroha 2** (თვითმმართველი განლაგება) და
+**Iroha 3 / SORA Nexus** (ერთი გლობალური Nexus წიგნი). ორივე ხელახლა იყენებს იგივე Iroha ვირტუალურ მანქანას (IVM) და
+Kotodama ხელსაწყოების ჯაჭვი, ამიტომ კონტრაქტები და ბაიტეკოდი რჩება პორტატული განლაგების მიზნებს შორის. გამოიყენება დოკუმენტაცია
+ორივეს, თუ სხვა რამ არ არის აღნიშნული.
 
-In the [main Iroha documentation](https://docs.iroha.tech/) you will find:
+[მთავარ Iroha დოკუმენტაციაში](https://docs.iroha.tech/) ნახავთ:
 
-- [Get Started Guide](https://docs.iroha.tech/get-started/)
-- [SDK Tutorials](https://docs.iroha.tech/guide/tutorials/) for Rust, Python, Javascript, and Java/Kotlin
-- [API Reference](https://docs.iroha.tech/reference/torii-endpoints.html)
+- [დაწყების სახელმძღვანელო] (https://docs.iroha.tech/get-started/)
+- [SDK გაკვეთილები] (https://docs.iroha.tech/guide/tutorials/) Rust, Python, Javascript და Java/Kotlin-ისთვის
+- [API მითითება] (https://docs.iroha.tech/reference/torii-endpoints.html)
 
-Release-specific whitepapers and specs:
+გამოშვების სპეციფიკური whitepapers და სპეციფიკაციები:
 
-- [Iroha 2 Whitepaper](./source/iroha_2_whitepaper.md) — self-hosted network specification.
-- [Iroha 3 (SORA Nexus) Whitepaper](./source/iroha_3_whitepaper.md) — Nexus multi-lane and data-space design.
-- [Data Model & ISI Spec (implementation‑derived)](./source/data_model_and_isi_spec.md) — reverse-engineered behavior reference.
-- [ZK Envelopes (Norito)](./source/zk_envelopes.md) — native IPA/STARK Norito envelopes and verifier expectations.
+- [Iroha 2 თეთრი ფურცელი](./source/iroha_2_whitepaper.md) — თვითმმართველი ქსელის სპეციფიკაცია.
+- [Iroha 3 (SORA Nexus) თეთრი ფურცელი](./source/iroha_3_whitepaper.md) — Nexus მრავალ ზოლის და მონაცემთა სივრცის დიზაინი.
+- [მონაცემთა მოდელი და ISI სპეციფიკაცია (დანერგვისგან მიღებული)](./source/data_model_and_isi_spec.md) — საპირისპირო ინჟინერიის ქცევის მითითება.
+- [ZK კონვერტები (Norito)](./source/zk_envelopes.md) — მშობლიური IPA/STARK Norito კონვერტები და დამადასტურებელი მოლოდინები.
 
-## Localization
+## ლოკალიზაცია
 
-Japanese (`*.ja.*`), Hebrew (`*.he.*`), Spanish (`*.es.*`), Portuguese
-(`*.pt.*`), French (`*.fr.*`), Russian (`*.ru.*`), Arabic (`*.ar.*`), and Urdu
-(`*.ur.*`) documentation stubs live next to each English source file. See
-[`docs/i18n/README.md`](./i18n/README.md) for details on generating and
-maintaining translations, as well as guidance for adding new languages in the
-future.
+იაპონური (`*.ja.*`), ებრაული (`*.he.*`), ესპანური (`*.es.*`), პორტუგალიური
+(`*.pt.*`), ფრანგული (`*.fr.*`), რუსული (`*.ru.*`), არაბული (`*.ar.*`) და ურდუ
+(`*.ur.*`) დოკუმენტაციის სტილები განთავსებულია თითოეული ინგლისური წყაროს ფაილის გვერდით. იხ
+[`docs/i18n/README.md`](./i18n/README.md) დეტალებისთვის გენერირებისა და
+თარგმანების შენარჩუნება, ასევე ინსტრუქციები ახალი ენების დასამატებლად
+მომავალი.
 
-## Tools
+## ინსტრუმენტები
 
-In this repository you can find documentation for Iroha 2 tools:
+ამ საცავში შეგიძლიათ იხილოთ დოკუმენტაცია Iroha 2 ინსტრუმენტებისთვის:
 
 - [Kagami](../crates/iroha_kagami/README.md)
-- [`iroha_derive`](../crates/iroha_derive/) macros for configuration structs (see the `config_base` feature)
-- [Profiling build steps](./profile_build.md) for identifying slow `iroha_data_model` compilation tasks
+- [`iroha_derive`](../crates/iroha_derive/) მაკრო კონფიგურაციის სტრუქტურებისთვის (იხ. `config_base` ფუნქცია)
+- [პროფილის აგების ნაბიჯები] (./profile_build.md) ნელი `iroha_data_model` კომპილაციის ამოცანების იდენტიფიცირებისთვის
 
-## Swift / iOS SDK References
+## Swift / iOS SDK ცნობები
 
-- [Swift SDK overview](./source/sdk/swift/index.md) — pipeline helpers, acceleration toggles, and Connect/WebSocket APIs.
-- [Connect quickstart](./connect_swift_ios.md) — SDK-first walkthrough plus the CryptoKit reference.
-- [Xcode integration guide](./connect_swift_integration.md) — wiring NoritoBridgeKit/Connect into an app, with ChaChaPoly and frame helpers.
-- [SwiftUI demo contributor guide](./norito_demo_contributor.md) — running the iOS demo against a local Torii node, plus acceleration notes.
-- Run `make swift-ci` before publishing Swift artifacts or Connect changes; it verifies fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata.
+- [Swift SDK მიმოხილვა] (./source/sdk/swift/index.md) — მილსადენის დამხმარეები, აჩქარების გადართვები და Connect/WebSocket API-ები.
+- [დაკავშირება სწრაფი დაწყება] (./connect_swift_ios.md) — SDK-ის პირველი გზამკვლევი პლუს CryptoKit მითითება.
+- [Xcode ინტეგრაციის სახელმძღვანელო](./connect_swift_integration.md) — NoritoBridgeKit-ის გაყვანილობა/დაკავშირება აპში, ChaChaPoly-ით და ჩარჩოს დამხმარეებით.
+- [SwiftUI დემო კონტრიბუტორი სახელმძღვანელო] (./norito_demo_contributor.md) — iOS-ის დემო გაშვება ადგილობრივი Torii კვანძის წინააღმდეგ, პლუს აჩქარების შენიშვნები.
+- გაუშვით `make swift-ci` Swift-ის არტეფაქტების ან Connect ცვლილებების გამოქვეყნებამდე; ის ამოწმებს მოწყობილობების პარიტეტს, დაფის არხებს და Buildkite `ci/xcframework-smoke:<lane>:device_tag` მეტამონაცემებს.
 
-## Norito (Serialization Codec)
+## Norito (სერიალიზაციის კოდეკი)
 
-Norito is the workspace serialization codec. We do not use `parity-scale-codec`
-(SCALE). Where documentation or benchmarks compare to SCALE, it is only for
-context; all production paths use Norito. The `norito::codec::{Encode, Decode}`
-APIs provide a headerless ("bare") Norito payload for hashing and wire
-efficiency — it is Norito, not SCALE.
+Norito არის სამუშაო სივრცის სერიალიზაციის კოდეკი. ჩვენ არ ვიყენებთ `parity-scale-codec`
+(SCALE). სადაც დოკუმენტაცია ან საორიენტაციო ნიშნები შეედრება SCALE-ს, ის მხოლოდ ამისთვისაა
+კონტექსტი; წარმოების ყველა გზა იყენებს Norito. `norito::codec::{Encode, Decode}`
+API უზრუნველყოფს უთავო ("შიშველი") Norito დატვირთვას ჰეშინგისთვის და მავთულისთვის
+ეფექტურობა - ეს არის Norito და არა SCALE.
 
-Latest state:
+უახლესი მდგომარეობა:
 
-- Deterministic encoding/decoding with a fixed header (magic, version, 16‑byte schema, compression, length, CRC64, flags).
-- CRC64-XZ checksum with runtime‑selected acceleration:
-  - x86_64 PCLMULQDQ (carry‑less multiply) + Barrett reduction, folded over 32‑byte chunks.
-  - aarch64 PMULL with matching folding.
-  - Slicing‑by‑8 and bitwise fallbacks for portability.
-- Encoded length hints implemented by derives and core types to reduce allocations.
-- Larger streaming buffers (64 KiB) and incremental CRC update during decode.
-- Optional zstd compression; GPU acceleration is feature‑gated and deterministic.
-- Adaptive path selection: `norito::to_bytes_auto(&T)` chooses among no
-  compression, CPU zstd, or GPU‑offloaded zstd (when compiled and available)
-  based on payload size and cached hardware capabilities. Selection only affects
-  performance and the header's `compression` byte; payload semantics are unchanged.
+- დეტერმინისტული კოდირება/გაშიფვრა ფიქსირებული სათაურით (ჯადოსნური, ვერსია, 16-ბაიტიანი სქემა, შეკუმშვა, სიგრძე, CRC64, დროშები).
+- CRC64-XZ გამშვები ჯამი მუშაობის დროის შერჩეული აჩქარებით:
+  - x86_64 PCLMULQDQ (carry-less გამრავლება) + ბარეტის შემცირება, დაკეცილი 32 ბაიტიან ნაწილებზე.
+  - aarch64 PMULL შესაბამისი დასაკეცი.
+  - დაჭრა 8-ით და ბიტ-ნაკლები პორტაბელურობისთვის.
+- დაშიფრული სიგრძის მინიშნებები, განხორციელებული წარმოშობისა და ძირითადი ტიპების მიერ, გამოყოფის შესამცირებლად.
+- უფრო დიდი ნაკადის ბუფერები (64 KiB) და დამატებითი CRC განახლება დეკოდირების დროს.
+- სურვილისამებრ zstd შეკუმშვა; GPU აჩქარება არის მახასიათებლით შეზღუდული და განმსაზღვრელი.
+- ადაპტაციური ბილიკის შერჩევა: `norito::to_bytes_auto(&T)` ირჩევს ნომრებს შორის
+  შეკუმშვა, CPU zstd ან GPU-ით ჩამოტვირთული zstd (როდესაც კომპილირებული და ხელმისაწვდომია)
+  დატვირთვის ზომისა და ქეშირებული ტექნიკის შესაძლებლობებზე დაყრდნობით. შერჩევა მხოლოდ გავლენას ახდენს
+  შესრულება და ჰედერის `compression` ბაიტი; დატვირთვის სემანტიკა უცვლელია.
 
-See `crates/norito/README.md` for parity tests, benchmarks, and usage examples.
+იხილეთ `crates/norito/README.md` პარიტეტის ტესტებისთვის, საორიენტაციო ნიშნები და გამოყენების მაგალითები.
 
-Note: Some subsystem docs (e.g., IVM acceleration and ZK circuits) are evolving. Where functionality is incomplete, the files call out the work that remains and the direction of travel.
+შენიშვნა: ზოგიერთი ქვესისტემის დოკუმენტი (მაგ., IVM აჩქარება და ZK სქემები) ვითარდება. სადაც ფუნქციონირება არასრულია, ფაილები ასახელებენ დარჩენილი სამუშაოს და მოგზაურობის მიმართულებას.
 
-Status endpoint encoding notes
-- Torii `/status` body uses Norito by default with a headerless ("bare") payload for compactness. Clients should attempt Norito decode first.
-- Servers may return JSON when requested; clients fall back to JSON if the `content-type` is `application/json`.
-- The wire format is Norito, not SCALE. The `norito::codec::{Encode,Decode}` APIs are used for the bare variant.
+სტატუსის ბოლო წერტილის კოდირების შენიშვნები
+- Torii `/status` კორპუსი ნაგულისხმევად იყენებს Norito-ს უთავო ("შიშველი") დატვირთვით კომპაქტურობისთვის. კლიენტებმა ჯერ უნდა სცადონ Norito გაშიფვრა.
+- სერვერებს შეუძლიათ დააბრუნონ JSON მოთხოვნის შემთხვევაში; კლიენტები უბრუნდებიან JSON-ს, თუ `content-type` არის `application/json`.
+- მავთულის ფორმატი არის Norito და არა SCALE. `norito::codec::{Encode,Decode}` API გამოიყენება შიშველი ვარიანტისთვის.

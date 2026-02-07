@@ -7,91 +7,90 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fd1e43316c492cc96ed107f6318841ad8db160735d4698c4f05562ff6127fda9
 source_last_modified: "2026-01-22T14:35:37.492932+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Confidential asset rotation playbook referenced by `roadmap.md:M3`.
+//! `roadmap.md:M3` မှ ကိုးကားထားသော လျှို့ဝှက်ပိုင်ဆိုင်မှု လည်ပတ်မှုပြစာအုပ်။
 
-# Confidential Asset Rotation Runbook
+# လျှို့ဝှက်ပိုင်ဆိုင်မှု အလှည့်အပြောင်း Runbook
 
-This playbook explains how operators schedule and execute confidential asset
-rotations (parameter sets, verifying keys, and policy transitions) while
-ensuring wallets, Torii clients, and mempool guards remain deterministic.
+ဤပြခန်းစာအုပ်တွင် အော်ပရေတာများက လျှို့ဝှက်ပိုင်ဆိုင်မှုကို မည်သို့စီစဉ်ပြီး လုပ်ဆောင်ကြောင်း ရှင်းပြထားသည်။
+အလှည့်အပြောင်းများ (ပါရာမီတာသတ်မှတ်မှုများ၊ သော့များကို အတည်ပြုခြင်းနှင့် မူဝါဒအကူးအပြောင်းများ)
+ပိုက်ဆံအိတ်များ၊ Torii ဖောက်သည်များနှင့် mempool အစောင့်များသည် အဆုံးအဖြတ်အတိုင်း ရှိနေကြောင်း သေချာစေသည်။
 
-## Lifecycle & Statuses
+## ဘဝသံသရာနှင့် အခြေအနေများ
 
-Confidential parameter sets (`PoseidonParams`, `PedersenParams`, verifying keys)
-lattice and helper used to derive the effective status at a given height live in
-`crates/iroha_core/src/state.rs:7540`–`7561`. Runtime helpers sweep pending
-transitions as soon as the target height is reached and log failures for later
-rebroadcasts (`crates/iroha_core/src/state.rs:6725`–`6765`).
+လျှို့ဝှက်ကန့်သတ်ချက်များ (`PoseidonParams`၊ `PedersenParams`၊ အတည်ပြုသော့များ)
+ရာဇမတ်ကွက်များနှင့် အထောက်အကူပြုသူများသည် သတ်မှတ်အရပ်မြင့်သည့်နေရာတွင် နေထိုင်ကြသည်။
+`crates/iroha_core/src/state.rs:7540`–`7561`။ Runtime အကူအညီပေးသူများသည် ဆိုင်းငံ့ထားသည်။
+ပစ်မှတ်အမြင့်ရောက်သည်နှင့် နောက်ပိုင်းတွင် မှတ်တမ်းမအောင်မြင်သည်နှင့်တပြိုင်နက် ကူးပြောင်းမှုများ
+ပြန်လည်ထုတ်လွှင့်မှုများ (`crates/iroha_core/src/state.rs:6725`–`6765`)။
 
-Asset policies embed
+ပိုင်ဆိုင်မှုမူဝါဒများ ထည့်သွင်းထားသည်။
 `pending_transition { transition_id, new_mode, effective_height, conversion_window }`
-so governance can schedule upgrades via
-`ScheduleConfidentialPolicyTransition` and cancel them if required. See
-`crates/iroha_data_model/src/asset/definition.rs:320` and the Torii DTO mirrors
-(`crates/iroha_torii/src/routing.rs:1539`–`1580`).
+ထို့ကြောင့် အုပ်ချုပ်မှုမှတစ်ဆင့် အဆင့်မြှင့်တင်မှုများကို အချိန်ဇယားဆွဲနိုင်သည်။
+`ScheduleConfidentialPolicyTransition` လိုအပ်ပါက ၎င်းတို့ကို ပယ်ဖျက်ပါ။ ကြည့်ပါ။
+`crates/iroha_data_model/src/asset/definition.rs:320` နှင့် Torii DTO မှန်များ
+(`crates/iroha_torii/src/routing.rs:1539`–`1580`)။
 
-## Rotation Workflow
+## အလှည့်ကျ အလုပ်အသွားအလာ
 
-1. **Publish new parameter bundles.** Operators submit
-   `PublishPedersenParams`/`PublishPoseidonParams` instructions (CLI
-   `iroha app zk params publish ...`) to stage new generator sets with metadata,
-   activation/deprecation windows, and status markers. The executor rejects
-   duplicate IDs, non-increasing versions, or bad status transitions per
-   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, and the
-   registry tests cover the failure modes (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`).
-2. **Register/verifying-key updates.** `RegisterVerifyingKey` enforces backend,
-   commitment, and circuit/version constraints before a key can enter the
-   registry (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`).
-   Updating a key automatically deprecates the old entry and wipes inline bytes,
-   as exercised by `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1`.
-3. **Schedule asset-policy transitions.** Once the new parameter IDs are live,
-   governance calls `ScheduleConfidentialPolicyTransition` with the desired
-   mode, transition window, and audit hash. The executor refuses conflicting
-   transitions or assets with outstanding transparent supply. Tests such as
-   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` verify that
-   aborted transitions clear `pending_transition`, while
-   `confidential_policy_transition_reaches_shielded_only_on_schedule` at
-   lines 385–433 confirms scheduled upgrades flip to `ShieldedOnly` exactly at
-   the effective height.
-4. **Policy application & mempool guard.** The block executor sweeps all pending
-   transitions at the start of each block (`apply_policy_if_due`) and emits
-   telemetry if a transition fails so operators can reschedule. During admission
-   the mempool refuses transactions whose effective policy would change mid-block,
-   ensuring deterministic inclusion across the transition window
-   (`docs/source/confidential_assets.md:60`).
+1. **ပါရာမီတာ အစုအဝေးအသစ်များကို ထုတ်ဝေပါ။** အော်ပရေတာများ တင်ပြပါ။
+   `PublishPedersenParams`/`PublishPoseidonParams` ညွှန်ကြားချက်များ (CLI
+   `iroha app zk params publish ...`) မက်တာဒေတာဖြင့် ဂျင်နရေတာအစုံအသစ်များကို အဆင့်မြှင့်တင်ရန်၊
+   အသက်သွင်းခြင်း/ကန့်ကွက်ခြင်း ပြတင်းပေါက်များနှင့် အခြေအနေ အမှတ်အသားများ။ အုပ်ချုပ်သူက ငြင်းပယ်သည်။
+   ID များပွားခြင်း၊ မတိုးတက်သော ဗားရှင်းများ သို့မဟုတ် ဆိုးရွားသော အခြေအနေအကူးအပြောင်းများအလိုက်
+   `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635` နှင့်
+   မှတ်ပုံတင်ခြင်းစစ်ဆေးမှုများသည် ကျရှုံးမှုမုဒ်များ (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`) ကို အကျုံးဝင်သည်။
+2. **Register/verifying-key updates.** `RegisterVerifyingKey` သည် backend အား တွန်းအားပေးသည်၊
+   သော့မဝင်မီ ကတိကဝတ်များနှင့် ဆားကစ်/ဗားရှင်း ကန့်သတ်ချက်များ
+   မှတ်ပုံတင်ခြင်း (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`)။
+   သော့ကို အပ်ဒိတ်လုပ်ခြင်းသည် အဟောင်းကို အလိုအလျောက် ရပ်တန့်စေပြီး inline bytes များကို ရှင်းလင်းပေးသည်၊
+   `crates/iroha_core/tests/zk_vk_deprecate_marks_status.rs:1` ကျင့်သုံးသည့်အတိုင်း။
+3. **ပိုင်ဆိုင်မှု-မူဝါဒအကူးအပြောင်းများကို အချိန်ဇယားဆွဲပါ။** ကန့်သတ်ချက်အသစ် ID များ တိုက်ရိုက်ထုတ်လွှင့်သည်နှင့်၊
+   အလိုရှိသော အုပ်ချုပ်မှုစနစ် `ScheduleConfidentialPolicyTransition` ကို ခေါ်ဆိုပါ။
+   မုဒ်၊ အကူးအပြောင်း ဝင်းဒိုးနှင့် စာရင်းစစ် ဟက်ရှ်။ စီမံအုပ်ချုပ်သူသည် ကွဲလွဲမှုကို ငြင်းဆိုသည်။
+   ပွင့်လင်းမြင်သာမှုရှိသော ပံ့ပိုးမှုဖြင့် အသွင်ကူးပြောင်းမှုများ သို့မဟုတ် ပိုင်ဆိုင်မှုများ။ အစရှိတဲ့ စမ်းသပ်မှုတွေ၊
+   `crates/iroha_core/tests/confidential_policy_gates.rs:300`–`384` အတည်ပြုပါ
+   Aborted transitions များသည် `pending_transition` ကို ရှင်းလင်းစေပြီး၊
+   `confidential_policy_transition_reaches_shielded_only_on_schedule` မှာ
+   lines385–433 သည် စီစဉ်ထားသော အဆင့်မြှင့်တင်မှုများကို `ShieldedOnly` သို့ အတိအကျပြောင်းရန် အတည်ပြုသည်
+   ထိရောက်သောအမြင့်။
+4. **မူဝါဒလျှောက်လွှာနှင့် mempool အစောင့်အကြပ်။** block executor သည် ဆိုင်းငံ့ထားသမျှကို ရှင်းသည်။
+   ဘလောက်တစ်ခုစီ၏အစတွင် အကူးအပြောင်းများ (`apply_policy_if_due`) နှင့် ထုတ်သည်
+   အကူးအပြောင်း ပျက်ကွက်ပါက အော်ပရေတာများသည် အချိန်ဇယားဆွဲနိုင်သည်။ ဝင်ခွင့်ကာလအတွင်း
+   Mempool သည် mid-block ကိုပြောင်းလဲမည့်ထိရောက်သောမူဝါဒကိုပြောင်းလဲမည့်ငွေပေးငွေယူများကိုငြင်းဆိုသည်၊
+   အကူးအပြောင်း ၀င်းဒိုးတစ်လျှောက် အဆုံးအဖြတ်ပေးသော ပါဝင်မှုကို သေချာစေခြင်း။
+   (`docs/source/confidential_assets.md:60`)။
 
-## Wallet & SDK Requirements
+## ပိုက်ဆံအိတ်နှင့် SDK လိုအပ်ချက်များ- Swift နှင့် အခြားသော မိုဘိုင်း SDK များသည် Torii ကူညီပေးသူများကို တက်ကြွသောမူဝါဒကိုရယူရန် ဖော်ထုတ်ပြသသည်
+  ထို့အပြင် ဆိုင်းငံ့ထားသည့် အပြောင်းအရွှေ့မှန်သမျှကို လက်မှတ်မထိုးမီ အသုံးပြုသူများကို ပိုက်ဆံအိတ်များက သတိပေးနိုင်သည်။ ကြည့်ပါ။
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) နှင့် ဆက်စပ်နေသည်။
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591` တွင် စမ်းသပ်မှုများ။
+- CLI သည် `iroha ledger assets data-policy get` မှတဆင့် တူညီသော metadata ကို ထင်ဟပ်နေပါသည်။
+  `crates/iroha_cli/src/main.rs:1497`–`1670`)၊ အော်ပရေတာများအား စာရင်းစစ်နိုင်စေခြင်း၊
+  မူဝါဒ/ပါရာမီတာ ID များကို မဖော်ပြဘဲ ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက်သို့ ကြိုးတပ်ထားသည်။
+  ပိတ်ဆို့စတိုးဆိုင်။
 
-- Swift and other mobile SDKs expose Torii helpers to fetch the active policy
-  plus any pending transition, so wallets can warn users before signing. See
-  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) and the associated
-  tests at `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591`.
-- The CLI mirrors the same metadata via `iroha ledger assets data-policy get` (helper in
-  `crates/iroha_cli/src/main.rs:1497`–`1670`), enabling operators to audit the
-  policy/parameter IDs wired into an asset definition without spelunking the
-  block store.
+## စမ်းသပ်မှုနှင့် ကြေးနန်းလွှမ်းခြုံမှု
 
-## Test & Telemetry Coverage
+- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` သည် ထိုမူဝါဒကို အတည်ပြုသည်
+  အကူးအပြောင်းများသည် မက်တာဒေတာလျှပ်တစ်ပြက်ရိုက်ချက်များအဖြစ် ပျံ့နှံ့သွားပြီး အသုံးပြုပြီးသည်နှင့် ရှင်းလင်းသည်။
+- `crates/iroha_core/tests/zk_dedup.rs:1` သည် `Preverify` ကက်ရှ်ဖြစ်ကြောင်း သက်သေပြသည်
+  လည်ပတ်မှုအခြေအနေများ အပါအဝင် double-spends/double-proofs များကို ငြင်းပယ်သည်။
+  ကတိကဝတ်များ ကွဲပြားသည်။
+- `crates/iroha_core/tests/zk_confidential_events.rs` နှင့်
+  `zk_shield_transfer_audit.rs` အဆုံးမှ အဆုံး အကာအကွယ် → လွှဲပြောင်းခြင်း → အကာအကွယ် ဖြုတ်ခြင်း
+  စီးဆင်းမှုများ၊ စာရင်းစစ်လမ်းကြောင်းသည် ကန့်သတ်လှည့်ပတ်မှုများတစ်လျှောက် ရှင်သန်ကြောင်းသေချာစေပါသည်။
+- `dashboards/grafana/confidential_assets.json` နှင့်
+  `docs/source/confidential_assets.md:401` သည် CommitmentTree &
+  ချိန်ညှိခြင်း/လည်ပတ်မှုတိုင်းနှင့်အတူ ပူးတွဲပါရှိသော verifier-cache တိုင်းတာမှုများ။
 
-- `crates/iroha_core/tests/zk_ledger_scaffold.rs:288`–`345` verifies that policy
-  transitions propagate into metadata snapshots and clear once applied.
-- `crates/iroha_core/tests/zk_dedup.rs:1` proves that the `Preverify` cache
-  rejects double-spends/double-proofs, including rotation scenarios where
-  commitments differ.
-- `crates/iroha_core/tests/zk_confidential_events.rs` and
-  `zk_shield_transfer_audit.rs` cover end-to-end shield → transfer → unshield
-  flows, ensuring the audit trail survives across parameter rotations.
-- `dashboards/grafana/confidential_assets.json` and
-  `docs/source/confidential_assets.md:401` document the CommitmentTree &
-  verifier-cache gauges that accompany every calibration/rotation run.
+## Runbook ပိုင်ဆိုင်မှု
 
-## Runbook Ownership
-
-- **DevRel / Wallet SDK Leads:** maintain SDK snippets + quickstarts that show
-  how to surface pending transitions and replay the mint → transfer → reveal
-  tests locally (tracked under `docs/source/project_tracker/confidential_assets_phase_c.md:M3.2`).
-- **Program Mgmt / Confidential Assets TL:** approve transition requests, keep
-  `status.md` updated with upcoming rotations, and ensure waivers (if any) are
-  recorded alongside the calibration ledger.
+- **DevRel / Wallet SDK ဦးဆောင်မှုများ-** SDK အတိုအထွာများကို ထိန်းသိမ်းထား + ပြသသော အမြန်စတင်မှုများ
+  ဆိုင်းငံ့ထားသောအကူးအပြောင်းများကို ပုံဖော်နည်းနှင့် mint → လွှဲပြောင်းခြင်း → ထုတ်ဖေါ်ခြင်းတို့ကို ပြန်ဖွင့်နည်း
+  ဒေသအလိုက် စမ်းသပ်မှုများ (`docs/source/project_tracker/confidential_assets_phase_c.md:M3.2` အောက်တွင် ခြေရာခံသည်)။
+- **Program Mgmt / Confidential Assets TL:** အကူးအပြောင်းတောင်းဆိုချက်များကို အတည်ပြုပြီး သိမ်းဆည်းထားပါ၊
+  `status.md` ကို လာမည့်လည်ပတ်မှုများဖြင့် အပ်ဒိတ်လုပ်ထားပြီး စွန့်လွှတ်မှုများ (ရှိပါက) ရှိကြောင်း သေချာပါစေ။
+  စံချိန်စံညွှန်းစာရင်းဇယားနှင့်အတူ မှတ်တမ်းတင်ထားသည်။

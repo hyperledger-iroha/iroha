@@ -4,54 +4,56 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Отчет о soak начисления емкости SF-2c
+# Ouvrir le trempage des composants SF-2c
 
-Дата: 2026-03-21
+Données : 2026-03-21
 
 ## Область
 
-Этот отчет фиксирует детерминированные тесты soak начисления емкости SoraFS и выплат,
-запрошенные в дорожной карте SF-2c.
+Cela signifie que les tests de détermination du solvant de trempage des substances SoraFS et votre plaque,
+запрошенные в дорожной carte SF-2c.
 
-- **30-дневный multi-provider soak:** Запускается
-  `capacity_fee_ledger_30_day_soak_deterministic` в
+- **Trempage multi-fournisseurs de 30 jours :** Запускается
+  `capacity_fee_ledger_30_day_soak_deterministic`
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  Harness создает пять providers, охватывает 30 окон settlement и
-  проверяет, что итоги ledger совпадают с независимо вычисленной эталонной
-  проекцией. Тест выводит Blake3 digest (`capacity_soak_digest=...`), чтобы CI
-  могла захватить и сравнить канонический snapshot.
+  Exploitez vos fournisseurs, obtenez un règlement en 30 heures et
+  vérifiez que ce grand livre est compatible avec votre intégralité
+  projet. Testez Blake3 digest (`capacity_soak_digest=...`), par CI
+  Je peux créer et créer un instantané canonique.
 - **Штрафы за недопоставку:** Обеспечиваются
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (тот же файл). Тест подтверждает, что пороги strikes, cooldowns, slashes
-  collateral и счетчики ledger остаются детерминированными.
+  (тот же файл). Testez ce que sont les frappes, les temps de recharge, les barres obliques
+  les garanties et les registres des comptes sont déterminés.
 
 ## Выполнение
 
-Запустите проверки soak локально:
+Appliquez les ingrédients de trempage localement :
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Тесты завершаются меньше чем за секунду на стандартном ноутбуке и не требуют
-внешних fixtures.
+Les tests s'effectuent pendant une seconde sur le ordinateur de bureau standard et ne génèrent aucun problème
+внешних luminaires.
 
 ## Наблюдаемость
 
-Torii теперь показывает snapshots кредитов providers вместе с fee ledgers, чтобы
-dashboards могли gate по низким балансам и penalty strikes:
+Torii permet d'obtenir des instantanés des fournisseurs de crédit dans les registres de frais, par exemple
+Les tableaux de bord comprennent la porte de l'équilibrage national et les pénalités :
 
-- REST: `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
-  которые отражают поля ledger, проверенные в soak тесте. См.
+- REST : `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
+  которые отражают поля ledger, проверенные в trempage teste. См.
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Импорт Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` строит
-  экспортированные счетчики strikes, суммы штрафов и залог collateral, чтобы
-  дежурная команда могла сравнивать baseline soak с живыми окружениями.
+- Importer Grafana : `dashboards/grafana/sorafs_capacity_penalties.json` строит
+  Grèves de grève des exportations, sommes des travailleurs et des garanties, choses
+  Vous devez utiliser la commande pour effectuer le trempage de base avec vos tâches.
 
 ## Дальнейшие шаги
 
-- Запланировать еженедельные gate-прогоны в CI для воспроизведения soak теста (smoke-tier).
-- Расширить панель Grafana целями scrape Torii после запуска экспортов telemetry в прод.
+- Planifiez les programmes de porte spécifiques au CI pour le test de trempage (niveau de fumée).
+- Fixez le panneau Grafana pour gratter Torii après l'installation de la télémétrie des exportations dans le cadre de la production.

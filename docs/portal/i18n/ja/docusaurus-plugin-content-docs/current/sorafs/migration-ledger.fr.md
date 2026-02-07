@@ -4,41 +4,43 @@ direction: ltr
 source: docs/portal/docs/sorafs/migration-ledger.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Registre de migration SoraFS
-description: Journal des changements canonique qui suit chaque jalon de migration, les responsables et les suivis requis.
+title: 移行登録 SoraFS
+説明: ジャーナル・デ・チェンジメント・カノニク・キ・イ・スーツ・チャク・ジャロン・デ・マイグレーション、レス・レスポンサブルとレ・スイヴィス・リクエスト。
 ---
 
-> Adapte de [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+> [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) を適応させます。
 
-# Registre de migration SoraFS
+# 移行レジストリ SoraFS
 
-Ce registre reprend le journal des migrations capture dans le RFC d'architecture
-SoraFS. Les entrees sont groupees par jalon et indiquent la fenetre effective,
-les equipes impactees et les actions requises. Les mises a jour du plan de
-migration DOIVENT modifier cette page et le RFC
-(`docs/source/sorafs_architecture_rfc.md`) pour garder les consommateurs en aval
-alignes.
+RFC アーキテクチャによる移行ジャーナルのキャプチャ登録
+SoraFS。 Les entres Sont groupees par jalon et indiquent la fenetre 効果的、
+影響を受ける人々の装備を整え、必要な行動をとります。一日の計画を立ててください
+移行 DOIVENT 修飾子 cette ページ et le RFC
+(`docs/source/sorafs_architecture_rfc.md`) ガルダー・レ・コンソマトゥール・アン・アヴァルを注ぐ
+整列します。
 
-| Jalon | Fenetre effective | Resume du changement | Equipes impactees | Actions | Statut |
-|-------|-------------------|---------------------|------------------|---------|--------|
-| M1 | Semaines 7–12 | Le CI impose des fixtures deterministes; les preuves d'alias sont disponibles en staging; le tooling expose des flags d'attente explicites. | Docs, Storage, Governance | S'assurer que les fixtures restent signees, enregistrer les alias dans le registry de staging, mettre a jour les checklists de release avec l'exigence `--car-digest/--root-cid`. | ⏳ En attente |
+|ジャロン |フェネトレ効果 |転職履歴書 |影響を受ける人に装備を提供します |アクション |法令 |
+|----------|-------------------|----------|---------------------|-----------|----------|
+| M1 |セマイネス 7–12 | Le CI は、フィクスチャの決定を強制します。 les preuves d'alias はステージングを担当します。ファイルツールはフラグを明示的に公開します。 |ドキュメント、ストレージ、ガバナンス |署名者を確実に保証し、エイリアスとレジストリのステージングを登録し、リリースの安全性 `--car-digest/--root-cid` を確認します。 | ⏳ 注意してください |
 
-Les minutes du plan de controle de gouvernance qui referencent ces jalons vivent sous
-`docs/source/sorafs/`. Les equipes doivent ajouter des puces datees sous chaque ligne
-lorsque des evenements notables surviennent (ex: nouveaux enregistrements d'alias,
-retrospectives d'incidents du registry) afin de fournir une trace auditable.
+統治計画管理に関する議事録 CES JALONS VIVENT SOU
+`docs/source/sorafs/`。 Les equipes doivent ajouter des puces datees sous Chaque ligne
+lorsque des Evenements notables surviennent (例: nouveaux enregistrements d'alias,
+レジストリでの事件の遡及) 監査可能な追跡を追跡できます。
 
-## Mises a jour recentes
+## 最近、一時間を忘れました
 
-- 2025-11-01 — Diffusion de `migration_roadmap.md` au conseil de gouvernance et aux listes
-  operateurs pour revision; en attente de validation lors de la prochaine session du
-  conseil (ref: suivi `docs/source/sorafs/council_minutes_2025-10-29.md`).
-- 2025-11-02 — L'ISI d'enregistrement du Pin Registry applique desormais la validation
-  partagee chunker/politique via les helpers `sorafs_manifest`, gardant les chemins
-  on-chain alignes avec les checks Torii.
-- 2026-02-13 — Ajout des phases de rollout de provider advert (R0–R3) au registre et
-  publication des dashboards et de la guidance operateur associes
-  (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
+- 2025-11-01 — `migration_roadmap.md` 管理および補助リストの拡散
+  オペレーターが改訂を注ぎます。プロチェーンセッションの検証に注意してください
+  conseil (参照: suivi `docs/source/sorafs/council_minutes_2025-10-29.md`)。
+- 2025-11-02 — L'ISI d'enregistrement du Pin Registry アップリケの検証の解除
+  Partagee chunker/politique via les helpers `sorafs_manifest`、gardant les chemins
+  オンチェーンは、アベクレルチェック Torii を調整します。
+- 2026-02-13 — プロバイダー広告 (R0 ～ R3) au 登録の展開段階の準備
+  ダッシュボードおよびガイダンス運営者協会の出版物
+  (`provider_advert_rollout.md`、`grafana_sorafs_admission.json`)。

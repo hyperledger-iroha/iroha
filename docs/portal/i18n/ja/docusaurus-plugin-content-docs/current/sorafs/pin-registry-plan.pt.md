@@ -4,144 +4,144 @@ direction: ltr
 source: docs/portal/docs/sorafs/pin-registry-plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: pin-registry-plan
-title: Plano de implementacao do Pin Registry do SoraFS
-sidebar_label: Plano do Pin Registry
-description: Plano de implementacao SF-4 cobrindo a maquina de estados do registry, a fachada Torii, tooling e observabilidade.
+タイトル: SoraFS によるピン レジストリの実装計画
+サイドバーラベル: Plano do Pin レジストリ
+説明: SF-4 の実装計画、レジストリのマキナ、ファチャダ Torii、ツールの監視。
 ---
 
-:::note Fonte canonica
-Esta pagina reflete `docs/source/sorafs/pin_registry_plan.md`. Mantenha ambas as copias sincronizadas enquanto a documentacao herdada permanecer ativa.
+:::note フォンテ カノニカ
+エスタページナリフレテ`docs/source/sorafs/pin_registry_plan.md`。マンテンハは、記録を記録するための記録として、永続的な活動を記録します。
 :::
 
-# Plano de implementacao do Pin Registry do SoraFS (SF-4)
+# SoraFS (SF-4) を使用してピン レジストリを実装する計画
 
 O SF-4 entrega o contrato do Pin Registry e os servicos de apoio que armazenam
-compromissos de manifest, impoem politicas de pin e expoem APIs para Torii,
-gateways e orquestradores. Este documento amplia o plano de validacao com
-tarefas de implementacao concretas, cobrindo a logica on-chain, os servicos do
-host, os fixtures e os requisitos operacionais.
+Torii に関する API のマニフェストでの妥協、マニフェストでの政治的不法行為、
+ゲートウェイとオルケストラドール。 Este documento amplia o plano de validacao com
+具体的な実装方法、オンチェーンでのロジックのコブリンド、OS サービスの実行
+ホスト、OS フィクスチャ、OS の操作が必要です。
 
-## Escopo
+## エスコポ
 
-1. **Maquina de estados do registry**: registros definidos por Norito para manifests,
-   aliases, cadeias sucessoras, epocas de retencao e metadados de governanca.
-2. **Implementacao do contrato**: operacoes CRUD deterministicas para o ciclo de vida
-   dos pins (`ReplicationOrder`, `Precommit`, `Completion`, eviction).
-3. **Fachada de servico**: endpoints gRPC/REST sustentados pelo registry que Torii
-   e os SDKs consomem, incluindo paginacao e atestacao.
-4. **Tooling e fixtures**: helpers de CLI, vetores de teste e documentacao para manter
-   manifests, aliases e envelopes de governanca sincronizados.
-5. **Telemetria e ops**: metricas, alertas e runbooks para a saude do registry.
+1. **Maquina de estados do registry**: Norito パラ マニフェストのレジストリ定義、
+   エイリアス、cadias sucessoras、epocas de retencao および metadados de Governmenta。
+2. **コントラートの実装**: 自動 CRUD の決定性を実現するためのオペラ
+   dos ピン (`ReplicationOrder`、`Precommit`、`Completion`、エビクション)。
+3. **サービスの機能**: エンドポイント gRPC/REST sustentados pelo registry que Torii
+   os SDK のコンソメムには、paginacao や atestacao が含まれます。
+4. **ツールとフィクスチャ**: CLI のヘルパー、テストおよびドキュメントのパラメータの管理
+   マニフェスト、エイリアス、エンベロープ デ ガバナンカ シンクロニザドス。
+5. **Telemetria e ops**: レジストリに関するメトリクス、アラート、ランブック。
 
-## Modelo de dados
+## モデロ デ ダドス
 
-### Registros centrais (Norito)
+### レジストロス セントライス (Norito)
 
-| Struct | Descricao | Campos |
-|--------|-----------|--------|
-| `PinRecordV1` | Entrada canonica de manifest. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
-| `AliasBindingV1` | Mapeia alias -> CID de manifest. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
-| `ReplicationOrderV1` | Instrucao para providers fixarem o manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
-| `ReplicationReceiptV1` | Confirmacao do provider. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
-| `ManifestPolicyV1` | Snapshot de politica de governanca. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
+|構造体 |説明 |カンポス |
+|----------|----------|----------|
+| `PinRecordV1` |マニフェストの登録。 | `manifest_cid`、`chunk_plan_digest`、`por_root`、`profile_handle`、`approved_at`、`retention_epoch`、`pin_policy`、`successor_of`、 `governance_envelope_hash`。 |
+| `AliasBindingV1` | Mapeia エイリアス -> CID のマニフェスト。 | `alias`、`manifest_cid`、`bound_at`、`expiry_epoch`。 |
+| `ReplicationOrderV1` |プロバイダーの修正プログラムまたはマニフェストの説明。 | `order_id`、`manifest_cid`、`providers`、`redundancy`、`deadline`、`policy_hash`。 |
+| `ReplicationReceiptV1` |プロバイダーを確認してください。 | `order_id`、`provider_id`、`status`、`timestamp`、`por_sample_digest`。 |
+| `ManifestPolicyV1` |政府の政治のスナップショット。 | `min_replicas`、`max_retention_epochs`、`allowed_profiles`、`pin_fee_basis_points`。 |
 
-Referencia de implementacao: veja `crates/sorafs_manifest/src/pin_registry.rs` para os
-esquemas Norito em Rust e os helpers de validacao que sustentam esses registros. A
-validacao espelha o tooling de manifest (lookup do chunker registry, pin policy gating)
-para que o contrato, as fachadas Torii e a CLI compartilhem invariantes identicas.
+実装に関するリファレンス: veja `crates/sorafs_manifest/src/pin_registry.rs` para OS
+esquemas Norito em Rust eos ヘルパーは、レジストリをサポートします。あ
+マニフェストのツールの検証 (チャンカー レジストリの検索、ポリシー ゲートの固定)
+Torii は、CLI と同様に、同一性を維持します。
 
-Tarefas:
-- Finalizar os esquemas Norito em `crates/sorafs_manifest/src/pin_registry.rs`.
-- Gerar codigo (Rust + outros SDKs) usando macros Norito.
-- Atualizar a documentacao (`sorafs_architecture_rfc.md`) quando os esquemas estiverem prontos.
+タレファス:
+- Norito または `crates/sorafs_manifest/src/pin_registry.rs` を終了します。
+- Gerar codigo (Rust + outros SDK) マクロ Norito。
+- ドキュメントを更新 (`sorafs_architecture_rfc.md`) することで、すぐに安全性を確認できます。
 
-## Implementacao do contrato
+## コントラートを実装する
 
-| Tarefa | Responsavel(is) | Notas |
-|--------|-----------------|-------|
-| Implementar armazenamento do registry (sled/sqlite/off-chain) ou modulo de smart contract. | Core Infra / Smart Contract Team | Fornecer hashing deterministico, evitar ponto flutuante. |
-| Entry points: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | Aproveitar `ManifestValidator` do plano de validacao. O binding de alias agora flui via `RegisterPinManifest` (DTO do Torii) enquanto `bind_alias` dedicado segue planejado para atualizacoes sucessivas. |
-| Transicoes de estado: impor sucessao (manifest A -> B), epocas de retencao, unicidade de alias. | Governance Council / Core Infra | Unicidade de alias, limites de retencao e checks de aprovacao/retirada de predecessores vivem em `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; a deteccao de sucessao multi-hop e o bookkeeping de replicacao permanecem em aberto. |
-| Parametros governados: carregar `ManifestPolicyV1` de config/estado de governanca; permitir atualizacoes via eventos de governanca. | Governance Council | Fornecer CLI para atualizacoes de politica. |
-| Emissao de eventos: emitir eventos Norito para telemetria (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | Definir esquema de eventos + logging. |
+|タレファ |レスポンス |メモ |
+|------|------|------|
+|スマート コントラクトをモジュールとしてレジストリ (スレッド/SQLite/オフチェーン) を実装します。 |コアインフラ/スマートコントラクトチーム | Fornecer ハッシュ決定論、evitar ponto flutuante。 |
+|エントリ ポイント: `submit_manifest`、`approve_manifest`、`bind_alias`、`issue_replication_order`、`complete_replication`、`evict_manifest`。 |コアインフラ | Aprobeitar `ManifestValidator` は検証を計画します。 `RegisterPinManifest` (DTO は Torii を実行します) を介して別名アゴラ フルイを結合します。`bind_alias` は成功を収めるのに役立ちます。 |
+| Transicoes de estado: imor sucessao (マニフェスト A -> B)、epocas de retencao、unicidade de alias。 |ガバナンス評議会 / コアインフラ | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` の別名、保持の制限、および承認/再任のチェックの制限。マルチホップの管理と永続的な簿記の管理を行います。 |
+|ガバナドパラメータ: carregar `ManifestPolicyV1` de config/estado de Governmenta;イベント・デ・ガバナンカ経由で許可が得られます。 |ガバナンス評議会 | Fornecer CLI パラアチュアリザコ・デ・ポリティカ。 |
+|イベントの送信: テレメトリア用イベント Norito (`ManifestApproved`、`ReplicationOrderIssued`、`AliasBound`)。 |可観測性 |イベントの定義とログ記録。 |精巣:
+- Testes unitarios para cada エントリーポイント (positivo + rejeicao)。
+- Testes de propriedades para a cadeia de sucessao (sem ciclos, epocas monotonicamente crescentes)。
+- Fuzz de validacao gerando は、aleatorios (limitados) を示します。
 
-Testes:
-- Testes unitarios para cada entry point (positivo + rejeicao).
-- Testes de propriedades para a cadeia de sucessao (sem ciclos, epocas monotonicamente crescentes).
-- Fuzz de validacao gerando manifests aleatorios (limitados).
+## ファチャダ デ サービス (Integracao Torii/SDK)
 
-## Fachada de servico (Integracao Torii/SDK)
+|コンポネ |タレファ |レスポンス |
+|-----------|----------|------|
+|サービコ Torii | `/v1/sorafs/pin` (送信)、`/v1/sorafs/pin/{cid}` (検索)、`/v1/sorafs/aliases` (リスト/バインド)、`/v1/sorafs/replication` (注文/受領書) をエクスポートします。フォルネサー パギナカオ + フィルトラジェム。 |ネットワーキング TL / コア インフラ |
+|アテスタカオ |レジストリに altura/hash を含めます。 Norito の SDK を追加してください。 |コアインフラ |
+| CLI | Estender `sorafs_manifest_stub` または新しい CLI `sorafs_pin` com `pin submit`、`alias bind`、`order issue`、`registry export`。 |ツーリングWG |
+| SDK |クライアントのバインディング (Rust/Go/TS) の一部は Norito;アディショナー精巣デインテグラカオ。 | SDK チーム |
 
-| Componente | Tarefa | Responsavel(is) |
-|------------|--------|-----------------|
-| Servico Torii | Expor `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Fornecer paginacao + filtragem. | Networking TL / Core Infra |
-| Atestacao | Incluir altura/hash do registry nas respostas; adicionar estrutura de atestacao Norito consumida pelos SDKs. | Core Infra |
-| CLI | Estender `sorafs_manifest_stub` ou um novo CLI `sorafs_pin` com `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | Gerar bindings de cliente (Rust/Go/TS) a partir do esquema Norito; adicionar testes de integracao. | SDK Teams |
+オペラコ:
+- エンドポイントの GET に関するキャッシュ/ETag の追加機能。
+- Fornecer レート制限 / 認証は、政治家が行う Torii と同様に com と一致します。
 
-Operacoes:
-- Adicionar camada de cache/ETag para endpoints GET.
-- Fornecer rate limiting / auth consistentes com as politicas do Torii.
+## フィクスチャと CI
 
-## Fixtures e CI
+- フィクスチャのディレクトリ: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` マニフェスト/エイリアス/オーダーの再生成のスナップショット `cargo run -p iroha_core --example gen_pin_snapshot`。
+- CI の Etapa: `ci/check_sorafs_fixtures.sh` スナップショットとファルハセ フーバー差分、CI アリニャドスのマンテンド OS フィクスチャを再生成します。
+- Testes de integracao (`crates/iroha_core/tests/pin_registry.rs`) は、別名重複を再確認し、別名を保護/別名を保持し、チャンカーの互換性のないハンドルを処理し、レプリカの感染を検証し、安全性を確認します (ポンテイロス)。デスコンヘシドス/プレアプロバドス/レティラドス/オートリファレンス); veja casos `register_manifest_rejects_*` パラ デタルヘス デ コベルトゥーラ。
+- 別名、保護者が後継者をチェックするためのテスト ユニタリオス アゴラ コブレム バリダカオ `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`。マルチホップを確実に実行し、マキナ デ スタドス チェガールを実行します。
+- JSON ゴールデンパライベント米国ペロスパイプラインの監視。
 
-- Diretorio de fixtures: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` armazena snapshots assinados de manifest/alias/order regenerados por `cargo run -p iroha_core --example gen_pin_snapshot`.
-- Etapa de CI: `ci/check_sorafs_fixtures.sh` regenera o snapshot e falha se houver diffs, mantendo os fixtures de CI alinhados.
-- Testes de integracao (`crates/iroha_core/tests/pin_registry.rs`) exercitam o fluxo feliz mais a rejeicao de alias duplicado, guards de aprovacao/retencao de alias, handles de chunker incompativeis, validacao de contagem de replicas e falhas de guardas de sucessao (ponteiros desconhecidos/preaprovados/retirados/autorreferencias); veja casos `register_manifest_rejects_*` para detalhes de cobertura.
-- Testes unitarios agora cobrem validacao de alias, guards de retencao e checks de sucessor em `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; a deteccao de sucessao multi-hop quando a maquina de estados chegar.
-- JSON golden para eventos usados pelos pipelines de observabilidade.
+## テレメトリアと観察
 
-## Telemetria e observabilidade
-
-Metricas (Prometheus):
+メトリカ (Prometheus):
 - `torii_sorafs_registry_manifests_total{status="pending|approved|retired"}`
 - `torii_sorafs_registry_aliases_total`
 - `torii_sorafs_registry_orders_total{status="pending|completed|expired"}`
 - `torii_sorafs_replication_sla_total{outcome="met|missed|pending"}`
 - `torii_sorafs_replication_completion_latency_epochs{stat="avg|p95|max|count"}`
 - `torii_sorafs_replication_deadline_slack_epochs{stat="avg|p95|max|count"}`
-- A telemetria existente de providers (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) permanece em escopo para dashboards end-to-end.
+- プロバイダー (`torii_sorafs_capacity_*`、`torii_sorafs_fee_projection_nanos`) は、ダッシュボードをエンドツーエンドで永続的に管理します。
 
-Logs:
-- Stream de eventos Norito estruturados para auditorias de governanca (assinados?).
+ログ:
+- イベント Norito のストリーム パラ オーディトリアス デ ガバナンカ (アッシナドス?)。
 
-Alertas:
-- Ordens de replicacao pendentes excedendo o SLA.
-- Expiracao de alias abaixo do limiar.
-- Violacoes de retencao (manifest nao renovado antes de expirar).
+アラート:
+- SLA を超えた複製の順序。
+- 別名 abaixo do limiar を有効にしてください。
+- Violacoes de retencao (マニフェスト nao renovado antes de expirar)。
 
-Dashboards:
-- O JSON do Grafana `docs/source/grafana_sorafs_pin_registry.json` rastreia totais do ciclo de vida dos manifests, cobertura de alias, saturacao do backlog, razao de SLA, overlays de latencia vs slack e taxas de ordens perdidas para revisao on-call.
+ダッシュボード:
+- O JSON は、Grafana `docs/source/grafana_sorafs_pin_registry.json` rastreia totais の ciclo de vida dos マニフェスト、cobertura de alias、saturacao do backlog、razao de SLA、overlays de latencia とlack、on-call での定期的な見直しを行います。
 
-## Runbooks e documentacao
+## ランブックとドキュメント
 
-- Atualizar `docs/source/sorafs/migration_ledger.md` para incluir atualizacoes de status do registry.
-- Guia do operador: `docs/source/sorafs/runbooks/pin_registry_ops.md` (ja publicado) cobrindo metricas, alertas, deploy, backup e fluxos de recuperacao.
-- Guia de governanca: descrever parametros de politica, workflow de aprovacao, tratamento de disputas.
-- Paginas de referencia de API para cada endpoint (docs Docusaurus).
+- Atualizar `docs/source/sorafs/migration_ledger.md` には、ステータスのレジストリが含まれています。
+- 操作方法: `docs/source/sorafs/runbooks/pin_registry_ops.md` (ja publicado) コブリンド メトリクス、アラート、デプロイ、バックアップ、および回復方法。
+- 政府の政策: 政治パラメタ、承認ワークフロー、紛争処理。
+- API のエンドポイントに関する参照ページ (ドキュメント Docusaurus)。
 
-## Dependencias e sequenciamento
+## 依存性とシーケンス
 
-1. Completar tarefas do plano de validacao (integracao do ManifestValidator).
-2. Finalizar esquema Norito + defaults de politica.
-3. Implementar contrato + servico, conectar telemetria.
-4. Regenerar fixtures, rodar suites de integracao.
-5. Atualizar docs/runbooks e marcar itens do roadmap como completos.
+1. 完全なデータ検証計画 (ManifestValidator の統合)。
+2. 最終的なエスケマ Norito + 政治的デフォルト。
+3. contrato + servico、conectar テレメトリアを実装します。
+4. 再生設備、統合されたロッドスイート。
+5. Atualizar のドキュメント/Runbook とロードマップを完全に作成します。
 
-Cada checklist do SF-4 deve referenciar este plano quando houver progresso.
-A fachada REST agora entrega endpoints de listagem com atestacao:
+CADA チェックリストは、SF-4 を参照して、エステ プランノ クアンド フーバー プログレスを実行します。
+com atestacao でエンドポイントのリストを作成する REST の詳細:
 
-- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` retornam manifests com
-  bindings de alias, ordens de replicacao e um objeto de atestacao derivado do
-  hash do ultimo bloco.
-- `GET /v1/sorafs/aliases` e `GET /v1/sorafs/replication` expoem o catalogo de
-  alias ativo e o backlog de ordens de replicacao com paginacao consistente e
-  filtros de status.
+- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` retornam マニフェスト com
+  バインディングのエイリアス、オブジェクトの複製、デリバドの実行
+  ハッシュ・ドゥ・ウルティモ・ブロコ。
+- `GET /v1/sorafs/aliases` および `GET /v1/sorafs/replication` カタログの説明
+  別名、バックログ、レプリカのコンパニオンの順序、一貫性
+  ステータスのフィルター。
 
-A CLI encapsula essas chamadas (`iroha app sorafs pin list`, `pin show`, `alias list`,
-`replication list`) para que operadores possam automatizar auditorias do
-registry sem tocar APIs de baixo nivel.
+CLI カプセル化 essas Chamadas (`iroha app sorafs pin list`、`pin show`、`alias list`、
+`replication list`) パラ・ケ・オペラドール・ポッサム・オートマティザー・オーディトリアス・ドゥ
+レジストリとバイショニベルの API を組み合わせます。

@@ -9,71 +9,72 @@ source_last_modified: "2025-12-29T18:16:35.201601+00:00"
 translation_last_reviewed: 2026-02-07
 title: SF-6 Security Review
 summary: Findings and follow-up items from the independent assessment of keyless signing, proof streaming, and manifest submission pipelines.
+translator: machine-google-reviewed
 ---
 
-# SF-6 Security Review
+# SF-6 የደህንነት ግምገማ
 
-**Assessment window:** 2026-02-10 → 2026-02-18  
-**Review leads:** Security Engineering Guild (`@sec-eng`), Tooling Working Group (`@tooling-wg`)  
-**Scope:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, Torii manifest handling, Sigstore/OIDC integration, CI release hooks.  
-**Artifacts:**  
-- CLI source and tests (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
-- Torii manifest/proof handlers (`crates/iroha_torii/src/sorafs/api.rs`)  
-- Release automation (`ci/check_sorafs_cli_release.sh`, `scripts/release_sorafs_cli.sh`)  
-- Deterministic parity harness (`crates/sorafs_car/tests/sorafs_cli.rs`, [SoraFS Orchestrator GA Parity Report](./orchestrator-ga-parity.md))
+**የግምገማ መስኮት፡** 2026-02-10 → 2026-02-18  
+** ግምገማ ይመራል፡** የደህንነት ምህንድስና ማህበር (`@sec-eng`)፣ Tooling Working Group (I18NI0000020X)  
+** ወሰን፡** I18NT0000003X CLI/SDK (`sorafs_cli`፣ `sorafs_car`፣ `sorafs_manifest`)፣ የማረጋገጫ ዥረት APIs፣ Torii አንጸባራቂ አያያዝ፣ Sigstore/OIDC ውህደት፣ CI መልቀቂያ መንጠቆዎች።  
+**ቅርሶች:**  
+- የ CLI ምንጭ እና ሙከራዎች (`crates/sorafs_car/src/bin/sorafs_cli.rs`)  
+- Torii አንጸባራቂ/ማስረጃ ተቆጣጣሪዎች (`crates/iroha_torii/src/sorafs/api.rs`)  
+- የልቀት አውቶሜሽን (`ci/check_sorafs_cli_release.sh`፣ `scripts/release_sorafs_cli.sh`)  
+- ቆራጥ እኩልነት መታጠቂያ (`crates/sorafs_car/tests/sorafs_cli.rs`፣ [SoraFS ኦርኬስትራ GA የፓሪቲ ሪፖርት](./orchestrator-ga-parity.md))
 
-## Methodology
+## ዘዴ
 
-1. **Threat modelling workshops** mapped attacker capabilities for developer workstations, CI systems, and Torii nodes.  
-2. **Code review** focused on credential surfaces (OIDC token exchange, keyless signing), Norito manifest validation, and proof streaming back-pressure.  
-3. **Dynamic testing** replayed fixture manifests and simulated failure modes (token replay, manifest tampering, truncated proof streams) using the parity harness and bespoke fuzz drives.  
-4. **Configuration inspection** validated `iroha_config` defaults, CLI flag handling, and release scripts to ensure deterministic, auditable runs.  
-5. **Process interview** confirmed remediation flow, escalation paths, and audit evidence capture with Tooling WG release owners.
+1. **አስጊ ሞዴሊንግ ወርክሾፖች** ለገንቢ መሥሪያ ቤቶች፣ CI ሲስተሞች እና I18NT0000007X ኖዶች የተቀረጹ የአጥቂ ችሎታዎች።  
+2. **የኮድ ግምገማ** በማረጋገጫ ቦታዎች ላይ ያተኮረ (OIDC token exchange፣ keyless signing)፣ Norito አንጸባራቂ ማረጋገጫ እና የኋለኛ-ግፊት ዥረት ማረጋገጫ።  
+3. **ተለዋዋጭ ፍተሻ** በድጋሚ የተጫወተው አካል ያሳያል እና የውድቀት ሁነታዎችን አስመስሎ (የማስመሰያ መልሶ ማጫወት፣ የሰነድ መታወክ፣ የተቆራረጡ የማረጋገጫ ዥረቶች) የፓሪቲ መታጠቂያውን እና የፉዝ ድራይቭን በመጠቀም።  
+4. **የማዋቀር ፍተሻ** የተረጋገጠ የI18NI0000029X ነባሪዎች፣ የCLI ባንዲራ አያያዝ እና የመልቀቂያ ስክሪፕቶች ቆራጥ፣ ኦዲት የሚደረጉ ሂደቶችን ለማረጋገጥ።  
+5. **የሂደት ቃለ መጠይቅ** የተረጋገጠ የማሻሻያ ፍሰት፣የእድገት ጎዳናዎች እና የኦዲት ማስረጃዎች በTooling WG የተለቀቁ ባለቤቶች።
 
-## Findings Summary
+## ግኝቶች ማጠቃለያ
 
-| ID | Severity | Area | Finding | Resolution |
-|----|----------|------|---------|------------|
-| SF6-SR-01 | High | Keyless signing | OIDC token audience defaults were implicit in CI templates, risking cross-tenant replay. | Added explicit `--identity-token-audience` enforcement in release hooks and CI templates ([release process](../developer-releases.md), `docs/examples/sorafs_ci.md`). CI now fails when the audience is omitted. |
-| SF6-SR-02 | Medium | Proof streaming | Back-pressure paths accepted unbounded subscriber buffers, enabling memory exhaustion. | `sorafs_cli proof stream` enforces bounded channel sizes with deterministic truncation, logging Norito summaries and aborting the stream; Torii mirror updated to bound response chunks (`crates/iroha_torii/src/sorafs/api.rs`). |
-| SF6-SR-03 | Medium | Manifest submission | CLI accepted manifests without verifying embedded chunk plans when `--plan` was absent. | `sorafs_cli manifest submit` now recomputes and compares CAR digests unless `--expect-plan-digest` is provided, rejecting mismatches and surfacing remediation hints. Tests cover success/failure cases (`crates/sorafs_car/tests/sorafs_cli.rs`). |
-| SF6-SR-04 | Low | Audit trail | Release checklist lacked a signed approval log for the security review. | Added [release process](../developer-releases.md) section requiring attachment of review memo hashes and sign-off ticket URL before GA. |
+| መታወቂያ | ከባድነት | አካባቢ | ማግኘት | ጥራት |
+|----|----------|------|---------|-----------|
+| SF6-SR-01 | ከፍተኛ | ቁልፍ የሌለው መፈረም | የOIDC ማስመሰያ ታዳሚ ነባሪዎች በCI አብነቶች ውስጥ የተዘጉ ነበሩ፣ ይህም ተከራይን አቋራጭ መልሶ ማጫወትን አደጋ ላይ ጥሏል። | በመልቀቂያ መንጠቆዎች እና CI አብነቶች ([የመልቀቅ ሂደት](../developer-releases.md)፣ I18NI0000031X) ላይ ግልፅ I18NI0000030X ተጨምሯል። CI አሁን ተመልካቾች ሲቀሩ ይከሽፋል። |
+| SF6-SR-02 | መካከለኛ | ማረጋገጫ ዥረት | የኋላ-ግፊት ዱካዎች ያልተገደቡ የደንበኝነት ተመዝጋቢዎችን ተቀብለዋል፣ ይህም የማስታወስ መሟጠጥን ያስችላል። | `sorafs_cli proof stream` የታሰሩ የሰርጥ መጠኖችን በቆራጥነት መቆራረጥ ፣ Norito ማጠቃለያዎችን በመመዝገብ እና ዥረቱን በማስወረድ ያስፈጽማል። Torii መስታወት ወደ የታሰሩ ምላሽ ቁርጥራጮች ዘምኗል (`crates/iroha_torii/src/sorafs/api.rs`)። |
+| SF6-SR-03 | መካከለኛ | ማስረከቢያ | `--plan` በሌለበት ጊዜ CLI የተከተቱ ቁርጥራጭ ዕቅዶችን ሳያረጋግጥ ተቀብሏል። | `sorafs_cli manifest submit` አሁን `--expect-plan-digest` እስካልቀረበ ድረስ የ CAR መፈጨትን ያሰላል እና ያወዳድራል፣ አለመዛመጃዎችን ውድቅ ያደርጋል እና የማሻሻያ ፍንጮችን ያሳያል። ሙከራዎች የስኬት/የሽንፈት ጉዳዮችን ይሸፍናሉ (`crates/sorafs_car/tests/sorafs_cli.rs`)። |
+| SF6-SR-04 | ዝቅተኛ | የኦዲት ዱካ | የልቀት ማረጋገጫ ዝርዝር ለደህንነት ግምገማ የተፈረመ የማረጋገጫ መዝገብ አልነበረውም። | የታከለው [የመልቀቅ ሂደት](../developer-releases.md) የግምገማ ማስታወሻ ሃሽ እና የመግቢያ ትኬት ዩአርኤል ከጂኤ በፊት ማያያዝን ይፈልጋል። |
 
-All high/medium findings were fixed during the review window and validated through the existing parity harness. No latent critical issues remain.
+ሁሉም ከፍተኛ/መካከለኛ ግኝቶች በግምገማ መስኮቱ ውስጥ ተስተካክለው እና በነባሩ ተመሳሳይነት መታጠቂያ በኩል ተረጋግጠዋል። ምንም ስውር ወሳኝ ጉዳዮች አይቀሩም።
 
-## Control Validation
+## የቁጥጥር ማረጋገጫ
 
-- **Credential scope:** Default CI templates now mandate explicit audience and issuer assertions; the CLI and release helper both fail fast unless `--identity-token-audience` accompanies `--identity-token-provider`.  
-- **Deterministic replay:** Updated tests cover positive/negative manifest submission flows, ensuring mismatched digests remain non-deterministic failures and are surfaced before touching the network.  
-- **Proof streaming back-pressure:** Torii now streams PoR/PoTR items over bounded channels, and the CLI retains only truncated latency samples + five failure exemplars, preventing unbounded subscriber growth while keeping deterministic summaries.  
-- **Observability:** Proof streaming counters (`torii_sorafs_proof_stream_*`) and CLI summaries capture abort reasons, providing operators with audit breadcrumbs.  
-- **Documentation:** Developer guides ([developer index](../developer-index.md), [CLI reference](../developer-cli.md)) call out security-sensitive flags and escalation workflows.
+- **የማስረጃ ወሰን፡** ነባሪ CI አብነቶች አሁን ግልጽ ተመልካቾችን እና የሰጪ ማረጋገጫዎችን ያስገድዳሉ። `--identity-token-audience` ከ `--identity-token-provider` ጋር ካልመጣ በስተቀር CLI እና የመልቀቂያ አጋዥ ሁለቱም በፍጥነት ይሳናሉ።  
+- ** ቆራጥ ድጋሚ አጫውት፡** የተዘመኑ ሙከራዎች አወንታዊ/አሉታዊ አንጸባራቂ የማስረከቢያ ፍሰቶችን ይሸፍናሉ፣ይህም ያልተዛመደ የምግብ መፍጫ አካላት ወሳኙ ያልሆኑ ውድቀቶች ሆነው መቆየታቸውን እና አውታረ መረቡን ከመንካት በፊት ይታያሉ።  
+- ** የኋለኛ ግፊት ዥረት ማረጋገጫ፡** Torii አሁን PoR/PoTR እቃዎችን በተከለከሉ ቻናሎች ላይ ያሰራጫል፣ እና CLI የተቆራረጡ የቆይታ ጊዜ ናሙናዎችን + አምስት ብልሽቶችን ብቻ ይይዛል፣ ይህም ቆራጥ ማጠቃለያዎችን እየጠበቀ ያልተገደበ የተመዝጋቢ እድገትን ይከላከላል።  
+- ** ታዛቢነት፡** የዥረት ቆጣሪዎች (`torii_sorafs_proof_stream_*`) እና CLI ማጠቃለያዎች የማቋረጥ ምክንያቶችን ይይዛሉ፣ ይህም ኦፕሬተሮችን የኦዲት ፍርፋሪ ያቀርባል።  
+- **ሰነድ:** የገንቢ መመሪያዎች ([ገንቢ መረጃ ጠቋሚ](../developer-index.md)፣ [CLI ማጣቀሻ](../developer-cli.md)) ለደህንነት ትኩረት የሚስቡ ባንዲራዎችን እና የማሳደግ የስራ ፍሰቶችን ይጥራሉ።
 
-## Release Checklist Additions
+## የልቀት ማረጋገጫ ዝርዝር ተጨማሪዎች
 
-Release managers **must** attach the following evidence when promoting a GA candidate:
+የGA እጩን ሲያስተዋውቁ የመልቀቂያ አስተዳዳሪዎች ** የሚከተሉትን ማስረጃዎች ማያያዝ አለባቸው፡-
 
-1. Hash of the latest security review memo (this document).  
-2. Link to the tracked remediation ticket (e.g., `governance/tickets/SF6-SR-2026.md`).  
-3. Output of `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` showing explicit audience/issuer arguments.  
-4. Captured logs from the parity harness (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
-5. Confirmation that Torii release notes include bounded proof streaming telemetry counters.
+1. የቅርብ ጊዜ የደህንነት ግምገማ ማስታወሻ (ይህ ሰነድ) Hash.  
+2. ከተከታተለው የማሻሻያ ትኬት ጋር ማገናኘት (ለምሳሌ፡ I18NI0000041X)።  
+3. የI18NI0000042X ውፅዓት ግልፅ ተመልካቾች/አውጪ ነጋሪ እሴቶችን ያሳያል።  
+4. የተያዙ ምዝግብ ማስታወሻዎች ከፓሪቲ ታጥቆ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`).  
+5. የTorii የመልቀቂያ ማስታወሻዎች የታሰሩ የቴሌሜትሪ ቆጣሪዎችን እንደሚያካትቱ ማረጋገጫ።
 
-Failure to collect the artefacts above blocks GA sign-off.
+ከላይ ያሉትን ቅርሶች መሰብሰብ አለመቻል የ GA ማቋረጥን ያግዳል።
 
-**Reference artefact hashes (2026-02-20 sign-off):**
+** የማጣቀሻ አርቲፊክ ሃሽ (2026-02-20 ማቋረጥ):**
 
 - `sf6_security_review.md` — `66001d0b53d8e7ed5951a07453121c075dea931ca44c11f1fcd1571ed827342a`
 
-## Outstanding Follow-ups
+## የላቀ ክትትል
 
-- **Threat model refresh:** Repeat this review quarterly or before major CLI flag additions.  
-- **Fuzzing coverage:** Proof streaming transport encodings are fuzzed via `fuzz/proof_stream_transport`, covering identity, gzip, deflate, and zstd payloads.  
-- **Incident rehearsal:** Schedule an operator exercise simulating token compromise and manifest rollback, ensuring documentation reflects practised procedures.
+- ** የአስጊ ሞዴል ማደስ፡** ይህንን ግምገማ በየሩብ ዓመቱ ይድገሙት ወይም ከዋና ዋና የCLI ባንዲራዎች በፊት ይድገሙት።  
+- ** ደብዛዛ ሽፋን፡** የዥረት ማጓጓዣ ኢንኮዲንግ በ`fuzz/proof_stream_transport`፣ ማንነትን፣ gzip፣ deflate እና zstd የሚሸፍኑ ሸክሞችን የሚሸፍኑ ናቸው።  
+- **የአጋጣሚ ልምምድ፡** የማስመሰያ ስምምነትን እና አንጸባራቂ መመለሻን የሚያሳይ የኦፕሬተር መልመጃ መርሐግብር ያስይዙ፣ ሰነዶች የተለማመዱ ሂደቶችን የሚያንፀባርቁ መሆናቸውን በማረጋገጥ።
 
-## Approval
+## ማጽደቅ
 
-- Security Engineering Guild representative: @sec-eng (2026-02-20)  
-- Tooling Working Group representative: @tooling-wg (2026-02-20)
+- የደህንነት ምህንድስና ማህበር ተወካይ፡ @ ሰከንድ (2026-02-20)  
+- የመሳሪያ ስራ ቡድን ተወካይ፡ @tooling-wg (2026-02-20)
 
-Store signed approvals alongside the release artefact bundle.
+የተፈረሙ ማጽደቆችን ከሚለቀቀው የቅርስ ቅርቅብ ጎን ለጎን ያከማቹ።

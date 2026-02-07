@@ -11,65 +11,66 @@ id: incident-runbooks
 title: Incident Runbooks & Rollback Drills
 sidebar_label: Incident Runbooks
 description: Response guides for failed portal deployments, SoraFS replication degradation, analytics outages, and the quarterly rehearsal cadence required by DOCS-9.
+translator: machine-google-reviewed
 ---
 
-## Purpose
+#ዓላማ
 
-Roadmap item **DOCS-9** calls for actionable playbooks plus a rehearsal plan so
-portal operators can recover from shipping failures without guessing. This note
-covers three high-signal incidents—failed deployments, replication
-degradation, and analytics outages—and documents the quarterly drills that
-prove alias rollback and synthetic validation still work end to end.
+የመንገድ ካርታ ንጥል **DOCS-9** ተግባራዊ ሊሆኑ የሚችሉ የመጫወቻ ደብተሮች እና የመልመጃ እቅድ ይጠይቃል
+ፖርታል ኦፕሬተሮች ሳይገመቱ ከማጓጓዣ ውድቀቶች ማገገም ይችላሉ። ይህ ማስታወሻ
+ሶስት ከፍተኛ የሲግናል ክስተቶችን ይሸፍናል-ያልተሳኩ ማሰማራት፣ ማባዛት።
+መበላሸት እና የትንታኔ መቋረጥ - እና ያንን የሩብ አመት ልምምድ መዝግቧል
+አረጋግጥ ተለዋጭ ስም እና ሰራሽ ማረጋገጫ አሁንም ከጫፍ እስከ ጫፍ ይሰራሉ።
 
-### Related material
+### ተዛማጅ ቁሳቁስ
 
-- [`devportal/deploy-guide`](./deploy-guide) — packaging, signing, and alias
-  promotion workflow.
-- [`devportal/observability`](./observability) — release tags, analytics, and
-  probes referenced below.
+- [`devportal/deploy-guide`](./deploy-guide) - ማሸግ ፣ መፈረም እና ተለዋጭ ስም
+  የማስተዋወቂያ የስራ ፍሰት.
+- [`devportal/observability`](./observability) - የመልቀቂያ መለያዎች ፣ ትንታኔዎች እና
+  መመርመሪያዎች ከዚህ በታች ተጠቅሰዋል.
 - `docs/source/sorafs_node_client_protocol.md`
-  and [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
-  — registry telemetry and escalation thresholds.
-- `docs/portal/scripts/sorafs-pin-release.sh` and `npm run probe:*` helpers
-  referenced throughout the checklists.
+  እና [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
+  - የመመዝገቢያ ቴሌሜትሪ እና የመጨመር ደረጃዎች.
+- `docs/portal/scripts/sorafs-pin-release.sh` እና `npm run probe:*` ረዳቶች
+  በሁሉም የማረጋገጫ ዝርዝሮች ውስጥ ተጠቅሷል.
 
-### Shared telemetry & tooling
+### የተጋራ ቴሌሜትሪ እና መገልገያ
 
-| Signal / Tool | Purpose |
-| ------------- | ------- |
-| `torii_sorafs_replication_sla_total` (met/missed/pending) | Detects replication stalls and SLA breaches. |
-| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Quantifies backlog depth and completion latency for triage. |
-| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Shows gateway-side failures that often follow a bad deploy. |
-| `npm run probe:portal` / `npm run probe:tryit-proxy` | Synthetic probes that gate releases and validate runbacks. |
-| `npm run check:links` | Broken-link gate; used after every mitigation. |
-| `sorafs_cli manifest submit … --alias-*` (wrapped by `scripts/sorafs-pin-release.sh`) | Alias promotion/reversion mechanism. |
-| `Docs Portal Publishing` Grafana board (`dashboards/grafana/docs_portal.json`) | Aggregates refusal/alias/TLS/replication telemetry. PagerDuty alerts reference these panels for evidence. |
+| ምልክት / መሳሪያ | ዓላማ |
+| ------------ | ------- |
+| `torii_sorafs_replication_sla_total` (ተገናኝቶ/ያመለጡ/በመጠባበቅ ላይ) | የማባዛት ድንኳኖችን እና የ SLA ጥሰቶችን ያውቃል። |
+| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | የመለኪያ ጥልቀት እና የማጠናቀቂያ መዘግየትን ይለካል። |
+| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | ብዙውን ጊዜ መጥፎ ስምሪትን የሚከተሉ የመግቢያ-ጎን ውድቀቶችን ያሳያል። |
+| `npm run probe:portal` / `npm run probe:tryit-proxy` | በሩ የሚለቀቅ እና መመለሻዎችን የሚያረጋግጡ ሰራሽ ፍተሻዎች። |
+| `npm run check:links` | የተሰበረ-አገናኝ በር; ከእያንዳንዱ ቅነሳ በኋላ ጥቅም ላይ ይውላል. |
+| `sorafs_cli manifest submit … --alias-*` (በ I18NI0000028X ተጠቅልሎ) | ተለዋጭ የማስተዋወቂያ/የመቀየር ዘዴ። |
+| `Docs Portal Publishing` I18NT0000000X ሰሌዳ (`dashboards/grafana/docs_portal.json`) | ድምር ድምር እምቢታ/ተለዋጭ ስም/TLS/ተባዛ ቴሌሜትሪ። PagerDuty ማንቂያዎች እነዚህን ፓነሎች ለማስረጃ ይጠቅሳሉ። |
 
-## Runbook — Failed deployment or bad artefact
+## Runbook — ያልተሳካ ማሰማራት ወይም መጥፎ ቅርስ
 
-### Trigger conditions
+### ቀስቃሽ ሁኔታዎች
 
-- Preview/production probes fail (`npm run probe:portal -- --expect-release=…`).
-- Grafana alerts on `torii_sorafs_gateway_refusals_total` or
-  `torii_sorafs_manifest_submit_total{status="error"}` after a rollout.
-- Manual QA notices broken routes or Try-It proxy failures immediately after
-  alias promotion.
+- ቅድመ እይታ/ምርት መመርመሪያዎች አልተሳኩም (`npm run probe:portal -- --expect-release=…`)።
+- Grafana ማንቂያዎች በ I18NI0000032X ወይም
+  `torii_sorafs_manifest_submit_total{status="error"}` ከታቀደ በኋላ።
+- በእጅ QA የተበላሹ መንገዶችን ወይም የፕሮክሲ ፕሮክሲ አለመሳካቶችን ወዲያውኑ ያስተውላል
+  ተለዋጭ ስም ማስተዋወቅ.
 
-### Immediate containment
+### ወዲያውኑ መያዣ
 
-1. **Freeze deployments:** mark the CI pipeline with `DEPLOY_FREEZE=1` (GitHub
-   workflow input) or pause the Jenkins job so no additional artefacts go out.
-2. **Capture artefacts:** download the failing build’s `build/checksums.sha256`,
-   `portal.manifest*.{json,to,bundle,sig}`, and probe output so the rollback can
-   reference exact digests.
-3. **Notify stakeholders:** storage SRE, Docs/DevRel lead, and the governance
-   duty officer for awareness (especially when `docs.sora` is impacted).
+1. ** የቀዘቀዙ ማሰማራት፡** የ CI ቧንቧ መስመርን በI18NI0000034X (GitHub) ምልክት ያድርጉበት።
+   የስራ ፍሰት ግቤት) ወይም ተጨማሪ ቅርሶች እንዳይወጡ የጄንኪንስ ስራን ለአፍታ ያቁሙ።
+2. ** ቅርሶችን ያንሱ፡** ያልተሳካውን ግንብ `build/checksums.sha256` አውርድ፣
+   `portal.manifest*.{json,to,bundle,sig}`፣ እና መልሶ መመለስ እንዲችል የፍተሻ ውፅዓት
+   የማጣቀሻ ትክክለኛ የምግብ መፍጫዎች.
+3. **ለባለድርሻ አካላት ያሳውቁ፡** ማከማቻ SRE፣ ሰነዶች/ዴቭሬል አመራር እና አስተዳደር
+   የግንዛቤ ኦፊሰር (በተለይ `docs.sora` ሲነካ)።
 
-### Rollback procedure
+### የመመለሻ ሂደት
 
-1. Identify the last-known-good (LKG) manifest. The production workflow stores
-   them under `artifacts/devportal/<release>/sorafs/portal.manifest.to`.
-2. Rebind the alias to that manifest with the shipping helper:
+1. የመጨረሻው-የታወቀ-ጥሩ (LKG) አንጸባራቂን መለየት። የምርት የስራ ፍሰት መደብሮች
+   እነሱን በ `artifacts/devportal/<release>/sorafs/portal.manifest.to`.
+2. ተለዋጭ ስምውን ወደዚያ አንጸባራቂ በማጓጓዣ ረዳት እንደገና ያያይዙት፡-
 
 ```bash
 cd docs/portal
@@ -106,123 +107,123 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --summary-out artifacts/.../sorafs/rollback.submit.json
 ```
 
-3. Record the rollback summary in the incident ticket together with the LKG and
-   failed manifest digests.
+3. የመመለሻ ማጠቃለያውን በክስተቱ ትኬት ውስጥ ከLKG እና ጋር ይመዝግቡ
+   ያልተሳካ አንጸባራቂ መፍጨት።
 
-### Validation
+### ማረጋገጫ
 
 1. `npm run probe:portal -- --expect-release=${LKG_TAG}`.
 2. `npm run check:links`.
-3. `sorafs_cli manifest verify-signature …` and `sorafs_cli proof verify …`
-   (see the deployment guide) to confirm the re-promoted manifest still matches
-   the archived CAR.
-4. `npm run probe:tryit-proxy` to ensure the Try-It staging proxy came back.
+3. `sorafs_cli manifest verify-signature …` እና `sorafs_cli proof verify …`
+   (የማሰማራቱን መመሪያ ይመልከቱ) በድጋሚ የተሻሻለው አንጸባራቂ አሁንም መመሳሰሉን ለማረጋገጥ
+   በማህደር የተቀመጠው CAR.
+4. Try-It staging proxy ተመልሶ መምጣቱን ለማረጋገጥ `npm run probe:tryit-proxy`።
 
-### Post-incident
+### ከክስተቱ በኋላ
 
-1. Re-enable the deployment pipeline only after the root cause is understood.
-2. Backfill [`devportal/deploy-guide`](./deploy-guide) “Lessons learned”
-   entries with new gotchas, if any.
-3. File defects for the failing test suite (probe, link checker, etc.).
+1. የመዘርጋት ቧንቧን እንደገና ማንቃት ዋናው ምክንያት ከተረዳ በኋላ ብቻ ነው።
+2. Backfill [`devportal/deploy-guide`](./deploy-guide) "የተማሩ ትምህርቶች"
+   ከአዲስ gotchas ጋር ግቤቶች።
+3. ለተሳካው የሙከራ ስብስብ (መመርመሪያ፣ አገናኝ አራሚ፣ ወዘተ) ጉድለቶችን ፋይል ያድርጉ።
 
-## Runbook — Replication degradation
+## Runbook - የማባዛት መበላሸት።
 
-### Trigger conditions
+### ቀስቃሽ ሁኔታዎች
 
-- Alert: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
-  clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) <
-  0.95` for 10 minutes.
-- `torii_sorafs_replication_backlog_total > 10` for 10 minutes (see
-  `pin-registry-ops.md`).
-- Governance reports slow alias availability after a release.
+- ማንቂያ፡ ` ድምር(torii_sorafs_replication_sla_total{ውጤት=«ተገናኝቶ»}) /
+  clamp_min( ድምር(torii_sorafs_replication_sla_total{ውጤት=~"ተገናኝቶ|ያመለጡ"))፣ 1) <
+  0.95` ለ 10 ደቂቃዎች
+- `torii_sorafs_replication_backlog_total > 10` ለ 10 ደቂቃዎች (ተመልከት
+  `pin-registry-ops.md`)።
+- አስተዳደር ከተለቀቀ በኋላ ቀርፋፋ ተለዋጭ ስም ሪፖርት ያደርጋል።
 
-### Triage
+### መለያ
 
-1. Inspect [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops) dashboards to confirm
-   whether the backlog is localized to a storage class or a provider fleet.
-2. Cross-check Torii logs for `sorafs_registry::submit_manifest` warnings to
-   determine whether submissions themselves are failing.
-3. Sample replica health via `sorafs_cli manifest status --manifest …` (lists
-   per-provider replication outcomes).
+1. ለማረጋገጥ [I18NI0000047X](../sorafs/pin-registry-ops) ዳሽቦርዶችን መርምር
+   የኋላ መዝገብ ወደ ማከማቻ ክፍል ወይም ለአቅራቢ መርከቦች የተተረጎመ ስለመሆኑ።
+2. የ Torii ምዝግብ ማስታወሻዎችን ለ`sorafs_registry::submit_manifest` ማስጠንቀቂዎች ይመልከቱ
+   ማስረከብ እራሳቸው አለመሳካታቸውን ይወስኑ።
+3. ናሙና ጤና በ`sorafs_cli manifest status --manifest …` (ዝርዝሮች
+   በአንድ አቅራቢ የማባዛት ውጤቶች).
 
-### Mitigation
+### መቀነስ
 
-1. Reissue the manifest with higher replica count (`--pin-min-replicas 7`) using
-   `scripts/sorafs-pin-release.sh` so the scheduler spreads load across a larger
-   provider set. Record the new manifest digest in the incident log.
-2. If backlog is tied to a single provider, temporarily disable it via the
-   replication scheduler (documented in `pin-registry-ops.md`) and submit a new
-   manifest forcing the other providers to refresh the alias.
-3. When alias freshness is more critical than replication parity, rebind the
-   alias to a warm manifest already staged (`docs-preview`), then publish a
-   follow-up manifest once SRE clears the backlog.
+1. አንጸባራቂውን ከፍ ባለ ብዜት ብዛት (`--pin-min-replicas 7`) በመጠቀም ያውጡ
+   `scripts/sorafs-pin-release.sh` ስለዚህ መርሐግብር አውጪው ሸክሙን በትልቁ ላይ ያሰራጫል።
+   አቅራቢ ስብስብ. በክስተቱ ምዝግብ ማስታወሻ ውስጥ አዲሱን አንጸባራቂ መግለጫ ይቅረጹ።
+2. የኋላ መዝገብ ከአንድ አገልግሎት አቅራቢ ጋር የተቆራኘ ከሆነ፣ ለጊዜው ያሰናክሉት
+   የማባዛት መርሐግብር አዘጋጅ (በ`pin-registry-ops.md` ውስጥ የተመዘገበ) እና አዲስ ያስገቡ
+   ሌሎች አቅራቢዎች ተለዋጭ ስም እንዲያድሱ ማስገደድ።
+3. ተለዋጭ ስም ትኩስነት ከማባዛት እኩልነት የበለጠ ወሳኝ በሚሆንበት ጊዜ፣ እንደገና ያያይዙት።
+   ተለዋጭ ስም ሞቅ ያለ መግለጫ አስቀድሞ ተዘጋጅቷል (`docs-preview`) ፣ ከዚያ ያትሙ
+   SRE የኋላ መዝገቡን ካጸዳ በኋላ የክትትል አንጸባራቂ።
 
-### Recovery & closure
+### ማገገም እና መዝጋት
 
-1. Monitor `torii_sorafs_replication_sla_total{outcome="missed"}` to ensure the
-   count plateaus.
-2. Capture `sorafs_cli manifest status` output as evidence that every replica is
-   back in compliance.
-3. File or update the replication backlog post-mortem with next steps
-   (provider scaling, chunker tuning, etc.).
+1. ለማረጋገጥ `torii_sorafs_replication_sla_total{outcome="missed"}` ይቆጣጠሩ
+   አምባ መቁጠር.
+2. እያንዳንዱ ቅጂ ለመሆኑ የI18NI0000055X ውጤትን ይቅረጹ
+   በማክበር መመለስ.
+3. ከድህረ ሞት በኋላ የማባዛቱን ሂደት በሚቀጥሉት እርምጃዎች ፋይል ያድርጉ ወይም ያዘምኑ
+   (የአቅራቢው ልኬት፣ ቻንከር ማስተካከል፣ ወዘተ)።
 
-## Runbook — Analytics or telemetry outage
+## Runbook — ትንታኔ ወይም የቴሌሜትሪ መቋረጥ
 
-### Trigger conditions
+### ቀስቃሽ ሁኔታዎች
 
-- `npm run probe:portal` succeeds but dashboards stop ingesting
-  `AnalyticsTracker` events for >15 minutes.
-- Privacy review flags an unexpected increase in dropped events.
-- `npm run probe:tryit-proxy` fails on `/probe/analytics` paths.
+- `npm run probe:portal` ተሳክቷል ነገር ግን ዳሽቦርዶች መመገብ አቁመዋል
+  `AnalyticsTracker` ክስተቶች ለ> 15 ደቂቃዎች።
+- የግላዊነት ግምገማ በተጣሉ ክስተቶች ላይ ያልተጠበቀ ጭማሪ ያሳያል።
+- `npm run probe:tryit-proxy` በ I18NI0000059X መንገዶች ላይ አልተሳካም።
 
-### Response
+### ምላሽ
 
-1. Verify build-time inputs: `DOCS_ANALYTICS_ENDPOINT` and
-   `DOCS_ANALYTICS_SAMPLE_RATE` in the failing release artifact (`build/release.json`).
-2. Re-run `npm run probe:portal` with `DOCS_ANALYTICS_ENDPOINT` pointing at the
-   staging collector to confirm the tracker still emits payloads.
-3. If collectors are down, set `DOCS_ANALYTICS_ENDPOINT=""` and rebuild so the
-   tracker short-circuits; record the outage window in the incident timeline.
-4. Validate `scripts/check-links.mjs` still fingerprints `checksums.sha256`
-   (analytics outages must *not* block sitemap validation).
-5. Once the collector recovers, run `npm run test:widgets` to exercise the
-   analytics helper unit tests before republishing.
+1. የግንባታ ጊዜ ግብዓቶችን ያረጋግጡ: `DOCS_ANALYTICS_ENDPOINT` እና
+   `DOCS_ANALYTICS_SAMPLE_RATE` በመጥፋቱ የተለቀቀው ቅርስ (`build/release.json`)።
+2. I18NI0000063X በ `DOCS_ANALYTICS_ENDPOINT` በመጠቆም እንደገና ያሂዱ
+   መከታተያውን ለማረጋገጥ የዝግጅት ሰብሳቢው አሁንም ጭነቶችን እንደሚያመነጭ ያሳያል።
+3. ሰብሳቢዎች ከወደቁ, `DOCS_ANALYTICS_ENDPOINT=""` ያዘጋጁ እና እንደገና ይገንቡ.
+   መከታተያ አጭር-ወረዳዎች; በተፈጠረው የጊዜ መስመር ውስጥ የመውጫ መስኮቱን ይመዝግቡ.
+4. I18NI0000066X አሁንም የጣት አሻራዎችን `checksums.sha256` ያረጋግጡ
+   (የትንታኔ መቋረጥ የጣቢያ ካርታ ማረጋገጫን ማገድ የለበትም)።
+5. ሰብሳቢው ካገገመ በኋላ፣ `npm run test:widgets` ን ያሂዱ
+   እንደገና ከመታተሙ በፊት የትንታኔ አጋዥ ክፍል ሙከራዎች።
 
-### Post-incident
+### ከክስተቱ በኋላ
 
-1. Update [`devportal/observability`](./observability) with any new collector
-   limitations or sampling requirements.
-2. File governance notice if any analytics data was dropped or redacted outside
-   policy.
+1. ከማንኛውም አዲስ ሰብሳቢ ጋር [`devportal/observability`](./observability) አዘምን
+   ገደቦች ወይም ናሙና መስፈርቶች.
+2. ማንኛውም የትንታኔ ዳታ ወደ ውጭ ከተጣለ ወይም ከተቀየረ የአስተዳደር ማስታወቂያ
+   ፖሊሲ.
 
-## Quarterly resilience drills
+## በየሩብ ዓመቱ የመቋቋም ልምምድ
 
-Run both drills during the **first Tuesday of each quarter** (Jan/Apr/Jul/Oct)
-or immediately after any major infrastructure change. Store artifacts under
+በእያንዳንዱ ሩብ የመጀመሪያ ማክሰኞ ** (ጥር/ኤፕሪል/ጁላይ/ኦክቶበር) ሁለቱንም ልምምዶች ያካሂዱ።
+ወይም ማንኛውም ትልቅ የመሠረተ ልማት ለውጥ በኋላ ወዲያውኑ. ቅርሶችን ስር ያከማቹ
 `artifacts/devportal/drills/<YYYYMMDD>/`.
 
-| Drill | Steps | Evidence |
-| ----- | ----- | -------- |
-| Alias rollback rehearsal | 1. Replay the “Failed deployment” rollback using the most recent production manifest.<br/>2. Re-bind to production once probes pass.<br/>3. Record `portal.manifest.submit.summary.json` and probe logs in the drill folder. | `rollback.submit.json`, probe output, and release tag of the rehearsal. |
-| Synthetic validation audit | 1. Run `npm run probe:portal` and `npm run probe:tryit-proxy` against production and staging.<br/>2. Run `npm run check:links` and archive `build/link-report.json`.<br/>3. Attach screenshots/exports of Grafana panels confirming probe success. | Probe logs + `link-report.json` referencing the manifest fingerprint. |
+| መሰርሰሪያ | እርምጃዎች | ማስረጃ |
+| --- | --- | -------- |
+| ተለዋጭ መልመጃ | 1. በጣም የቅርብ ጊዜውን የምርት ዝርዝር መግለጫ በመጠቀም የ"ያልተሳካ ማሰማራት" መልሶ ማጫወት።<br/>2. መመርመሪያዎች ካለፉ በኋላ ወደ ምርት እንደገና ያስሩ።<br/>3. `portal.manifest.submit.summary.json` ይቅረጹ እና ምዝግብ ማስታወሻዎችን በመሰርሰሪያው አቃፊ ውስጥ። | `rollback.submit.json`፣ የመመርመሪያ ውፅዓት እና የልምምድ ልቀት መለያ። |
+| ሰው ሠራሽ ማረጋገጫ ኦዲት | 1. `npm run probe:portal` እና I18NI0000074Xን ከምርት እና ዝግጅት ጋር ያሂዱ።<br/>2. `npm run check:links` ን ያሂዱ እና `build/link-report.json`ን ያስቀምጡ።<br/>3. የፍተሻ ስኬትን የሚያረጋግጡ የGrafana ፓነሎች ቅጽበታዊ ገጽ እይታዎችን/መላክን ያያይዙ። | የመመርመሪያ ምዝግብ ማስታወሻዎች + I18NI0000077X አንጸባራቂውን የጣት አሻራ በማጣቀስ። |
 
-Escalate missed drills to the Docs/DevRel manager and SRE governance review,
-since the roadmap requires deterministic, quarterly evidence that both alias
-rollback and portal probes remain healthy.
+ያመለጡ ልምምዶችን ለሰነዶች/DevRel ሥራ አስኪያጅ እና ለኤስአርአይ የአስተዳደር ግምገማ ያሳድጉ፣
+ፍኖተ ካርታው ቆራጥ፣ የሩብ ዓመት ማስረጃ ስለሚፈልግ ሁለቱም ተለዋጭ ስሞች
+የመመለሻ እና የፖርታል ምርመራዎች ጤናማ ሆነው ይቆያሉ።
 
-## PagerDuty & on-call coordination
+## ፔጀርዱቲ እና በጥሪ ላይ ማስተባበር
 
-- PagerDuty service **Docs Portal Publishing** owns the alerts generated from
-  `dashboards/grafana/docs_portal.json`. The rules `DocsPortal/GatewayRefusals`,
-  `DocsPortal/AliasCache`, and `DocsPortal/TLSExpiry` page the Docs/DevRel
-  primary with Storage SRE as secondary.
-- When paged, include the `DOCS_RELEASE_TAG`, attach screenshots of the affected
-  Grafana panels, and link probe/link-check output in the incident notes before
-  mitigation starts.
-- After mitigation (rollback or redeploy), re-run `npm run probe:portal`,
-  `npm run check:links`, and capture fresh Grafana snapshots showing the metrics
-  back within thresholds. Attach all evidence to the PagerDuty incident prior to
-  resolving it.
-- If two alerts fire simultaneously (for example TLS expiry plus backlog), triage
-  refuses first (stop publishing), execute the rollback procedure, then clear
-  TLS/backlog items with Storage SRE on the bridge.
+- የፔጄርዱቲ አገልግሎት ** የሰነዶች ፖርታል ህትመት ** የሚመነጩ ማንቂያዎችን በባለቤትነት ይይዛል
+  `dashboards/grafana/docs_portal.json`. ደንቦቹ `DocsPortal/GatewayRefusals`፣
+  `DocsPortal/AliasCache`፣ እና `DocsPortal/TLSExpiry` የሰነዶች/DevRel ገጽ
+  የመጀመሪያ ደረጃ ከማከማቻ SRE ጋር እንደ ሁለተኛ ደረጃ።
+- ገጽ ሲደረግ፣ `DOCS_RELEASE_TAG`ን ያካትቱ፣ የተጎዱትን ቅጽበታዊ ገጽ እይታዎች ያያይዙ
+  Grafana ፓነሎች፣ እና የአገናኝ መፈተሻ/አገናኝ-ቼክ ውፅዓት ከዚህ በፊት በተከሰቱት ማስታወሻዎች ውስጥ
+  ቅነሳ ይጀምራል.
+- ከተቀነሰ በኋላ (ተመለስ ወይም እንደገና ከተሰራ) በኋላ `npm run probe:portal` ን እንደገና ያሂዱ ፣
+  `npm run check:links`፣ እና አዲስ የI18NT0000004X ቅጽበታዊ ገጽ እይታዎችን ያንሱ መለኪያዎችን
+  በገደቦች ውስጥ ተመለስ ። ሁሉንም ማስረጃዎች ከ PagerDuty ክስተት በፊት ያያይዙ
+  መፍታት.
+- ሁለት ማንቂያዎች በአንድ ጊዜ ከተቃጠሉ (ለምሳሌ TLS ጊዜው ያለፈበት እና የኋላ መዝገብ) ፣ መለያ
+  መጀመሪያ እምቢ ማለት (ማተምን አቁም)፣ የመልሶ ማቋቋሚያ ሂደቱን አስፈጽም፣ ከዚያም አጽዳ
+  በድልድዩ ላይ የTLS/የኋላ መዝገብ ዕቃዎች ከማከማቻ SRE ጋር።

@@ -11,53 +11,54 @@ id: chunker-conformance
 title: SoraFS Chunker Conformance Guide
 sidebar_label: Chunker Conformance
 description: Requirements and workflows for preserving the deterministic SF1 chunker profile across fixtures and SDKs.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-This guide codifies the requirements every implementation must follow to stay
-aligned with the SoraFS deterministic chunker profile (SF1). It also
-documents the regeneration workflow, signing policy, and verification steps so
-fixture consumers across SDKs remain in sync.
+Энэхүү гарын авлага нь хэрэгжилт бүрд үлдэхийн тулд дагаж мөрдөх ёстой шаардлагуудыг кодчилдог
+SoraFS детерминистик chunker профайлтай (SF1) нийцсэн. Тэр бас
+нөхөн сэргээх ажлын урсгал, гарын үсэг зурах бодлого, баталгаажуулах алхмуудыг баримтжуулна
+SDK дээрх бэхэлгээний хэрэглэгчид синхрончлолтой хэвээр байна.
 
-## Canonical Profile
+## Каноник профайл
 
-- Profile handle: `sorafs.sf1@1.0.0`
-- Input seed (hex): `0000000000dec0ded`
-- Target size: 262 144 bytes (256 KiB)
-- Minimum size: 65 536 bytes (64 KiB)
-- Maximum size: 524 288 bytes (512 KiB)
-- Rolling polynomial: `0x3DA3358B4DC173`
-- Gear table seed: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- Профайл бариул: `sorafs.sf1@1.0.0`
+- Оролтын үр (hex): `0000000000dec0ded`
+- Зорилтот хэмжээ: 262144 байт (256КБ)
+- Хамгийн бага хэмжээ: 65536 байт (64КБ)
+- Хамгийн их хэмжээ: 524288 байт (512KiB)
+- Өнхрөх олон гишүүнт: `0x3DA3358B4DC173`
+- Араа хүснэгтийн үр: `sorafs-v1-gear`
+- Завсарлагааны маск: `0x0000FFFF`
 
-Reference implementation: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Any SIMD acceleration must produce identical boundaries and digests.
+Лавлагааны хэрэгжилт: `sorafs_chunker::chunk_bytes_with_digests_profile`.
+Аливаа SIMD хурдатгал нь ижил хил хязгаар, боловсруулалтыг бий болгох ёстой.
 
-## Fixture Bundle
+## Бэхэлгээний багц
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenerates the
-fixtures and emits the following files under `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` -ийг сэргээдэг
+`fixtures/sorafs_chunker/` доор дараах файлуудыг суулгаж, ялгаруулдаг:
 
-- `sf1_profile_v1.{json,rs,ts,go}` — canonical chunk boundaries for Rust,
-  TypeScript, and Go consumers. Each file advertises the canonical handle as the
-  first (and only) entry in `profile_aliases`. The ordering is enforced by
-  `ensure_charter_compliance` and MUST NOT be altered.
-- `manifest_blake3.json` — BLAKE3-verified manifest covering every fixture file.
-- `manifest_signatures.json` — Council signatures (Ed25519) over the manifest
-  digest.
-- `sf1_profile_v1_backpressure.json` and raw corpora inside `fuzz/` —
-  deterministic streaming scenarios used by chunker back-pressure tests.
+- `sf1_profile_v1.{json,rs,ts,go}` - Rust-ийн каноник хэсгүүдийн хил хязгаар,
+  TypeScript болон Go хэрэглэгчид. Файл бүр нь каноник бариулыг сурталчилдаг
+  `profile_aliases` дахь анхны (болон цорын ганц) оруулга. Захиалгыг хэрэгжүүлдэг
+  `ensure_charter_compliance` ба ЗААВАЛ ӨӨРЧЛӨХ БОЛОМЖГҮЙ.
+- `manifest_blake3.json` — бэхэлгээний файл бүрийг хамарсан BLAKE3 баталгаажуулсан манифест.
+- `manifest_signatures.json` - Манифест дээрх Зөвлөлийн гарын үсэг (Ed25519)
+  шингээх.
+- `sf1_profile_v1_backpressure.json` ба `fuzz/` доторх түүхий корпус -
+  chunker-ийн буцах даралтын туршилтанд ашигладаг тодорхойлогч урсгалын хувилбарууд.
 
-### Signing Policy
+### Гарын үсэг зурах бодлого
 
-Fixture regeneration **must** include a valid council signature. The generator
-rejects unsigned output unless `--allow-unsigned` is passed explicitly (intended
-only for local experimentation). Signature envelopes are append-only and
-deduplicated per signer.
+Бэхэлгээний нөхөн сэргээлт нь **заавал** хүчинтэй зөвлөлийн гарын үсгийг агуулсан байх ёстой. Генератор
+`--allow-unsigned` тодорхой дамжуулагдаагүй тохиолдолд гарын үсэг зураагүй гаралтыг үгүйсгэдэг (зориулалттай)
+зөвхөн орон нутгийн туршилтанд). Гарын үсэг бүхий дугтуйг зөвхөн хавсаргах боломжтой
+гарын үсэг зурсан хүн бүрт давхардсан.
 
-To add a council signature:
+Зөвлөлийн гарын үсэг нэмэхийн тулд:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -65,33 +66,33 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verification
+## Баталгаажуулалт
 
-The CI helper `ci/check_sorafs_fixtures.sh` replays the generator with
-`--locked`. If fixtures drift or signatures are missing, the job fails. Use
-this script in nightly workflows and before submitting fixture changes.
+CI туслах `ci/check_sorafs_fixtures.sh` нь генераторыг дахин тоглуулдаг
+`--locked`. Хэрэв бэхэлгээ эргэлдэж, гарын үсэг байхгүй бол ажил амжилтгүй болно. Ашиглах
+энэ скриптийг шөнийн ажлын урсгалд болон засварын өөрчлөлт оруулахаас өмнө.
 
-Manual verification steps:
+Гараар баталгаажуулах алхамууд:
 
-1. Run `cargo test -p sorafs_chunker`.
-2. Invoke `ci/check_sorafs_fixtures.sh` locally.
-3. Confirm `git status -- fixtures/sorafs_chunker` is clean.
+1. `cargo test -p sorafs_chunker` ажиллуулна уу.
+2. `ci/check_sorafs_fixtures.sh`-г дотооддоо дуудна.
+3. `git status -- fixtures/sorafs_chunker` цэвэр гэдгийг баталгаажуулна уу.
 
-## Upgrade Playbook
+## Тоглоомын номыг шинэчил
 
-When proposing a new chunker profile or updating SF1:
+Шинэ chunker профайлыг санал болгох эсвэл SF1-ийг шинэчлэх үед:
 
-See also: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) for
-metadata requirements, proposal templates, and validation checklists.
+Мөн үзнэ үү: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
+мета өгөгдлийн шаардлага, саналын загвар, баталгаажуулалтын хяналтын хуудас.
 
-1. Draft a `ChunkProfileUpgradeProposalV1` (see RFC SF‑1) with new parameters.
-2. Regenerate fixtures via `export_vectors` and record the new manifest digest.
-3. Sign the manifest with the required council quorum. All signatures must be
-   appended to `manifest_signatures.json`.
-4. Update affected SDK fixtures (Rust/Go/TS) and ensure cross-runtime parity.
-5. Regenerate fuzz corpora if parameters change.
-6. Update this guide with the new profile handle, seeds, and digest.
-7. Submit the change alongside updated tests and roadmap updates.
+1. Шинэ параметр бүхий `ChunkProfileUpgradeProposalV1` (RFC SF‑1-ийг үзнэ үү) ноорог.
+2. `export_vectors`-ээр дамжуулан эд ангиудыг сэргээж, шинэ манифестийг бичнэ үү.
+3. Шаардлагатай зөвлөлийн чуулгатай манифестт гарын үсэг зурна. Бүх гарын үсэг байх ёстой
+   `manifest_signatures.json`-д хавсаргав.
+4. Нөлөөлөлд өртсөн SDK бэхэлгээг (Rust/Go/TS) шинэчилж, ажлын цаг хоорондын тэнцвэрийг баталгаажуулна уу.
+5. Параметрүүд өөрчлөгдвөл fuzz corpora-г сэргээнэ.
+6. Энэхүү гарын авлагыг шинэ профайлын бариул, үр, задаргаагаар шинэчилнэ үү.
+7. Өөрчлөлтийг шинэчилсэн тестүүд болон замын газрын зургийн шинэчлэлтийн хамт оруулна уу.
 
-Changes that affect chunk boundaries or digests without following this process
-are invalid and must not be merged.
+Энэ процессыг дагаж мөрдөөгүй бол хэсгүүдийн хил хязгаар эсвэл задралд нөлөөлдөг өөрчлөлтүүд
+хүчингүй бөгөөд нэгтгэж болохгүй.

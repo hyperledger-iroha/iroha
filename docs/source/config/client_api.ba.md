@@ -7,25 +7,26 @@ generator: scripts/sync_docs_i18n.py
 source_hash: fa548ec31fe928decc5c23719472618ff97f4eb45b084f9f9084df82b96cfac6
 source_last_modified: "2025-12-29T18:16:35.933651+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Client API Configuration Reference
+## Клиент API конфигурацияһы һылтанмаһы
 
-This document tracks the Torii client-facing configuration knobs that are
-surfaces through `iroha_config::parameters::user::Torii`. The section below
-focuses on the Norito-RPC transport controls introduced for NRPC-1; future
-client API settings should extend this file.
+Был документ Torii клиент-йөҙөндә конфигурация ручкаларын күҙәтә, улар
+ер өҫтө `iroha_config::parameters::user::Torii` аша. Түбәндәге бүлек
+Norito транспорт менән идара итеүгә йүнәлтелгән NRPC-1 өсөн индерелгән; киләсәк
+клиент API параметрҙары был файлды киңәйтергә тейеш.
 
 ### `torii.transport.norito_rpc`
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `enabled` | `bool` | `true` | Master switch that enables binary Norito decoding. When `false`, Torii rejects every Norito-RPC request with `403 norito_rpc_disabled`. |
-| `stage` | `string` | `"disabled"` | Rollout tier: `disabled`, `canary`, or `ga`. Stages drive admission decisions and `/rpc/capabilities` output. |
-| `require_mtls` | `bool` | `false` | Enforces mTLS for Norito-RPC transport: when `true`, Torii rejects Norito-RPC requests that do not carry an mTLS marker header (e.g. `X-Forwarded-Client-Cert`). The flag is surfaced via `/rpc/capabilities` so SDKs can warn on misconfigured environments. |
-| `allowed_clients` | `array<string>` | `[]` | Canary allowlist. When `stage = "canary"`, only requests carrying an `X-API-Token` header present in this list are accepted. |
+| Асҡыс | Тип | Ғәҙәттәгесә | Тасуирлама |
+|----|-----|----------|------------- |
+| `enabled` | `bool` | `true` | Мастер-карта, мөмкинлек бирә бинар Norito декодлау. Ҡасан `false`, Torii һәр Norito-RPC запросы менән `403 norito_rpc_disabled` кире ҡаға. |
+| `stage` | `string` | `"disabled"` | Rollout ярус: `disabled`, `canary`, йәки `ga`. Этаптар ҡабул итеү ҡарарҙары һәм `/rpc/capabilities` продукцияһы драйв. |
+| `require_mtls` | `bool` | `false` | Norito-RPC транспорты өсөн mTLS үтәй: `true`, Torii Norito-RPC запростарын кире ҡаға, улар мТЛС маркеры башын йөрөтмәй (мәҫәлән, `X-Forwarded-Client-Cert`). Флаг `/rpc/capabilities` аша сыға, шуға күрә SDKs дөрөҫ булмаған конфигурацияланмаған мөхиттәр тураһында иҫкәртә ала. |
+| `allowed_clients` | `array<string>` | `[]` | Канар рөхсәт ҡағыҙы. Ҡасан `stage = "canary"`, был исемлектә `X-API-Token` башын йөрөтөү тураһында ғына үтенестәр ҡабул ителә. |
 
-Example configuration:
+Миҫал конфигурацияһы:
 
 ```toml
 [torii.transport.norito_rpc]
@@ -35,16 +36,16 @@ stage = "canary"
 allowed_clients = ["alpha-canary-token", "beta-canary-token"]
 ```
 
-Stage semantics:
+Этап семантикаһы:
 
-- **disabled** — Norito-RPC is unavailable even if `enabled = true`. Clients
-  receive `403 norito_rpc_disabled`.
-- **canary** — Requests must include an `X-API-Token` header that matches one
-  of the `allowed_clients`. All other requests receive `403
-  norito_rpc_canary_denied`.
-- **ga** — Norito-RPC is available to every authenticated caller (subject to the
-  usual rate and pre-auth limits).
+- **инвалид** — Norito-RPC, хатта `enabled = true`. Клиенттар
+  `403 norito_rpc_disabled` ала.
+- **канар** — Запростар `X-API-Token` X башын үҙ эсенә алырға тейеш, ул бер тап килә
+  `allowed_clients`. Ҡалған бөтә үтенестәр ҙә `403 ала.
+  норито_рпц_канар_күҙәлгән».
+- **га** — Norito-RPC һәр аутентификацияланған шылтыратыусы өсөн мөмкин (унда
+  ғәҙәти ставкаһы һәм алдан аут сиктәре).
 
-Operators can update these values dynamically through `/v1/config`. Each change
-is reflected immediately in `/rpc/capabilities`, allowing SDKs and observability
-dashboards to show the live transport posture.
+Операторҙар был ҡиммәттәрҙе динамик яңырта ала, `/v1/config` аша. Һәр үҙгәреш
+тиҙ арала `/rpc/capabilities`-та сағыла, был SDK-лар һәм күҙәтеүсәнлеккә мөмкинлек бирә
+приборҙар таҡталары тере транспорт поза күрһәтеү өсөн.

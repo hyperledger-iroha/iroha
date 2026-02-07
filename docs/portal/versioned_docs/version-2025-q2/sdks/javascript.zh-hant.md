@@ -7,16 +7,17 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7c19e80d060b1ecd57524e7398420990bd9159e7c4ac431ee5b85cfbf3b3df07
 source_last_modified: "2026-01-22T16:26:46.562559+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JavaScript SDK Quickstart
+# JavaScript SDK 快速入門
 
-`@iroha2/torii-client` provides a browser and Node.js friendly wrapper around Torii.
-This quickstart mirrors the core flows from the SDK recipes so you can get a
-client running in a few minutes. For fuller examples, see
-`javascript/iroha_js/recipes/` in the repository.
+`@iroha2/torii-client` 為 Torii 提供了一個瀏覽器和 Node.js 友好的包裝器。
+本快速入門反映了 SDK 配方中的核心流程，因此您可以獲得
+客戶端在幾分鐘內運行。有關更完整的示例，請參閱
+存儲庫中的 `javascript/iroha_js/recipes/`。
 
-## 1. Install
+## 1.安裝
 
 ```sh
 npm install @iroha2/torii-client
@@ -24,13 +25,13 @@ npm install @iroha2/torii-client
 yarn add @iroha2/torii-client
 ```
 
-If you plan to sign transactions locally, also install the crypto helpers:
+如果您計劃在本地簽署交易，還需安裝加密助手：
 
 ```sh
 npm install @iroha2/crypto-target-node  # Node18+/Bun/Deno
 ```
 
-## 2. Create a Torii client
+## 2.創建Torii客戶端
 
 ```ts title="client.ts"
 import {ToriiClient} from '@iroha2/torii-client';
@@ -41,22 +42,22 @@ const client = ToriiClient.create({
 });
 ```
 
-The configuration mirrors the constructor used in the recipes. If your node
-uses basic auth, pass `{username, password}` via the `basicAuth` option.
+該配置反映了配方中使用的構造函數。如果你的節點
+使用基本身份驗證，通過 `basicAuth` 選項傳遞 `{username, password}`。
 
-## 3. Fetch node status
+## 3. 獲取節點狀態
 
 ```ts
 const status = await client.getStatus();
 console.log(status.irohaVersion, status.latestBlock.height);
 ```
 
-All read operations return Norito-backed JSON objects. See the generated types in
-`index.d.ts` for field details.
+所有讀取操作都會返回 Norito 支持的 JSON 對象。查看生成的類型
+`index.d.ts` 了解字段詳細信息。
 
-## 4. Submit a transaction
+## 4.提交交易
 
-Signers can build transactions with the helper API:
+簽名者可以使用輔助 API 構建交易：
 
 ```ts
 import {createKeyPairFromHex} from '@iroha2/crypto-target-node';
@@ -77,28 +78,28 @@ const hash = await client.submitTransaction(tx);
 console.log('Submitted tx', hash);
 ```
 
-The helper automatically wraps the transaction in the Norito envelope expected
-by Torii. For a richer example (including waits for finality), see
-`javascript/iroha_js/recipes/registration.mjs`.
+幫助程序自動將交易包裝在預期的 Norito 信封中
+由 Torii 提供。有關更豐富的示例（包括等待最終結果），請參閱
+`javascript/iroha_js/recipes/registration.mjs`。
 
-## 5. Use high-level helpers
+## 5. 使用高級助手
 
-The SDK bundles specialised flows that mirror the CLI:
+SDK 捆綁了反映 CLI 的專用流程：
 
-- **Governance helpers** – `recipes/governance.mjs` demonstrates staging
-  proposals and ballots with the `governance` instruction builders.
-- **ISO bridge** – `recipes/iso_bridge.mjs` shows how to submit `pacs.008` and
-  poll transfer status using the `/v1/iso20022` endpoints.
-- **SoraFS & triggers** – Pagination helpers under `src/toriiClient.js` expose
-  typed iterators for contracts, assets, triggers, and SoraFS providers.
+- **治理助手** – `recipes/governance.mjs` 演示分期
+  與 `governance` 指令構建者的提案和投票。
+- **ISO 橋** – `recipes/iso_bridge.mjs` 顯示如何提交 `pacs.008` 和
+  使用 `/v1/iso20022` 端點輪詢傳輸狀態。
+- **SoraFS 和触發器** – `src/toriiClient.js` 下的分頁助手公開
+  合約、資產、觸發器和 SoraFS 提供程序的類型化迭代器。
 
-Import the relevant builder functions from `@iroha2/torii-client` to reuse those flows.
+從 `@iroha2/torii-client` 導入相關構建器函數以重用這些流。
 
-## 6. Error handling
+## 6. 錯誤處理
 
-All SDK calls throw rich `ToriiClientError` instances with transport metadata
-and the Norito error payload. Wrap calls in `try/catch` or use `.catch()` to
-surface context to users:
+所有 SDK 調用都會拋出帶有傳輸元數據的豐富 `ToriiClientError` 實例
+和 Norito 錯誤負載。將調用包裝在 `try/catch` 中或使用 `.catch()`
+用戶的表面上下文：
 
 ```ts
 try {
@@ -108,10 +109,10 @@ try {
 }
 ```
 
-## Next steps
+## 後續步驟
 
-- Explore the recipes in `javascript/iroha_js/recipes/` for end-to-end flows.
-- Read the generated types in `javascript/iroha_js/index.d.ts` for detailed
-  method signatures.
-- Pair this SDK with the Norito quickstart to inspect and debug the payloads
-  you send to Torii.
+- 探索 `javascript/iroha_js/recipes/` 中端到端流程的秘訣。
+- 詳細閱讀 `javascript/iroha_js/index.d.ts` 中生成的類型
+  方法簽名。
+- 將此 SDK 與 Norito 快速入門配對以檢查和調試有效負載
+  您發送至 Torii。

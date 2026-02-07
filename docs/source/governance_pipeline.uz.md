@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f9f765fbe3170f654a9c44c3cd1afc5d82a72ff49137f32b98cf9d310faf114e
 source_last_modified: "2025-12-29T18:16:35.963528+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% Governance Pipeline (Iroha 2 and SORA Parliament)
+% Boshqaruv quvuri (Iroha 2 va SORA Parlamenti)
 
-# Current state (v1)
-- Governance proposals run as: proposer → referendum → tally → enactment. Referendum windows and turnout/approval thresholds are enforced as described in `gov.md`; locks are extend-only and unlock on expiry.
-- Parliament selection uses VRF-based draws with deterministic ordering and term bounds; when no persisted roster exists, Torii derives a fallback using `gov.parliament_*` config. Council gating and quorum checks are exercised in `gov_parliament_bodies` / `gov_pipeline_sla` tests.
-- Voting modes: ZK (default, requires `Active` VK with inline bytes) and Plain (quadratic weight). Mode mismatches are rejected; lock creation/extension is monotonic in both modes with regression tests for ZK and plain re-votes.
-- Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
-- Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
+# Joriy holat (v1)
+- Boshqaruv takliflari quyidagicha amalga oshiriladi: taklifchi → referendum → hisob → kuchga kirish. Referendum oynalari va ishtirok etish/tasdiqlash chegaralari `gov.md` da tavsiflanganidek amalga oshiriladi; qulflar faqat uzaytiriladi va muddati tugashi bilan ochiladi.
+- Parlament tanlovida deterministik tartib va ​​muddat chegaralari bilan VRF asosidagi chizmalardan foydalaniladi; doimiy ro'yxat mavjud bo'lmaganda, Torii `gov.parliament_*` konfiguratsiyasidan foydalangan holda zaxirani oladi. Kengashga kirish va kvorum tekshiruvlari `gov_parliament_bodies` / `gov_pipeline_sla` testlarida amalga oshiriladi.
+- Ovoz berish rejimlari: ZK (standart, ichki baytlar bilan `Active` VK talab qilinadi) va Oddiy (kvadrat og'irlik). Rejimning mos kelmasligi rad etiladi; qulfni yaratish/kengaytirish ZK va oddiy qayta ovoz berish uchun regressiya testlari bilan ikkala rejimda ham monotondir.
+- Tasdiqlovchining noto'g'ri xatti-harakati `NextMode` + `ModeActivationHeight` tomonidan qo'llaniladigan qo'shma konsensus topshirish bilan dalillar quvuri (`/v1/sumeragi/evidence*`, CLI yordamchilari) orqali amalga oshiriladi.
+- Himoyalangan nom maydonlari, ish vaqtini yangilash ilgaklari va boshqaruv manifestini qabul qilish `governance_api.md` da hujjatlashtirilgan va telemetriya bilan qoplangan (`governance_manifest_*`, `governance_protected_namespace_total`).
 
-# In-flight / backlog
-- Publish VRF draw artifacts (seed, proof, ordered roster, alternates) and codify replacement rules for no-shows; add golden fixtures for the draw and replacements.
-- Stage-SLA enforcement for the Parliament bodies (rules → agenda → study → review → jury → enact) needs explicit timers, escalation paths, and telemetry counters.
-- Policy-jury secret/commit–reveal voting and associated bribery-resistance audits are still to be implemented.
-- Role-bond multipliers, misconduct slashing for high-risk bodies, and cooldowns between service slots require configuration plumbing plus tests.
-- Governance lane sealing and referenda window/turnout gates are tracked in `gov.md`/`status.md`; keep the roadmap entries updated as the remaining acceptance tests land.
+# Parvoz / orqada qolish
+- VRF chizma artefaktlarini nashr qilish (urug', isbot, buyurtma qilingan ro'yxat, muqobillar) va ko'rsatilmaganlar uchun almashtirish qoidalarini kodlash; durang va almashtirish uchun oltin armatura qo'shing.
+- Parlament organlari uchun SLA-ning bosqichma-bosqich bajarilishi (qoidalar → kun tartibi → o'rganish → ko'rib chiqish → hakamlar hay'ati → kuchga kirish) aniq taymerlar, eskalatsiya yo'llari va telemetriya hisoblagichlarini talab qiladi.
+- Siyosat – hakamlar hay’atining maxfiy/kommit – oshkora ovoz berish va bog‘liq poraxo‘rlikka qarshilik tekshiruvlari hali ham amalga oshirilishi kerak.
+- Rol-bog'lanish ko'paytmalari, yuqori xavfli jismlar uchun noto'g'ri harakatlar va xizmat ko'rsatish joylari o'rtasidagi sovutish konfiguratsiyasi sanitariya-tesisat va sinovlarni talab qiladi.
+- `gov.md`/`status.md` da boshqaruv yoʻlaklarining muhrlanishi va referendum oynasi/saylov ishtirokchilari eshigi kuzatilgan; Qolgan qabul sinovlari tushganda yo'l xaritasi yozuvlarini yangilab turing.

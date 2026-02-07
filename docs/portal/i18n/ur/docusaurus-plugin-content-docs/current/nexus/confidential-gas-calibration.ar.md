@@ -4,40 +4,42 @@ direction: rtl
 source: docs/portal/docs/nexus/confidential-gas-calibration.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: سجل معايرة الغاز السري
-description: قياسات بجودة الاصدار تدعم جدول الغاز السري.
-slug: /nexus/confidential-gas-calibration
+عنوان: خفیہ گیس انشانکن ریکارڈ
+تفصیل: ایڈیشن کے معیار کی پیمائش خفیہ گیس ٹیبل کی حمایت کرتی ہے۔
+سلگ: /گٹھ جوڑ /خفیہ گیس-کیلیبریشن
 ---
 
-# خطوط اساس لمعايرة الغاز السري
+خفیہ گیس کیلیبریٹ کرنے کے لئے #بیسک
 
-يتتبع هذا السجل المخرجات المعتمدة لمعايرات معايرة الغاز السري. كل صف يوثق مجموعة قياسات بجودة اصدار تم التقاطها وفق الاجراء الموضح في [Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates).
+یہ ریکارڈ نال گیس انشانکن کی منظور شدہ آؤٹ پٹس کو ٹریک کرتا ہے۔ ہر صف میں [خفیہ اثاثوں اور زیڈ کے ٹرانسفر] (./confidential-assets#calibration-baselines--acceptance-gates) میں بیان کردہ طریقہ کار کے مطابق رہائی کے معیار کی پیمائش کا ایک مجموعہ دستاویز کیا گیا ہے۔
 
-| التاريخ (UTC) | Commit | الملف التعريفي | `ns/op` | `gas/op` | `ns/gas` | الملاحظات |
+| تاریخ (UTC) | ارتکاب | پروفائل | `ns/op` | `gas/op` | `ns/gas` | نوٹ |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-12 | pending | baseline-simd-neutral | - | - | - | تشغيل محايد x86_64 مجدول على مضيف CI `bench-x86-neon0`; انظر التذكرة GAS-214. ستضاف النتائج بعد اكتمال نافذة bench (قائمة pre-merge تستهدف اصدار 2.1). |
-| 2026-04-13 | pending | baseline-avx2 | - | - | - | معايرة AVX2 لاحقة باستخدام نفس commit/build للتشغيل المحايد؛ تتطلب المضيف `bench-x86-avx2a`. تغطي GAS-214 التشغيلين مع مقارنة الفروقات مقابل `baseline-neon`. |
+| 2025-10-18 | 3C70A7D3 | بیس لائن نیون | 2.93E5 | 1.57E2 | 1.87e3 | ڈارون 25.0.0 ARM64E (ہوسٹینفو) ؛ `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018` ؛ `cargo test -p iroha_core bench_repro -- --ignored` ؛ `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5` ؛ `rustc 1.88.0 (6b00bc3)` |
+| 04-12-2026 | زیر التواء | بیس لائن سمڈ غیر جانبدار | -| -| -| X86_64 غیر جانبدار بوٹ CI میزبان `bench-x86-neon0` پر شیڈول ؛ ٹکٹ GAS-214 دیکھیں۔ بینچ ونڈو کے مکمل ہونے کے بعد نتائج شامل کیے جائیں گے (پری انضمام مینو کو نشانہ بنانے والا ورژن 2.1)۔ |
+| 04-13-2026 | زیر التواء | بیس لائن-ای وی ایکس 2 | -| -| -| غیر جانبدار آپریشن کے لئے ایک ہی کمٹ/بلڈ کا استعمال کرتے ہوئے بعد میں اے وی ایکس 2 انشانکن۔ میزبان `bench-x86-avx2a` کی ضرورت ہے۔ GAS-214 `baseline-neon` کے مقابلے میں مختلف حالتوں کے موازنہ کے ساتھ دونوں رنز کا احاطہ کرتا ہے۔ |
 
-`ns/op` يجمع الوسيط لوقت الجدار لكل تعليمة مقاس بواسطة Criterion؛ `gas/op` هو المتوسط الحسابي لكلف الجدول المقابلة من `iroha_core::gas::meter_instruction`; و`ns/gas` يقسم مجموع النانوثانية على مجموع الغاز عبر مجموعة التعليمات التسع.
+`ns/op` پیمائش کے ذریعہ ماپنے والی دیوار کے وقت کے وسط کے حساب سے۔ `gas/op` `iroha_core::gas::meter_instruction` کے متعلقہ ٹیبل لاگتوں کی ریاضی کی اوسط ہے۔ `ns/gas` نانو سیکنڈ کے مجموعہ کو گیس کی رقم کے ذریعہ نو انسٹرکشن سیٹ میں تقسیم کرتا ہے۔
 
-*ملاحظة.* المضيف arm64 الحالي لا يصدر ملخصات Criterion `raw.csv` بشكل افتراضي؛ اعد التشغيل مع `CRITERION_OUTPUT_TO=csv` او اصلاح upstream قبل وسم الاصدار لكي يتم ارفاق artefacts المطلوبة في قائمة القبول. اذا كان `target/criterion/` ما زال مفقودا بعد `--save-baseline` فاجمع التشغيل على مضيف Linux او قم بتسلسل مخرجات الكونسول في حزمة الاصدار كحل مؤقت. كمرجع، سجل الكونسول arm64 لاخر تشغيل موجود في `docs/source/confidential_assets_calibration_neon_20251018.log`.
+* نوٹ. `CRITERION_OUTPUT_TO=csv` کے ساتھ دوبارہ اسٹارٹ کریں یا ریلیز کو ٹیگ کرنے سے پہلے اپ اسٹریم کو ٹھیک کریں تاکہ مطلوبہ نوادرات قبولیت کی فہرست سے منسلک ہوں۔ اگر `target/criterion/` `--save-baseline` کے بعد بھی غائب ہے تو ، لینکس کے میزبان پر بوٹ لگائیں یا کنسول آؤٹ پٹ کو ریلیز پیکیج میں عارضی حل کے طور پر سیریلائز کریں۔ حوالہ کے لئے ، تازہ ترین رن کے لئے ARM64 کنسول لاگ `docs/source/confidential_assets_calibration_neon_20251018.log` پر ہے۔
 
-الوسيطات لكل تعليمة من نفس التشغيل (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+ایک ہی رن کی ہر ہدایت کے لئے دلائل (`cargo bench -p iroha_core --bench isi_gas_calibration`):
 
-| التعليمة | الوسيط `ns/op` | جدول `gas` | `ns/gas` |
+| ہدایات | بروکر `ns/op` | ٹیبل `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 3.46e5 | 200 | 1.73e3 |
-| RegisterAccount | 3.15e5 | 200 | 1.58e3 |
-| RegisterAssetDef | 3.41e5 | 200 | 1.71e3 |
-| SetAccountKV_small | 3.28e5 | 67 | 4.90e3 |
-| GrantAccountRole | 3.33e5 | 96 | 3.47e3 |
-| RevokeAccountRole | 3.12e5 | 96 | 3.25e3 |
-| ExecuteTrigger_empty_args | 1.42e5 | 224 | 6.33e2 |
-| MintAsset | 1.56e5 | 150 | 1.04e3 |
-| TransferAsset | 3.68e5 | 180 | 2.04e3 |
+| رجسٹر ڈومین | 3.46e5 | 200 | 1.73e3 |
+| رجسٹر اکاؤنٹ | 3.15E5 | 200 | 1.58e3 |
+| رجسٹراسیٹ ڈیف | 3.41E5 | 200 | 1.71e3 |
+| setaccountkv_small | 3.28E5 | 67 | 4.90e3 |
+| گرانٹ ایککونٹرول | 3.33E5 | 96 | 3.47E3 |
+| ریووکی کوکونٹرول | 3.12e5 | 96 | 3.25E3 |
+| exectetrigger_empty_args | 1.42E5 | 224 | 6.33e2 |
+| منٹاسیٹ | 1.56e5 | 150 | 1.04E3 |
+| ٹرانسفراسیٹ | 3.68E5 | 180 | 2.04E3 |
 
-عمود الجدول مفروض بواسطة `gas::tests::calibration_bench_gas_snapshot` (اجمالي 1,413 غاز عبر مجموعة التعليمات التسع) وسيفشل اذا غيرت التصحيحات المستقبلية القياس دون تحديث fixtures المعايرة.
+ٹیبل کالم `gas::tests::calibration_bench_gas_snapshot` (نو انسٹرکشن سیٹ میں کل 1،413 گیسیں کل) کے ذریعہ نافذ کیا گیا ہے اور اگر مستقبل کے پیچ انشانکن فکسچر کو اپ ڈیٹ کیے بغیر پیمائش کو تبدیل کرتے ہیں تو ناکام ہوجائیں گے۔

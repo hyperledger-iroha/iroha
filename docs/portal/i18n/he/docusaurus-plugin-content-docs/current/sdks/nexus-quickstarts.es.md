@@ -4,11 +4,13 @@ direction: rtl
 source: docs/portal/docs/sdks/nexus-quickstarts.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-La guia completa esta en `docs/source/nexus_sdk_quickstarts.md`. Este resumen del portal resalta los prerrequisitos compartidos y los comandos por SDK para que los desarrolladores verifiquen su configuracion rapido.
+La guia completa esta en `docs/source/nexus_sdk_quickstarts.md`. קורות חיים של פורטל נדל"ן או שירותים מוקדמים ותוספות ל-SDK עבור בדיקת הגדרות התצורה המהירות.
 
-## Configuracion compartida
+## התאמה לתצורה
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Descarga el paquete de configuracion de Nexus, instala las dependencias de cada SDK y confirma que los certificados TLS coinciden con el perfil de release (ver `docs/source/sora_nexus_operator_onboarding.md`).
+הורד את חבילת התצורה של Nexus, התקן את התלויות של ה-SDK ואת האישורים לאישורי TLS בצירוף אישורים לשחרור (גרסה `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## חלודה
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,7 +30,7 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-Refs: `docs/source/sdk/rust.md`
+רפים: `docs/source/sdk/rust.md`
 
 ## JavaScript / TypeScript
 
@@ -38,15 +40,15 @@ npm run demo:nexus
 
 El script instancia `ToriiClient` con las variables de entorno de arriba e imprime el ultimo bloque.
 
-## Swift
+## סוויפט
 
 ```bash
 make swift-nexus-demo
 ```
 
-Usa `Torii.Client` de `IrohaSwift` para obtener `FindNetworkStatus`.
+Usa `Torii.Client` de `IrohaSwift` למשתמש `FindNetworkStatus`.
 
-## Android
+## אנדרואיד
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -65,10 +67,10 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Solucion de problemas
+## פתרון בעיות
 
-- Fallas TLS -> confirma el bundle CA del tarball de release de Nexus.
+- Fallas TLS -> מאשר את הצרור CA del tarball de release de Nexus.
 - `ERR_UNKNOWN_LANE` -> pasa `--lane-id`/`--dataspace-id` cuando el enrutamiento multi-lane sea obligatorio.
-- `ERR_SETTLEMENT_PAUSED` -> revisa [Nexus operations](../nexus/nexus-operations) para el proceso de incidentes; la gobernanza pudo pausar la lane.
+- `ERR_SETTLEMENT_PAUSED` -> revisa [Nexus פעולות](../nexus/nexus-operations) para el processo de incidentes; la gobernanza pudo pausar la lane.
 
-Para mas contexto y explicaciones por SDK consulta `docs/source/nexus_sdk_quickstarts.md`.
+עבור ההקשר וההסברים של SDK consulta `docs/source/nexus_sdk_quickstarts.md`.

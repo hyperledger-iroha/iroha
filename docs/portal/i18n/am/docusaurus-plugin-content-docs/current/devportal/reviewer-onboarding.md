@@ -8,64 +8,66 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview reviewer onboarding
 sidebar_label: Reviewer onboarding
 description: Process and checklists for enrolling reviewers in the docs portal public preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Overview
+## አጠቃላይ እይታ
 
-DOCS-SORA tracks a staged launch of the developer portal. Checksum-gated builds
-(`npm run serve`) and hardened Try it flows unblock the next milestone:
-onboarding vetted reviewers before the public preview opens broadly. This guide
-describes how to collect requests, verify eligibility, provision access, and
-offboard participants safely. Refer to the
-[preview invite flow](./preview-invite-flow.md) for cohort planning, invite
-cadence, and telemetry exports; the steps below focus on the actions to take
-once a reviewer has been selected.
+DOCS-I18NT0000005X የገንቢ ፖርታልን በዝግጅቱ ይከታተላል። Checksum-gated ግንባታዎች
+(`npm run serve`) እና ጠንከር ያለ ይሞክሩት ይፈሳል የሚቀጥለውን ምዕራፍ ያንሱ፡
+ይፋዊ ቅድመ እይታው በሰፊው ከመከፈቱ በፊት የተረጋገጡ ገምጋሚዎችን ማሳፈር። ይህ መመሪያ
+ጥያቄዎችን እንዴት እንደሚሰበስብ፣ ብቁነትን ማረጋገጥ፣ የአቅርቦት ተደራሽነት እና
+ከቦርድ ውጪ ያሉ ተሳታፊዎች በሰላም። የሚለውን ተመልከት
+[የግብዣ ፍሰት ቅድመ እይታ](./preview-invite-flow.md) ለቡድን እቅድ፣ ግብዣ
+cadaence, እና ቴሌሜትሪ ወደ ውጭ መላክ; ከታች ያሉት እርምጃዎች በሚወሰዱት እርምጃዎች ላይ ያተኩራሉ
+አንዴ ገምጋሚ ከተመረጠ።
 
-- **Scope:** reviewers who need access to the docs preview (`docs-preview.sora`,
-  GitHub Pages builds, or SoraFS bundles) before GA.
-- **Out-of-scope:** Torii or SoraFS operators (covered by their own onboarding
-  kits) and production portal deployments (see
-  [`devportal/deploy-guide`](./deploy-guide.md)).
+- ** ወሰን፡** የሰነዶቹ ቅድመ እይታ መዳረሻ የሚያስፈልጋቸው ገምጋሚዎች (`docs-preview.sora`፣
+  GitHub ገጾች ይገነባል ወይም SoraFS ቅርቅቦች) ከጂኤ በፊት።
+- ** ከወሰን ውጪ:** Torii ወይም SoraFS ኦፕሬተሮች (በራሳቸው ተሳፍሪ ተሸፍኗል)
+  ኪት) እና የምርት ፖርታል ማሰማራት (ተመልከት
+  [`devportal/deploy-guide`](./deploy-guide.md))።
 
-## Roles & prerequisites
+## ሚናዎች እና ቅድመ ሁኔታዎች
 
-| Role | Typical goals | Required artefacts | Notes |
+| ሚና | የተለመዱ ግቦች | አስፈላጊ ቅርሶች | ማስታወሻ |
 | --- | --- | --- | --- |
-| Core maintainer | Verify new guides, run smoke tests. | GitHub handle, Matrix contact, signed CLA on file. | Usually already in the `docs-preview` GitHub team; still file a request so access is auditable. |
-| Partner reviewer | Validate SDK snippets or governance content before public release. | Corporate email, legal POC, signed preview terms. | Must acknowledge telemetry + data handling requirements. |
-| Community volunteer | Provide usability feedback on guides. | GitHub handle, preferred contact, timezone, acceptance of CoC. | Keep cohorts small; prioritize reviewers who have signed the contributor agreement. |
+| ዋና ጠባቂ | አዲስ መመሪያዎችን ያረጋግጡ፣ የጭስ ሙከራዎችን ያካሂዱ። | GitHub እጀታ፣ የማትሪክስ እውቂያ፣ በፋይል ላይ CLA የተፈረመ። | ብዙውን ጊዜ ቀድሞውኑ በ I18NI0000026X GitHub ቡድን ውስጥ; አሁንም ጥያቄ ያቅርቡ ስለዚህ መዳረሻ ኦዲት ይደረጋል። |
+| አጋር ገምጋሚ ​​| ይፋዊ ከመልቀቁ በፊት የኤስዲኬ ቅንጥቦችን ወይም የአስተዳደር ይዘትን ያረጋግጡ። | የድርጅት ኢሜይል፣ ህጋዊ POC፣ የተፈረመ የቅድመ እይታ ውሎች። | የቴሌሜትሪ + የውሂብ አያያዝ መስፈርቶችን መቀበል አለበት። |
+| የማህበረሰብ በጎ ፈቃደኛ | በመመሪያዎች ላይ የአጠቃቀም ግብረመልስ ይስጡ። | GitHub እጀታ፣ ተመራጭ እውቂያ፣ የሰዓት ሰቅ፣ የ CoC መቀበል። | ቡድኖቹን ትንሽ ያቆዩ; የአስተዋጽዖ ስምምነቱን የፈረሙ ገምጋሚዎች ቅድሚያ ይስጡ። |
 
-All reviewer types must:
+ሁሉም የገምጋሚ ዓይነቶች የሚከተሉትን ማድረግ አለባቸው:
 
-1. Acknowledge the acceptable-use policy for preview artefacts.
-2. Read the security/observability appendices
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-3. Agree to run `docs/portal/scripts/preview_verify.sh` before serving any
-   snapshot locally.
+1. ለቅድመ እይታ ቅርሶች ተቀባይነት ያለው የአጠቃቀም ፖሊሲን እውቅና ይስጡ።
+2. የደህንነት / ታዛቢነት ተጨማሪዎችን ያንብቡ
+   ([`security-hardening`](./security-hardening.md)፣
+   [`observability`](./observability.md)፣
+   [`incident-runbooks`](./incident-runbooks.md))።
+3. ማንኛውንም ከማገልገልዎ በፊት I18NI0000030X ለማሄድ ይስማሙ
+   ቅጽበተ-ፎቶ በአካባቢው.
 
-## Intake workflow
+## የመግቢያ የስራ ሂደት
 
-1. Ask the requester to fill out the
+1. ጠያቂውን እንዲሞላው ይጠይቁ
    [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   form (or copy/paste it into an issue). Capture at least: identity, contact
-   method, GitHub handle, intended review dates, and confirmation that the
-   security docs were read.
-2. Record the request in the `docs-preview` tracker (GitHub issue or governance
-   ticket) and assign an approver.
-3. Validate prerequisites:
-   - CLA / contributor agreement on file (or partner contract reference).
-   - Acceptable-use acknowledgement stored in the request.
-   - Risk assessment complete (for example, partner reviewers approved by Legal).
-4. Approver signs off in the request and links the tracking issue to any
-   change-management entry (example: `DOCS-SORA-Preview-####`).
+   ቅጽ (ወይም ወደ አንድ ጉዳይ ገልብጠው/ለጥፈው)። ቢያንስ ይያዙ፡ ማንነት፣ እውቂያ
+   ዘዴ፣ GitHub እጀታ፣ የታሰበ የግምገማ ቀናት እና ማረጋገጫ የ
+   የደህንነት ሰነዶች ተነበዋል.
+2. ጥያቄውን በ `docs-preview` መከታተያ ውስጥ ይመዝግቡ (የጊትህብ ጉዳይ ወይም አስተዳደር
+   ቲኬት) እና አጽዳቂን ይመድቡ.
+3. ቅድመ ሁኔታዎችን ያረጋግጡ፡-
+   - በፋይል ላይ የ CLA / የአስተዋጽኦ ስምምነት (ወይም የአጋር ውል ማጣቀሻ)።
+   - ተቀባይነት ያለው-የአጠቃቀም እውቅና በጥያቄው ውስጥ ተከማችቷል።
+   - የአደጋ ግምገማ ተጠናቅቋል (ለምሳሌ፣ በህጋዊ የጸደቁ የአጋር ገምጋሚዎች)።
+4. አጽዳቂው በጥያቄው ላይ ተፈርሞ የመከታተያ ጉዳዩን ከማንኛውም ጋር ያገናኛል።
+   የለውጥ አስተዳደር ግቤት (ለምሳሌ `DOCS-SORA-Preview-####`)።
 
-## Provisioning & tooling
+## አቅርቦት እና መገልገያ
 
-1. **Share artefacts** — Provide the latest preview descriptor + archive from
-   the CI workflow or SoraFS pin (`docs-portal-preview` artefact). Remind
-   reviewers to run:
+1. ** ቅርሶችን ያካፍሉ *** - የቅርብ ጊዜውን የቅድመ እይታ ገላጭ + መዝገብ ያቅርቡ
+   የ CI የስራ ፍሰት ወይም I18NT0000002X ፒን (`docs-portal-preview` artefact)። አስታውስ
+   የሚሄዱ ገምጋሚዎች፡-
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -74,65 +76,65 @@ All reviewer types must:
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Serve with checksum enforcement** — Point reviewers at the checksum-gated
-   command:
+2. **ከቼክሰም ማስፈጸሚያ ጋር አገልግሉ** — ገምጋሚዎችን በቼክሱም-ጌት ያመልክቱ
+   ትዕዛዝ፡-
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-   This reuses `scripts/serve-verified-preview.mjs` so no unverified build can be
-   launched accidentally.
+   ይህ `scripts/serve-verified-preview.mjs` እንደገና ይጠቀማል ስለዚህ ያልተረጋገጠ ግንባታ ሊኖር አይችልም።
+   በድንገት ተጀመረ።
 
-3. **Grant GitHub access (optional)** — If reviewers need unpublished branches,
-   add them to the `docs-preview` GitHub team for the duration of the review and
-   record the membership change in the request.
+3. **የGitHub መዳረሻን ይስጡ (አማራጭ)** — ገምጋሚዎች ያልታተሙ ቅርንጫፎች ከፈለጉ፣
+   ለግምገማው ጊዜ ወደ `docs-preview` GitHub ቡድን ያክሏቸው እና
+   በጥያቄው ውስጥ የአባልነት ለውጥ ይመዝግቡ።
 
-4. **Communicate support channels** — Share the on-call contact (Matrix/Slack)
-   and incident procedure from [`incident-runbooks`](./incident-runbooks.md).
+4. ** የድጋፍ ቻናሎችን ይገናኙ *** - በጥሪ ላይ ያለውን ግንኙነት ያጋሩ (ማትሪክስ/ስላክ)
+   እና የክስተቱ ሂደት ከ [`incident-runbooks`](./incident-runbooks.md)።
 
-5. **Telemetry + feedback** — Remind reviewers that anonymised analytics are
-  collected (see [`observability`](./observability.md)). Provide the feedback
-  form or issue template referenced in the invite and log the event with the
-  [`preview-feedback-log`](./preview-feedback-log) helper so the wave summary
-  stays current.
+5. **ቴሌሜትሪ + ግብረ መልስ** — ስም-አልባ ትንታኔዎች መሆናቸውን ገምጋሚዎችን አስታውስ
+  ተሰብስቧል ([`observability` ይመልከቱ](./observability.md)። አስተያየቱን ይስጡ
+  በግብዣው ውስጥ የተጠቀሰውን ቅጽ ወይም አብነት ያወጣል እና ክስተቱን በ
+  [`preview-feedback-log`](./preview-feedback-log) ረዳት ስለዚህ የሞገድ ማጠቃለያ
+  ወቅታዊ ሆኖ ይቆያል.
 
-## Reviewer checklist
+## የገምጋሚ ማረጋገጫ ዝርዝር
 
-Before accessing the preview, reviewers must complete the following:
+ቅድመ እይታውን ከመድረስዎ በፊት ገምጋሚዎች የሚከተሉትን ማጠናቀቅ አለባቸው፡
 
-1. Verify the downloaded artefacts (`preview_verify.sh`).
-2. Launch the portal via `npm run serve` (or `serve:verified`) to ensure the
-   checksum guard is active.
-3. Read the security and observability notes linked above.
-4. Test the OAuth/Try it console using device-code login (if applicable) and
-   avoid reusing production tokens.
-5. File findings in the agreed tracker (issue, shared doc, or form) and tag
-   them with the preview release tag.
+1. የወረዱትን ቅርሶች (`preview_verify.sh`) ያረጋግጡ።
+2. ፖርታሉን በI18NI0000041X (ወይም `serve:verified`) በኩል ያስጀምሩት
+   የቼክሱም ጠባቂ ንቁ ነው።
+3. ከላይ የተገናኙትን የደህንነት እና ታዛቢነት ማስታወሻዎችን ያንብቡ።
+4. OAuth/የመሳሪያ ኮድ መግቢያን በመጠቀም (የሚመለከተው ከሆነ) ኮንሶሉን ይሞክሩት።
+   የምርት ምልክቶችን እንደገና ከመጠቀም ይቆጠቡ.
+5. ግኝቶችን በተስማማው መከታተያ (ጉዳይ፣ የተጋራ ሰነድ ወይም ቅጽ) ያስገቡ እና መለያ ያድርጉ
+   ከቅድመ እይታ ልቀት መለያ ጋር።
 
-## Maintainer responsibilities & offboarding
+## ተሳፋሪዎች እና ተሳፋሪዎችን ማስጠበቅ
 
-| Phase | Actions |
+| ደረጃ | ድርጊቶች |
 | --- | --- |
-| Kickoff | Confirm intake checklist is attached to the request, share artefacts + instructions, append an `invite-sent` entry via [`preview-feedback-log`](./preview-feedback-log), and schedule a midpoint sync if the review lasts longer than one week. |
-| Monitoring | Track preview telemetry (look for unusual Try it traffic, probe failures) and follow the incident runbook if anything suspicious occurs. Log `feedback-submitted`/`issue-opened` events as findings arrive so the wave metrics stay accurate. |
-| Offboarding | Revoke temporary GitHub or SoraFS access, record `access-revoked`, archive the request (include feedback summary + outstanding actions), and update the reviewer registry. Ask the reviewer to purge local builds and attach the digest generated from [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+| Kickoff | የመግቢያ ማረጋገጫ ዝርዝር ከጥያቄው ጋር መያያዙን ያረጋግጡ፣ ቅርሶችን + መመሪያዎችን ያካፍሉ፣ የ`invite-sent` ግቤት በ[`preview-feedback-log`](./preview-feedback-log) ያክሉ እና ግምገማው ከአንድ ሳምንት በላይ የሚቆይ ከሆነ የመሃል ነጥብ ማመሳሰልን ያስይዙ። |
+| ክትትል | የቅድመ እይታ ቴሌሜትሪ ይከታተሉ (ያልተለመደ ይሞክሩት ትራፊክ ይሞክሩ፣ አለመሳካቶችን ይፈትሹ) እና አጠራጣሪ ነገር ከተፈጠረ የክስተቱን Runbook ይከተሉ። ግኝቶች ሲደርሱ የ `feedback-submitted`/I18NI0000046X ክስተቶችን ይመዝገቡ ስለዚህ የሞገድ መለኪያዎች ትክክለኛ ሆነው ይቆያሉ። |
+| ከመሳፈር ውጪ | ጊዜያዊ የ GitHub ወይም SoraFS መዳረሻን ይሰርዙ፣ `access-revoked` ይቅረጹ፣ ጥያቄውን በማህደር ያስቀምጡ (የአስተያየት ማጠቃለያ + አስደናቂ ተግባራትን ያካትቱ) እና የገምጋሚውን መዝገብ ያዘምኑ። ገምጋሚው የሀገር ውስጥ ግንባታዎችን እንዲያጸዳ እና ከ[`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md) የተፈጠረውን መፍጨት እንዲያያይዝ ይጠይቁ። |
 
-Use the same process when rotating reviewers between waves. Keeping the
-paper trail in the repo (issue + templates) helps DOCS-SORA remain auditable and
-lets governance confirm that preview access followed the documented controls.
+ገምጋሚዎችን በማዕበል መካከል በሚዞሩበት ጊዜ ተመሳሳይ ሂደት ይጠቀሙ። በማስቀመጥ ላይ
+የወረቀት ዱካ በሪፖ (እትም + አብነቶች) DOCS-SORA ኦዲት ተደርጎ እንዲቆይ እና
+የአስተዳደር ቅድመ እይታ መዳረሻ በሰነድ የተቀመጡትን መቆጣጠሪያዎች የተከተለ መሆኑን ያረጋግጣል።
 
-## Invite templates & tracking
+## አብነቶችን ይጋብዙ እና መከታተል
 
-- Start every outreach with the
+- እያንዳንዱን ግንኙነት በ
   [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  file. It captures the minimum legal language, preview checksum instructions,
-  and the expectation that reviewers acknowledge the acceptable-use policy.
-- When editing the template, replace the placeholders for `<preview_tag>`,
-  `<request_ticket>`, and contact channels. Store a copy of the final message in
-  the intake ticket so reviewers, approvers, and auditors can reference the
-  exact wording that was sent.
-- After dispatching the invite, update the tracking spreadsheet or issue with
-  the `invite_sent_at` timestamp and expected end date so the
-  [preview invite flow](./preview-invite-flow.md) report can pick up the cohort
-  automatically.
+  ፋይል. አነስተኛውን የህግ ቋንቋ ይይዛል፣የቼክሰም መመሪያዎችን ቅድመ እይታ፣
+  እና ገምጋሚዎች ተቀባይነት ያለውን የአጠቃቀም ፖሊሲን እንደሚገነዘቡ ይጠበቃል።
+- አብነቱን በሚያርትዑበት ጊዜ ለ `<preview_tag>` ቦታ ያዥዎችን ይተኩ ፣
+  `<request_ticket>`, እና የእውቂያ ጣቢያዎች. የመጨረሻውን መልእክት ቅጂ አስቀምጥ
+  ገምጋሚዎች፣ አጽዳቂዎች እና ኦዲተሮች የመግቢያ ትኬቱን ማጣቀስ ይችላሉ።
+  የተላከው ትክክለኛ ቃል.
+- ግብዣውን ከላኩ በኋላ የመከታተያ የተመን ሉህ ያዘምኑ ወይም ችግሩን ያቅርቡ
+  የ `invite_sent_at` የጊዜ ማህተም እና የሚጠበቀው የመጨረሻ ቀን ስለዚህ የ
+  [የግብዣ ፍሰትን ቅድመ እይታ](./preview-invite-flow.md) ሪፖርት ቡድኑን መውሰድ ይችላል
+  በራስ-ሰር.

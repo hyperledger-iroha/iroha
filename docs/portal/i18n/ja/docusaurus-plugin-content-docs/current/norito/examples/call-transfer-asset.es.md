@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/call-transfer-asset
-title: Invocar transferencia del host desde Kotodama
-description: Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+スラッグ: /norito/examples/call-transfer-asset
+タイトル: ホスト宛先の呼び出し側転送 Kotodama
+説明: Kotodama のエントリポイントに対するホスト `transfer_asset` のメタデータの検証の確認。
+ソース: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
+ホスト `transfer_asset` のメタデータの検証に関する Kotodama のエントリ ポイントの確認。
 
-## Recorrido del libro mayor
+## 市長のレコリード
 
-- Fondea la autoridad del contrato (por ejemplo `ih58...`) con el activo que transferirá y otórgale el rol `CanTransfer` o un permiso equivalente.
-- Llama al entrypoint `call_transfer_asset` para transferir 5 unidades desde la cuenta del contrato a `ih58...`, reflejando la forma en que la automatización on-chain puede envolver llamadas del host.
-- Verifica los balances mediante `FindAccountAssets` o `iroha_cli ledger assets list --account ih58...` e inspecciona los eventos para confirmar que la guardia de metadatos registró el contexto de la transferencia.
+- Fondea la autoridad del contrato (por ejemplo `ih58...`) con el activo que transferirá y otórgale el rol `CanTransfer` と同等の権限を与えられます。
+- ラマのエントリポイント `call_transfer_asset` は、`ih58...` とコントラクトの 5 つのユニットを転送し、オンチェーンのエンボルバー ラマダのホストを参照して自動化されます。
+- 中央値 `FindAccountAssets` または `iroha_cli ledger assets list --account ih58...` を検査し、メタデータ登録のメタデータを確認するための検査を行います。
 
-## Guías de SDK relacionadas
+## SDK 関係に関する情報
 
-- [Quickstart del SDK de Rust](/sdks/rust)
-- [Quickstart del SDK de Python](/sdks/python)
-- [Quickstart del SDK de JavaScript](/sdks/javascript)
+- [SDK および Rust のクイックスタート](/sdks/rust)
+- [Python の SDK クイックスタート](/sdks/python)
+- [JavaScript の SDK のクイックスタート](/sdks/javascript)
 
-[Descarga la fuente de Kotodama](/norito-snippets/call-transfer-asset.ko)
+[Kotodama](/norito-snippets/call-transfer-asset.ko) をダウンロードしてください
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

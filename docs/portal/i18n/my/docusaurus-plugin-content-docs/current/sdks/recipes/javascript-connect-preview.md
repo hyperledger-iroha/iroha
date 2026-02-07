@@ -7,24 +7,26 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript Connect preview recipe
 description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+'@site/src/components/SampleDownload' မှ SampleDownload ကို တင်သွင်းပါ။
 
-This recipe shows how to combine `bootstrapConnectPreviewSession` with the
-WebSocket dialer exposed by `ToriiClient.openConnectWebSocket()`. The script
-mirrors the Connect section of the JS SDK roadmap: it mints deterministic
-preview URIs, records queue depth telemetry, and opens the canonical
-`/v1/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
-same flow as browsers.
+ဤစာရွက်တွင် `bootstrapConnectPreviewSession` ကို မည်သို့ပေါင်းစပ်ရမည်ကို ပြသထားသည်။
+`ToriiClient.openConnectWebSocket()` ဖြင့် ဖော်ထုတ်ထားသော WebSocket dialer ဇာတ်ညွှန်း
+JS SDK လမ်းပြမြေပုံ၏ ချိတ်ဆက်မှုအပိုင်းကို ထင်ဟပ်စေသည်- ၎င်းသည် အဆုံးအဖြတ်ပိုင်းကို ဦးစားပေးသည်။
+URI များကို အစမ်းကြည့်ရှုခြင်း၊ တန်းစီနေသော အတိမ်အနက် တယ်လီမီတာကို မှတ်တမ်းတင်ပြီး canonical ကိုဖွင့်ပါ။
+`/v1/connect/ws` အဆုံးမှတ်သည် `ws` ပက်ကေ့ဂျ်ကို အသုံးပြု၍ Node.js အက်ပ်များကို လေ့ကျင့်ခန်းလုပ်နိုင်သည်။
+ဘရောက်ဆာများနှင့် တူညီသော စီးဆင်းမှု။
 
-<SampleDownload
+<နမူနာဒေါင်းလုဒ်လုပ်ပါ။
   href="/sdk-recipes/javascript/connect-preview.mjs"
-  filename="connect-preview.mjs"
-  description="Download the runnable script referenced in this recipe."
+  ဖိုင်အမည် = "connect-preview.mjs"
+  description="ဤစာရွက်တွင် ကိုးကားထားသော runnable script ကို ဒေါင်းလုဒ်လုပ်ပါ။"
 />
 
-## Prerequisites
+## လိုအပ်ချက်များ
 
 ```bash
 npm install @iroha/iroha-js ws
@@ -37,10 +39,10 @@ export IROHA_TORII_API_TOKEN="sandbox-token"
 export CONNECT_REGISTRATION_NODE="https://torii.backup.example"
 ```
 
-Set `CONNECT_ROLE` to `app` when you need to dial the application side of the
-handshake. The default role is `wallet`.
+သင်သည် အပလီကေးရှင်းဘက်မှ ခေါ်ဆိုရန် လိုအပ်သောအခါ `CONNECT_ROLE` ကို `app` သို့ သတ်မှတ်ပါ။
+လက်ဆွဲနှုတ်ဆက်သည်။ မူရင်းအခန်းကဏ္ဍမှာ `wallet` ဖြစ်သည်။
 
-## Example script
+## ဥပမာ ဇာတ်ညွှန်း
 
 ```ts title="connect-preview.mjs"
 #!/usr/bin/env node
@@ -135,21 +137,21 @@ main().catch((error) => {
 });
 ```
 
-## Run & monitor
+## ပြေးပြီး စောင့်ကြည့်ပါ။
 
-- Execute the script with `node --env-file=.env connect-preview.mjs` (or export
-  the variables manually). The script logs the preview wallet URI, deeplink, and
-  queue depth before opening the WebSocket.
-- Feed telemetry dashboards by scraping the queue metrics the script prints for
-  overflow/expiry cases (`connect.queue_depth`, `connect.queue_overflow_total`,
-  `connect.queue_expired_total`). The `ConnectQueueError` helpers emit the
-  roadmap taxonomy (`queueOverflow`, `timeout`) so OTEL exporters can stay
-  consistent with Android/Swift clients.
-- Swap the role to `app` to inspect the application leg of the handshake. The
-  dialer automatically chooses the correct token (`token_app` vs. `token_wallet`)
-  and upgrades `http→ws`/`https→wss` so both roles share the same snippet.
+- ဇာတ်ညွှန်းကို `node --env-file=.env connect-preview.mjs` ဖြင့် လုပ်ဆောင်ပါ (သို့မဟုတ် ထုတ်ယူပါ။
+  variable များကို manually)။ ဇာတ်ညွှန်းသည် အကြိုကြည့်ရှုသည့် ပိုက်ဆံအိတ် URI၊ deeplink နှင့် မှတ်တမ်းများကို မှတ်သားထားသည်။
+  WebSocket ကိုမဖွင့်မီ တန်းစီခြင်းအတိမ်အနက်။
+- script prints များအတွက် တန်းစီမက်ထရစ်များကို ခြစ်ထုတ်ခြင်းဖြင့် telemetry dashboards များကို feed လုပ်ပါ။
+  ပြည့်လျှံ/သက်တမ်းလွန်ကိစ္စများ (`connect.queue_depth`၊ `connect.queue_overflow_total`၊
+  `connect.queue_expired_total`)။ `ConnectQueueError` အကူအညီပေးသူများသည် ၎င်းကို ထုတ်လွှတ်သည်။
+  လမ်းပြမြေပုံအစီအစဥ် (`queueOverflow`၊ `timeout`) ထို့ကြောင့် OTEL တင်ပို့သူများသည် ဆက်လက်နေထိုင်နိုင်သည်
+  Android/Swift သုံးစွဲသူများနှင့် ကိုက်ညီသည်။
+- လက်ဆွဲခြင်း၏ အပလီကေးရှင်းခြေထောက်ကို စစ်ဆေးရန် အခန်းကဏ္ဍကို `app` သို့ ပြောင်းပါ။ ဟိ
+  dialer သည် မှန်ကန်သော တိုကင်ကို အလိုအလျောက် ရွေးချယ်သည် (`token_app` နှင့် `token_wallet`)
+  နှင့် `http→ws`/`https→wss` ကို အဆင့်မြှင့်ခြင်းဖြင့် ကဏ္ဍနှစ်ခုလုံးသည် တူညီသော အတိုအထွာကို မျှဝေပါသည်။
 
-This recipe closes the remaining JS5 documentation gap for the Connect preview
-story called out in `roadmap.md`: the portal now ships a turnkey sample plus
-queue telemetry guidance, matching the roadmap requirement to document the
-WebSocket walkthrough alongside the Connect session helpers.
+ဤစာရွက်သည် Connect အစမ်းကြည့်ရှုမှုအတွက် ကျန်ရှိသော JS5 စာရွက်စာတမ်းကွာဟချက်ကို ပိတ်သည်။
+`roadmap.md` တွင် ခေါ်ဝေါ်သော ဇာတ်လမ်း- ပေါ်တယ်သည် ယခု turnkey နမူနာ အပေါင်းကို ပို့ပေးသည်
+စီတန်းတယ်လီမီတာလမ်းညွှန်ချက်၊ မှတ်တမ်းပြုစုရန် လမ်းပြမြေပုံလိုအပ်ချက်နှင့် ကိုက်ညီသည်။
+Connect session helpers နှင့်အတူ WebSocket လမ်းညွှန်ချက်။

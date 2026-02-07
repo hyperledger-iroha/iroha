@@ -7,50 +7,51 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9be80e0138e1e8aa453c703c53069837b24f29f6b463d14c846a01b015918f24
 source_last_modified: "2025-12-29T18:16:35.907815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Publishing Checklist
+# Баҫма тикшерелгән исемлек
 
-Use this checklist whenever you update the developer portal. It ensures that the
-CI build, GitHub Pages deployment, and manual smoke tests cover every section
-before a release or roadmap milestone lands.
+Был тикшерелгән исемлекте ҡулланыу, ҡасан һеҙ яңыртыу порталы эшләүсе. Ул тәьмин итә, тип
+CI төҙөү, GitHub биттәре таратыу, һәм ҡул төтөн һынауҙары һәр бүлек ҡаплай
+йәки юл картаһы һыҙаттары алдынан ерҙәр.
 
-## 1. Local validation
+## 1. Урындағы раҫлау
 
-- `npm run sync-openapi` (when Torii OpenAPI changes).
-- `npm run build` – confirm the `Build on Iroha with confidence` hero copy still
-  appears in `build/index.html`.
-- `cd build && sha256sum -c checksums.sha256` – verify the checksum manifest the
-  build generated.
-- Spot-check the markdown you touched via `npm run start` and the live reload
-  server.
+- `npm run sync-openapi` X (ҡасан Torii OpenAPI үҙгәрештәр).
+- `npm run build` – `Build on Iroha with confidence` герой күсермәһен раҫлау.
+  `build/index.html`-та күренә.
+- `cd build && sha256sum -c checksums.sha256` – тикшерелгән сумманы раҫлауҙы раҫлай
+  төҙөү генерацияланған.
+- Һеҙҙең `npm run start` аша ҡағылған маркдаунды тап-тикшерергә һәм тура эфирҙа перезагрузка
+  сервер.
 
-## 2. Pull request checks
+## 2. Азат запрос чектары
 
-- Verify the `docs-portal-build` job succeeded in `.github/workflows/check-docs.yml`.
-- Confirm `ci/check_docs_portal.sh` ran (CI logs show the hero smoke check).
-- Ensure the preview workflow uploaded a manifest (`build/checksums.sha256`) and
-  that `sha256sum -c` passed in CI.
-- Add the published preview URL from the GitHub Pages environment to the PR
-  description.
+- `docs-portal-build` эшен тикшерергә уңышлы `.github/workflows/check-docs.yml`.
+- `ci/check_docs_portal.sh` раҫланған (CI журналдар герой төтөн тикшерергә күрһәтә).
+- Алдан ҡарау эш ағымын тәьмин итеү манифест (`build/checksums.sha256`) һәм
+  тип `sha256sum -c` үткән CI.
+- баҫылған алдан ҡарау URL-адресын GitHub биттәренән PR-ға тиклем өҫтәгеҙ.
+  васиф.
 
-## 3. Section sign-off
+## 3. Бүлек ҡул ҡуйыу-офф
 
-| Section | Owner | Checklist |
-|---------|-------|-----------|
-| Homepage | DevRel | Hero copy renders, quickstart cards link to valid routes, CTA buttons resolve. |
-| Norito | Norito WG | Overview and getting-started guides reference the latest CLI flags and Norito schema docs. |
-| SoraFS | Storage Team | Quickstart runs to completion, manifest report fields documented, fetch simulation instructions verified. |
-| SDK guides | SDK leads | Rust/Python/JS guides compile the current examples and link to live repos. |
-| Reference | Docs/DevRel | Index lists the newest specs, Norito codec reference matches `norito.md`. |
-| Preview artifact | Docs/DevRel | `docs-portal-preview` artifact attached to the PR, smoke checks pass, link shared with reviewers. |
+| Бүлек | Хужа | Тикшереү исемлеге |
+|--------|--------|------------|
+| Төп бит | DevRel | Герой күсермәһе күрһәтә, тиҙ башлау карталары һылтанма дөрөҫ маршруттар, CTA төймәләре хәл итә. |
+| Norito | Norito WG | Обзор һәм алыу-башланған етәкселәр һылтанма һуңғы CLI флагтары һәм Norito схемаһы docs. |
+| SoraFS | Һаҡлау командаһы | Quickstart тамамлау өсөн йүгерә, асыҡ отчет ҡырҙары документлаштырылған, алынған моделләштереү күрһәтмәләре раҫланды. |
+| SDK етәкселәр | SDK лидерҙары | Rust/Python/JS етәкселек итә, ағымдағы миҫалдарҙы компиляциялау һәм һылтанма тере репо. |
+| Һылтанма | Док/ДевРел | Индекс иң яңы спецификациялар исемлеге, Norito кодек белешмә тап килә `norito.md`. |
+| Алдан ҡарау артефакт | Док/ДевРел | `docs-portal-preview` артефакт беркетелгән пиар, төтөн тикшерелгән үтә, һылтанма менән уртаҡлашҡан рецензенттар. |
 
-Mark each row as part of your PR review, or note any follow-up tasks so status
-tracking stays accurate.
+Һәр рәтте билдәләү өлөшө булараҡ, һеҙҙең PR тикшерергә, йәки ниндәй ҙә булһа эҙмә-эҙлекле бурыстарҙы билдәләп, шулай статус .
+күҙәтеү дөрөҫ ҡала.
 
-## 4. Release notes
+## 4. Яҙмаларҙы сығарыу
 
-- Include `https://docs.iroha.tech/` (or the environment URL
-  from the deployment job) in release notes and status updates.
-- Call out any new or changed sections explicitly so downstream teams know where
-  to re-run their own smoke tests.
+- `https://docs.iroha.tech/` (йәки тирә-яҡ мөхит URL
+  таратыу эшенән) ноталар һәм статус яңыртыуҙары.
+- Һеҙҙең теләһә ниндәй яңы йәки үҙгәртелгән бүлектәрҙе асыҡтан-асыҡ асыҡтан-асыҡ, шулай итеп, аҫҡы команда командаларын белергә, ҡайҙа белергә
+  үҙҙәренең төтөн анализдарын яңынан эшләтергә.

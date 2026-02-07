@@ -4,20 +4,22 @@ direction: rtl
 source: docs/portal/docs/sorafs/capacity-simulation.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: capacity-simulation
+id: סימולציית קיבולת
 title: دليل تشغيل محاكاة سعة SoraFS
 sidebar_label: دليل محاكاة السعة
-description: تشغيل مجموعة أدوات محاكاة سوق السعة SF-2c باستخدام fixtures قابلة لإعادة الإنتاج وصادرات Prometheus ولوحات Grafana.
+description: تشغيل مجموعة أدوات محاكاة سوق السعة SF-2c باستخدام fixtures قابلة لإعادة الإنتاج وصادرات Prometheus ולוחות Grafana.
 ---
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. حافظ على تزامن النسختين إلى أن تُنقَل مجموعة توثيق Sphinx القديمة بالكامل.
 :::
 
-يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. يتحقق من تفاوض الحصص، ومعالجة failover، ومعالجة slashing من الطرف إلى الطرف باستخدام fixtures الحتمية في `docs/examples/sorafs_capacity_simulation/`. لا تزال payloads السعة تستخدم `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
+يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. התקנות תקלות, ותקשורת תקלות, וחיתוך תקלות. `docs/examples/sorafs_capacity_simulation/`. لا تزال payloads السعة تستخدم `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
 
 ## 1. إنشاء Artifacts خاصة بالـ CLI
 
@@ -26,11 +28,11 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-تقوم `run_cli.sh` بلف `sorafs_manifest_stub capacity` لإخراج Norito payloads وblobs من base64 وأجسام طلبات Torii وملخصات JSON لـ:
+تقوم `run_cli.sh` بلف `sorafs_manifest_stub capacity` لإخراج Norito payloads وblobs من base64 وأجسام طلبات Torii פורום JSON ל:
 
 - ثلاث تصريحات لمزوّدين مشاركين في سيناريو تفاوض الحصص.
 - أمر نسخ يوزّع المانيفست المجهز عبر أولئك المزوّدين.
-- لقطات تليمترية لخط الأساس قبل الانقطاع، وفترة الانقطاع، وتعافي failover.
+- תקשורת תקינה ותקשורת תקינה.
 - payload نزاع يطلب slashing بعد الانقطاع المُحاكَى.
 
 تُكتب كل الآرتيفاكت تحت `./artifacts` (يمكن الاستبدال بتمرير دليل مختلف كأول وسيط). راجع ملفات `_summary.json` للحصول على سياق مقروء.
@@ -43,7 +45,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 
 يقوم المحلل بإنتاج:
 
-- `capacity_simulation_report.json` - تخصيصات مجمعة، فروق failover، وبيانات نزاع وصفية.
+- `capacity_simulation_report.json` - תקלות תקלות, תקלות תקלות, ותקשורת.
 - `capacity_simulation.prom` - مقاييس textfile لـ Prometheus (`sorafs_simulation_*`) مناسبة لـ textfile collector الخاص بـ node-exporter أو scrape job مستقل.
 
 مثال إعداد scrape في Prometheus:
@@ -73,7 +75,7 @@ scrape_configs:
    - **Uptime Drop During Outage** يرسم نسبة الفقدان للمزوّد `alpha`.
    - **Requested Slash Percentage** يعرض نسبة المعالجة المستخرجة من fixture النزاع.
 
-## 4. الفحوصات المتوقعة
+## 4. מידע נוסף
 
 - `sorafs_simulation_quota_total_gib{scope="assigned"}` يساوي `600` طالما بقي الإجمالي الملتزم >=600.
 - `sorafs_simulation_failover_triggered` يعرض `1` ويبرز مقياس المزوّد البديل `beta`.

@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0397eec8373494a74060a7244a7f923714723e5feacc4a54374ee4461f0ddde1
 source_last_modified: "2025-12-29T18:16:35.078130+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Evaluation Template
+# የኤስኤንኤስ የስልጠና ግምገማ አብነት
 
-Please distribute this survey immediately after each session. Responses can be
-captured via form tool or Markdown and archived under
+እባክዎ ከእያንዳንዱ ክፍለ ጊዜ በኋላ ይህን ዳሰሳ ወዲያውኑ ያሰራጩ። ምላሾች ሊሆኑ ይችላሉ
+በቅጽ መሳሪያ ወይም በማርክ ታች ተይዞ በማህደር ስር ተቀምጧል
 `artifacts/sns/training/<suffix>/<cycle>/feedback/`.
 
-## Session metadata
-- Suffix:
-- Cycle:
-- Language:
-- Date:
-- Facilitator(s):
+## የክፍለ ጊዜ ዲበ ውሂብ
+- ቅጥያ፡-
+- ዑደት:
+ቋንቋ፡-
+- ቀን፡-
+- አስተባባሪ(ዎች)፡-
 
-## Rating scale
-1 — Poor · 2 — Fair · 3 — Good · 4 — Very good · 5 — Excellent
+## የደረጃ አሰጣጥ ልኬት
+1 - ድሆች · 2 - ፍትሃዊ · 3 - ጥሩ · 4 - በጣም ጥሩ · 5 - በጣም ጥሩ
 
-| Question | 1 | 2 | 3 | 4 | 5 |
-|----------|---|---|---|---|---|
-| Clarity of KPI walkthrough | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Usefulness of labs | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Pace + time allocation | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Localization quality (slides + facilitation) | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Overall confidence entering suffix launch | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ጥያቄ | 1 | 2 | 3 | 4 | 5 |
+|-------|---|---|---|---|---|
+| የ KPI የእግር ጉዞ ግልፅነት | ☐ | ☐ | ☐ | ☐ | ☐ |
+| የላብራቶሪዎች ጥቅም | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ፍጥነት + የጊዜ ምደባ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| የአካባቢ ጥራት (ስላይድ + ማመቻቸት) | ☐ | ☐ | ☐ | ☐ | ☐ |
+| አጠቃላይ በራስ መተማመን ወደ ቅጥያ ማስጀመሪያ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-## Open questions
-1. Which topic needs more depth?
-2. Were any tools/docs missing from the workbook?
-3. Did the localization meet your expectations? If not, why?
-4. Additional comments / blockers the program should track.
+#ጥያቄዎችን ይክፈቱ
+1. የትኛው ርዕስ የበለጠ ጥልቀት ያስፈልገዋል?
+2. ከስራ ደብተር ውስጥ የጠፉ መሳሪያዎች/ሰነዶች ነበሩ?
+3. የትርጉም ሥራው እርስዎ የሚጠብቁትን አሟልቷል? ካልሆነ ለምን?
+4. ተጨማሪ አስተያየቶች / አጋጆች ፕሮግራሙ መከታተል አለበት.
 
-## Follow-up
-- `[]` Feedback logged in governance tracker (ticket: __________)
-- `[]` Annex export captured (path: ____________________)
-- `[]` Action items assigned (owner + due date)
+#ክትትል
+- `[]` ግብረመልስ በአስተዳደር መከታተያ ውስጥ ገብቷል (ትኬት: __________)
+- `[]` አባሪ ወደ ውጭ መላክ ተቀርጿል (መንገድ፡ ____________________)
+- `[]` የተግባር እቃዎች ተመድበዋል (ባለቤት + የማለቂያ ቀን)

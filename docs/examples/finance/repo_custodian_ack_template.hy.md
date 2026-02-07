@@ -7,70 +7,71 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c52d7f2c5ec9dc4cda81895561bc1261659935c94bf3f7febb0867f4981fe616
 source_last_modified: "2026-01-22T16:26:46.472177+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Repo Custodian Acknowledgement Template
+# Repo պահառուի ճանաչման ձևանմուշ
 
-Use this template when a repo (bilateral or tri-party) references a custodian
-via `RepoAgreement::custodian`. The goal is to record the custody SLA, routing
-accounts, and drill contacts before assets move. Copy the template into your
-evidence directory (for example
-`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), fill the
-placeholders, and hash the file as part of the governance packet described in
+Օգտագործեք այս ձևանմուշը, երբ ռեպո (երկկողմանի կամ եռակողմ) հղում է կատարում պահառուի
+`RepoAgreement::custodian`-ի միջոցով: Նպատակն է արձանագրել խնամակալության SLA, երթուղի
+հաշիվները, և կոնտակտները նախքան ակտիվները տեղափոխելը: Պատճենեք ձևանմուշը ձեր մեջ
+ապացույցների գրացուցակ (օրինակ
+`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), լրացրեք
+տեղապահներ և հաշշիր ֆայլը որպես կառավարման փաթեթի մաս, որը նկարագրված է
 `docs/source/finance/repo_ops.md` §2.8.
 
-## 1. Metadata
+## 1. Մետատվյալներ
 
-| Field | Value |
+| Դաշտային | Արժեք |
 |-------|-------|
-| Agreement identifier | `<repo-yyMMdd-XX>` |
-| Custodian account id | `<ih58...>` |
-| Prepared by / date | `<custodian ops lead>` |
-| Desk contacts acknowledged | `<desk lead + counterparty>` |
-| Evidence directory | ``artifacts/finance/repo/<slug>/`` |
+| Պայմանագրի նույնացուցիչ | `<repo-yyMMdd-XX>` |
+| Պահառուի հաշվի id | `<ih58...>` |
+| Պատրաստված է / ամսաթիվը | `<custodian ops lead>` |
+| Գրասեղանի կոնտակտները հաստատված են | `<desk lead + counterparty>` |
+| Ապացույցների տեղեկատու | «`artifacts/finance/repo/<slug>/`» |
 
-## 2. Custody Scope
+## 2. Պահառության շրջանակը
 
-- **Collateral definitions received:** `<list of asset definition ids>`
-- **Cash leg currency / settlement rail:** `<xor#sora / other>`
-- **Custody window:** `<start/end timestamps or SLA summary>`
-- **Standing instructions:** `<hash + path to standing instruction document>`
-- **Automation prerequisites:** `<scripts, configs, or runbooks custodian will invoke>`
+- **Ստացված գրավի սահմանումներ.** `<list of asset definition ids>`
+- **Կանխիկ դրամական արժույթ / հաշվարկային երկաթուղի.** `<xor#sora / other>`
+- **Խնամակալության պատուհան՝** `<start/end timestamps or SLA summary>`
+- **Կանգնակի հրահանգներ.** `<hash + path to standing instruction document>`
+- **Ավտոմատացման նախադրյալներ.** `<scripts, configs, or runbooks custodian will invoke>`
 
-## 3. Routing & Monitoring
+## 3. Երթուղի և մոնիտորինգ
 
-| Item | Value |
+| Նյութ | Արժեք |
 |------|-------|
-| Custody wallet / ledger account | `<asset ids or ledger path>` |
-| Monitoring channel | `<Slack/phone/on-call rotation>` |
-| Drill contact | `<primary + backup>` |
-| Required alerts | `<PagerDuty service, Grafana board, etc.>` |
+| Պահառության դրամապանակ / հաշվապահական հաշիվ | `<asset ids or ledger path>` |
+| Մոնիտորինգի ալիք | `<Slack/phone/on-call rotation>` |
+| Հորատման կոնտակտ | `<primary + backup>` |
+| Պահանջվող ահազանգեր | `<PagerDuty service, Grafana board, etc.>` |
 
-## 4. Statements
+## 4. Հայտարարություններ
 
-1. *Custody readiness:* “We reviewed the staged `repo initiate` payload with the
-   identifiers above and are prepared to accept collateral under the SLA listed
-   in §2.”
-2. *Rollback commitment:* “We will execute the rollback playbook named above if
-   directed by the incident commander, and will provide CLI logs plus hashes in
-   `governance/drills/<timestamp>.log`.”
-3. *Evidence retention:* “We will keep the acknowledgement, standing
-   instructions, and CLI logs for at least `<duration>` and provide them to the
-   finance council upon request.”
+1. *Խնամակալության պատրաստակամություն.
+   վերը նշված նույնացուցիչները և պատրաստ են ընդունել գրավ՝ նշված SLA-ի ներքո
+   §2-ում»:
+2. *Վերադարձի պարտավորություն
+   ուղղորդվում է միջադեպի հրամանատարի կողմից և կտրամադրի CLI տեղեկամատյաններ, գումարած հեշեր
+   `governance/drills/<timestamp>.log`»:
+3. *Ապացույցների պահպանում
+   հրահանգներ և CLI գրանցամատյաններ առնվազն `<duration>`-ի համար և տրամադրեք դրանք
+   Ֆինանսական խորհուրդ ըստ պահանջի»:
 
-Sign below (electronic signatures acceptable when routed through the governance
-tracker).
+Ստորագրեք ստորև (էլեկտրոնային ստորագրություններն ընդունելի են, երբ փոխանցվում են կառավարման միջոցով
+հետագծող):
 
-| Name | Role | Signature / date |
+| Անունը | Դերը | Ստորագրություն / ամսաթիվ |
 |------|------|------------------|
-| `<custodian ops lead>` | Custodian operator | `<signature>` |
-| `<desk lead>` | Desk | `<signature>` |
-| `<counterparty>` | Counterparty | `<signature>` |
+| `<custodian ops lead>` | Պահառու օպերատոր | `<signature>` |
+| `<desk lead>` | Գրասեղան | `<signature>` |
+| `<counterparty>` | Կոնտրակուսակցական | `<signature>` |
 
-> Once signed, hash the file (example: `sha256sum custodian_ack_<cust>.md`) and
-> record the digest in the governance packet table so reviewers can verify the
-> acknowledgement bytes referenced during the vote.
+> Ստորագրվելուց հետո ֆայլը հեշացրեք (օրինակ՝ `sha256sum custodian_ack_<cust>.md`) և
+> գրանցեք ամփոփումը կառավարման փաթեթների աղյուսակում, որպեսզի վերանայողները կարողանան ստուգել այն
+> քվեարկության ժամանակ վկայակոչված ճանաչման բայթերը:

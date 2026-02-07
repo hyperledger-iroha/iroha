@@ -4,69 +4,67 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Relatorio de calibracao de moderacao de IA (2026-02)
-summary: Dataset de calibracao base, thresholds e scoreboard para o primeiro release de governanca MINFO-1.
+título: Relatorio de calibracao de moderacao de IA (2026-02)
+Resumen: Conjunto de datos de base de calibración, umbrales y marcador para la primera publicación de gobierno MINFO-1.
 ---
 
 # Relatorio de calibracao de moderacao de IA - Fevereiro 2026
 
-Este relatorio empacota os artefatos de calibracao iniciais para **MINFO-1**. O
-dataset, o manifest e o scoreboard foram produzidos em 2026-02-05, revisados pelo
-conselho do Ministerio em 2026-02-10 e ancorados no DAG de governanca na altura
+Este relatorio empacota os artefactos de calibracao iniciais para **MINFO-1**. oh
+conjunto de datos, manifiesto y marcador para foros producidos en 2026-02-05, revisados pelo
+Consejo del Ministerio en 2026-02-10 y ancorados no DAG de Gobernanza en Altura
 `912044`.
 
-## Manifest do dataset
+## Manifiesto del conjunto de datos
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **Referencia del conjunto de datos:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **Babosa:** `ai-moderation-calibration-202602`
+- **Entradas:** manifiesto 480, fragmento 12.800, metadatos 920, audio 160
+- **Mezcla de etiquetas:** seguro 68%, sospechoso 19%, escalado 13%
+- **Resumen de artefactos:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- **Distribución:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-O manifest completo fica em `docs/examples/ai_moderation_calibration_manifest_202602.json`
-e contem a assinatura de governanca e o hash do runner capturado no momento do
-release.
+El manifiesto completo fica en `docs/examples/ai_moderation_calibration_manifest_202602.json`
+e contem a assinatura degobernanza e o hash do runner capturado no momento do
+liberación.
 
-## Resumo do scoreboard
+## Resumen del marcador
 
-As calibracoes rodaram com opset 17 e o pipeline de seed deterministica. O
-JSON completo do scoreboard (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
-registra os hashes e digests de telemetry; a tabela abaixo destaca as metricas mais
-importantes.
-
-| Modelo (familia) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
+As calibracoes rodaram com opset 17 e o pipeline de seed deterministica. oh
+JSON completo del marcador (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
+registro de hashes y resúmenes de telemetría; a tabela abaixo destaca as metrics mais
+importantes.| Modelo (familia) | Zarzo | CEPE | AURÓC | Precisión@Cuarentena | Recordar@Escalar |
 | --------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ViT-H/14 Seguridad (visión) | 0,141 | 0,031 | 0,987 | 0,964 | 0,912 |
+| LLaVA-1.6 34B Seguridad (multimodal) | 0,118 | 0,028 | 0,978 | 0,942 | 0,904 |
+| Conjunto perceptual (perceptual) | 0,162 | 0,047 | 0,953 | 0,883 | 0,861 |
 
-Metricas combinadas: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. A distribuicao de
-vereditos na janela de calibracao foi pass 91.2%, quarantine 6.8%,
-escalate 2.0%, alinhada com as expectativas de politica registradas no resumo do
-manifest. O backlog de falsos positivos permaneceu em zero, e o drift score (7.1%)
+Métricas combinadas: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. A distribuicao de
+vereditos na janela de calibracao foi pasa 91,2%, cuarentena 6,8%,
+escalar 2.0%, alinhada com as expectativas de politica registradas no resumo do
+manifiesto. La acumulación de falsos positivos permanece en cero, y la puntuación de deriva (7,1%)
 ficou bem abaixo do limiar de alerta de 20%.
 
-## Thresholds e sign-off
+## Umbrales y aprobación
 
 - `thresholds.quarantine = 0.42`
 - `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+- Moción de gobernanza: `MINFO-2026-02-07`
+- Firmado por `ministry-council-seat-03` en `2026-02-10T11:33:12Z`
 
-CI armazenou o bundle assinado em `artifacts/ministry/ai_moderation/2026-02/`
-junto com os binarios do moderation runner. O digest do manifest e os hashes do
-scoreboard acima devem ser referenciados durante auditorias e apelacoes.
+CI armazenou o paquete asesinado en `artifacts/ministry/ai_moderation/2026-02/`
+junto con los binarios del corredor de moderación. O digest se manifiesta y os hashes se manifiestan
+marcador acima devem ser referenciados durante auditorias e apelacoes.
 
-## Dashboards e alertas
-
-SREs de moderacao devem importar o dashboard Grafana em
-`dashboards/grafana/ministry_moderation_overview.json` e as regras de alerta do
-Prometheus em `dashboards/alerts/ministry_moderation_rules.yml` (a cobertura de
-tests fica em `dashboards/alerts/tests/ministry_moderation_rules.test.yml`). Esses
-artefatos emitem alertas para ingest stalls, drift spikes e crescimento da fila de
-quarantine, atendendo aos requisitos de monitoramento indicados na
-[AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+## Paneles y alertasLos SRE de moderación deben importar el tablero Grafana en
+`dashboards/grafana/ministry_moderation_overview.json` y como regras de alerta do
+Prometheus en `dashboards/alerts/ministry_moderation_rules.yml` (una cobertura de
+pruebas fica en `dashboards/alerts/tests/ministry_moderation_rules.test.yml`). eses
+artefatos emite alertas para ingestión de puestos, picos de deriva e crecimiento de fila de
+cuarentena, atendiendo aos requisitos de monitoramento indicados na
+[Especificación del corredor de moderación de IA](../../ministry/ai-moderation-runner.md).

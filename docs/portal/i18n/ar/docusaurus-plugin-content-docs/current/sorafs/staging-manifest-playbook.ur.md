@@ -4,25 +4,27 @@ direction: rtl
 source: docs/portal/docs/sorafs/staging-manifest-playbook.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: SoraFS staging manifest playbook
-sidebar_label: SoraFS staging manifest playbook
-description: Torii کی staging deployments پر Parliament-ratified chunker profile فعال کرنے کے لیے checklist۔
+المعرف: دليل التدريج
+العنوان: SoraFS دليل التشغيل للبيان المرحلي
+Sidebar_label: SoraFS دليل التشغيل لبيان التدريج
+الوصف: Torii عمليات النشر المرحلية وفقًا لملف تعريف القطع المعتمد من البرلمان، قائمة التحقق الفعالة.
 ---
 
-:::note مستند ماخذ
+:::ملاحظة مستند ماخذ
 :::
 
-## Overview
+## نظرة عامة
 
-یہ playbook staging Torii deployment پر Parliament-ratified chunker profile فعال کرنے کے مراحل بیان کرتا ہے تاکہ تبدیلی کو production میں promote کرنے سے پہلے تصدیق ہو سکے۔ یہ فرض کرتا ہے کہ SoraFS governance charter ratify ہو چکا ہے اور canonical fixtures repository میں موجود ہیں۔
+نشر دليل التشغيل المرحلي Torii في الملف التعريفي للمقطع المعتمد من البرلمان، وهو عبارة عن مراحل فعالة من الإنشاءات وبدء الإنتاج مما يؤدي إلى تعزيز عملية الإنتاج. يفترض أن ميثاق الحوكمة SoraFS يصادق على ما هو موجود ومستودع التركيبات الأساسي موجود.
 
-## 1. Prerequisites
+## 1. المتطلبات الأساسية
 
-1. Canonical fixtures اور signatures sync کریں:
+1. مزامنة التركيبات والتوقيعات الأساسية:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -31,8 +33,8 @@ description: Torii کی staging deployments پر Parliament-ratified chunker pro
    ci/check_sorafs_fixtures.sh
    ```
 
-2. admission envelopes کی وہ directory تیار کریں جسے Torii startup پر پڑھے گا (example path): `/var/lib/iroha/admission/sorafs`.
-3. یقینی بنائیں کہ Torii config discovery cache اور admission enforcement کو enable کرتی ہے:
+2. قم ببدء تشغيل مظاريف القبول في دليل بدء التشغيل Torii (مثال للمسار): `/var/lib/iroha/admission/sorafs`.
+3. أداة Torii لذاكرة التخزين المؤقت لاكتشاف التكوين وإنفاذ القبول لتمكين البطاقة:
 
    ```toml
    [torii.sorafs.discovery]
@@ -50,42 +52,40 @@ description: Torii کی staging deployments پر Parliament-ratified chunker pro
    enforce_capabilities = true
    ```
 
-## 2. Admission envelopes publish کریں
+## 2. نشر مظاريف القبول کریں
 
-1. approved provider admission envelopes کو `torii.sorafs.discovery.admission.envelopes_dir` کے directory میں copy کریں:
+1. نسخة من مظاريف قبول مقدم الخدمة المعتمد `torii.sorafs.discovery.admission.envelopes_dir`:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Torii restart کریں (یا اگر loader hot reload کے ساتھ wrap ہے تو SIGHUP بھیجیں).
-3. admission messages کے لیے logs tail کریں:
+2. قم بإعادة تشغيل Torii (أو إذا تم إعادة التحميل السريع للمحمل ثم قم بالتسجيل).
+3. رسائل القبول الخاصة بسجلات الدخول:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Discovery propagation validate کریں
+## 3. التحقق من صحة انتشار الاكتشاف
 
-1. provider pipeline سے بنے ہوئے signed provider advert payload (Norito bytes) کو post کریں:
+1. خط أنابيب الموفر سے بنے ہوئے حمولة إعلان الموفر الموقعة (Norito بايت) کو نشر کریں:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
-   ```
-
-2. discovery endpoint query کریں اور confirm کریں کہ advert canonical aliases کے ساتھ نظر آتا ہے:
+   ```2. اكتشف استعلام نقطة النهاية وتأكد من كتابة الأسماء المستعارة الأساسية التي ينظر إليها على النحو التالي:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   یقینی بنائیں کہ `profile_aliases` میں `"sorafs.sf1@1.0.0"` پہلی entry کے طور پر شامل ہو۔
+   هذا هو الإدخال الأول الذي يشمل `profile_aliases` `"sorafs.sf1@1.0.0"` وهو شامل تمامًا.
 
-## 4. Manifest اور plan endpoints exercise کریں
+## 4. تمرين نقاط النهاية للبيان والتخطيط
 
-1. manifest metadata fetch کریں (اگر admission enforce ہے تو stream token درکار ہوگا):
+1. جلب بيانات التعريف الواضحة (إذا تم فرض القبول، قم بدفق الرمز المميز مرة أخرى):
 
    ```bash
    sorafs-fetch \
@@ -96,25 +96,25 @@ description: Torii کی staging deployments پر Parliament-ratified chunker pro
      --json-out=reports/staging_manifest.json
    ```
 
-2. JSON output inspect کریں اور verify کریں:
+2. فحص مخرجات JSON والتحقق من الكتابة:
    - `chunk_profile_handle`، `sorafs.sf1@1.0.0` ہو۔
-   - `manifest_digest_hex` determinism report سے match کرے۔
-   - `chunk_digests_blake3` regenerated fixtures سے align ہوں۔
+   - تقرير الحتمية `manifest_digest_hex` سے تطابق کرے۔
+   - `chunk_digests_blake3` التركيبات المجددة سے محاذاة ہوں۔
 
-## 5. Telemetry checks
+## 5. فحوصات القياس عن بعد
 
-- تصدیق کریں کہ Prometheus نئی profile metrics expose کر رہا ہے:
+- التحقق من Prometheus مقاييس الملف الشخصي الجديدة تكشف عن الهوية:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- dashboards کو staging provider expected alias کے تحت دکھانا چاہیے اور profile فعال ہونے پر brownout counters صفر رہنے چاہییں۔
+- لوحات المعلومات وموفر التدريج الاسم المستعار المتوقع کے تحت دکھانا چاہیے والملف الشخصي نشط ہونے پر عدادات انقطاع التيار صفر رہنے چاہییں.
 
-## 6. Rollout readiness
+## 6. الاستعداد للطرح
 
-1. URLs، manifest ID، اور telemetry snapshot کے ساتھ مختصر رپورٹ بنائیں۔
-2. رپورٹ کو Nexus rollout channel میں planned production activation window کے ساتھ شیئر کریں۔
-3. stakeholders کے sign off کے بعد production checklist پر جائیں (Section 4 in `chunker_registry_rollout_checklist.md`).
+1. عناوين URL ومعرف البيان ولقطة القياس عن بعد هي عبارة عن تقرير مختصر.
+2. يعرض التقرير Nexus قناة الطرح نافذة تنشيط الإنتاج المخطط لها والتي ستستمر في العمل.
+3. يقوم أصحاب المصلحة بالتوقيع بعد قائمة مراجعة الإنتاج (القسم 4 في `chunker_registry_rollout_checklist.md`).
 
-اس playbook کو اپ ڈیٹ رکھنا یقینی بناتا ہے کہ ہر chunker/admission rollout staging اور production میں ایک جیسے deterministic steps پر چلتا ہے۔
+يتضمن كتاب قواعد اللعبة هذا العديد من الخطوات التي تتضمن مراحل طرح القبول/التقطيع والإنتاج، وهي خطوة حتمية في كل شيء.

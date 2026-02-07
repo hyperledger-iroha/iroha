@@ -4,29 +4,31 @@ direction: ltr
 source: docs/portal/docs/soranet/pq-primitives.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-primitives
-title: Primitivos pos-quanticos do SoraNet
-sidebar_label: Primitivos PQ
-description: Visao geral do crate `soranet_pq` e de como o handshake do SoraNet consome helpers ML-KEM/ML-DSA.
+id: pq-プリミティブ
+タイトル: SoraNet の Primitivos pos-quanticos
+サイドバーラベル: プリミティブ PQ
+説明: Visao geral はクレート `soranet_pq` とハンドシェイクを行い、SoraNet コンソーム ヘルパー ML-KEM/ML-DSA を実行します。
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/soranet/pq_primitives.md`. Mantenha ambas as copias sincronizadas.
+:::note フォンテ カノニカ
+エスタ・ページナ・エスペルハ`docs/source/soranet/pq_primitives.md`。マンテンハ・アンバスはコピア・シンクロニザダスとして。
 :::
 
-O crate `soranet_pq` contem os blocos pos-quanticos nos quais todo relay, client e componente de tooling do SoraNet confia. Ele envolve as suites Kyber (ML-KEM) e Dilithium (ML-DSA) suportadas por PQClean e adiciona helpers de HKDF e RNG hedged amigaveis ao protocolo para que todas as superficies compartilhem implementacoes identicas.
+O crate `soranet_pq` は、ブロック、pos-quanticos、todo リレー、クライアントおよびコンポーネントのツールを管理し、SoraNet 構成を実行します。 Ele は、PQClean、HKDF の補助ヘルパー、および RNG ヘッジ アミガベーションのスイートとして Kyber (ML-KEM) と Dilithium (ML-DSA) をサポートし、同一性を実現するためのプロトコルとして機能します。
 
-## O que vem em `soranet_pq`
+## お願いします `soranet_pq`
 
-- **ML-KEM-512/768/1024:** geracao deterministica de chaves, helpers de encapsulation e decapsulation com propagacao de erros em tempo constante.
-- **ML-DSA-44/65/87:** assinatura/verificacao separadas para transcricoes com separacao de dominio.
-- **HKDF com rotulo:** `derive_labeled_hkdf` adiciona namespace a cada derivacao com o estagio do handshake (`DH/es`, `KEM/1`, ...) para que transcricoes hibridas fiquem sem colisao.
-- **Aleatoriedade hedged:** `hedged_chacha20_rng` mistura seeds deterministicas com entropia do SO e zera o estado intermediario ao descartar.
+- **ML-KEM-512/768/1024:** 不安定な決定性、カプセル化解除とカプセル化解除のヘルパーによるテンポ定数のエラーの伝達。
+- **ML-DSA-44/65/87:** assinatura/verificacao separadas para transcricoes com separacao de dominio。
+- **HKDF com rotulo:** `derive_labeled_hkdf` adiciona namespace a cada derivacao com o estagio do handshake (`DH/es`, `KEM/1`, ...) パラメータ ヒブリダス フィケム セム コリソ。
+- **Aleatoriedade ヘッジ:** `hedged_chacha20_rng` ミスチュラの種子の決定性は、SO e zera o estado intermediario ao descartar を参照してください。
 
-Todos os segredos ficam dentro de contenedores `Zeroizing` e a CI exercita os bindings PQClean em todas as plataformas suportadas.
+`Zeroizing` は、プラットフォーム サポートとして PQClean のバインディングを実行する CI です。
 
 ```rust
 use soranet_pq::{
@@ -49,19 +51,19 @@ let okm = derive_labeled_hkdf(
 ).unwrap();
 ```
 
-## Como consumir
+## コモ消費者
 
-1. **Adicione a dependencia** a crates fora da raiz do workspace:
+1. **依存関係のある** ワークスペース用のクレート:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **Selecione a suite correta** nos pontos de chamada. Para o trabalho inicial do handshake hibrido, use `MlKemSuite::MlKem768` e `MlDsaSuite::MlDsa65`.
+2. **ポントス デ シャマダの**コレッタ スイートを選択**。トラバルホが最初にハンドシェイクを行う場合は、`MlKemSuite::MlKem768` または `MlDsaSuite::MlDsa65` を使用します。
 
-3. **Derive chaves com rotulos.** Use `HkdfDomain::soranet("KEM/1")` (e similares) para que o encadeamento de transcricoes fique deterministico entre nodes.
+3. **コンロチュロスを導出します。** `HkdfDomain::soranet("KEM/1")` (類似) を使用して、暗号化された決定的なエントリ ノードを暗号化します。
 
-4. **Use o RNG hedged** ao amostrar segredos de fallback:
+4. **RNG ヘッジを使用** フォールバックのセグレドス:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -69,11 +71,11 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-O handshake central do SoraNet e os helpers de blinding de CID (`iroha_crypto::soranet`) puxam essas utilidades diretamente, o que significa que crates downstream herdam as mesmas implementacoes sem linkar bindings PQClean por conta propria.
+SoraNet の OS ヘルパーと CID (`iroha_crypto::soranet`) のブラインディング ディレタメントを行うハンドシェイク セントラル。独自の管理者向けに SEM リンカー バインディングを実装するための重要な下流ヘルダム クレートを管理します。
 
-## Checklist de validacao
+## 検証チェックリスト
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`
-- Audite os exemplos de uso no README (`crates/soranet_pq/README.md`)
-- Atualize o documento de design do handshake do SoraNet quando os hybrids chegarem
+- 使用例の README を参照 (`crates/soranet_pq/README.md`)
+- ドキュメントのデザイン、ハンドシェイク、SoraNet Quando OS ハイブリッド チェガレムの実現

@@ -9,30 +9,31 @@ source_last_modified: "2025-12-29T18:16:35.980526+00:00"
 translation_last_reviewed: 2026-02-07
 title: Referendum Packet Workflow (MINFO-4)
 summary: Produce the complete referendum dossier (`ReferendumPacketV1`) combining the proposal, neutral summary, sortition artefacts, and impact report.
+translator: machine-google-reviewed
 ---
 
-# Referendum Packet Workflow (MINFO-4)
+# Референдум пакетінің жұмыс процесі (MINFO-4)
 
-Roadmap item **MINFO-4 — In Review panel & referendum synthesizer** is now
-fulfilled by the new `ReferendumPacketV1` Norito schema plus the CLI helpers
-described below. The workflow bundles every artefact required for policy-jury
-votes into a single JSON document so governance, auditors, and transparency
-portals can replay the evidence deterministically.
+Жол картасының тармағы **MINFO-4 — Шолу панелінде және референдум синтезаторында** қазір
+жаңа `ReferendumPacketV1` Norito схемасымен және CLI көмекшілерімен орындалды
+төменде сипатталған. Жұмыс процесі қазылар алқасына қажетті әрбір артефакттарды біріктіреді
+басқару, аудиторлар және ашықтық үшін бір JSON құжатында дауыс береді
+порталдар дәлелдемелерді анықтаушы түрде қайталай алады.
 
-## Inputs
+## Кіріс
 
-1. **Agenda proposal** — same JSON used for `cargo xtask ministry-agenda validate`.
-2. **Volunteer briefs** — the curated dataset produced after linting via
+1. **Күн тәртібі ұсынысы** — `cargo xtask ministry-agenda validate` үшін бірдей JSON пайдаланылады.
+2. **Еріктілер туралы қысқаша ақпарат** — линтингтен кейін дайындалған кураторлық деректер жинағы
    `cargo xtask ministry-transparency volunteer-validate`.
-3. **AI moderation manifest** — governance-signed `ModerationReproManifestV1`.
-4. **Sortition summary** — deterministic artefact emitted by
-   `cargo xtask ministry-agenda sortition`. The JSON follows
-   [`PolicyJurySortitionV1`](./policy_jury_ballots.md) so governance can
-   reproduce the POP snapshot digest and waitlist/failover wiring.
-5. **Impact report** — hash-family/report generated via
+3. **AI модерациясының манифесті** — басқару қол қойылған `ModerationReproManifestV1`.
+4. **Сұрыптау қорытындысы** — шығаратын детерминирленген артефакт
+   `cargo xtask ministry-agenda sortition`. JSON орындалады
+   [`PolicyJurySortitionV1`](./policy_jury_ballots.md) сондықтан басқару
+   POP снапшот дайджестін және күту тізімі/ауыспалы сымдарды қайта жасаңыз.
+5. **Әсер туралы есеп** — хэш-отбасы/есеп арқылы жасалған
    `cargo xtask ministry-agenda impact`.
 
-## CLI usage
+## CLI пайдалану
 
 ```bash
 cargo xtask ministry-panel packet \
@@ -46,30 +47,30 @@ cargo xtask ministry-panel packet \
   --output artifacts/ministry/referendum_packets/AC-2026-001.json
 ```
 
-The `packet` subcommand runs the neutral-summary synthesizer (MINFO-4a), reuses
-the existing volunteer fixtures, and enriches the output with:
+`packet` ішкі пәрмені бейтарап жиынтық синтезаторды (MINFO-4a) іске қосады, қайта пайдаланады
+Қолданыстағы волонтерлік қондырғылар және өнімді келесілермен байытады:
 
-- `ReferendumSortitionEvidence` — algorithm, seed, and roster digests from the
-  sortition artefact.
-- `ReferendumPanelist[]` — each selected council member plus the Merkle proof
-  needed to audit their draw.
-- `ReferendumImpactSummary` — per-hash-family totals and conflict listings from
-  the impact report.
+- `ReferendumSortitionEvidence` — алгоритм, тұқым және тізімдік дайджесттер
+  сұрыптау артефакті.
+- `ReferendumPanelist[]` — әрбір таңдалған кеңес мүшесі және Merkle дәлелі
+  олардың ұтысын тексеру қажет.
+- `ReferendumImpactSummary` — отбасылық хэштердің жиынтықтары және қайшылықтар тізімі
+  әсер ету туралы есеп.
 
-Use `--summary-out` when you still need the standalone `ReviewPanelSummaryV1`
-file; otherwise the packet embeds the summary under `review_summary`.
+Оқшауланған `ReviewPanelSummaryV1` қажет болғанда `--summary-out` пайдаланыңыз.
+файл; әйтпесе пакет қорытындыны `review_summary` астына енгізеді.
 
-## Output structure
+## Шығару құрылымы
 
-`ReferendumPacketV1` lives in
-`crates/iroha_data_model/src/ministry/mod.rs` and is available across SDKs.
-Key sections include:
+`ReferendumPacketV1` тұрады
+`crates/iroha_data_model/src/ministry/mod.rs` және SDK файлдарында қол жетімді.
+Негізгі бөлімдерге мыналар кіреді:
 
-- `proposal` — the original `AgendaProposalV1` object.
-- `review_summary` — the balanced summary emitted by MINFO-4a.
-- `sortition` / `panelists` — reproducible proofs for the seated council.
-- `impact_summary` — duplicate/policy conflict evidence per hash family.
+- `proposal` — бастапқы `AgendaProposalV1` нысаны.
+- `review_summary` — MINFO-4a шығаратын теңдестірілген қорытынды.
+- `sortition` / `panelists` — отырған кеңес үшін қайталанатын дәлелдер.
+- `impact_summary` — әр хэш жанұясына қайталанатын/саясат қайшылықтары дәлелі.
 
-See `docs/examples/ministry/referendum_packet_example.json` for a full sample.
-Attach the generated packet to every referendum dossier alongside the signed AI
-manifest and transparency artefacts referenced by the highlights section.
+Толық үлгіні `docs/examples/ministry/referendum_packet_example.json` қараңыз.
+Жасалған пакетті референдумның әрбір құжатына қол қойылған AI-мен бірге тіркеңіз
+манифест және мөлдірлік артефактілері маңызды сәттер бөліміне сілтеме жасайды.

@@ -11,34 +11,35 @@ id: preview-feedback-w2-summary
 title: W2 community feedback & status
 sidebar_label: W2 summary
 description: Live digest for the community preview wave (W2).
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| Element | Tafsilotlar |
 | --- | --- |
-| Wave | W2 — Community reviewers |
-| Invite window | 2025‑06‑15 → 2025‑06‑29 |
-| Artefact tag | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
-| Participants | comm-vol-01 … comm-vol-08 |
+| To'lqin | W2 — Hamjamiyat sharhlovchilari |
+| Taklif oynasi | 2025‑06‑15 → 2025‑06‑29 |
+| Artefakt tegi | `preview-2025-06-15` |
+| Kuzatuvchi muammosi | `DOCS-SORA-Preview-W2` |
+| Ishtirokchilar | comm-vol-01 … comm-vol-08 |
 
-## Highlights
+## E'tiborga molik
 
-1. **Governance & tooling** — Community intake policy unanimously approved on 2025‑05‑20; updated request template with motivation/timezone fields lives under `docs/examples/docs_preview_request_template.md`.
-2. **Preflight evidence** — Try it proxy change `OPS-TRYIT-188` ran 2025‑06‑09, Grafana dashboards captured, and `preview-2025-06-15` descriptor/checksum/probe outputs archived under `artifacts/docs_preview/W2/`.
-3. **Invite wave** — Eight community reviewers invited 2025‑06‑15, with acknowledgements logged in the tracker invite table; all completed checksum verification before browsing.
-4. **Feedback** — `docs-preview/w2 #1` (tooltip wording) and `#2` (localization sidebar order) were filed on 2025‑06‑18 and resolved by 2025‑06‑21 (Docs-core-04/05); no incidents occurred during the wave.
+1. **Boshqaruv va vositalar** — Hamjamiyat tomonidan qabul qilish siyosati 2025-05-20 da bir ovozdan tasdiqlangan; motivatsiya/vaqt mintaqasi maydonlari bilan yangilangan so'rov shablonlari `docs/examples/docs_preview_request_template.md` ostida ishlaydi.
+2. **Parvozdan oldingi dalillar** — Proksi-serverni oʻzgartirishni sinab koʻring `OPS-TRYIT-188` 2025‑06‑09 ishga tushirildi, Grafana asboblar paneli yozib olindi va `preview-2025-06-15` deskriptor/tekshirish summasi/zond chiqishlari arxivi arxivlandi.
+3. **Invite to'lqini** — 2025-06-15 da taklif qilingan sakkiz nafar hamjamiyat sharhlovchisi taklifnomalar jadvalida qayd etilgan; ko'rishdan oldin barcha tugallangan nazorat summasini tekshirish.
+4. **Fikr-mulohaza** — `docs-preview/w2 #1` (maslahat matni) va `#2` (mahalliylashtirish yon paneli tartibi) 2025-06-18 da topshirilgan va 2025-06-21 (Docs-504) tomonidan hal qilingan; to'lqin paytida hech qanday hodisalar sodir bo'lmadi.
 
-## Action items
+## Harakat elementlari
 
-| ID | Description | Owner | Status |
+| ID | Tavsif | Egasi | Holati |
 | --- | --- | --- | --- |
-| W2-A1 | Address `docs-preview/w2 #1` (tooltip wording). | Docs-core-04 | ✅ Completed 2025‑06‑21 |
-| W2-A2 | Address `docs-preview/w2 #2` (localization sidebar). | Docs-core-05 | ✅ Completed 2025‑06‑21 |
-| W2-A3 | Archive exit evidence + update roadmap/status. | Docs/DevRel lead | ✅ Completed 2025‑06‑29 |
+| W2-A1 | Manzil `docs-preview/w2 #1` (ko'rsatma matni). | Docs-core-04 | ✅ Tugallangan 2025‑06‑21 |
+| W2-A2 | Manzil `docs-preview/w2 #2` (mahalliylashtirish yon paneli). | Docs-core-05 | ✅ Tugallangan 2025‑06‑21 |
+| W2-A3 | Arxivdan chiqish dalillari + yoʻl xaritasi/holatini yangilash. | Docs/DevRel yetakchisi | ✅ Tugallangan 2025‑06‑29 |
 
-## Exit summary (2025-06-29)
+## Chiqish xulosasi (29-06-2025)
 
-- All eight community reviewers confirmed completion and had preview access revoked; acknowledgements recorded in the tracker invite log.
-- Final telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) remained green; logs plus Try it proxy transcripts attached to `DOCS-SORA-Preview-W2`.
-- Evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) archived under `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- Tracker W2 checkpoint log updated through exit, ensuring the roadmap keeps an auditable record before W3 planning begins.
+- Barcha sakkizta hamjamiyat ko'rib chiquvchilari yakunlanganligini tasdiqladilar va oldindan ko'rish huquqi bekor qilindi; kuzatuvchi takliflar jurnalida qayd etilgan tasdiqlar.
+- Yakuniy telemetriya suratlari (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) yashil rangda qoldi; logs plus `DOCS-SORA-Preview-W2` ga biriktirilgan proksi transkriptlarini sinab ko'ring.
+- `artifacts/docs_preview/W2/preview-2025-06-15/` ostida arxivlangan dalillar to'plami (deskriptor, nazorat summasi jurnali, tekshirish chiqishi, havola hisoboti, Grafana skrinshotlari, taklifni tasdiqlash).
+- Tracker W2 nazorat punkti jurnali chiqish orqali yangilanadi, bu W3 rejalashtirish boshlanishidan oldin yo'l xaritasi tekshiriladigan yozuvni saqlab turishini ta'minlaydi.

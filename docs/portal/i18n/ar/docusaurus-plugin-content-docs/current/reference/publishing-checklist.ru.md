@@ -4,58 +4,54 @@ direction: rtl
 source: docs/portal/docs/reference/publishing-checklist.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Чек‑лист публикации портала
-description: Шаги проверки перед обновлением портала документации Iroha.
+العنوان: بوابة منشورات قائمة الاختيار
+الوصف: إجراءات التحقق قبل تسليم بوابة المستندات Iroha.
 ---
 
-Используйте этот чек‑лист при каждом обновлении портала разработчика. Он гарантирует, что
-CI‑сборка, деплой GitHub Pages и ручные smoke‑тесты покрывают все разделы перед релизом
-или вехой roadmap’а.
+استخدم قائمة الاختيار هذه عند الاشتراك في بوابة الشركة. هذا ضمان
+CI‑sborka ونشر صفحات GitHub واختبارات الدخان الكبيرة تظهر كل النتائج قبل النجاح
+أو خريطة الطريق الأخيرة.
 
-## 1. Локальная проверка
+## 1. التحقق المحلي
 
-- `npm run sync-openapi -- --version=current --latest` (добавьте один или несколько
-  флагов `--mirror=<label>`, если Torii OpenAPI меняется для замороженного snapshot’а).
-- `npm run build` — убедитесь, что слоган “Build on Iroha with confidence” всё ещё
-  отображается в `build/index.html`.
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` — проверьте manifest
-  checksum’ов (добавьте `--descriptor`/`--archive` при тестировании скачанных CI‑артефактов).
-- `npm run serve` — запускает helper‑режим с проверкой checksum’ов, который валидирует
-  manifest перед вызовом `docusaurus serve`, чтобы ревьюеры никогда не смотрели на
-  неподписанный snapshot (alias `serve:verified` остаётся для явных вызовов).
-- Просмотрите изменённые markdown‑файлы через `npm run start` и dev‑сервер с live‑reload.
+- `npm run sync-openapi -- --version=current --latest` (أضف واحدة أو عدة مرات)
+  العلامة `--mirror=<label>`، إذا تم استخدام Torii OpenAPI لللقطة المرغوبة).
+- `npm run build` — تعرف على الشعار “ابني على Iroha بثقة” أيضًا
+  تم التبرع به في `build/index.html`.
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` — التحقق من البيان
+  المجموع الاختباري (أضف `--descriptor`/`--archive` عند اختبار CI-artefactov).
+- `npm run serve` — سجل المساعد باستخدام المجموع الاختباري الذي تم التحقق منه، والذي تم التحقق منه
+  البيان قبل إرسال `docusaurus serve`، لعدم استهداف المراجعين
+  لقطة غير مكتملة (الاسم المستعار `serve:verified` موجودة للإصدارات الأحدث).
+- عرض ملفات تخفيض السعر المميزة من خلال `npm run start` وخادم التطوير من خلال إعادة التحميل المباشر.
 
-## 2. Проверки pull‑request’а
-
-- Убедитесь, что job `docs-portal-build` прошёл успешно в
+## 2. التحقق من طلب السحب- يرجى ملاحظة أن الوظيفة `docs-portal-build` تمت بنجاح
   `.github/workflows/check-docs.yml`.
-- Проверьте, что был запущен `ci/check_docs_portal.sh` (в логах CI отображается hero‑проверка).
-- Убедитесь, что workflow preview загрузил manifest (`build/checksums.sha256`) и что
-  скрипт проверки preview выполнился успешно (логи CI содержат вывод
+- تحقق من أنه تم تثبيت `ci/check_docs_portal.sh` (في حالة CI يتم الاحتفاء بالبطل-التحقق).
+- يرجى ملاحظة أن معاينة سير العمل قد تم تأمينها للبيان (`build/checksums.sha256`) وما إلى ذلك
+  تم استخدام معاينة التحقق من البرنامج النصي بنجاح (سجل تسجيل الدخول CI
   `scripts/preview_verify.sh`).
-- Добавьте опубликованный preview‑URL из окружения GitHub Pages в описание PR.
+- قم بإضافة المعاينة العامة - عنوان URL الخاص بتصفح صفحات GitHub في وصف العلاقات العامة.
 
-## 3. Подписание по разделам
+## 3. النشر عن بعد| راسديل | فلاديليتس | قائمة الاختيار |
+|--------|---------|----------|
+| الصفحة الرئيسية | ديفريل | يتم التفاخر بنسخة البطل؛ تبدأ بطاقات التشغيل السريع بالخريطة الصالحة؛ يعمل زر CTA. |
+| Norito | Norito WG | ترجع النصائح والإرشادات في البداية إلى علامات CLI الفعلية ومخطط Norito. |
+| SoraFS | فريق التخزين | يتم استخدام Quickstart في النهاية، بعد أن يتم التحقق من البيانات الموثقة، وتعليمات محاكاة الجلب. |
+| SDK-الإرشادات | يقود SDK | تجمع Rust/Python/JS-gaides الافتراضات الأولية الحالية وتتصل بمستودعات الحياة. |
+| مرجع | مستندات/ديفريل | مؤشر الاتصال بالمواصفات التالية، Norito-برنامج ترميز الصوت `norito.md`. |
+| معاينة قطعة أثرية | مستندات/ديفريل | قطعة أثرية `docs-portal-preview` prikreplen к PR, smoke-proverki proidenы, сsылка пропликован для reвьеров. |
+| الأمان وجرب وضع الحماية | المستندات/DevRel · الأمان | تسجيل الدخول إلى رمز جهاز OAuth (`DOCS_OAUTH_*`)، تم التحقق من قائمة الاختيار `security-hardening.md`، تم التحقق من أنواع CSP/الأنواع الموثوقة من خلال `npm run build` أو `npm run probe:portal`. |
 
-| Раздел | Владелец | Чек‑лист |
-|--------|----------|----------|
-| Главная | DevRel | Hero‑копирайт отображается; карточки quickstart ведут на валидные маршруты; CTA‑кнопки работают. |
-| Norito | Norito WG | Обзор и гайды по началу работы ссылаются на актуальные CLI‑флаги и Norito‑schema‑доки. |
-| SoraFS | Storage Team | Quickstart выполняется до конца, поля отчёта по manifest’у задокументированы, инструкции по симуляции fetch’а проверены. |
-| SDK‑гайды | Лиды SDK | Rust/Python/JS‑гайды собирают актуальные примеры и ссылаются на живые репозитории. |
-| Reference | Docs/DevRel | Индекс содержит свежие спецификации, справочник Norito‑codec’а соответствует `norito.md`. |
-| Preview‑артефакт | Docs/DevRel | Артефакт `docs-portal-preview` прикреплён к PR, smoke‑проверки пройдены, ссылка опубликована для ревьюеров. |
-| Security & Try it sandbox | Docs/DevRel · Security | Настроен OAuth device-code login (`DOCS_OAUTH_*`), чек‑лист `security-hardening.md` выполнен, заголовки CSP/Trusted Types проверены через `npm run build` или `npm run probe:portal`. |
-
-Отметьте каждую строку в ходе review PR’а или зафиксируйте follow‑up‑задачи, чтобы статус
+قم بإنهاء كل فترة من الوقت أثناء مراجعة العلاقات العامة أو إقرارات المتابعة الخاصة بالحالة
 оставался точным.
 
-## 4. Release‑notes
-
-- Включайте `https://docs.iroha.tech/` (или URL окружения из job’а деплоя) в release‑notes
-  и статусные апдейты.
-- Явно перечисляйте новые или изменённые разделы, чтобы downstream‑команды понимали,
-  какие smoke‑тесты им требуется перезапустить.
+## 4. ملاحظات الإصدار- قم بإدراج `https://docs.iroha.tech/` (أو حماية URL من نشر الوظيفة) في ملاحظات الإصدار
+  والخيارات الحالة.
+- قم بإعادة التدوير بشكل جديد أو متجدد للأوامر المتلقين للمعلومات،
+  يجب إعادة اختبار اختبارات الدخان.

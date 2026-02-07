@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W2 community feedback & status
 sidebar_label: W2 summary
 description: Live digest for the community preview wave (W2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| ნივთი | დეტალები |
 | --- | --- |
-| Wave | W2 — Community reviewers |
-| Invite window | 2025‑06‑15 → 2025‑06‑29 |
-| Artefact tag | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
-| Participants | comm-vol-01 … comm-vol-08 |
+| ტალღა | W2 — საზოგადოების მიმომხილველები |
+| მოწვევის ფანჯარა | 2025‑06‑15 → 2025‑06‑29 |
+| არტეფაქტის ტეგი | `preview-2025-06-15` |
+| ტრეკერის საკითხი | `DOCS-SORA-Preview-W2` |
+| მონაწილეები | comm-vol-01 … comm-vol-08 |
 
-## Highlights
+## მაჩვენებლები
 
-1. **Governance & tooling** — Community intake policy unanimously approved on 2025‑05‑20; updated request template with motivation/timezone fields lives under `docs/examples/docs_preview_request_template.md`.
-2. **Preflight evidence** — Try it proxy change `OPS-TRYIT-188` ran 2025‑06‑09, Grafana dashboards captured, and `preview-2025-06-15` descriptor/checksum/probe outputs archived under `artifacts/docs_preview/W2/`.
-3. **Invite wave** — Eight community reviewers invited 2025‑06‑15, with acknowledgements logged in the tracker invite table; all completed checksum verification before browsing.
-4. **Feedback** — `docs-preview/w2 #1` (tooltip wording) and `#2` (localization sidebar order) were filed on 2025‑06‑18 and resolved by 2025‑06‑21 (Docs-core-04/05); no incidents occurred during the wave.
+1. **მმართველობა და ხელსაწყოები** — საზოგადოების მიღების პოლიტიკა ერთხმად დამტკიცდა 2025-05-20; განახლებული მოთხოვნის შაბლონი მოტივაციის/საათი სარტყლის ველებით მუშაობს `docs/examples/docs_preview_request_template.md`-ში.
+2. **წინასწარი გაფრენის მტკიცებულება** — სცადეთ პროქსის შეცვლა.
+3. **მოწვევის ტალღა** — საზოგადოების რვა მიმომხილველი მოწვეული იყო 2025-06-15 წლებში, მადლობის აღრიცხვით შესული ტრეკერის მოწვევის ცხრილში; ყველა დასრულებული საკონტროლო ჯამის გადამოწმება დათვალიერებამდე.
+4. **გამოხმაურება** — `docs-preview/w2 #1` (ინსტრუმენტების მინიშნების ფორმულირება) და `#2` (ლოკალიზაციის გვერდითი ზოლის შეკვეთა) შეტანილი იყო 2025-06-18 წლებში და გადაჭრილი იყო 2025-06-21-21-04/00-5; ტალღის დროს არანაირი ინციდენტი არ მომხდარა.
 
-## Action items
+## სამოქმედო ელემენტი
 
-| ID | Description | Owner | Status |
+| ID | აღწერა | მფლობელი | სტატუსი |
 | --- | --- | --- | --- |
-| W2-A1 | Address `docs-preview/w2 #1` (tooltip wording). | Docs-core-04 | ✅ Completed 2025‑06‑21 |
-| W2-A2 | Address `docs-preview/w2 #2` (localization sidebar). | Docs-core-05 | ✅ Completed 2025‑06‑21 |
-| W2-A3 | Archive exit evidence + update roadmap/status. | Docs/DevRel lead | ✅ Completed 2025‑06‑29 |
+| W2-A1 | მისამართი `docs-preview/w2 #1` (ინსტრუმენტების ფორმულირება). | Docs-core-04 | ✅ დასრულდა 2025-06-21 |
+| W2-A2 | მისამართი `docs-preview/w2 #2` (ლოკალიზაციის გვერდითი ზოლი). | Docs-core-05 | ✅ დასრულდა 2025-06-21 |
+| W2-A3 | არქივიდან გასვლის მტკიცებულება + განაახლეთ საგზაო რუკა/სტატუსები. | Docs/DevRel წამყვანი | ✅ დასრულდა 2025-06-29 |
 
-## Exit summary (2025-06-29)
+## გამოსვლის შეჯამება (2025-06-29)
 
-- All eight community reviewers confirmed completion and had preview access revoked; acknowledgements recorded in the tracker invite log.
-- Final telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) remained green; logs plus Try it proxy transcripts attached to `DOCS-SORA-Preview-W2`.
-- Evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) archived under `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- Tracker W2 checkpoint log updated through exit, ensuring the roadmap keeps an auditable record before W3 planning begins.
+- საზოგადოების რვავე მიმომხილველმა დაადასტურა დასრულება და გაუქმდა წინასწარი გადახედვის წვდომა; ტრეკერის მოწვევის ჟურნალში ჩაწერილი აღიარება.
+- საბოლოო ტელემეტრიული კადრები (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) დარჩა მწვანე; ჟურნალები პლუს სცადეთ `DOCS-SORA-Preview-W2`-ზე მიმაგრებული პროქსი-ტრანსკრიპტები.
+- მტკიცებულებების ნაკრები (აღმწერი, საკონტროლო ჯამის ჟურნალი, გამოძიების გამომავალი, ბმულის ანგარიში, Grafana ეკრანის ანაბეჭდები, მოწვევის აღიარება) დაარქივებულია `artifacts/docs_preview/W2/preview-2025-06-15/` ქვეშ.
+- Tracker W2 საკონტროლო პუნქტის ჟურნალი განახლებულია გასასვლელით, რაც უზრუნველყოფს საგზაო რუქას აუდიტის ჩანაწერს W3 დაგეგმვის დაწყებამდე.

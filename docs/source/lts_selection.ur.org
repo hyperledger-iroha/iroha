@@ -5,193 +5,192 @@
 #+GENERATOR: scripts/sync_docs_i18n.py
 #+SOURCE_HASH: 1535fc970027c05003b4e03135f47b565d1434f8dc3c42946525a1b16252d40d
 #+SOURCE_LAST_MODIFIED: 2026-01-04T16:47:58+00:00
-#+TRANSLATION_LAST_REVIEWED: 2026-01-30
+#+TRANSLATION_LAST_REVIEWED: 2026-02-07
 
 #+TITLE: On selecting versions as LTS candidates
 #+AUTHOR: Aleksandr Petrosyan
 #+DATE: 12-08-2023
-* About
+#+TRANSLATOR: machine-google-reviewed
 
-In the interest of preserving the engineering resources, it is in our
-interests to limit the scope of post-release support. If one has
-several versions of Iroha running in parallel, they might need to
-replicate the support work as many times as there are parallel
-versions.
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* کے بارے میں
 
-Instead of attempting to support multiple versions badly, we try to
-cater to 80% of use cases with 20% of the effort and reach a
-compromise between supporting every released version equally and only
-supporting the latest stable version.
+انجینئرنگ کے وسائل کے تحفظ کے مفاد میں ، یہ ہمارے میں ہے
+ریلیز کے بعد کی حمایت کے دائرہ کار کو محدود کرنے کے لئے مفادات۔ اگر کسی کے پاس ہے
+Iroha کے متعدد ورژن متوازی طور پر چل رہے ہیں ، انہیں ضرورت پڑسکتی ہے
+معاونت کے کام کو جتنی بار متوازی ہے اس کی نقل تیار کریں
+ورژن
 
-Specifically, we support the latest =stable= release. Often this
-release is either not as well-tested, well-documented, or
-well-supported by the SDKs, in addition to often changing in terms of
-thus have a monthly release cadence and one release per year is chosen
-to be the target of long-term support and development.
+متعدد ورژن کو بری طرح سے سپورٹ کرنے کی کوشش کرنے کے بجائے ، ہم کوشش کرتے ہیں
+20 ٪ کوشش کے ساتھ استعمال کے 80 ٪ معاملات کو پورا کریں اور ایک تک پہنچیں
+ہر جاری کردہ ورژن کی حمایت کرنے کے مابین سمجھوتہ کریں
+تازہ ترین مستحکم ورژن کی حمایت کرنا۔
 
-* LTS selection criteria
+خاص طور پر ، ہم تازہ ترین =stable= ریلیز کی حمایت کرتے ہیں۔ اکثر یہ
+رہائی یا تو اچھی طرح سے آزمائشی ، اچھی طرح سے دستاویزی ، یا نہیں ہے
+ایس ڈی کے کے ذریعہ اچھی طرح سے تعاون یافتہ ، اکثر کے لحاظ سے تبدیل کرنے کے علاوہ
+اس طرح ماہانہ ریلیز کیڈینس ہے اور ہر سال ایک ریلیز کا انتخاب کیا جاتا ہے
+طویل مدتی مدد اور ترقی کا نشانہ بننے کے لئے۔
 
-The following is a non-exhaustive list of recommended considerations
-for selecting a particular version as an LTS candidate
+* ایل ٹی ایس کے انتخاب کے معیار
 
-1. The release should be /unlikely/ to contain major /known/ issues which
-   would preclude it from being useful.
+مندرجہ ذیل تجویز کردہ تحفظات کی ایک غیر متاثر کن فہرست ہے
+کسی خاص ورژن کو ایل ٹی ایس امیدوار کے طور پر منتخب کرنے کے لئے
 
-   More specifically, the release should have a good coverage of a
-   basic use-case, for example, (Pre-)RC-6[fn:1] was the last release which
-   contained the old consensus engine. Given that the actor-based
-   consensus had a maximum stable throughput of 10 TPS, (Pre-)RC-6 was
-   not labelled as an LTS, despite being used as one.
+1. رہائی / غیر متوقع / بڑے / معلوم / مسائل پر مشتمل ہونا چاہئے جو
+   اسے مفید ہونے سے روک دے گا۔
 
-   RC-9 contained all the necessary features for running an Iroha node
-   on the new consensus, some changes to the structure of the
-   configuration and a few fixes to the =p2p= subsystem. It could have
-   filled all the possible niches of any projects based on Iroha, and
-   as such it was labelled as an LTS release despite being less-well
-   tested.
+   خاص طور پر ، رہائی میں ایک کی اچھی کوریج ہونی چاہئے
+   بنیادی استعمال کیس ، مثال کے طور پر ، (پری) RC-6 [FN: 1] آخری ریلیز تھی جو
+   پرانے اتفاق رائے انجن پر مشتمل ہے۔ یہ دیا گیا ہے کہ اداکار پر مبنی ہے
+   اتفاق رائے میں زیادہ سے زیادہ مستحکم تھروپپٹ 10 ٹی پی ایس تھا ، (پری) آر سی 6 تھا
+   ایک کے طور پر استعمال ہونے کے باوجود ، ایل ٹی ایس کے طور پر لیبل نہیں لگایا گیا۔
 
-   Releases RC8, RC12, RC13 and RC17 were disqualified based on this
-   criterion.
+   RC-9 میں Iroha نوڈ چلانے کے لئے تمام ضروری خصوصیات موجود ہیں
+   نئے اتفاق رائے پر ، کچھ تبدیلیاں
+   =p2p= سب سسٹم کی تشکیل اور کچھ اصلاحات۔ یہ ہوسکتا تھا
+   Iroha پر مبنی کسی بھی پروجیکٹس کے تمام ممکنہ طاقوں کو بھرا ہوا ، اور
+   اس طرح اس پر کم اچھی طرح سے ایل ٹی ایس کی رہائی کا لیبل لگا ہوا تھا
+   تجربہ کیا۔
 
-2. If there is a large feature that entails an API breakage, the
-   release that has the most stable version of the "old way of doing
-   things" should be prioritised as an LTS candidate.
+   ریلیز RC8 ، RC12 ، RC13 اور RC17 کو اس کی بنیاد پر نااہل کردیا گیا تھا
+   معیار
 
-   For example, RC12 and RC13, were the last versions of Iroha that
-   still used a hard-coded permission validator. Them being labelled
-   as an LTS candidate was precluded by the major known issues,
-   particularly with stability, poor coverage, and because releasing
-   an LTS after RC9 would have split the development resources off
-   from fixing the issue of rigid un-modifiable permission validators.
+2. اگر کوئی بڑی خصوصیت موجود ہے جس میں API ٹوٹ پھوٹ کا سامنا کرنا پڑتا ہے
+   ریلیز جس میں "کرنے کا پرانا طریقہ" کا سب سے مستحکم ورژن ہے
+   چیزوں کو "ایل ٹی ایس امیدوار کی حیثیت سے ترجیح دی جانی چاہئے۔
 
-   RC14 and RC15 on the other hand, were in the process of a slow
-   migration of features. As such, the latter versions would be
-   considered direct upgrades over the previous one, having more
-   optimisations and better feature coverage.
+   مثال کے طور پر ، RC12 اور RC13 ، Iroha کے آخری ورژن تھے
+   پھر بھی ایک سخت کوڈڈ اجازت کی توثیق کرنے والا استعمال کیا گیا۔ ان کا لیبل لگایا جارہا ہے
+   ایل ٹی ایس کے امیدوار کی حیثیت سے بڑے معروف امور سے روک دیا گیا تھا ،
+   خاص طور پر استحکام ، ناقص کوریج ، اور کیونکہ جاری کرنا
+   آر سی 9 کے بعد ایل ٹی ایس ترقیاتی وسائل کو الگ کر دیتا
+   سخت غیر ترمیمی اجازت دینے والوں کے مسئلے کو حل کرنے سے۔
 
-3. The release must be feature complete for a use-case.
+   دوسری طرف آر سی 14 اور آر سی 15 ، سست کے عمل میں تھے
+   خصوصیات کی ہجرت۔ اس طرح ، مؤخر الذکر ورژن ہوں گے
+   پچھلے ایک سے زیادہ براہ راست اپ گریڈ پر غور کیا گیا ، جس میں زیادہ ہے
+   اصلاحات اور خصوصیت کی بہتر کوریج۔
 
-   This is different to point 1, because while RC10 and RC13 were free
-   from major problems, they did not offer sufficiently full coverage
-   of the features required for the major project stakeholders.
+3. استعمال کے معاملے کے لئے ریلیز کی خصوصیت مکمل ہونی چاہئے۔یہ نقطہ 1 سے مختلف ہے ، کیونکہ جبکہ RC10 اور RC13 مفت تھے
+   بڑے مسائل سے ، انہوں نے کافی حد تک مکمل کوریج پیش نہیں کی
+   پروجیکٹ کے بڑے اسٹیک ہولڈرز کے لئے درکار خصوصیات میں سے۔
 
-4. The release must be supported by all SDKs.
+4. رہائی کو تمام SDKs کے ذریعہ تعاون کرنا چاہئے۔
 
-   While the support in Iroha Python is largely confined to LTS
-   candidates, creating a catch 22 situation, it is an exception. The
-   two other major SDKs, namely Kotlin, and TypeScript must support
-   the LTS candidate. If the SDK cannot be made to support the
-   candidate, the candidate release is disqualified.
+   جبکہ Iroha ازگر میں تعاون بڑی حد تک LTS تک محدود ہے
+   امیدوار ، کیچ 22 کی صورتحال پیدا کرتے ہوئے ، یہ ایک استثناء ہے۔
+   دو دیگر بڑے ایس ڈی کے ، یعنی کوٹلن ، اور ٹائپ اسکرپٹ کو لازمی طور پر مدد کرنا چاہئے
+   ایل ٹی ایس امیدوار۔ اگر SDK کو سپورٹ کرنے کے لئے نہیں بنایا جاسکتا
+   امیدوار ، امیدوار کی رہائی نااہل ہے۔
 
-5. The release must be well-tested.
+5. رہائی کو اچھی طرح سے آزمائشی ہونا چاہئے۔
 
-   This point supplements point 1, in that lack of known features
-   coupled with bad test coverage does not, in fact, mean freedom from
-   major problems.
+   اس نقطہ سپلیمنٹس پوائنٹ 1 ، معلوم خصوصیات کی کمی میں
+   خراب ٹیسٹ کی کوریج کے ساتھ مل کر ، حقیقت میں ، آزادی کا مطلب نہیں ہے
+   بڑے مسائل۔
 
-   This generally applies to all releases after RC6 and until RC17, as
-   the development team was told of a way of restructuring the
-   integration tests, but the process only ended with RC17 and the
-   introduction of the =pytest= framework.
+   یہ عام طور پر RC6 کے بعد اور RC17 تک تمام ریلیز پر لاگو ہوتا ہے ، جیسے
+   ترقیاتی ٹیم کو تنظیم نو کے ایک طریقہ کے بارے میں بتایا گیا تھا
+   انضمام کے ٹیسٹ ، لیکن عمل صرف RC17 اور کے ساتھ ختم ہوا
+   =pytest= فریم ورک کا تعارف۔
 
-   While passing integration tests is necessary it is not sufficient,
-   the following minimal testing is required to qualify a release as
-   an LTS candidate
+   جبکہ انضمام کے ٹیسٹ پاس کرنا ضروری ہے یہ کافی نہیں ہے ،
+   مندرجہ ذیل کم سے کم جانچ کے لئے کسی ریلیز کے اہل ہونے کے لئے ضروری ہے
+   ایل ٹی ایس امیدوار
 
-   1. Unit and Integration testing. One must take care to run all
-      integration tests, including the long and flaky ones. If tests
-      are unusually flaky that is indicative of a problem, and the
-      release should be disqualified (see [[../../flakyness.org]]).
+   1. یونٹ اور انضمام کی جانچ. کسی کو سب کو چلانے کا خیال رکھنا چاہئے
+      انضمام کے ٹیسٹ ، بشمول لمبے اور فلکی والے۔ اگر ٹیسٹ
+      غیر معمولی طور پر فلکی ہیں جو کسی مسئلے کا اشارہ ہے ، اور
+      رہائی کو نااہل کیا جانا چاہئے ([[../../flakyness.org]] دیکھیں)۔
 
-   2. =pytest= tests, which technically qualify as integration
-      tests.
+   2. =pytest= ٹیسٹ ، جو تکنیکی طور پر انضمام کے طور پر اہل ہیں
+      ٹیسٹ
 
-   3. Longevity testing. The candidate must be tested for at least two
-      weeks to qualify. If the candidate is accepted as an LTS, the
-      longevity testing should be conducted for at least four weeks.
+   3. لمبی عمر کی جانچ. کم از کم دو کے لئے امیدوار کا تجربہ کرنا ضروری ہے
+      کوالیفائی کرنے کے لئے ہفتوں. اگر امیدوار کو ایل ٹی ایس کے طور پر قبول کیا جاتا ہے تو
+      لمبی عمر کی جانچ کم سے کم چار ہفتوں تک کی جانی چاہئے۔
 
-   4. Load testing. The LTS candidate must satisfy all of the criteria
-      set out by the QA team as operational and developmental
-      requirements under load (also known as extra-functional, and
-      mistakenly as non-functional). Failure to produce blocks in a
-      timely fashion is an automatic disqualification. Other
-      disqualifying criteria are left up to the discretion of the QA
-      team.
+   4. لوڈ ٹیسٹنگ. ایل ٹی ایس امیدوار کو لازمی طور پر تمام معیارات کو پورا کرنا ہوگا
+      آپریشنل اور ڈویلپمنٹ کے طور پر کیو اے ٹیم کے ذریعہ ترتیب دیں
+      بوجھ کے تحت تقاضے (جسے اضافی فنکشنل بھی کہا جاتا ہے ، اور
+      غلطی سے غیر فعال کے طور پر)۔ a میں بلاکس پیدا کرنے میں ناکامی
+      بروقت فیشن ایک خودکار نااہلی ہے۔ دیگر
+      نااہل کرنے والے معیارات کیو اے کی صوابدید پر رہ گئے ہیں
+      ٹیم
 
-   5. It must be deployed as a =development= container in at least one
-      project for at least two weeks, with no major problems. RC9 did
-      not pass this test and would have been disqualified with the
-      updated criteria listed in the present document.
+   5. اسے کم از کم ایک میں =development= کنٹینر کے طور پر تعینات کیا جانا چاہئے
+      کم از کم دو ہفتوں کے لئے پروجیکٹ ، بغیر کسی بڑی پریشانی کے۔ آر سی 9 نے کیا
+      اس امتحان کو پاس نہیں کیا جاتا ہے اور اس کے ساتھ نااہل ہوجاتا
+      موجودہ دستاویز میں درج تازہ ترین معیارات۔
 
-6. The release must be well-documented.
+6. رہائی کو اچھی طرح سے دستاویزی دستاویز کرنا چاہئے۔
 
-   It should not contain multiple new features that lack
-   documentation. Any shortfall in terms of documentation coverage
-   must be fixable within the time-frame of at most the release window
-   for the candidate. Failure to do so is an automatic disqualification.
+   اس میں متعدد نئی خصوصیات نہیں ہونی چاہئیں جن کی کمی ہے
+   دستاویزات دستاویزات کی کوریج کے معاملے میں کوئی کمی
+   زیادہ تر ریلیز ونڈو میں ٹائم فریم کے اندر قابل فکس ہونا ضروری ہے
+   امیدوار کے لئے۔ ایسا کرنے میں ناکامی ایک خودکار نااہلی ہے۔
 
-In addition to the regular release procedure outlined in
-[[release_procedure.org]], the LTS must adhere to the following additional
-steps.
+رہائی کے باقاعدہ طریقہ کار کے علاوہ
+[[release_procedure.org]] ، LTS کو مندرجہ ذیل اضافی پر عمل کرنا ہوگا
+اقداماتمیں / اضافی / باقاعدہ رہائی انجام دینے میں ، ایک علیحدہ PR کے ساتھ
+عنوان =[release]: <semver> LTS= جہاں =<semver>= معنویت ہے
+ڈویلپمنٹ برانچ کے کوڈ کا ورژن بنانا ضروری ہے۔
+باقاعدہ چیک لسٹ کو لازمی طور پر ختم کرنا چاہئے ، اور اس کے بجائے پل کی درخواست ضروری ہے
+انہی اہلکاروں کے ذریعہ جائزہ لیا جائے جس نے جائزہ لیا اور اس کی منظوری دی
+=stable= ریلیز۔ زیادہ سے زیادہ دو جائزوں کی ضرورت ہے ، اس بات کو یقینی بنانے کے لئے کہ سبھی
+تبدیلیاں صحیح ترتیب میں ہوں گی اور وہ نہیں
+غیر دستاویزی مسائل پھسل گئے۔
 
-In /addition/ to performing a regular release, a separate PR with the
-title =[release]: <semver> LTS= where =<semver>= is the semantic
-version of the code from the development branch must be created. The
-regular checklist must be eschewed, and instead the Pull Request must
-be reviewed by the same personnel that reviewed and approved the
-=stable= release. At most two reviews are needed, to ensure that all
-the changes will take place in the correct order and that no
-undocumented issues slipped through.
+ایک بار جب ایل ٹی ایس کی رہائی ہوجائے تو ، سی آئی ڈوکر کنٹینر تیار کرے گی
+ایل ٹی ایس کے ساتھ الپائن لینکس پلیٹ فارم اور اوبنٹو لینکس پر رہائی کے ساتھ ،
+=glibc= کے پلیٹ فارم-مقامی ورژن کا استعمال کرتے ہوئے۔ سی آئی کو بھی تیار کرنا چاہئے
+تمام تائید شدہ پیکیجز ، اور انہیں اپنے متعلقہ میں شائع کریں
+ذخیرے اس کا مطلب ہے ، مثال کے طور پر ، یہ کہ AUR پیکیج کو اپ ڈیٹ کیا گیا ہے
+پل کی درخواست کو ضم کرنے اور صحیح پیکیج تیار کرنے کے بعد۔
+گٹ ہب کی رہائی کا صفحہ ایک علیحدہ ریلیز کے ساتھ آباد ہونا ضروری ہے
+ایل ٹی ایس اور سنگل فائل =AppImage= پر مشتمل ہے۔ یہ ریلیز لازمی ہیں
+علیحدہ پیکیجوں کے طور پر آئیں جن کو نشان زد نہیں کیا جاتا ہے اس کے ساتھ ساتھ انسٹال نہیں کیا جاتا ہے
+مستحکم ورژن
 
-Once the LTS release is made, the CI will produce a docker container
-with the LTS release on the Alpine Linux platform and on Ubuntu Linux,
-using the platform-native version of =glibc=. The CI must also produce
-all of the supported packages, and publish them to their respective
-repositories. This means, for example, that the AUR package is updated
-after the pull request is merged and produces the correct package. The
-GitHub release page must be populated with a separate release entitled
-LTS and containing the single-file =AppImage=. These releases must
-come as separate packages that are marked as not installable alongside the
-stable version.
+* بیک پورٹنگ پالیسی
 
-* Back-porting policy
+عام طور پر ، ایل ٹی ایس میں بیک پورٹنگ کی حوصلہ شکنی کی جاتی ہے۔ مندرجہ ذیل
+بیک پورٹنگ وجوہات کو قابل قبول سمجھا جاتا ہے:
+1. اس کے علاوہ جو Iroha API سے منسلک نہیں ہے ، جیسے جیسے۔ ایک جنرل
+   مددگار ٹول اور/یا دستاویزات۔
+2. سیکیورٹی کے ایک بڑے خطرے کو ٹھیک کرنا۔
+3. ایک بڑے مسئلے کو ٹھیک کرنا۔
+4. ایک بڑے ڈیزائن کی نگرانی کو ٹھیک کرنا جو استعمال کو روکتا ہے ، بشرطیکہ یہ
+   موجودہ ایل ٹی ایس کے کلیدی اسٹیک ہولڈرز/صارفین زبانی طور پر ہیں
+   تصدیق شدہ کہ بیک پورٹ ایک ترجیحی حل ہے۔
 
-Generally, back-porting into the LTS is discouraged. The following
-back-porting reasons are considered acceptable:
-1. Addition that is not tied to the Iroha API, like e.g. a general
-   helper tool and/or documentation.
-2. Fixing a major security vulnerability.
-3. Fixing a major bug.
-4. Fixing a major design oversight that precludes usage, provided that
-   the key stakeholders/users of the current LTS have verbally
-   certified that a backport is a preferable solution.
+بیک پورٹس کا اعلان اسی چینلز کے ذریعہ کرنا چاہئے ، جیسا کہ ریلیز
+خود مطلوبہ تبدیلیوں کو دونوں میں بیک پورٹ کے طور پر لیبل لگانا چاہئے
+اپ اسٹریم ریلیز جس میں وہ فکسڈ تھے اور جس ورژن میں
+وہ بیک پورٹ ہوچکے ہیں۔
 
-Back-ports must be announced through the same channels, as the release
-itself. Required changes must be labelled as backported in both the
-upstream release in which they were fixed and the version into which
-they have been back-ported.
+اعلان کی وضاحت کرنی ہوگی
+1. بیک پورٹ کیوں منتخب کیا گیا (اوپر وجوہات دیکھیں)
+2. بیک پورٹ کا کیا اثر ہونا چاہئے
+3. فنکشنل ، انضمام اور کی موجودہ حیثیت کیا ہے؟
+   لوڈ/لمبی عمر کی جانچ۔
 
-The announcement must explain
-1. Why the backport was chosen (see above reasons)
-2. What the impact of the backport must be
-3. What is the current status of functional, integration and
-   load/longevity testing.
+* قابل اطلاق
 
-* Applicability
+ایل ٹی ایس/مستحکم ریلیز پالیسی میں پہلے ہی پہلے ہی اس پر نظر ثانی کی جانی چاہئے
+Iroha کے فیچر مکمل ورژن کا اعلان کیا گیا ہے (v2.0.0)۔ مزید نہیں دیا گیا
+فعال ترقی ، بنیادی ترقیاتی ٹیم قابل ہوسکتی ہے (اور چاہئے)
+موڑنے والے ورژن کی حمایت پر زیادہ توجہ دینے کے لئے۔
 
-The LTS/stable release policy should be revised as soon as the first
-feature-complete version of Iroha is announced (v2.0.0). Given no more
-active development, the core development team can (and should) be able
-to focus more on the support of the diverging versions.
-
-* Footnotes
-
-[fn:1] The naming convention was stabilised long before any plan to
-release a version of Iroha was made.  As such calling any version of
-Iroha a release candidate has some implications.  Calling them pre
-release candidates is a similar type of misnomer, but less egregious,
-because rather than a misapplication of an existing term, this is an
-invention of a term that /could/ have subtle differences from a
-release candidate.  In reality these should have been called
-*development snapshots*.  But in order not to break continuity too
-much with the existing SDKs a compromise was chosen.
+* فوٹ نوٹس[ایف این: 1] نام کے کنونشن کو کسی بھی منصوبے سے بہت پہلے مستحکم کیا گیا تھا
+Iroha کا ایک ورژن جاری کیا گیا تھا۔  جیسا کہ کسی بھی ورژن کو کال کرنا
+Iroha A ریلیز امیدوار کے کچھ مضمرات ہیں۔  انہیں پہلے سے پکارنا
+ریلیز امیدوار اسی طرح کی غلط قسم کا ہے ، لیکن کم ناگوار ،
+کیونکہ موجودہ اصطلاح کے غلط استعمال کے بجائے ، یہ ایک ہے
+ایک اصطلاح کی ایجاد جو / کر سکتی ہے / سے ٹھیک ٹھیک اختلافات
+امیدوار جاری کریں۔  حقیقت میں ان کو بلایا جانا چاہئے تھا
+*ڈویلپمنٹ سنیپ شاٹس*۔  لیکن تسلسل کو بھی توڑنے کے لئے
+موجودہ SDKs کے ساتھ ایک سمجھوتہ کا انتخاب کیا گیا تھا۔

@@ -6,57 +6,59 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS KPI dashboard
 description: Live Grafana panels that aggregate registrar, freeze, and revenue metrics for SN-8a.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Sora Name Service KPI Dashboard
+# སོ་ར་མིང་ཞབས་ཏོག་ཀེ་པི་ཨའི་ དྲ་རྒྱ།
 
-The KPI dashboard gives stewards, guardians, and regulators a single place to
-review adoption, error, and revenue signals before the monthly annex cadence
-(SN-8a). The Grafana definition ships in the repository at
-`dashboards/grafana/sns_suffix_analytics.json` and the portal mirrors the same
-panels via an embedded iframe so the experience matches the internal Grafana
-instance.
+KPI གི་བཀོད་ཁྲམ་འདི་གིས་ བདག་འཛིན་པ་དང་ ལྟ་རྟོག་པ་ དེ་ལས་ ཁྲིམས་ལུགས་ཚུ་ལུ་ ས་སྒོ་གཅིག་རྐྱངམ་ཅིག་བྱིནམ་ཨིན།
+ཟླ་རིམ་བཞིན་དུ་ འཛུལ་ཞུགས་ཀྱི་ཧེ་མ་ བསྐྱར་ཞིབ་ངོས་ལེན་དང་ འཛོལ་བ་ དེ་ལས་ འོང་འབབ་ཀྱི་བརྡ་མཚོན་ཚུ་ འབད་དགོ།
+(SN-8a). Grafana གི་ གསང་གྲངས་ནང་ གསང་ཡིག་ནང་ གྲུ་གཟིངས་ནང་།
+`dashboards/grafana/sns_suffix_analytics.json` དང་ དྲྭ་ཚིགས་འདི་ དེ་དང་འདྲ་བའི་མེ་ལོང་།
+བཙུགས་ཏེ་ཡོད་པའི་ iframe བརྒྱུད་དེ་ ཉམས་མྱོང་འདི་ ནང་འཁོད་ I18NT0000001X དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+གནས༌སྟངས།
 
-## Filters & Data Sources
+## ཚགས་མ་དང་གནས་སྡུད་འབྱུང་ཁུངས།
 
-- **Suffix filter** – drives the `sns_registrar_status_total{suffix}` queries so
-  `.sora`, `.nexus`, and `.dao` can be inspected independently.
-- **Bulk release filter** – scopes the `sns_bulk_release_payment_*` metrics so
-  finance can reconcile a specific registrar manifest.
-- **Metrics** – pulls from Torii (`sns_registrar_status_total`,
-  `torii_request_duration_seconds`), guardian CLI (`guardian_freeze_active`),
-  `sns_governance_activation_total`, and the bulk-onboarding helper metrics.
+- **རྗེས་འཇུག་ཚགས་མ་** – དེ་འབདཝ་ལས་ `sns_registrar_status_total{suffix}` འདྲི་དཔྱད་ཚུ་ འདྲེན་འབདཝ་ཨིན།
+  I18NI000000006X, I18NI000000007X, དང་ I18NI000000008X རང་དབང་ཅན་སྦེ་ བརྟག་དཔྱད་འབད་ཚུགས།
+- **Bulk གསར་བཏོན་ཚགས་མ་** – དེ་ I18NI0000009X མེཊིགསི་དེ་སྦེ་ཁྱབ་ཨིན།
+  དངུལ་འབྲེལ་འདི་གིས་ དམིགས་བསལ་གྱི་ཐོ་བཀོད་ཀྱི་གསལ་སྟོན་འདི་ མཐུན་སྒྲིག་འབད་ཚུགས།
+- **མེ་ཊིག་** – I18NT000000003X (`sns_registrar_status_total`, ལས་འཐེན།
+  I18NI000000011X), བཀག་འཛིན་པ་ CLI (I18NI000000012X).
+  I18NI000000013X, དང་ bulk-onboarding གྲོགས་རམ་གྱི་མེ་ཊིགས།
 
-## Panels
+## སྡེབ་ཚན་ཚུ།
 
-1. **Registrations (last 24h)** – number of successful registrar events for the
-   selected suffix.
-2. **Governance activations (30d)** – charter/addendum motions recorded by the
+1. **ཐོ་བཀོད་ཚུ་ (མཇུག་ ༢༤h)** – མཐར་འཁྱོལ་ཅན་གྱི་ཐོ་བཀོད་འབད་མི་ ཐོ་བཀོད་ཀྱི་བྱུང་རིམ་གྱི་ གྲངས་འབོར།
+   སེལ་འཐུ་འབད་ཡོད་པའི་རྗེས་འཇུག་།
+2. **གཞུང་སྐྱོང་ཤུགས་ལྡན་ (30d)** – བཀའ་ཁྲིམས་/ཁ་སྐོང་འགུལ་སྐྱོད་ཚུ།
    CLI.
-3. **Registrar throughput** – per-suffix rate of successful registrar actions.
-4. **Registrar error modes** – 5 minute rate of error-labelled
-   `sns_registrar_status_total` counters.
-5. **Guardian freeze windows** – live selectors where `guardian_freeze_active`
-   reports an open freeze ticket.
-6. **Net payment units by asset** – totals reported by
-   `sns_bulk_release_payment_net_units` per asset.
-7. **Bulk requests per suffix** – manifest volumes per suffix id.
-8. **Net units per request** – ARPU-style calculation derived from the release
-   metrics.
+༣ **ཐོ་བཀོད་འབད་ཐངས།** – མཐར་འཁྱོལ་ཅན་གྱི་ཐོ་བཀོད་ཀྱི་བྱ་སྤྱོད་ཀྱི་ རྗེས་འཇུག་རེ་རེའི་ཚད་གཞི།
+4. **ཐོ་བཀོད་འཛོལ་བ་ཐབས་ལམ་** – 5 minute འཛོལ་བའི་ཚད་གཞི།
+   `sns_registrar_status_total` གྱངས་ཁ་ཚུ།
+5. **Gaudian གྱང་ཁོག་སྒོ་སྒྲིག་** – I18NI0000015X ཡོད་པའི་ཐད་འཕྲིན།
+   ཁ་ཕྱེ་སྟེ་ཡོད་པའི་ གྱང་ཤོག་ཅིག་ སྙན་ཞུ་འབདཝ་ཨིན།
+༦. ** དངུལ་སྤྲོད་ཚད་གཞི་ཚུ་ རྒྱུ་དངོས་** གིས་སྙན་ཞུ་འབད་ཡོདཔ།
+   I18NI000000016X རྒྱུ་དངོས་རེ་རེ།
+7. ** རྗེས་འཇུག་** རེ་ལུ་ ཞུ་བ་སྦོམ་ཚུ་ - རྗེས་འཇུག་ཨའི་ཌི་རེ་ལུ་ གསལ་སྟོན་གྱི་ སྐད་ཤུགས་ཚུ།
+8. **ཞུ་བ་རེ་ལུ་ Net units ཚུ་* – བཏོན་གཏང་ནི་ལས་ཐོན་པའི་ཨེ་ཨར་པི་ཡུ་-བཟོ་རྣམ་རྩིས་སྟོན།
+   mitrics.
 
-## Monthly KPI Review Checklist
+## ཟླ་རིམ་ཀེ་པི་ཨའི་ དཔྱད་ཞིབ་ཀྱི་དཔྱད་གཞི།
 
-The finance lead drives a recurring review on the first Tuesday of every month:
+དངུལ་འབྲེལ་གྱི་འགོ་ཁྲིད་འདི་གིས་ ཟླཝ་རེ་གི་ གཟའ་ལྷགཔ་འགོ་དང་པ་ལུ་ བསྐྱར་ཞིབ་འབདཝ་ཨིན།
 
-1. Open the portal’s **Analytics → SNS KPI** page (or Grafana dashboard `sns-kpis`).
-2. Capture a PDF/CSV export of the registrar throughput and revenue tables.
-3. Compare suffixes for SLA breaches (error rate spikes, frozen selectors >72 h,
-   ARPU deltas >10 %).
-4. Log summaries + action items in the relevant annex entry under
+1. དྲྭ་ཚིགས་ཁ་ཕྱེ། **དབྱེ་དཔྱད་ → SNS KPI** ཤོག་ལེབ་ (ཡང་ན་ I18NT000000002X ཌེཤ་བོརཌ་ `sns-kpis`).
+༢ ཐོ་བཀོད་ཀྱི་ཐོན་འབྲས་དང་ འོང་འབབ་ཀྱི་ཐིག་ཁྲམ་ཚུ་ PDF/CSV ཕྱིར་ཚོང་འཐབ་ནི།
+༣ ཨེསི་ཨེལ་ཨེ་བིརིཆ་ཚུ་གི་དོན་ལུ་ རྗེས་འཇུག་ཚུ་ག་བསྡུར་རྐྱབ། (འཛོལ་བ་ཚད་གཞི་འཕར་ཚད། གྱང་ཤུགས་ཅན་གྱི་འདེམས་སྒྲུག་ཚུ་ >༧༢h,
+   ARPU deltas >10%).
+༤ དྲན་ཐོ་བཅུད་བསྡུས་ + བྱ་བའི་རྣམ་གྲངས།
    `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. Attach the exported dashboard artefacts to the annex commit and link them in
-   the council agenda.
+༥ ཕྱིར་ཚོང་འཐབ་མི་ ཌེཤ་བོརཌ་ ཅ་ཆས་ཚུ་ མཐུད་སྦྱོར་འབད་མི་ལུ་ མཐུད་དེ་ ༢༠༡༦ ལུ་ འབྲེལ་མཐུད་འབད།
+   ཚོགས་སྡེའི་གྲོས་གཞི་འདི་ཨིན།
 
-If the review uncovers SLA breaches, file a PagerDuty incident for the affected
-owner (registrar duty manager, guardian on-call, or steward program lead) and
-track the remediation in the annex log.
+བསྐྱར་ཞིབ་དེ་གིས་ ཨེསི་ཨེལ་ཨེ་ བརྡ་བསྐུལ་ཚུ་གསལ་སྟོན་འབད་བ་ཅིན་ གནོད་སྐྱོན་བྱུང་མི་གི་དོན་ལུ་ པེ་ཇར་ཌུ་ཊི་ བྱུང་རྐྱེན་ཅིག་ ཡིག་སྣོད་ནང་བཙུགས་དགོ།
+ཇོ་བདག་ (ཐོ་བཀོད་འགན་འཛིན་ ལྟ་རྟོག་པ་ འབོད་བརྡ་, ཡང་ན་ བདག་འཛིན་ལས་རིམ་གྱི་འགོ་ཁྲིད་) དང་།
+ཟུར་དེབ་ནང་ བཅོ་ཁ་འདི་ བརྟག་ཞིབ་འབད།

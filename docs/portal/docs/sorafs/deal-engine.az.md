@@ -11,66 +11,67 @@ id: deal-engine
 title: SoraFS Deal Engine
 sidebar_label: Deal Engine
 description: Overview of the SF-8 deal engine, Torii integration, and telemetry surfaces.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
 # SoraFS Deal Engine
 
-The SF-8 roadmap track introduces the SoraFS deal engine, providing
-deterministic accounting for storage and retrieval agreements between
-clients and providers. Agreements are described with the Norito payloads
-defined in `crates/sorafs_manifest/src/deal.rs`, covering deal terms, bond
-locking, probabilistic micropayments, and settlement records.
+SF-8 yol xəritəsi treki, təmin edən SoraFS müqavilə mühərrikini təqdim edir.
+arasında saxlama və axtarış müqavilələrinin deterministik uçotu
+müştərilər və provayderlər. Razılaşmalar Norito faydalı yükləri ilə təsvir edilmişdir
+əqd şərtlərini, istiqrazı əhatə edən `crates/sorafs_manifest/src/deal.rs`-də müəyyən edilmişdir
+kilidləmə, ehtimal mikro ödənişlər və hesablaşma qeydləri.
 
-The embedded SoraFS worker (`sorafs_node::NodeHandle`) now instantiates a
-`DealEngine` instance for every node process. The engine:
+Daxili SoraFS işçisi (`sorafs_node::NodeHandle`) indi
+Hər node prosesi üçün `DealEngine` nümunəsi. Mühərrik:
 
-- validates and registers deals using `DealTermsV1`;
-- accrues XOR-denominated charges when replication usage is reported;
-- evaluates probabilistic micropayment windows using deterministic
-  Blake3-based sampling; and
-- produces ledger snapshots and settlement payloads suitable for governance
-  publishing.
+- `DealTermsV1` istifadə edərək sövdələşmələri təsdiqləyir və qeydiyyatdan keçirir;
+- replikasiyadan istifadə barədə məlumat verildikdə XOR ilə ifadə olunan ödənişlər hesablanır;
+- deterministik istifadə edərək ehtimal mikroödəmə pəncərələrini qiymətləndirir
+  Blake3 əsaslı seçmə; və
+- idarəetmə üçün uyğun olan mühasibat dəftəri snapshotları və hesablaşma yükləri istehsal edir
+  nəşriyyat.
 
-Unit tests cover validation, micropayment selection, and settlement flows so
-operators can exercise the APIs with confidence. Settlements now emit
-`DealSettlementV1` governance payloads, wiring directly into the SF-12
-publishing pipeline, and update the `sorafs.node.deal_*` OpenTelemetry series
+Vahid testləri doğrulama, mikroödəmə seçimi və hesablaşma axınlarını əhatə edir
+operatorlar API-lərdən əminliklə istifadə edə bilərlər. İndi yaşayış məntəqələri yayılır
+`DealSettlementV1` idarəetmə yükləri, birbaşa SF-12-yə naqillər
+nəşr boru kəməri və `sorafs.node.deal_*` OpenTelemetry seriyasını yeniləyin
 (`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) for Torii dashboards and SLO
-enforcement. Follow-up items focus on auditor-initiated slashing automation and
-coordinating cancellation semantics with governance policy.
+`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) Torii idarə panelləri və SLO üçün
+icra. Sonrakı maddələr auditorun təşəbbüsü ilə kəsmə avtomatlaşdırmasına və
+ləğv semantikasının idarəetmə siyasəti ilə əlaqələndirilməsi.
 
-Usage telemetry now also feeds the `sorafs.node.micropayment_*` metrics set:
+İstifadə telemetriyası indi də `sorafs.node.micropayment_*` ölçülər dəstini qidalandırır:
 `micropayment_charge_nano`, `micropayment_credit_generated_nano`,
 `micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, and the ticket counters
+`micropayment_outstanding_nano` və bilet sayğacları
 (`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). These totals expose the probabilistic
-lottery flow so operators can correlate micropayment wins and credit carry-over
-with settlement outcomes.
+`micropayment_tickets_duplicate_total`). Bu cəmlər ehtimalı ifşa edir
+Lotereya axını operatorların mikroödəmə uduşlarını və kreditin ötürülməsini əlaqələndirə bilsin
+hesablaşma nəticələri ilə.
 
-## Torii Integration
+## Torii İnteqrasiya
 
-Torii exposes dedicated endpoints so providers can report usage and drive the
-deal lifecycle without bespoke wiring:
+Torii xüsusi son nöqtələri ifşa edir ki, provayderlər istifadə haqqında məlumat verə və
+sifarişli naqillər olmadan işləmə müddəti:
 
-- `POST /v1/sorafs/deal/usage` accepts `DealUsageReport` telemetry and returns
-  deterministic accounting outcomes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalises the current window, streaming the
-  resulting `DealSettlementRecord` alongside a base64-encoded `DealSettlementV1`
-  ready for governance DAG publication.
-- Torii's `/v1/events/sse` feed now broadcasts `SorafsGatewayEvent::DealUsage`
-  records summarising each usage submission (epoch, metered GiB-hours, ticket
-  counters, deterministic charges), `SorafsGatewayEvent::DealSettlement`
-  records that include the canonical settlement ledger snapshot plus the
-  BLAKE3 digest/size/base64 of the on-disk governance artefact, and
-  `SorafsGatewayEvent::ProofHealth` alerts whenever PDP/PoTR thresholds are
-  exceeded (provider, window, strike/cooldown state, penalty amount). Consumers can
-  filter by provider to react to new telemetry, settlements, or proof-health alerts without polling.
+- `POST /v1/sorafs/deal/usage` `DealUsageReport` telemetriyasını qəbul edir və qaytarır
+  deterministik uçot nəticələri (`UsageOutcome`).
+- `POST /v1/sorafs/deal/settle` cari pəncərəni axınla tamamlayır
+  nəticədə `DealSettlementRecord` baza64 kodlu `DealSettlementV1` ilə birlikdə
+  idarəetmə DAG nəşrinə hazırdır.
+- Torii-in `/v1/events/sse` lenti indi `SorafsGatewayEvent::DealUsage`-i yayımlayır
+  hər bir istifadə təqdimini ümumiləşdirən qeydlər (dövr, ölçülü GiB-saatlar, bilet
+  sayğaclar, deterministik yüklər), `SorafsGatewayEvent::DealSettlement`
+  kanonik hesablaşma kitabçası snapshot və əlavə daxil olan qeydlər
+  Disk idarəetmə artefaktının BLAKE3 həzmi/ölçüsü/baza64 və
+  PDP/PoTR hədləri olduqda `SorafsGatewayEvent::ProofHealth` xəbərdarlıq edir
+  aşılmışdır (provayder, pəncərə, tətil/soyutma vəziyyəti, cərimə məbləği). İstehlakçılar bilər
+  səsvermə olmadan yeni telemetriya, yaşayış məntəqələri və ya sağlamlığa dair xəbərdarlıqlara reaksiya vermək üçün provayder tərəfindən süzün.
 
-Both endpoints participate in the SoraFS quota framework via the new
-`torii.sorafs.quota.deal_telemetry` window, allowing operators to tune the
-allowed submission rate per deployment.
+Hər iki son nöqtə yeni vasitəsilə SoraFS kvota çərçivəsində iştirak edir.
+`torii.sorafs.quota.deal_telemetry` pəncərəsi operatorlara tənzimləməyə imkan verir
+yerləşdirmə başına icazə verilən təqdimetmə dərəcəsi.

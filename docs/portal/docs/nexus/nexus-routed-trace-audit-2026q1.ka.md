@@ -10,84 +10,85 @@ translation_last_reviewed: 2026-02-07
 id: nexus-routed-trace-audit-2026q1
 title: 2026 Q1 routed-trace audit report (B1)
 description: Mirror of `docs/source/nexus_routed_trace_audit_report_2026q1.md`, covering the quarterly telemetry rehearsal outcomes.
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_routed_trace_audit_report_2026q1.md`. Keep both copies aligned until remaining translations land.
+:::შენიშვნა კანონიკური წყარო
+ეს გვერდი ასახავს `docs/source/nexus_routed_trace_audit_report_2026q1.md`-ს. შეინახეთ ორივე ასლი გასწორებულად, სანამ დარჩენილი თარგმანები არ გამოდგება.
 :::
 
-# 2026 Q1 Routed-Trace Audit Report (B1)
+# 2026 კვარტალის მარშრუტების კვალიფიკაციის აუდიტის ანგარიში (B1)
 
-Roadmap item **B1 — Routed-Trace Audits & Telemetry Baseline** requires a
-quarterly review of the Nexus routed-trace program. This report documents the
-Q1 2026 audit window (January–March) so the governance council can sign off the
-telemetry posture before the Q2 launch rehearsals.
+საგზაო რუქის პუნქტი **B1 — მარშრუტის კვალი აუდიტი და ტელემეტრიის საბაზისო** მოითხოვს
+Nexus მარშრუტირებული კვალი პროგრამის კვარტალური მიმოხილვა. ეს ანგარიში ადასტურებს
+Q12026 აუდიტის ფანჯარა (იანვარი-მარტი), რათა მმართველმა საბჭომ ხელი მოაწეროს მას
+ტელემეტრიული პოზა Q2-ის გაშვების რეპეტიციებამდე.
 
-## Scope & Timeline
+## ფარგლები და ვადები
 
-| Trace ID | Window (UTC) | Objective |
-|----------|--------------|-----------|
-| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 | Verify lane-admission histograms, queue gossip, and alert flow before multi-lane enablement. |
-| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00–10:45 | Validate OTLP replay, diff bot parity, and SDK telemetry ingestion ahead of AND4/AND7 milestones. |
-| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 | Confirm governance-approved `iroha_config` deltas and rollback readiness prior to the RC1 cut. |
+| კვალი ID | ფანჯარა (UTC) | მიზანი |
+|----------|-------------|-----------|
+| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 | გადაამოწმეთ ზოლის დაშვების ჰისტოგრამები, რიგის ჭორები და გაფრთხილების ნაკადი მრავალ ზოლის ჩართვამდე. |
+| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00–10:45 | დაადასტურეთ OTLP ხელახალი დაკვრა, განსხვავებული ბოტის პარიტეტი და SDK ტელემეტრიის ჩასმა AND4/AND7 ეტაპებზე წინ. |
+| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 | დაადასტურეთ მმართველობის მიერ დამტკიცებული `iroha_config` დელტა და უკან დაბრუნების მზადყოფნა RC1 ჭრამდე. |
 
-Each rehearsal ran on production-like topology with the routed-trace
-instrumentation enabled (`nexus.audit.outcome` telemetry + Prometheus counters),
-Alertmanager rules loaded, and evidence exported into `docs/examples/`.
+თითოეული რეპეტიცია წარმოების მსგავსი ტოპოლოგიით მიმდინარეობდა მარშრუტ-კვალით
+ჩართულია ინსტრუმენტაცია (`nexus.audit.outcome` ტელემეტრია + Prometheus მრიცხველი),
+Alertmanager-ის წესები დატვირთულია და მტკიცებულება ექსპორტირებულია `docs/examples/`-ში.
 
-## Methodology
+## მეთოდოლოგია
 
-1. **Telemetry collection.** All nodes emitted the structured
-   `nexus.audit.outcome` event and accompanying metrics
-   (`nexus_audit_outcome_total*`). The helper
-   `scripts/telemetry/check_nexus_audit_outcome.py` tailed the JSON log,
-   validated the event status, and archived the payload under
+1. **ტელემეტრიის კოლექცია.** ყველა კვანძი ასხივებდა სტრუქტურირებულს
+   `nexus.audit.outcome` მოვლენა და თანმხლები მეტრიკა
+   (`nexus_audit_outcome_total*`). დამხმარე
+   `scripts/telemetry/check_nexus_audit_outcome.py` მოყვა JSON ჟურნალს,
+   დაადასტურა ღონისძიების სტატუსი და დაარქივებული დატვირთვა ქვემოთ
    `docs/examples/nexus_audit_outcomes/`.【scripts/telemetry/check_nexus_audit_outcome.py:1】
-2. **Alert validation.** `dashboards/alerts/nexus_audit_rules.yml` and its test
-   harness ensured alert noise thresholds and payload templating stayed
-   consistent. CI runs `dashboards/alerts/tests/nexus_audit_rules.test.yml` on
-   every change; the same rules were exercised manually during each window.
-3. **Dashboard capture.** Operators exported the routed-trace panels from
-   `dashboards/grafana/soranet_sn16_handshake.json` (handshake health) and the
-   telemetry overview dashboards to correlate queue health with audit outcomes.
-4. **Reviewer notes.** The governance secretary logged reviewer initials,
-   decision, and any mitigation tickets in [Nexus transition notes](./nexus-transition-notes)
-   and the config delta tracker (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`).
+2. **გაფრთხილების ვალიდაცია.** `dashboards/alerts/nexus_audit_rules.yml` და მისი ტესტი
+   აღკაზმულობა უზრუნველყოფდა გაფრთხილების ხმაურის ზღურბლებს და დატვირთვის შაბლონის შენარჩუნებას
+   თანმიმდევრული. CI მუშაობს `dashboards/alerts/tests/nexus_audit_rules.test.yml`-ზე
+   ყოველი ცვლილება; იგივე წესები ხორციელდებოდა ხელით თითოეული ფანჯრის დროს.
+3. **Dashboard-ის აღება.** ოპერატორებმა მოახდინეს მარშრუტირებული ტრასის პანელების ექსპორტი
+   `dashboards/grafana/soranet_sn16_handshake.json` (ხელის ჩამორთმევის ჯანმრთელობა) და
+   ტელემეტრიის მიმოხილვის დაფები რიგის სიჯანსაღის აუდიტის შედეგებთან კორელაციისთვის.
+4. **მიმომხილველი აღნიშნავს.** მმართველობის მდივანმა ჩაწერა რეფერენტის ინიციალები,
+   გადაწყვეტილება და ნებისმიერი შემამსუბუქებელი ბილეთი [Nexus გარდამავალი შენიშვნები] (./nexus-transition-notes)
+   და კონფიგურაციის დელტა ტრეკერი (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`).
 
-## Findings
+## დასკვნები
 
-| Trace ID | Outcome | Evidence | Notes |
+| კვალი ID | შედეგი | მტკიცებულება | შენიშვნები |
 |----------|---------|----------|-------|
-| `TRACE-LANE-ROUTING` | Pass | Alert fire/recover screenshots (internal link) + `dashboards/alerts/tests/soranet_lane_rules.test.yml` replay; telemetry diffs recorded in [Nexus transition notes](./nexus-transition-notes#quarterly-routed-trace-audit-schedule). | Queue-admission P95 remained 612 ms (target ≤750 ms). No follow-up required. |
-| `TRACE-TELEMETRY-BRIDGE` | Pass | Archived outcome payload `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` plus OTLP replay hash recorded in `status.md`. | SDK redaction salts matched the Rust baseline; diff bot reported zero deltas. |
-| `TRACE-CONFIG-DELTA` | Pass (mitigation closed) | Governance tracker entry (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + TLS profile manifest (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + telemetry pack manifest (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`). | Q2 rerun hashed the approved TLS profile and confirmed zero stragglers; telemetry manifest records slot range 912–936 and workload seed `NEXUS-REH-2026Q2`. |
+| `TRACE-LANE-ROUTING` | საშვი | გაფრთხილების ცეცხლი/აღდგენის ეკრანის ანაბეჭდები (შიდა ბმული) + `dashboards/alerts/tests/soranet_lane_rules.test.yml` განმეორება; ტელემეტრიული განსხვავებები ჩაწერილია [Nexus გარდამავალ ნოტებში] (./nexus-transition-notes#quarterly-routed-trace-audit-schedule). | რიგში დაშვება P95 დარჩა 612ms (სამიზნე ≤750ms). შემდგომი დაკვირვება არ არის საჭირო. |
+| `TRACE-TELEMETRY-BRIDGE` | საშვი | დაარქივებული შედეგის დატვირთვა `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` პლუს OTLP განმეორებითი ჰეში ჩაწერილი `status.md`-ში. | SDK რედაქციის მარილები ემთხვეოდა Rust-ის საწყისს; diff bot იტყობინება ნულოვანი დელტა. |
+| `TRACE-CONFIG-DELTA` | უღელტეხილი (შემარბილებელი დახურული) | მმართველობის ტრეკერის ჩანაწერი (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + TLS პროფილის მანიფესტი (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + ტელემეტრიული პაკეტის მანიფესტი (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`). | Q2-ის განმეორებით გაშვებამ გააშინა დამტკიცებული TLS პროფილი და დაადასტურა ნულოვანი სტრაგლერები; ტელემეტრიის მანიფესტის ჩანაწერების სლოტის დიაპაზონი 912–936 და სამუშაო დატვირთვის თესლი `NEXUS-REH-2026Q2`. |
 
-All traces produced at least one `nexus.audit.outcome` event within their
-windows, satisfying the Alertmanager guardrails (`NexusAuditOutcomeFailure`
-remained green for the quarter).
+ყველა კვალმა წარმოქმნა მინიმუმ ერთი `nexus.audit.outcome` მოვლენა მათში
+ფანჯრები, დამაკმაყოფილებელი Alertmanager-ის ფარები (`NexusAuditOutcomeFailure`
+დარჩა მწვანე მეოთხედი).
 
-## Follow-ups
+## შემდგომი
 
-- Routed-trace appendix updated with TLS hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb`;
-  mitigation `NEXUS-421` closed in the transition notes.
-- Continue attaching raw OTLP replays and Torii diff artifacts to the archive to
-  bolster parity evidence for Android AND4/AND7 reviews.
-- Confirm that upcoming `TRACE-MULTILANE-CANARY` rehearsals reuse the same
-  telemetry helper so Q2 sign-off benefits from the validated workflow.
+- Routed-trace დანართი განახლებულია TLS ჰეშით `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb`;
+  შემარბილებელი საშუალება `NEXUS-421` დაიხურა გარდამავალ შენიშვნებში.
+- განაგრძეთ დაუმუშავებელი OTLP-ის გამეორებების და Torii განსხვავებული არტეფაქტების მიმაგრება არქივში
+  გააძლიერეთ თანასწორობის მტკიცებულება Android AND4/AND7 მიმოხილვებისთვის.
+- დაადასტურეთ, რომ მომავალი `TRACE-MULTILANE-CANARY` რეპეტიციები იგივეს ხელახლა გამოიყენებს
+  ტელემეტრიის დამხმარე, ასე რომ Q2-ის გაფორმება ისარგებლებს დადასტურებული სამუშაო ნაკადით.
 
-## Artefact Index
+## არტეფაქტის ინდექსი
 
-| Asset | Location |
+| აქტივი | მდებარეობა |
 |-------|----------|
-| Telemetry validator | `scripts/telemetry/check_nexus_audit_outcome.py` |
-| Alert rules & tests | `dashboards/alerts/nexus_audit_rules.yml`, `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
-| Sample outcome payload | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
-| Config delta tracker | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
-| Routed-trace schedule & notes | [Nexus transition notes](./nexus-transition-notes) |
+| ტელემეტრიის ვალიდატორი | `scripts/telemetry/check_nexus_audit_outcome.py` |
+| გაფრთხილების წესები და ტესტები | `dashboards/alerts/nexus_audit_rules.yml`, `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
+| ნიმუშის შედეგის დატვირთვა | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
+| დელტა ტრეკერის კონფიგურაცია | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
+| მარშრუტ-კვალი გრაფიკი & შენიშვნები | [Nexus გარდამავალი შენიშვნები](./nexus-transition-notes) |
 
-This report, the artefacts above, and the alert/telemetry exports should be
-attached to the governance decision log to close B1 for the quarter.
+ეს ანგარიში, ზემოთ მოყვანილი არტეფაქტები და გაფრთხილების/ტელემეტრიის ექსპორტი უნდა იყოს
+თან ერთვის მმართველობის გადაწყვეტილებების ჟურნალს B1 კვარტლის დახურვის მიზნით.

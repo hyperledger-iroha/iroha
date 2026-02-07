@@ -8,18 +8,20 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Каноник эх сурвалжийг анхаарна уу
 :::
 
-## Overview
+## Тойм
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+Энэхүү тоглоомын ном нь үйлдвэрлэлд өөрчлөлт оруулахаас өмнө УИХ-аас соёрхон баталсан chunker профайлыг Torii үе шаттайгаар байршуулах боломжийг олгодог. Энэ нь SoraFS засаглалын дүрмийг соёрхон баталсан бөгөөд каноник бэхэлгээг хадгалах газарт байгаа гэж үзэж байна.
 
-## 1. Prerequisites
+## 1. Урьдчилсан нөхцөл
 
-1. Sync the canonical fixtures and signatures:
+1. Каноник бэхэлгээ болон гарын үсгийг синк хийнэ үү:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -28,8 +30,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. Torii эхлүүлэх үед унших элсэлтийн дугтуйны лавлахыг бэлтгэ (жишээ нь): `/var/lib/iroha/admission/sorafs`.
+3. Torii тохиргоо нь илрүүлэлтийн кэш болон зөвшөөрлийн хэрэгжилтийг идэвхжүүлж байгаа эсэхийг шалгаарай:
 
    ```toml
    [torii.sorafs.discovery]
@@ -47,43 +49,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## 2. Элсэлтийн дугтуйг нийтлэх
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. Зөвшөөрөгдсөн үйлчилгээ үзүүлэгчийн элсэлтийн дугтуйг `torii.sorafs.discovery.admission.envelopes_dir` лавлах лавлах руу хуулна уу:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. Torii-г дахин эхлүүлнэ үү (эсвэл хэрэв та ачаалагчийг шууд ачааллаар ороосон бол SIGHUP илгээнэ үү).
+3. Элсэлтийн мессежийн бүртгэлийг дарааллаар нь бичнэ үү:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. Нээлтийн тархалтыг баталгаажуулах
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. Гарын үсэг зурсан үйлчилгээ үзүүлэгчийн зар сурталчилгааны ачааллыг (Norito байт) байршуулна уу.
+   нийлүүлэгч дамжуулах хоолой:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. Нээлтийн төгсгөлийн цэгийг асууж, зар сурталчилгааг каноник нэрээр харуулахыг баталгаажуулна уу:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   `profile_aliases` эхний оруулгад `"sorafs.sf1@1.0.0"` орсон эсэхийг шалгаарай.
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. Дасгалын Манифест ба Төгсгөлийн цэгүүдийг төлөвлө
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. Манифест мета өгөгдлийг дуудах (хэрэв элсэлтийн зөвшөөрлийг баталгаажуулсан бол дамжуулалтын тэмдэг шаардлагатай):
 
    ```bash
    sorafs-fetch \
@@ -94,25 +96,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. JSON гаралтыг шалгаж, баталгаажуулна уу:
+   - `chunk_profile_handle` бол `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` нь детерминизмын тайлантай таарч байна.
+   - `chunk_digests_blake3` нь шинэчлэгдсэн бэхэлгээтэй нийцдэг.
 
-## 5. Telemetry Checks
+## 5. Телеметрийн шалгалт
 
-- Confirm Prometheus exposes the new profile metrics:
+- Prometheus шинэ профайлын хэмжигдэхүүнийг харуулж байгааг баталгаажуулна уу:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- Хяналтын самбарууд нь хүлээгдэж буй нэрийн дор тайзны үйлчилгээ үзүүлэгчийг харуулах ёстой бөгөөд профайл идэвхтэй байх үед тоологчийг тэг дээр байлгах ёстой.
 
-## 6. Rollout Readiness
+## 6. Дамжуулахад бэлэн байдал
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. URL-ууд, манифест ID болон телеметрийн агшин зуурын зураг бүхий богино тайланг аваарай.
+2. Төлөвлөсөн үйлдвэрлэлийг идэвхжүүлэх цонхны хажуугаар Nexus нэвтрүүлэх сувагт тайланг хуваалцаарай.
+3. Оролцогч талууд гарын үсэг зурсны дараа үйлдвэрлэлийн хяналтын хуудсыг (`chunker_registry_rollout_checklist.md`-ийн 4-р хэсэг) үргэлжлүүлнэ үү.
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+Энэхүү тоглоомын дэвтрийг шинэчилж байх нь хэсэгчилсэн хэсэг/элсэлтийн танилцуулга бүр үе шат, үйлдвэрлэлд ижил тодорхой алхамуудыг дагаж мөрддөг.

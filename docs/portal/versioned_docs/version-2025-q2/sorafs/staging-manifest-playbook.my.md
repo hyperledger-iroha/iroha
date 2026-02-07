@@ -11,19 +11,20 @@ id: staging-manifest-playbook
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Keep both copies aligned across releases.
+::: Canonical Source ကို သတိပြုပါ။
+မှန်ချပ်များ `docs/source/sorafs/runbooks/staging_manifest_playbook.md`။ ထုတ်ဝေမှုများတစ်လျှောက် မိတ္တူနှစ်ခုလုံးကို ချိန်ညှိထားပါ။
 :::
 
-## Overview
+## ခြုံငုံသုံးသပ်ချက်
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+ဤပြခန်းစာအုပ်သည် ထုတ်လုပ်မှုသို့ ပြောင်းလဲခြင်းအား မြှင့်တင်ခြင်းမပြုမီ အဆင့် Torii ဖြန့်ကျက်မှုတွင် ပါလီမန်မှ အတည်ပြုထားသော အစုအဝေးပရိုဖိုင်ကို ဖွင့်ပေးခြင်းဖြင့် လမ်းညွှန်ပေးပါသည်။ ၎င်းသည် SoraFS အုပ်ချုပ်မှုပဋိဉာဉ်ကို အတည်ပြုပြီးဖြစ်ပြီး ကာနိုနီဆိုင်ရာပစ္စည်းများကို သိုလှောင်ခန်းတွင် ရနိုင်သည်ဟု ၎င်းကဆိုသည်။
 
-## 1. Prerequisites
+## 1. ကြိုတင်လိုအပ်ချက်များ
 
-1. Sync the canonical fixtures and signatures:
+1. Canonical fixtures များနှင့် လက်မှတ်များကို ထပ်တူပြုပါ-
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -32,8 +33,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. စတင်ချိန်တွင် Torii ဖတ်မည့် ဝင်ခွင့်စာအိတ်လမ်းညွှန်ကို ပြင်ဆင်ပါ (ဥပမာ လမ်းကြောင်း)- `/var/lib/iroha/admission/sorafs`။
+3. Torii config သည် ရှာဖွေတွေ့ရှိမှု ကက်ရှ်နှင့် ဝင်ခွင့်ဆိုင်ရာ ပြဋ္ဌာန်းချက်များကို ဖွင့်ထားကြောင်း သေချာစေသည်-
 
    ```toml
    [torii.sorafs.discovery]
@@ -51,43 +52,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## ၂။ ဝင်ခွင့်စာအိတ်များကို ထုတ်ဝေပါ။
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. အတည်ပြုထားသော ဝန်ဆောင်မှုပေးသူ ဝင်ခွင့်စာအိတ်များကို `torii.sorafs.discovery.admission.envelopes_dir` ရည်ညွှန်းထားသော လမ်းညွှန်ထဲသို့ ကူးယူပါ-
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. Torii ကို ပြန်လည်စတင်ပါ (သို့မဟုတ် အကယ်၍ သင်သည် loader ကို on-the-fly reload ဖြင့်ပတ်ထားလျှင် SIGHUP ပေးပို့ပါ)။
+3. ဝင်ခွင့်မက်ဆေ့ဂျ်များအတွက် မှတ်တမ်းများကို မှတ်သားပါ-
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. Discovery Propagation ကို အတည်ပြုပါ။
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. သင့်မှထုတ်လုပ်သော ဝန်ဆောင်မှုပေးသူ၏ ကြော်ငြာပေးချေမှု (Norito bytes) ကို ပို့စ်တင်ပါ
+   ပံ့ပိုးပေးသူ ပိုက်လိုင်း-
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. ရှာဖွေတွေ့ရှိမှု အဆုံးမှတ်ကို မေးမြန်းပြီး ကြော်ငြာကို canonical aliases ဖြင့် အတည်ပြုပါ-
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   `profile_aliases` တွင် `"sorafs.sf1@1.0.0"` ပါဝင်ကြောင်း သေချာပါစေ။
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. လေ့ကျင့်ခန်းဖော်ပြချက် & အစီအစဉ် အဆုံးမှတ်များ
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. မန်နီးဖက်စ် မက်တာဒေတာကို ရယူပါ (ဝင်ခွင့်ကို ပြဌာန်းပါက ထုတ်လွှင့်မှု တိုကင်တစ်ခု လိုအပ်သည်-
 
    ```bash
    sorafs-fetch \
@@ -98,25 +99,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. JSON အထွက်ကို စစ်ဆေးပြီး အတည်ပြုပါ-
+   - `chunk_profile_handle` သည် `sorafs.sf1@1.0.0` ဖြစ်သည်။
+   - `manifest_digest_hex` သည် သတ်မှတ်ပြဋ္ဌာန်းချက်အစီရင်ခံစာနှင့် ကိုက်ညီသည်။
+   - `chunk_digests_blake3` သည် အသစ်ထုတ်ထားသော ပစ္စည်းများနှင့် ချိန်ညှိသည်။
 
-## 5. Telemetry Checks
+## 5. Telemetry စစ်ဆေးမှုများ
 
-- Confirm Prometheus exposes the new profile metrics:
+- Prometheus သည် ပရိုဖိုင်မက်ထရစ်အသစ်များကို ဖော်ထုတ်အတည်ပြုသည်-
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- ဒက်ရှ်ဘုတ်များသည် ပရိုဖိုင်ကိုဖွင့်နေချိန်တွင် မျှော်လင့်ထားသည့်အမည်များအောက်တွင် အဆင့်သတ်မှတ်ပေးသူကိုပြသသင့်ပြီး အညိုရောင်ကောင်တာများကို သုညတွင်ထားရပါမည်။
 
-## 6. Rollout Readiness
+## 6. စတင်ပြင်ဆင်မှု
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. URLs များ၊ manifest ID နှင့် telemetry snapshot များဖြင့် အစီရင်ခံစာတိုကို ရိုက်ကူးပါ။
+2. အစီရင်ခံစာကို စီစဉ်ထုတ်လုပ်သည့် အသက်သွင်းမှုဝင်းဒိုးနှင့်အတူ Nexus ထုတ်လွှင့်သည့်ချန်နယ်တွင် မျှဝေပါ။
+3. သက်ဆိုင်သူများလက်မှတ်ထိုးပြီးသည်နှင့် ထုတ်လုပ်မှုစစ်ဆေးမှုစာရင်း (`chunker_registry_rollout_checklist.md` တွင် အပိုင်း 4) သို့ ဆက်လက်ဆောင်ရွက်ပါ။
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+ဤပြခန်းစာအုပ်ကို အပ်ဒိတ်လုပ်ထားပါက အစုအဝေး/ဝင်ခွင့် ဖြန့်ချိမှုတိုင်းသည် အဆင့်သတ်မှတ်ခြင်းနှင့် ထုတ်လုပ်ခြင်းတစ်လျှောက် တူညီသော အဆုံးအဖြတ်ပေးသည့် အဆင့်များကို လိုက်နာကြောင်း သေချာစေပါသည်။

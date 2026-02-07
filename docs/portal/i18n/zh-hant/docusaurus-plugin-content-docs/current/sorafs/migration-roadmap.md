@@ -5,44 +5,46 @@ source: docs/portal/docs/sorafs/migration-roadmap.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: "SoraFS Migration Roadmap"
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Adapted from [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> 改編自 [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md)。
 
-# SoraFS Migration Roadmap (SF-1)
+# SoraFS 遷移路線圖 (SF-1)
 
-This document operationalises the migration guidance captured in
-`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
-execution-ready milestones, gating criteria, and owner checklists so storage,
-artifact hosting to SoraFS-backed publication.
+本文檔實施了中捕獲的遷移指南
+`docs/source/sorafs_architecture_rfc.md`。它將 SF-1 可交付成果擴展為
+執行就緒的里程碑、門控標準和所有者清單，以便存儲、
+工件託管到 SoraFS 支持的出版物。
 
-The roadmap is intentionally deterministic: every milestone names the required
-artifacts, command invocations, and attestation steps so downstream pipelines
-produce identical outputs and governance retains an auditable trail.
+路線圖是有意確定性的：每個里程碑都指定了所需的內容
+工件、命令調用和證明步驟，以便下游管道
+產生相同的輸出，治理保留可審計的跟踪。
 
-## Milestone Overview
+## 里程碑概述
 
-| Milestone | Window | Primary Goals | Must Ship | Owners |
-|-----------|--------|---------------|-----------|--------|
-| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and stage alias proofs while pipelines adopt expectation flags. | Nightly fixture verification, council-signed manifests, alias registry staging entries. | Storage, Governance, SDKs |
+|里程碑|窗口|主要目標|必鬚髮貨 |業主|
+|------------|--------|----------------|------------|--------|
+| **M1 – 確定性執行** |第 7-12 週 |當管道採用期望標誌時，強制執行簽名的裝置和階段別名證明。 |每晚固定裝置驗證、理事會簽署的清單、別名註冊表暫存條目。 |存儲、治理、SDK |
 
-Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
-changes to this roadmap MUST update the ledger to keep governance and release
-engineering in sync.
+里程碑狀態在 `docs/source/sorafs/migration_ledger.md` 中跟踪。全部
+對此路線圖的更改必須更新分類帳以保持治理和發布
+工程同步。
 
-## Workstreams
+## 工作流
 
-### 2. Deterministic Pinning Adoption
+### 2. 確定性固定採用
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
-| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
-| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
-| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
-| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
+|步驟|里程碑|描述 |所有者 |輸出|
+|------|------------|-------------|---------|--------|
+|固定排練| M0 |每週進行一次演練，將本地塊摘要與 `fixtures/sorafs_chunker` 進行比較。在 `docs/source/sorafs/reports/` 下發布報告。 |存儲提供商| `determinism-<date>.md` 帶有通過/失敗矩陣。 |
+|強制簽名 | M1 |如果簽名或清單發生偏差，`ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` 會失敗。開發優先權需要 PR 附帶的治理豁免。 |工具工作組 | CI 日誌、豁免票證鏈接（如果適用）。 |
+|期望旗幟| M1 |管道調用 `sorafs_manifest_stub` 並明確期望引腳輸出： |文檔 CI |更新了引用期望標誌的腳本（請參閱下面的命令塊）。 |
+|註冊表優先固定| M2| `sorafs pin propose` 和 `sorafs pin approve` 包裝清單提交； CLI 默認為 `--require-registry`。 |治理行動|註冊表 CLI 審核日誌、失敗提案的遙測。 |
+|可觀測性平價 | M3 |當塊庫存與註冊表清單不一致時，Prometheus/Grafana 儀表板會發出警報；警報連接到待命的操作人員。 |可觀察性|儀表板鏈接、警報規則 ID、GameDay 結果。 |
 
-#### Canonical publishing command
+#### 規範發布命令
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -56,50 +58,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Replace the digest, size, and CID values with the expected references recorded in
-the migration ledger entry for the artifact.
+將摘要、大小和 CID 值替換為記錄在中的預期引用
+工件的遷移分類帳條目。
 
-### 3. Alias Transition & Communications
+### 3. 別名轉換和通信
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`). | Governance, Docs | Proof bundle stored next to manifest + ledger comment with alias name. |
-| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
+|步驟|里程碑|描述 |所有者 |輸出|
+|------|------------|-------------|---------|--------|
+|暫存中的別名證明 | M1 |在 Pin 註冊表暫存環境中註冊別名聲明，並將 Merkle 證明附加到清單 (`--alias`)。 |治理，文檔 |證明包存儲在帶有別名的清單 + 賬本註釋旁邊。 |
+|證據執行 | M2|網關拒絕沒有新 `Sora-Proof` 標頭的清單； CI 獲得 `sorafs alias verify` 步來獲取證明。 |網絡|網關配置補丁+ CI 輸出捕獲驗證成功。 |
 
-### 4. Communication & Audit
+### 4.溝通與審計
 
-- **Ledger discipline:** every state change (fixture drift, registry submission,
-  alias activation) must append a dated note to
-  `docs/source/sorafs/migration_ledger.md`.
-- **Governance minutes:** council sessions approving pin registry changes or
-  alias policies must reference both this roadmap and the ledger.
-- **External comms:** DevRel publishes status updates at each milestone (blog +
-  changelog excerpt) highlighting deterministic guarantees and alias timelines.
+- **賬本規則：**每次狀態變化（夾具漂移、註冊表提交、
+  別名激活）必須附加註明日期的註釋
+  `docs/source/sorafs/migration_ledger.md`。
+- **治理會議紀要：** 理事會會議批准 PIN 註冊更改或
+  別名策略必須引用此路線圖和分類賬。
+- **外部通訊：** DevRel 在每個里程碑發布狀態更新（博客 +
+  變更日誌摘錄）強調確定性保證和別名時間表。
 
-## Dependencies & Risks
+## 依賴性和風險
 
-| Dependency | Impact | Mitigation |
+|依賴|影響 |緩解措施 |
 |------------|--------|------------|
-| Pin Registry contract availability | Blocks M2 pin-first rollout. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
-| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
-| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
+| Pin 註冊合同可用性 |阻止 M2 引腳優先推出。 |在 M2 之前進行階段合約並進行重播測試；保持包絡回退直至無回歸。 |
+|理事會簽名密鑰 |艙單信封和登記處批准所必需的。 |簽字儀式記錄在`docs/source/sorafs/signing_ceremony.md`中；旋轉帶有重疊和分類帳註釋的密鑰。 |
+| SDK 發布節奏 |客戶必須在 M3 之前遵守別名證明。 |將 SDK 發布窗口與里程碑門保持一致；將遷移清單添加到發布模板。 |
 
-Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
-and should be cross-referenced when adjustments are made.
+剩餘風險和緩解措施反映在 `docs/source/sorafs_architecture_rfc.md` 中
+並在調整時應相互參考。
 
-## Exit Criteria Checklist
+## 退出標準清單
 
-| Milestone | Criteria |
-|-----------|----------|
-| M1 | - Nightly fixture job green for seven consecutive days. <br /> - Staging alias proofs verified in CI. <br /> - Governance ratifies expectation flag policy. |
+|里程碑|標準|
+|------------|----------|
+| M1 | - 每晚固定工作連續七天呈綠色。 <br /> - 在 CI 中驗證暫存別名證明。 <br /> - 治理批准預期標誌政策。 |
 
-## Change Management
+## 變革管理
 
-1. Propose adjustments via PR updating this file **and**
-   `docs/source/sorafs/migration_ledger.md`.
-2. Link supporting governance minutes and CI evidence in the PR description.
-3. On merge, notify storage + DevRel mailing list with summary and expected
-   operator actions.
+1. 通過 PR 更新此文件提出調整**和**
+   `docs/source/sorafs/migration_ledger.md`。
+2. PR 描述中支持治理會議紀要和 CI 證據的鏈接。
+3. 合併時，通知存儲 + DevRel 郵件列表以及摘要和預期
+   操作員的動作。
 
-Following this procedure ensures the SoraFS rollout remains deterministic,
-auditable, and transparent across teams participating in the Nexus launch.
+遵循此過程可確保 SoraFS 部署保持確定性，
+參與 Nexus 發布的團隊之間可審核且透明。

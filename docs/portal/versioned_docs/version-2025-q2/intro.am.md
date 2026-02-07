@@ -7,41 +7,42 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e797879d1f77c8cfd62fcc67874d584f6bdeee9395faafe52fc33f26ce2e6a21
 source_last_modified: "2025-12-29T18:16:35.904811+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# እንኳን ወደ SORA Nexus የገንቢ ፖርታል በደህና መጡ
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository.
+የSORA Nexus የገንቢ ፖርታል በይነተገናኝ ሰነድ፣ ኤስዲኬ
+አጋዥ ስልጠናዎች፣ እና የኤፒአይ ማጣቀሻዎች ለNexus ኦፕሬተሮች እና Hyperledger Iroha
+አበርካቾች. በእጅ የሚሰሩ መመሪያዎችን በማንሳት ዋናውን የዶክመንቶች ጣቢያ ያሟላል።
+እና ከዚህ ማከማቻ በቀጥታ የመነጩ ዝርዝሮች።
 
-## What you can do here
+## እዚህ ምን ማድረግ ይችላሉ።
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- ** Norito ይወቁ - በአጠቃላይ እይታ ይጀምሩ እና ለመረዳት በፍጥነት ይጀምሩ።
+  ተከታታይነት ያለው ሞዴል እና የባይቴኮድ መገልገያ።
+- ** የቡት ስታራፕ ኤስዲኬዎች *** - ዛሬ ለጃቫ ስክሪፕት እና ዝገት ፈጣን ጅምርን ይከተሉ። ፒዘን፣
+  የምግብ አዘገጃጀቶች ሲሰደዱ ስዊፍት እና አንድሮይድ መመሪያዎች ይቀላቀላቸዋል።
+- ** የኤፒአይ ማጣቀሻዎችን አስስ *** - የ Torii OpenAPI ገጽ የቅርብ ጊዜውን REST ያቀርባል
+  ዝርዝር መግለጫ እና የውቅረት ሰንጠረዦች ወደ ቀኖናዊው ማርክ ዳውን ይመለሳሉ
+  ምንጮች.
+- ** ማሰማራቶችን አዘጋጁ *** - የሚሰራ የሩጫ መጽሐፍት (ቴሌሜትሪ ፣ ሰፈራ ፣ Nexus
+  ተደራቢዎች) ከ `docs/source/` ተልከዋል እና በዚህ ጣቢያ ላይ እንደሚታየው
+  ፍልሰት እየገፋ ይሄዳል።
 
-## Current status
+## ወቅታዊ ሁኔታ
 
-- ✅ Docusaurus v3 scaffolding with live pages for Norito and SDK quickstarts.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`.
-- ⏳ Migrating the remaining guides from `docs/source/`.
-- ⏳ Adding preview builds and linting to the documentation CI.
+- ✅ Docusaurus v3 ስካፎልዲንግ ከቀጥታ ገፆች ጋር ለNorito እና ኤስዲኬ ፈጣን ጅምር።
+- ✅ Torii OpenAPI ተሰኪ ወደ `npm run sync-openapi` ተሽሯል።
+- ⏳ የቀሩትን መመሪያዎች ከ`docs/source/` ማዛወር።
+- ⏳ የቅድመ እይታ ግንባታዎችን ማከል እና በሰነድ CI ላይ መያያዝ።
 
-## Getting involved
+#መሳተፍ
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
-  `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- ለአካባቢ ልማት ትዕዛዞች `docs/portal/README.md` ይመልከቱ (`npm install`፣
+  `npm run start`፣ `npm run build`)።
+- የይዘት ፍልሰት ተግባራት ከ`DOCS-*` የመንገድ ካርታ እቃዎች ጋር ክትትል ይደረግባቸዋል።
+  አስተዋጽዖዎች እንኳን ደህና መጡ-የወደብ ክፍሎች ከ`docs/source/` እና ገጹን ያክሉ
+  ወደ ጎን አሞሌ.
+- የመነጨ ቅርስ (ዝርዝር መግለጫዎች ፣ ሰንጠረዦችን ማዋቀር) ካከሉ ግንባታውን ይመዝግቡ
+  ወደፊት አስተዋጽዖ አበርካቾች በቀላሉ እንዲያድሱት ትእዛዝ ስጥ።

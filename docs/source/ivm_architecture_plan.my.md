@@ -7,82 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da8a99adbbcf1d8b209a25da32e256c0dad2860633f373d7410a3a91d790c938
 source_last_modified: "2026-01-21T19:17:13.236818+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Architecture Refactor Plan
+#IVM Architecture Refactor Plan
 
-This plan captures the short-term milestones for reshaping the Iroha Virtual Machine
-(IVM) into clearer layers while preserving security and performance characteristics.
-It focuses on isolating responsibilities, making host integrations safer, and
-preparing the Kotodama language stack for extraction into a standalone crate.
+ဤအစီအစဥ်သည် Iroha Virtual Machine ကို ပြန်လည်ပုံဖော်ခြင်းအတွက် ရေတိုမှတ်တိုင်များကို ဖမ်းယူထားသည်။
+(IVM) လုံခြုံရေးနှင့် စွမ်းဆောင်ရည်လက္ခဏာများကို ထိန်းသိမ်းထားစဉ် ပိုမိုရှင်းလင်းသော အလွှာများအဖြစ်သို့။
+၎င်းသည် တာဝန်ဝတ္တရားများကို သီးခြားခွဲထုတ်ခြင်း၊ အိမ်ရှင်ပေါင်းစည်းခြင်းများကို ပိုမိုဘေးကင်းစေရန်နှင့်၊
+သီးခြားသေတ္တာထဲသို့ ထုတ်ယူရန်အတွက် Kotodama ဘာသာစကားအတွဲကို ပြင်ဆင်နေပါသည်။
 
-## Goals
+## ပန်းတိုင်
 
-1. **Layered runtime façade** – introduce an explicit runtime interface so the VM
-   core can be embedded behind a narrow trait and alternative front-ends can evolve
-   without touching internal modules.
-2. **Host/syscall boundary  hardening** – route syscall dispatch through a
-   dedicated adapter that enforces ABI policy and pointer validation before any host
-   code executes.
-3. **Language/tooling separation** – move Kotodama specific code to a new crate and
-   keep only the bytecode execution surface in `ivm`.
-4. **Configuration cohesion** – unify acceleration and feature toggles so they are
-   driven through `iroha_config`, removing environment-based knobs in production
-   paths.
+1. ** Layered runtime façade** – VM သည် တိကျပြတ်သားသော runtime interface ကို မိတ်ဆက်ပေးသည် ။
+   core ကို ကျဉ်းမြောင်းသော စရိုက်နောက်တွင် မြှုပ်နှံထားနိုင်ပြီး အစားထိုး ရှေ့စွန်းများ တိုးလာနိုင်သည်။
+   အတွင်းပိုင်း module များကိုမထိဘဲ။
+2. **host/syscall boundary hardening** – route syscall dispatch မှတဆင့်၊
+   ABI မူဝါဒနှင့် pointer validation ကို မည်သည့် host မဆိုရှေ့မှောက်တွင် ကျင့်သုံးသည့် သီးခြား adapter
+   code ကို execute ။
+3. **ဘာသာစကား/ကိရိယာ ခွဲခြားခြင်း** – Kotodama တိကျသောကုဒ်ကို သေတ္တာအသစ်တစ်ခုသို့ ရွှေ့ပြီး
+   bytecode execution မျက်နှာပြင်ကို `ivm` တွင်သာထားပါ။
+4. **Configuration cohesion** – အရှိန်အဟုန်နှင့် အင်္ဂါရပ်များကို ပေါင်းစပ်ထားသောကြောင့် ၎င်းတို့သည်
+   `iroha_config` ဖြင့် မောင်းနှင်ပြီး ထုတ်လုပ်မှုတွင် ပတ်ဝန်းကျင်အခြေခံ ခလုတ်များကို ဖယ်ရှားခြင်း၊
+   လမ်းကြောင်းများ။
 
 ## Phase Breakdown
 
-### Phase 1 – Runtime façade (in progress)
-- Add a `runtime` module that defines a `VmEngine` trait describing lifecycle
-  operations (`load_program`, `execute`, host plumbing).
-- Teach `IVM` to implement the trait.  This keeps the existing struct but allows
-  consumers (and future tests) to depend on the interface instead of concrete
-  types.
-- Start shedding direct module re-exports from `lib.rs` so callers import via the
-  façade when possible.
+### အဆင့် 1 – Runtime façade (လုပ်ဆောင်နေသည်)
+- ဘဝသံသရာကိုဖော်ပြသည့် `VmEngine` စရိုက်လက္ခဏာကို သတ်မှတ်ပေးသည့် `runtime` မော်ဂျူးကို ထည့်ပါ
+  လုပ်ငန်းဆောင်ရွက်မှုများ (`load_program`၊ `execute`၊ လက်ခံရေပိုက်လိုင်း)။
+- ဉာဉ်ကိုအကောင်အထည်ဖော်ရန် `IVM` သင်ပေးပါ။  ၎င်းသည် ရှိပြီးသား struct ကို ထိန်းသိမ်းထားသော်လည်း ခွင့်ပြုသည်။
+  စားသုံးသူများ (နှင့် အနာဂတ်စမ်းသပ်မှုများ) သည် ကွန်ကရစ်အစား အင်တာဖေ့စ်ပေါ်တွင် မှီတည်နေပါသည်။
+  အမျိုးအစားများ။
+- `lib.rs` မှ တိုက်ရိုက် module re-export များကို စတင်ဖွာခြင်းဖြင့် ခေါ်ဆိုသူများမှတဆင့် တင်သွင်းပါ။
+  ဖြစ်နိုင်လျှင် မျက်နှာစာ။
 
-**Security / performance impact**: The façade restricts direct access to internal
-state; only safe entry points are exposed.  This makes it easier to audit host
-interactions and reason about gas or TLV handling.
+**လုံခြုံရေး/စွမ်းဆောင်ရည်သက်ရောက်မှု**- မျက်နှာစာသည် အတွင်းပိုင်းသို့ တိုက်ရိုက်ဝင်ရောက်ခွင့်ကို ကန့်သတ်ထားသည်။
+ပြည်နယ်၊ ဘေးကင်းသော ဝင်ခွင့်အမှတ်များကိုသာ ဖော်ထုတ်ထားသည်။  ၎င်းသည် host ကိုစာရင်းစစ်ရန်ပိုမိုလွယ်ကူစေသည်။
+ဓာတ်ငွေ့ သို့မဟုတ် TLV ကိုင်တွယ်ခြင်းဆိုင်ရာ တုံ့ပြန်မှုများနှင့် အကြောင်းပြချက်။
 
-### Phase 2 – Syscall dispatcher
-- Introduce a `SyscallDispatcher` component that wraps `IVMHost` and enforces ABI
-  policy and pointer validation once, in one location.
-- Migrate the default host and mock hosts to use the dispatcher, removing
-  duplicated validation logic.
-- Make dispatcher pluggable so hosts can supply custom instrumentation without
-  bypassing safety checks.
-- Provide a `SyscallDispatcher::shared(...)` helper so cloned VMs can forward
-  syscalls through a shared `Arc<Mutex<..>>` host without each worker building
-  bespoke wrappers.
+### အဆင့် 2 – Syscall dispatcher
+- `IVMHost` ကို ခြုံပြီး ABI ကို ကျင့်သုံးသည့် `SyscallDispatcher` အစိတ်အပိုင်းကို မိတ်ဆက်ပေးပါ
+  မူဝါဒနှင့် ညွှန်ပြချက်ကို တစ်နေရာတည်းတွင် တစ်ကြိမ်၊ အတည်ပြုခြင်း။
+- dispatcher ကိုအသုံးပြုရန်၊ ဖယ်ရှားရန် မူရင်း host နှင့် mock host များကို ရွှေ့ပြောင်းပါ။
+  ထပ်တူပွားထားသော validation logic
+- host များမလိုအပ်ဘဲ စိတ်ကြိုက် instrumentation ကို ထောက်ပံ့ပေးနိုင်စေရန် dispatcher pluggable လုပ်ပါ။
+  လုံခြုံရေးစစ်ဆေးမှုများကို ကျော်ဖြတ်ခြင်း။
+- ပုံတူကူးထားသော VM များကို ထပ်ဆင့်ပို့နိုင်စေရန် `SyscallDispatcher::shared(...)` အကူအညီပေးသူကို ပေးပါ။
+  အလုပ်သမားတစ်ဦးစီမပါဘဲ မျှဝေထားသော `Arc<Mutex<..>>` host မှတဆင့် syscall များ
+  စိတ်ကြိုက်ထုပ်ပိုး။
 
-**Security / performance impact**: Centralised gating protects against hosts that
-forget to call `is_syscall_allowed`, and it allows future caching of pointer
-validations for repeated syscalls.
+**လုံခြုံရေး/စွမ်းဆောင်ရည် သက်ရောက်မှု**- ဗဟိုချုပ်ကိုင်မှု ဂိတ်ပေါက်သည် ထိုအိမ်ရှင်များကို အကာအကွယ်ပေးသည်။
+`is_syscall_allowed` ကို ခေါ်ရန် မေ့လျော့ပြီး ၎င်းသည် အနာဂတ်တွင် pointer ၏ သိမ်းဆည်းမှုကို ခွင့်ပြုသည်။
+ထပ်ခါတလဲလဲ syscalls များအတွက် တရားဝင်အတည်ပြုချက်များ။
 
-### Phase 3 – Kotodama extraction
-- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
-- Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
+### အဆင့် 3 – Kotodama ထုတ်ယူခြင်း။
+- Kotodama compiler ကို `crates/kotodama_lang` (`crates/ivm/src/kotodama`) သို့ ဖြည်ထားသည်။
+- VM စားသုံးသည့် အနည်းဆုံး bytecode API (`compile_to_ivm_bytecode`) ကို ပေးပါ။
 
-**Security / performance impact**: Decoupling lowers the attack surface of the VM
-core and allows language innovation without risking interpreter regressions.
+**လုံခြုံရေး/စွမ်းဆောင်ရည်သက်ရောက်မှု**- Decoupling သည် VM ၏ တိုက်ခိုက်မှုမျက်နှာပြင်ကို လျှော့ချပေးသည်။
+core နှင့် စကားပြန်ဆုတ်ယုတ်မှုများကို အန္တရာယ်မရှိဘဲ ဘာသာစကားဆန်းသစ်တီထွင်မှုကို ခွင့်ပြုသည်။### အဆင့် 4 – ဖွဲ့စည်းမှု စုစည်းမှု
+- runtime kill switches များအဖြစ် `iroha_config` မှတဆင့် Thread acceleration options (ဥပမာ၊ GPU backends) ကိုဖွင့်ထားစဉ်၊ ရှိပြီးသားပတ်ဝန်းကျင်ကို overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`)။
+- façade အသစ်မှတဆင့် `RuntimeConfig` အရာဝတ္တုကို ထုတ်ပြနိုင်စေရန် အိမ်ရှင်များကို ရွေးချယ်ပါ။
+  အရှိန်အဟုန်မြှင့်မူဝါဒများကို ပြတ်သားစွာ အဆုံးအဖြတ်ပေးသည်။
 
-### Phase 4 – Configuration consolidation
-- Thread acceleration options through `iroha_config` presets (e.g., enabling GPU backends) while keeping the existing environment overrides (`IVM_DISABLE_CUDA`, `IVM_DISABLE_METAL`) as runtime kill switches.
-- Expose a `RuntimeConfig` object through the new façade so hosts select
-  deterministic acceleration policies explicitly.
+**လုံခြုံရေး/စွမ်းဆောင်ရည်သက်ရောက်မှု**- env-based toggles များကို ဖယ်ရှားခြင်းသည် အသံတိတ်ခြင်းကို ရှောင်ရှားသည်။
+ဖွဲ့စည်းမှုပုံစံသည် ပျံ့လွင့်နေပြီး ဖြန့်ကျက်မှုများတစ်လျှောက် အဆုံးအဖြတ်ပေးသည့် အပြုအမူကို သေချာစေသည်။
 
-**Security / performance impact**: Eliminating env-based toggles avoids silent
-configuration drift and ensures deterministic behaviour across deployments.
+## ချက်ခြင်း နောက်တစ်ဆင့်တက်ပါ။
 
-## Immediate next steps
+- façade စရိုက်ကို ပေါင်းထည့်ကာ အဆင့်မြင့် ဖုန်းခေါ်ဆိုမှု ဆိုက်များကို အဆင့်မြှင့်တင်ခြင်းဖြင့် အဆင့် 1 ကို အပြီးသတ်ပါ
+  အဲဒီအပေါ်မှာ မူတည်တယ်။
+- façade နှင့် တမင်တကာ အများသူငှာ API များကိုသာ သေချာစေရန် အများသူငှာ ပြန်လည်တင်ပို့မှုများကို စာရင်းစစ်ပါ။
+  သေတ္တာထဲက ယိုစိမ့်။
+- သီးခြား module တစ်ခုတွင် syscall dispatcher API ကို နမူနာပုံစံလုပ်ပြီး ရွှေ့ပြောင်းပါ။
+  default host ကို တစ်ကြိမ် အတည်ပြုပြီးပါပြီ။
 
-- Finish Phase 1 by adding the façade trait and updating high-level call sites to
-  depend on it.
-- Audit public re-exports to ensure only the façade and deliberately public APIs
-  leak out of the crate.
-- Prototype the syscall dispatcher API in a separate module and migrate the
-  default host once validated.
-
-Progress on each phase will be tracked in `status.md` once the implementation is
-underway.
+အကောင်အထည်ဖော်ပြီးသည်နှင့် အဆင့်တစ်ခုစီ၏ တိုးတက်မှုကို `status.md` တွင် ခြေရာခံပါမည်။
+ဆောင်ရွက်ဆဲ။

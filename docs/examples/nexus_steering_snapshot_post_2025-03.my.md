@@ -7,12 +7,13 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0b30760d86224dcfe3a396b1f0270cc201afe73dfb6af5e3c8f85df9de5a9b76
 source_last_modified: "2025-12-29T18:16:35.075490+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Nexus Steering — Priority Snapshot (2025-03 wave)
+#Nexus စတီယာရင် — ဦးစားပေးလျှပ်တစ်ပြက် (2025-03 wave)
 
-Paste the following message into `#nexus-steering` (or include in the meeting
-invite) to circulate the 2025‑03 priority snapshot and request ACKs.
+အောက်ပါစာကို `#nexus-steering` (သို့မဟုတ် အစည်းအဝေးတွင် ထည့်သွင်းပါ။
+2025-03 ဦးစားပေးလျှပ်တစ်ပြက်ရိုက်ချက်အား ဖြန့်ဝေရန်နှင့် ACKs တောင်းဆိုရန်) ဖိတ်ခေါ်ပါ။
 
 ```
 Subject: 2025-03 SORA doc & SoraFS priority snapshot (ACK by Mar 4, 12:00 UTC)

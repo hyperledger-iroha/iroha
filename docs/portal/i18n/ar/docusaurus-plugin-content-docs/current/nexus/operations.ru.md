@@ -4,70 +4,72 @@ direction: rtl
 source: docs/portal/docs/nexus/operations.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-operations
-title: Runbook по операциям Nexus
-description: Практичный полевой обзор рабочего процесса оператора Nexus, отражающий `docs/source/nexus_operations.md`.
+المعرف: عمليات الترابط
+العنوان: دليل التشغيل للعملية Nexus
+الوصف: فحص شامل عملي لمشغل العملية Nexus، خارج `docs/source/nexus_operations.md`.
 ---
 
-Используйте эту страницу как быстрый справочник к `docs/source/nexus_operations.md`. Она концентрирует операционный чек-лист, точки управления изменениями и требования к телеметрии, которым должны следовать операторы Nexus.
+استخدم هذا القسم كالمحادثة المباشرة مع `docs/source/nexus_operations.md`. قائمة التحقق الخاصة بعملية التركيز، وضبط ومراقبة أجهزة القياس عن بعد التي تتبعها المشغلين Nexus.
 
-## Чек-лист жизненного цикла
+## قائمة الاختيار لدائرة الحياة
 
-| Этап | Действия | Доказательства |
+| إيتاب | الحقيقة | التصريح |
 |-------|--------|----------|
-| Предстарт | Проверить хэши/подписи релиза, подтвердить `profile = "iroha3"` и подготовить шаблоны конфигурации. | Вывод `scripts/select_release_profile.py`, журнал checksum, подписанный bundle манифестов. |
-| Выравнивание каталога | Обновить каталог `[nexus]`, политику маршрутизации и пороги DA по манифесту совета, затем сохранить `--trace-config`. | Вывод `irohad --sora --config ... --trace-config`, сохраненный с тикетом onboarding. |
-| Smoke & cutover | Запустить `irohad --sora --config ... --trace-config`, выполнить CLI smoke (`FindNetworkStatus`), проверить экспорт телеметрии и запросить admission. | Лог smoke-test + подтверждение Alertmanager. |
-| Штатный режим | Следить за dashboards/alerts, ротировать ключи по графику governance и синхронизировать configs/runbooks при изменении манифестов. | Протоколы квартального обзора, скриншоты дашбордов, ID тикетов ротации. |
+| مقدمة | تحقق من هذا/نشر الإصدار، وتحقق من `profile = "iroha3"`، وقم بضبط تكوينات الأقسام. | Вывод `scripts/select_release_profile.py`، المجموع الاختباري للمجلة، بيان الحزمة المصاحبة. |
+| كتالوج تفعيل | قم بقراءة الكتالوج `[nexus]`، والتنظيم السياسي، والأخطاء DA في البيان، ثم قم بتخزين `--trace-config`. | Вывод `irohad --sora --config ... --trace-config`، مدعوم بالتذكرة على متن الطائرة. |
+| الدخان والانقطاع | أدخل `irohad --sora --config ... --trace-config`، وحدد CLI smoke (`FindNetworkStatus`)، وتحقق من تصدير أجهزة القياس عن بعد، وتوقف عن الدخول. | سجل اختبار الدخان + تحديث Alertmanager. |
+| النظام الغذائي | قم بالانتقال إلى لوحات المعلومات/التنبيهات، وقم بتدوير المفاتيح في إدارة الرسومات ومزامنة التكوينات/دفاتر التشغيل من خلال تحديث البيانات. | نظرة عامة على البروتوكول، لقطة شاشة، تناوب تذكرة الهوية. |
 
-Подробный onboarding (замена ключей, шаблоны маршрутизации, шаги профиля релиза) остается в `docs/source/sora_nexus_operator_onboarding.md`.
+يتم العثور على الإعداد الجيد (كلمات رئيسية، جداول بيانات، بعض إصدارات الملف الشخصي) في `docs/source/sora_nexus_operator_onboarding.md`.
 
-## Управление изменениями
+## التحكم في القياس
 
-1. **Обновления релиза** - следите за объявлениями в `status.md`/`roadmap.md`; прикладывайте чек-лист onboarding к каждому PR релиза.
-2. **Изменения манифестов lane** - проверяйте подписанные bundles из Space Directory и архивируйте их в `docs/source/project_tracker/nexus_config_deltas/`.
-3. **Дельты конфигурации** - каждое изменение `config/config.toml` требует тикет с ссылкой на lane/data-space. Сохраняйте редактированную копию эффективной конфигурации при join/upgrade узлов.
-4. **Тренировки rollback** - ежеквартально репетируйте stop/restore/smoke; фиксируйте результаты в `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **Согласования compliance** - private/CBDC lanes должны получить одобрение compliance перед изменением политики DA или knobs редактирования телеметрии (см. `docs/source/cbdc_lane_playbook.md`).
+1. **إصدار التسليم** - خطوات التسليم في `status.md`/`roadmap.md`; قم باقتراح قائمة الاختيار onboarding من خلال إصدار العلاقات العامة.
+2. **ممر تغيير البيانات** - تحقق من حزم النشر من دليل الفضاء وقم بحفظها في `docs/source/project_tracker/nexus_config_deltas/`.
+3. **التكوينات** - عند تغيير `config/config.toml`، تحتاج إلى تذكرة عبر المسار/مساحة البيانات. قم بحفظ نسخة منقحة من التكوينات الفعالة عند الانضمام/الترقية.
+4. ** التراجع عن التدريبات ** - تكرار التوقف/الاستعادة/الدخان بشكل متكرر؛ قم بإصلاح النتائج في `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
+5. **الامتثال للامتثال** - يجب على الممرات الخاصة/CBDC الحصول على الامتثال للموافقة قبل تغيير السياسة DA أو مقابض تعديل أجهزة القياس عن بعد (سم. `docs/source/cbdc_lane_playbook.md`).
 
-## Телеметрия и SLOs
+## القياس عن بعد وSLOs
 
-- Дашборды: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, а также SDK-специфичные виды (например, `android_operator_console.json`).
-- Алерты: `dashboards/alerts/nexus_audit_rules.yml` и правила Torii/Norito transport (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- Метрики для мониторинга:
-  - `nexus_lane_height{lane_id}` - алерт при отсутствии прогресса три слота.
-  - `nexus_da_backlog_chunks{lane_id}` - алерт выше порогов для lane (по умолчанию 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` - алерт когда P99 превышает 900 ms (public) или 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` - алерт если 5-минутная доля ошибок >2%.
-  - `telemetry_redaction_override_total` - Sev 2 немедленно; убедитесь, что overrides имеют тикеты compliance.
-- Выполняйте чек-лист телеметрии из [Nexus telemetry remediation plan](./nexus-telemetry-remediation) минимум ежеквартально и прикладывайте заполненную форму к заметкам операционного обзора.
+- لوحات المفاتيح: `dashboards/grafana/nexus_lanes.json`، `nexus_settlement.json`، بالإضافة إلى مقاطع الفيديو الخاصة بـ SDK (على سبيل المثال، `android_operator_console.json`).
+- التنبيهات: `dashboards/alerts/nexus_audit_rules.yml` والنقل الصحيح Torii/Norito (`dashboards/alerts/torii_norito_rpc_rules.yml`).
+- مقاييس الرصد:
+  - `nexus_lane_height{lane_id}` - تنبيه عند التقدم بثلاث فتحات.
+  - `nexus_da_backlog_chunks{lane_id}` - تنبيه بشأن المسار التالي (عند الوصول إلى 64 عام / 8 خاص).
+  - `nexus_settlement_latency_seconds{lane_id}` - تنبيه عند P99 يصل إلى 900 مللي ثانية (عام) أو 1200 مللي ثانية (خاص).
+  - `torii_request_failures_total{scheme="norito_rpc"}` - تنبيه إذا كانت مدة الخدمة 5 دقائق > 2%.
+  - `telemetry_redaction_override_total` - Sev 2 غير محدد; تأكد من أن هذا يتجاوز امتثال التذاكر.
+- استخدم أجهزة القياس عن بعد من قائمة التحقق من [Nexus خطة معالجة القياس عن بعد](./nexus-telemetry-remediation) الحد الأدنى من التوصيل والتشغيل نموذج إخلاء المسؤولية عن عملية القرض.
 
-## Матрица инцидентов
+## أحداث ماتريس
 
-| Severity | Определение | Ответ |
-|----------|------------|----------|
-| Sev 1 | Нарушение изоляции data-space, остановка settlement >15 минут или порча голосования governance. | Пейджинг Nexus Primary + Release Engineering + Compliance, заморозить admission, собрать артефакты, выпустить коммуникации <=60 минут, RCA <=5 рабочих дней. |
-| Sev 2 | Нарушение SLA backlog lane, слепая зона телеметрии >30 минут, провал rollout манифеста. | Пейджинг Nexus Primary + SRE, смягчение <=4 часа, оформить follow-ups в течение 2 рабочих дней. |
-| Sev 3 | Не блокирующий дрейф (docs, alerts). | Зафиксировать в tracker и запланировать исправление в спринте. |
+| شدة | المقدمة | رد |
+|----------|-----------|----------|
+| سيف 1 | عزلة كبيرة لمساحة البيانات أو تسوية التسوية> 15 دقيقة أو حوكمة كاملة. | Пейдjinг Nexus Primary + Release Engineering + Compliance، ضمان القبول، اكتشاف القطع الأثرية، استخدام الاتصالات <= 60 دقيقة، RCA <= 5 أيام عمل. |
+| سيف 2 | حارة متراكمة لاتفاقية مستوى الخدمة (SLA)، مسافة بعيدة عن المنطقة المحددة > 30 دقيقة، تم إثبات بيان الطرح. | Пейдjinг Nexus Primary + SRE, смягчение <= 4 ساعات, إجراء متابعة في 2 يوم عمل. |
+| سيف 3 | لا يتم حظره (المستندات، التنبيهات). | قم بالتثبيت في المتعقب وتخطيط التنفيذ في Sprint. |
 
-Тикеты инцидентов должны фиксировать затронутые IDs lane/data-space, хэши манифестов, таймлайн, поддерживающие метрики/логи, и follow-up задачи/ответственных.
+تحتاج أحداث التذاكر إلى إصلاح مسار المعرفات الشخصية/مساحة البيانات، وهذه البيانات، والجدول الزمني، ودعم المقاييس/السجلات، والمتابعة задачи/ответственный.
 
-## Архив доказательств
+## أرشيف التوثيق
 
-- Храните bundles/manifestes/экспорты телеметрии в `artifacts/nexus/<lane>/<date>/`.
-- Сохраняйте редактированные configs + вывод `--trace-config` для каждого релиза.
-- Прикладывайте протоколы совета + подписанные решения при внесении изменений конфигурации или манифеста.
-- Храните еженедельные snapshots Prometheus по метрикам Nexus в течение 12 месяцев.
-- Фиксируйте правки runbook в `docs/source/project_tracker/nexus_config_deltas/README.md`, чтобы аудиторы знали, когда менялись обязанности.
+- قم بتحميل الحزم/البيانات/أجهزة القياس عن بعد الخاصة بالصادرات في `artifacts/nexus/<lane>/<date>/`.
+- قم بالاشتراك في التكوينات المعدلة + الإدخال `--trace-config` لكل إصدار.
+- قم بطرح البروتوكولات الأساسية + قرارات الدعم عند تغيير التكوين أو البيان.
+- قم بنشر اللقطات الأصلية Prometheus بمقياس Nexus في غضون 12 شهرًا.
+- قم بإصلاح دليل التشغيل الصحيح في `docs/source/project_tracker/nexus_config_deltas/README.md` لكي يعرف المدققون عندما يراجعون الالتزام.
 
-## Связанные материалы
+## مواد صديقة للبيئة
 
-- Обзор: [Nexus overview](./nexus-overview)
-- Спецификация: [Nexus spec](./nexus-spec)
-- Геометрия lane: [Nexus lane model](./nexus-lane-model)
-- Переход и routing shims: [Nexus transition notes](./nexus-transition-notes)
-- Onboarding операторов: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Ремедиация телеметрии: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- النموذج: [نظرة عامة على Nexus](./nexus-overview)
+- المواصفات: [مواصفات Nexus](./nexus-spec)
+- الحارة الهندسية: [Nexus نموذج الحارة](./nexus-lane-model)
+- حشوات المتابعة والتوجيه: [ملاحظات الانتقال Nexus](./nexus-transition-notes)
+- تجهيز المشغلين: [تجهيز مشغل Sora Nexus](./nexus-operator-onboarding)
+- علاج القياس عن بعد: [Nexus خطة معالجة القياس عن بعد](./nexus-telemetry-remediation)

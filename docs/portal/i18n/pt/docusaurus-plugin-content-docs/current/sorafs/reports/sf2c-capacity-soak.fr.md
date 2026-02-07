@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Rapport de soak d'accumulation de capacité SF-2c
+# Relatório de absorção de acumulação de capacidade SF-2c
 
-Date: 2026-03-21
+Data: 21/03/2026
 
 ## Portée
 
-Ce rapport consigne les tests déterministes de soak d'accumulation et de paiement de capacité SoraFS demandés
-dans la feuille de route SF-2c.
+Este relatório envia os testes determinados de absorção de acumulação e pagamento de capacidade SoraFS exigidos
+na folha da rota SF-2c.
 
-- **Soak multi-provider sur 30 jours:** Exécuté par
-  `capacity_fee_ledger_30_day_soak_deterministic` dans
+- **Mergulhe multi-provedor por 30 dias:** Executado por
+  `capacity_fee_ledger_30_day_soak_deterministic` em
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  Le harness instancie cinq providers, couvre 30 fenêtres de settlement et
-  valide que les totaux du ledger correspondent à une projection de référence
-  calculée indépendamment. Le test émet un digest Blake3 (`capacity_soak_digest=...`)
-  afin que CI puisse capturer et comparer le snapshot canonique.
+  Os provedores de instância Cinq aproveitam, cobrem 30 janelas de liquidação e
+  valide que todos os livros contábeis correspondem a uma projeção de referência
+  calculado indépendamment. O teste foi realizado com um resumo Blake3 (`capacity_soak_digest=...`)
+  então o CI pode capturar e comparar o snapshot canônico.
 - **Pénalités de sous-livraison:** Appliquées par
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (même fichier). Le test confirme que les seuils de strikes, cooldowns,
-  slashes de collateral et compteurs du ledger restent déterministes.
+  (mesmo arquivo). O teste confirmou que os seus ataques, cooldowns,
+  barras de garantia e contas do livro-razão restantes deterministas.
 
-## Exécution
+## Execução
 
-Relancez les validations de soak localement avec:
+Relance as validações de localização de imersão com:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Les tests se terminent en moins d'une seconde sur un laptop standard et ne
-nécessitent aucun fixture externe.
+Os testes terminam em menos de um segundo em um laptop padrão e não
+necessário nenhum acessório externo.
 
-## Observabilité
+## Observabilidade
 
-Torii expose maintenant des snapshots de crédit providers aux côtés des fee ledgers afin que les dashboards
-puissent gate sur les faibles soldes et penalty strikes:
+Torii expõe a manutenção de instantâneos de provedores de crédito nos registros de taxas nos painéis
+puissent gate sur les faibles soldes et penal strikes:
 
-- REST: `GET /v1/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
-  reflètent les champs du ledger vérifiés dans le test de soak. Voir
+- REST: `GET /v1/sorafs/capacity/state` envio de entradas `credit_ledger[*]` aqui
+  reflete os campos do livro-razão verificados no teste de imersão. Voir
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Import Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` trace les
-  compteurs de strikes exportés, les totaux de pénalités et le collateral engagé afin que
-  l'équipe on-call puisse comparer les baselines de soak avec les environnements live.
+- Importar arquivos de rastreamento Grafana: `dashboards/grafana/sorafs_capacity_penalties.json`
+  administradores de greves exportados, o total de penalidades e as garantias contratadas para que
+  A equipe de plantão pode comparar as linhas de base de imersão com os ambientes ao vivo.
 
 ## Suivi
 
-- Planifier des exécutions hebdomadaires de gate en CI pour rejouer le test de soak (smoke-tier).
-- Étendre le tableau Grafana avec les cibles de scrape Torii une fois que les exports de telemetry de production
+- Planeje as execuções hebdomadaires de gate en CI para refazer o teste de imersão (camada de fumaça).
+- Crie o quadro Grafana com os cabos de raspagem Torii uma vez que as exportações de telemetria de produção
   seront en ligne.

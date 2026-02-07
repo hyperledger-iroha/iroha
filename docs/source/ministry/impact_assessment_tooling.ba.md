@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2025-12-29T18:16:35.978367+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# Һөнәри баһалау инструменты (МИНФО-4б)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+Юл картаһы һылтанма: **МИНФО-4b — Impact баһалау инструменттары.**  
+Хужаһы: Идара итеү советы / Аналитика
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+Был иҫкәрмә документы `cargo xtask ministry-agenda impact` командаһы, тип хәҙер
+референдум пакеттары өсөн кәрәкле автоматлаштырылған хеш-ғаилә диффын етештерә. 1990 й.
+ҡорал ҡулланыу раҫланған көн тәртибе советы тәҡдимдәре, дубликаты реестры, һәм
+опциональ денилист/сәйәсәт снимок шулай рецензенттар аныҡ күрә ала, ниндәй
+бармаҡ эҙҙәре яңы, улар ғәмәлдәге сәйәсәт менән бәрелешә, һәм күпме яҙмалар .
+һәр хеш ғаиләһе үҙ өлөшөн индерә.
 
-## Inputs
+##
 
-1. **Agenda proposals.** One or more files that follow
-   [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
-   [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+1. **Көн һайын тәҡдимдәр.** Бер йәки бер нисә файл, улар үтәй
+   [`docs/source/ministry/agenda_council_proposal.md`] (agenda_council_proposal.md).
+   Уларҙы асыҡтан-асыҡ `--proposal <path>` менән йәки команданы күрһәтеү өсөн үтергә
+   каталогы аша `--proposal-dir <dir>` һәм һәр `*.json` файл был юл аҫтында
+   инә.
+2. **Дупликат реестры (теләкле).** JSON файл тап килтереп
+   `docs/examples/ministry/agenda_duplicate_registry.json`. Конфликттар 1990 й.
+   `source = "duplicate_registry"` буйынса хәбәр иткән.
+3. **Сәйәсәт снимок (теләһәгеҙ).** Еңел генә манифест, тип исемлеккә һәр .
+   бармаҡ эҙҙәре инде тормошҡа ашырылған GAR/Министрлыҡ сәйәсәте. Йөкләүсе көтә
+   аҫта күрһәтелгән схема (ҡара:
+   [`docs/examples/ministry/policy_snapshot_example.json`] (../../examples/ministry/policy_snapshot_example.json X)
+   тулы өлгө өсөн):
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+Теләһә ниндәй яҙма, уның `hash_family:hash_hex` бармаҡ эҙҙәре тәҡдим маҡсатына тап килә
+`source = "policy_snapshot"` буйынса хәбәр ителгән `policy_id` һылтанмаһы менән.
 
-## Usage
+## Ҡулланыу
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+Өҫтәмә тәҡдимдәрҙе ҡабатланған `--proposal` флагы аша йәки 2020 йылға күсерергә мөмкин.
+каталогты тәьмин итеү, унда тотош референдум партияһы бар:
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+Команда генерацияланған JSON stdout баҫтырып сығара, ҡасан `--out` төшөрөп ҡалдырылған.
 
-## Output
+## Сығыш
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+Отчет - был ҡул ҡуйылған артефак
+`artifacts/ministry/impact/` каталогы) түбәндәге структура менән:
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+Был JSON беркетергә һәр референдум досье менән бер рәттән нейтраль резюме шулай
+панелисттар, присяжныйҙар һәм идара итеү күҙәтеүселәре 2012 йылғы теүәл шартлау радиусын күрә ала.
+һәр тәҡдим. Сығыш детерминистик (хеш ғаиләһе тарафынан сорттарға бүлергә) һәм хәүефһеҙ
+CI/runbooks индереү; әгәр дубликаты реестр йәки сәйәсәт снимок үҙгәрештәр,
+бойороҡто яңынан эшләтеп, тауыш биреүҙең асылғансы яңыртылған артефактты беркетергә.
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> **Киләһе аҙым:** генерацияланған йоғонто отчетын туҡландырыу
+> [`cargo xtask ministry-panel packet`] (referendum_packet.md) шулай итеп
+> `ReferendumPacketV1` досьела хеш-ғаилә тарҡалыуын да, 1990 йылда ла үҙ эсенә ала.
+> ентекле конфликт исемлеге өсөн тәҡдим тикшерелгән.

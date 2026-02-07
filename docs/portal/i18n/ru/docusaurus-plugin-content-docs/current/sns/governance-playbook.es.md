@@ -4,222 +4,210 @@ direction: ltr
 source: docs/portal/docs/sns/governance-playbook.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Fuente canonica
-Esta pagina refleja `docs/source/sns/governance_playbook.md` y ahora sirve como
-la copia canonica del portal. El archivo fuente persiste para PRs de traduccion.
+:::обратите внимание на Фуэнте каноника
+Эта страница отражается `docs/source/sns/governance_playbook.md` и сейчас работает как
+каноническая копия портала. Архив сохраняется для PR-перевода.
 :::
 
 # Playbook de gobernanza del Servicio de Nombres Sora (SN-6)
 
-**Estado:** Borrador 2026-03-24 - referencia viva para la preparacion SN-1/SN-6  
-**Enlaces del roadmap:** SN-6 "Compliance & Dispute Resolution", SN-7 "Resolver & Gateway Sync", politica de direcciones ADDR-1/ADDR-5  
-**Prerequisitos:** Esquema de registro en [`registry-schema.md`](./registry-schema.md), contrato de API de registrador en [`registrar-api.md`](./registrar-api.md), guia UX de direcciones en [`address-display-guidelines.md`](./address-display-guidelines.md), y reglas de estructura de cuentas en [`docs/account_structure.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/account_structure.md).
+**Эстадо:** Боррадор 24 марта 2026 г. - живая ссылка для подготовки SN-1/SN-6  
+**Дополнительная дорожная карта:** SN-6 «Соответствие требованиям и разрешение споров», SN-7 «Резолвер и синхронизация шлюза», политика направлений ADDR-1/ADDR-5.  
+**Предварительные требования:** Регистрационный номер в [`registry-schema.md`](./registry-schema.md), соглашение об API-регистраторе в [`registrar-api.md`](./registrar-api.md), руководство UX по направлениям в [`address-display-guidelines.md`](./address-display-guidelines.md), а также правила структуры счетов в [`docs/account_structure.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/account_structure.md).
 
-Este playbook describe como los cuerpos de gobernanza del Sora Name Service (SNS)
-adoptan cartas, aprueban registros, escalan disputas, y prueban que los estados de
-resolver y gateway permanecen sincronizados. Cumple el requisito del roadmap de
-que la CLI `sns governance ...`, los manifiestos Norito y los artefactos de
-auditoria compartan una unica referencia operativa antes de N1 (lanzamiento
-publico).
+В этом сборнике пьес описана служба имен службы имен (SNS) cuerpos de gobernanza del Sora.
+принять карты, утвердить реестры, разрешить споры и разрешить, что лос-стадос-де-
+Резолвер и шлюз постоянно синхронизируются. Соберите требования к дорожной карте
+что CLI `sns governance ...`, манифесты Norito и артефакты
+аудитория, совместимая с уникальной референсией, действующей до N1 (lanzamiento
+Публикация).
 
-## 1. Alcance y audiencia
+## 1. Альканс и аудитория
 
-El documento esta dirigido a:
+Документ находится в указанном направлении:
 
-- Miembros del Consejo de Gobernanza que votan cartas, politicas de sufijos y
-  resultados de disputas.
-- Miembros de la junta de guardianes que emiten congelamientos de emergencia y
-  revisan reversiones.
-- Stewards de sufijos que operan colas de registrador, aprueban subastas y
+- Miembros del Consejo de Gobernanza que Votan Cartas, Politicas de Sufijos y
+  результаты споров.
+- Члены хунты стражей, которые излучают замороженные чрезвычайные ситуации и
+  ревизан реверсивный.
+- Суфийские стюарды, работающие с регистраторами, могут подтвердить их и
   gestionan repartos de ingresos.
-- Operadores de resolver/gateway responsables de la propagacion SoraDNS,
-  actualizaciones GAR y guardrails de telemetria.
-- Equipos de cumplimiento, tesoreria y soporte que deben demostrar que toda
-  accion de gobernanza dejo artefactos Norito auditables.
+- Операторы резолвера/шлюза, ответственные за распространение SoraDNS,
+  актуализация ГАР и ограждений телеметрии.
+- Эквипос де кумплименто, тесориа и поддержка, которые должны быть продемонстрированы сегодня.
+  аксьон де гобернанса дехо артефакты Norito проверяемые.
 
-Cubre las fases de beta cerrada (N0), lanzamiento publico (N1) y expansion (N2)
-listadas en `roadmap.md`, vinculando cada flujo de trabajo con la evidencia,
- dashboards y rutas de escalamiento requeridas.
+Cubre las fases de beta cerrada (N0), lanzamiento publico (N1) и расширение (N2)
+listadas en `roadmap.md`, Vinculando Cada Flujo de Trabajo Con La Evidencia,
+ панели мониторинга и необходимые маршруты восстановления.
 
-## 2. Roles y mapa de contactos
-
-| Rol | Responsabilidades principales | Artefactos y telemetria principales | Escalacion |
+## 2. Роли и карта контактов| Рол | Основные обязанности | Основные артефакты и телеметрия | Эскаласьон |
 |------|-------------------------------|-------------------------------------|------------|
-| Consejo de Gobernanza | Redacta y ratifica cartas, politicas de sufijos, veredictos de disputa y rotaciones de stewards. | `docs/source/sns/governance_addenda/`, `artifacts/sns/governance/*`, votos del consejo almacenados via `sns governance charter submit`. | Presidencia del consejo + tracker de agenda de gobernanza. |
-| Junta de Guardianes | Emite congelamientos soft/hard, canones de emergencia y revisiones de 72 h. | Tickets de guardian emitidos por `sns governance freeze`, manifiestos de override en `artifacts/sns/guardian/*`. | Guardia on-call (<=15 min ACK). |
-| Stewards de sufijo | Operan colas del registrador, subastas, niveles de precio y comunicacion con clientes; reconocen cumplimientos. | Politicas de steward en `SuffixPolicyV1`, hojas de referencia de precios, acuses de steward junto a memorandos regulatorios. | Lider del programa de stewards + PagerDuty por sufijo. |
-| Operaciones de registrador y facturacion | Operan endpoints `/v1/sns/*`, reconcilian pagos, emiten telemetria y mantienen snapshots de CLI. | API del registrador ([`registrar-api.md`](./registrar-api.md)), metricas `sns_registrar_status_total`, pruebas de pago en `artifacts/sns/payments/*`. | Duty manager del registrador y enlace de tesoreria. |
-| Operadores de resolver y gateway | Mantienen SoraDNS, GAR y estado del gateway alineados con eventos del registrador; transmiten metricas de transparencia. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md), `dashboards/alerts/soradns_transparency_rules.yml`. | SRE del resolver on-call + puente ops de gateway. |
-| Tesoreria y Finanzas | Aplica reparto 70/30, carve-outs de referidos, declaraciones fiscales/tesoreria y atestaciones SLA. | Manifiestos de acumulacion de ingresos, exportaciones Stripe/tesoreria, apendices KPI trimestrales en `docs/source/sns/regulatory/`. | Controller de finanzas + oficial de cumplimiento. |
-| Enlace de Cumplimiento y Regulacion | Rastrea obligaciones globales (EU DSA, etc.), actualiza covenants KPI y presenta divulgaciones. | Memos regulatorios en `docs/source/sns/regulatory/`, decks de referencia, entradas `ops/drill-log.md` para ensayos tabletop. | Lider de programa de cumplimiento. |
-| Soporte / SRE On-call | Maneja incidentes (colisiones, drift de facturacion, caidas de resolver), coordina mensajes a clientes y es dueno de runbooks. | Plantillas de incidente, `ops/drill-log.md`, evidencia de laboratorio, transcripciones Slack/war-room en `incident/`. | Rotacion on-call SNS + gestion SRE. |
+| Совет Гобернансы | Редакта и ратификация карт, политика суфиев, вередикты диспутов и ротации стюардов. | `docs/source/sns/governance_addenda/`, `artifacts/sns/governance/*`, голосование за список голосов через `sns governance charter submit`. | Президентство совета + трекер повестки дня губернатора. |
+| Хунта стражей | Выделите мягкие/твердые загустевшие вещества, правила экстренной помощи и изменения в течение 72 часов. | Билеты защиты, выданные для `sns governance freeze`, манифестируют переопределение в `artifacts/sns/guardian/*`. | Дежурство стражи порядка (<= 15 минут подтверждения). |
+| Суфийские стюарды | Работа с регистраторами, субастами, ценными моментами и общением с клиентами; reconocen cumplimentos. | Политика стюарда в `SuffixPolicyV1`, ссылки на драгоценные камни, обвинения стюарда в нормативных записках. | Лидер программы стюардов + PagerDuty для суфиев. |
+| Операции по регистрации и фактурированию | Операционные конечные точки `/v1/sns/*`, страницы согласования, телеметрия и создание снимков CLI. | API регистратора ([`registrar-api.md`](./registrar-api.md)), метрики `sns_registrar_status_total`, платежи на `artifacts/sns/payments/*`. | Дежурный менеджер по регистрации и хранению документов. |
+| Операции резольвера и шлюза | Mantienen SoraDNS, GAR и место подключения к шлюзу с событиями регистратора; передаваемые показатели прозрачности. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md), `dashboards/alerts/soradns_transparency_rules.yml`. | SRE резолвера по вызову + возможность работы шлюза. |
+| Тесория и финансы | Приложение 70/30, исключения из реферидо, налоговые декларации/тесорерия и аттестации SLA. | Манифесты по накоплению, экспорту Stripe/tesoreria, приложения по триместрам KPI в `docs/source/sns/regulatory/`. | Финансовый контролер + официальное лицо. |
+| Enlace de Cumplimiento и регулирование | Rastrea obligaciones globales (EU DSA и т. д.), актуализация соглашений KPI и представление разглашения. | Нормативные заметки на `docs/source/sns/regulatory/`, справочные материалы, входы `ops/drill-log.md` для настольных компьютеров. | Лидер программы накопления. |
+| Сопорте / SRE По вызову | Манежа инцидентов (столкновения, дрейф фактуры, кадастр резольвера), координация сообщений клиентам и дуэно де Runbooks. | Плантильи инцидентов, `ops/drill-log.md`, лабораторные доказательства, транскрипции Slack/war-room и `incident/`. | Вращение по вызову SNS + жест SRE. |
 
-## 3. Artefactos canonicos y fuentes de datos
-
-| Artefacto | Ubicacion | Proposito |
+## 3. Канонические артефакты и источники данных| Артефакт | Убикасьон | Предложение |
 |----------|----------|---------|
-| Carta + anexos KPI | `docs/source/sns/governance_addenda/` | Cartas firmadas con control de version, covenants KPI y decisiones de gobernanza referenciadas por votos de CLI. |
-| Esquema de registro | [`registry-schema.md`](./registry-schema.md) | Estructuras Norito canonicas (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
-| Contrato del registrador | [`registrar-api.md`](./registrar-api.md) | Payloads REST/gRPC, metricas `sns_registrar_status_total` y expectativas de governance hook. |
-| Guia UX de direcciones | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizados canonicos IH58 (preferido) y comprimidos (segunda mejor opcion) reflejados por wallets/explorers. |
-| Docs SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Derivacion deterministica de hosts, flujo de tailer de transparencia y reglas de alertas. |
-| Memos regulatorios | `docs/source/sns/regulatory/` | Notas de ingreso jurisdiccional (p. ej., EU DSA), acuses de steward, anexos plantilla. |
-| Drill log | `ops/drill-log.md` | Registro de ensayos de caos e IR requeridos antes de salir de fase. |
-| Almacen de artefactos | `artifacts/sns/` | Pruebas de pago, tickets de guardian, diffs de resolver, exportaciones KPI y salida firmada de `sns governance ...`. |
+| Карта + приложения KPI | `docs/source/sns/governance_addenda/` | Фирменные соглашения с контролем версий, соглашения KPI и решения губернаторов по результатам голосования CLI. |
+| Регистрация | [`registry-schema.md`](./registry-schema.md) | Estructuras Norito canonicas (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
+| Договор регистратора | [`registrar-api.md`](./registrar-api.md) | Полезные нагрузки REST/gRPC, метрики `sns_registrar_status_total` и ожидаемый хук управления. |
+| UX-инструкции по направлениям | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические версии IH58 (предпочтительно) и дополнительные (второй лучший вариант) предназначены для кошельков/исследователей. |
+| Документы SoraDNS/ГАР | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Детерминированное определение хостов, прозрачность и правила оповещений. |
+| Нормативные памятки | `docs/source/sns/regulatory/` | Notas de ingreso jurisdiccional (p. ej., EU DSA), acuses de steward, anexos plantilla. |
+| Журнал бурения | `ops/drill-log.md` | Регистрационных документов и IR требуется до начала процедуры. |
+| Альмасен де артефактов | `artifacts/sns/` | Платежи, билеты опекуна, различия резольвера, экспортные KPI и твердая фирма `sns governance ...`. |
 
-Todas las acciones de gobernanza deben referenciar al menos un artefacto en la
- tabla anterior para que los auditores reconstruyan el rastro de decision en 24
- horas.
+Todas las actiones de gobernanza должен ссылаться на все мои артефакты в
+ передняя табла, чтобы аудиторы реконструировали расстановку решения в 24
+ часы.
 
-## 4. Playbooks de ciclo de vida
+## 4. Учебники цикла жизни
 
-### 4.1 Mociones de carta y steward
+### 4.1 Карта действий и стюард
 
-| Paso | Dueno | CLI / Evidencia | Notas |
+| Пасо | Дуэно | CLI/Эвиденсия | Заметки |
 |------|-------|----------------|-------|
-| Redactar addendum y deltas KPI | Rapporteur del consejo + lider de steward | Plantilla Markdown en `docs/source/sns/governance_addenda/YY/` | Incluir IDs de covenant KPI, hooks de telemetria y condiciones de activacion. |
-| Presentar propuesta | Presidencia del consejo | `sns governance charter submit --input SN-CH-YYYY-NN.md` (produce `CharterMotionV1`) | La CLI emite manifiesto Norito en `artifacts/sns/governance/<id>/charter_motion.json`. |
-| Voto y reconocimiento de guardianes | Consejo + guardianes | `sns governance ballot cast --proposal <id>` y `sns governance guardian-ack --proposal <id>` | Adjuntar minutos con hash y pruebas de quorum. |
-| Aceptacion de steward | Programa de stewards | `sns governance steward-ack --proposal <id> --signature <file>` | Requerido antes de cambiar politicas de sufijos; guardar sobre en `artifacts/sns/governance/<id>/steward_ack.json`. |
-| Activacion | Ops del registrador | Actualizar `SuffixPolicyV1`, refrescar caches del registrador, publicar nota en `status.md`. | Timestamp de activacion en `sns_governance_activation_total`. |
-| Audit log | Cumplimiento | Agregar entrada a `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md` y drill log si hubo tabletop. | Incluir referencias a dashboards de telemetria y diffs de politica. |
+| Редактировать дополнение и изменения в KPI | Докладчик совета + руководитель стюарда | Plantilla Markdown ru `docs/source/sns/governance_addenda/YY/` | Включите идентификаторы ключевых показателей эффективности соглашения, перехватчики телеметрии и условия активации. |
+| Представляем пропуэста | Президентство Совета | `sns governance charter submit --input SN-CH-YYYY-NN.md` (производить `CharterMotionV1`) | Эмиссия CLI проявляется в Norito и `artifacts/sns/governance/<id>/charter_motion.json`. |
+| Голосование и признание опекунов | Совет + опекуны | `sns governance ballot cast --proposal <id>` и `sns governance guardian-ack --proposal <id>` | Дополнительные минуты с хэшем и проверками кворума. |
+| Прием стюарда | Программа стюардов | `sns governance steward-ack --proposal <id> --signature <file>` | Requerido antes de cambiar politicas de sufijos; охранять `artifacts/sns/governance/<id>/steward_ack.json`. |
+| Активация | Операции регистратора | Обновите `SuffixPolicyV1`, обновите кэши регистратора, публикуйте заметку на `status.md`. | Временная метка активации: `sns_governance_activation_total`. |
+| Журнал аудита | Кумплименто | Добавьте `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md` и бревно для сверления на стол. | Включите ссылки на информационные панели телеметрии и различия в политике. |
 
-### 4.2 Registros, subastas y aprobaciones de precio
+### 4.2 Регистры, субасты и подтверждения ценности1. **Предполетная подготовка:** Консультация регистратора `SuffixPolicyV1` для подтверждения уровня
+   precio, terminos disponibles y ventanas de gracia/redencion. Мантенер ходас де
+   Синхронизированные драгоценности с таблицей нивелов 3/4/5/6-9/10+ (база нивела +
+   «Коэффициенты суфии») документированы в дорожной карте.
+2. **Субастас с закрытой заявкой:** Премиум для парапулов, запуск цикла в течение 72 часов /
+   Выявление через 24 часа через `sns governance auction commit` / `... reveal`. Публикация ла
+   список коммитов (индивидуальные хеши) в `artifacts/sns/auctions/<name>/commit.json`
+   для того, чтобы аудиторы проверили алеаторию.
+3. **Проверка страницы:** Проверка действительных регистраторов `PaymentProofV1` против эл.
+   reparto de tesoreria (70% tesoreria / 30% управляющий с выделением реферидо <= 10%).
+   Защитите JSON Norito и `artifacts/sns/payments/<tx>.json` и подключите его
+   ответ регистратора (`RevenueAccrualEventV1`).
+4. **Крюк управления:** Дополнение `GovernanceHookV1` для номеров премиум/защищено.
+   con references a ids de propuesta del consejo y Firmas de steward. Крючки
+   Неверный результат в `sns_err_governance_missing`.
+5. **Активация + синхронизация преобразователя:** Укажите, что Torii излучает событие
+   зарегистрируйтесь, проверьте прозрачность распознавателя для подтверждения
+   que el nuevo estado GAR/zone se propago (версия 4.5).
+6. **Раскрытие информации клиенту:** Актуализация бухгалтерской книги, ориентированной на клиента.
+   (кошелек/проводник) через Los Fixtures Compartidos ru
+   [`address-display-guidelines.md`](./address-display-guidelines.md), гарантированно
+   рендеринг IH58 и совпадение с графическим интерфейсом/QR.
 
-1. **Preflight:** El registrador consulta `SuffixPolicyV1` para confirmar nivel de
-   precio, terminos disponibles y ventanas de gracia/redencion. Mantener hojas de
-   precios sincronizadas con la tabla de niveles 3/4/5/6-9/10+ (nivel base +
-   coeficientes de sufijo) documentada en el roadmap.
-2. **Subastas sealed-bid:** Para pools premium, ejecutar el ciclo 72 h commit /
-   24 h reveal via `sns governance auction commit` / `... reveal`. Publicar la
-   lista de commits (solo hashes) en `artifacts/sns/auctions/<name>/commit.json`
-   para que los auditores verifiquen la aleatoriedad.
-3. **Verificacion de pago:** Los registradores validan `PaymentProofV1` contra el
-   reparto de tesoreria (70% tesoreria / 30% steward con carve-out de referido <=10%).
-   Guardar el JSON Norito en `artifacts/sns/payments/<tx>.json` y enlazarlo en la
-   respuesta del registrador (`RevenueAccrualEventV1`).
-4. **Hook de gobernanza:** Adjuntar `GovernanceHookV1` para nombres premium/guarded
-   con referencias a ids de propuesta del consejo y firmas de steward. Hooks
-   faltantes resultan en `sns_err_governance_missing`.
-5. **Activacion + sync de resolver:** Una vez que Torii emite el evento de
-   registro, disparar el tailer de transparencia del resolver para confirmar
-   que el nuevo estado GAR/zone se propago (ver 4.5).
-6. **Divulgacion al cliente:** Actualizar el ledger orientado al cliente
-   (wallet/explorer) via los fixtures compartidos en
-   [`address-display-guidelines.md`](./address-display-guidelines.md), asegurando
-   que los renderizados IH58 y comprimidos coincidan con la guia de copia/QR.
-
-### 4.3 Renovaciones, facturacion y reconciliacion de tesoreria
-
-- **Flujo de renovacion:** Los registradores aplican las ventanas de gracia de
-  30 dias + redencion de 60 dias especificadas en `SuffixPolicyV1`. Despues de 60
-  dias, la secuencia de reapertura holandesa (7 dias, tarifa 10x decayendo 15%/dia)
-  se activa automaticamente via `sns governance reopen`.
-- **Reparto de ingresos:** Cada renovacion o transferencia crea un
-  `RevenueAccrualEventV1`. Las exportaciones de tesoreria (CSV/Parquet) deben
-  reconciliar con estos eventos diariamente; adjuntar pruebas en
+### 4.3 Реновации, фактурирование и согласование tesoreria- **Ремонтный ремонт:** Применимые регистраторы las ventanas de gracia de
+  30 диаметров + специальные изменения на 60 диаметров в `SuffixPolicyV1`. Despues de 60
+  в день, la secuencia de reapertura holandesa (7 дней, тариф 10x Decendendo 15%/в день)
+  Активируется автоматически через `sns governance reopen`.
+- **Reparto de ingresos:** Обновление или создание переноса
+  `RevenueAccrualEventV1`. Экспортные поставки (CSV/Паркет) доступны
+  примирение с этими событиями в одностороннем порядке; адъюнтар прюбас ru
   `artifacts/sns/treasury/<date>.json`.
-- **Carve-outs de referidos:** Porcentajes de referido opcionales se rastrean por
-  sufijo agregando `referral_share` a la politica de steward. Los registradores
-  emiten el split final y guardan manifiestos de referido junto a la prueba de pago.
-- **Cadencia de reportes:** Finanzas publica anexos KPI mensuales (registros,
-  renovaciones, ARPU, uso de disputas/bond) en
-  `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Los dashboards deben tomar
-  de las mismas tablas exportadas para que los numeros de Grafana coincidan con
-  la evidencia del ledger.
-- **Revision KPI mensual:** El checkpoint del primer martes empareja al lider de
-  finanzas, steward de turno y PM del programa. Abrir el [SNS KPI dashboard](./kpi-dashboard.md)
-  (embed del portal de `sns-kpis` / `dashboards/grafana/sns_suffix_analytics.json`),
-  exportar las tablas de throughput y revenue del registrador, registrar deltas en
-  el anexo y adjuntar los artefactos al memo. Disparar un incidente si la revision
-  encuentra brechas SLA (ventanas de freeze >72 h, picos de error del registrador,
-  drift de ARPU).
+- **Вырезки из ссылок:** Дополнительные ссылки могут быть растрачены для
+  sufijo agregando `referral_share` в политике стюарда. Лос-регистрадорес
+  финал раскола и защита манифестов реферидо в рамках а-ля пруэба-де-паго.
+- **Cadencia de reportes:** Финансовые публичные приложения, менуальные KPI (регистры,
+  ремонт, ARPU, использование споров/облигаций) ru
+  `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Лос дашборды Дебен Томар
+  экспортированные таблицы ошибок, которые совпадают с номерами Grafana
+  ла доказательство дель леджера.
+- **Пересмотр руководства по ключевым показателям эффективности:** Контрольная точка первого этапа эмпарежа аль-лидер де
+  финансы, управляющий делами и PM программы. Откройте [панель мониторинга SNS KPI] (./kpi-dashboard.md)
+  (встроить портал `sns-kpis` / `dashboards/grafana/sns_suffix_analytics.json`),
+  экспортировать таблицы пропускной способности и доходов регистратора, дельты регистратора
+  el anexo и дополнение к артефактам в памятке. Disparar un Incidente Si La Revision
+  нарушение SLA (замораживание >72 часов, изображения ошибок регистратора,
+  дрейф ARPU).
 
-### 4.4 Congelamientos, disputas y apelaciones
+### 4.4 Конгеламиентос, споры и апеласионы
 
-| Fase | Dueno | Accion y evidencia | SLA |
+| Фаза | Дуэно | Действия и доказательства | соглашение об уровне обслуживания |
 |-------|-------|-------------------|-----|
-| Solicitud de freeze soft | Steward / soporte | Presentar ticket `SNS-DF-<id>` con pruebas de pago, referencia de bond de disputa y selector(es) afectados. | <=4 h desde el ingreso. |
-| Ticket de guardian | Junta de guardianes | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` produce `GuardianFreezeTicketV1`. Guardar el JSON del ticket en `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h ejecucion. |
-| Ratificacion del consejo | Consejo de gobernanza | Aprobar o rechazar congelamientos, documentar decision enlazada al ticket de guardian y digest del bond de disputa. | Proxima sesion del consejo o voto asincrono. |
-| Panel de arbitraje | Cumplimiento + steward | Convocar panel de 7 jurados (segun roadmap) con boletas hasheadas via `sns governance dispute ballot`. Adjuntar recibos de voto anonimizados al paquete de incidente. | Veredicto <=7 dias despues del deposito de bond. |
-| Apelacion | Guardianes + consejo | Las apelaciones duplican el bond y repiten el proceso de jurados; registrar manifiesto Norito `DisputeAppealV1` y referenciar ticket primario. | <=10 dias. |
-| Descongelar y remediar | Registrador + ops de resolver | Ejecutar `sns governance unfreeze --selector <IH58> --ticket <id>`, actualizar estado del registrador y propagar diffs GAR/resolver. | Inmediato despues del veredicto. |
+| Запрос на замораживание мягких продуктов | Стюард/сопорте | Предъявить билет `SNS-DF-<id>` с pruebas de pago, ссылкой на облигацию де спора и селектором(ами) afectados. | <= 4 часа после входа. |
+| Билет де Хранитель | Хунта де Хранителей | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` производят `GuardianFreezeTicketV1`. Защитите JSON билета на `artifacts/sns/guardian/<id>.json`. | <= 30 минут подтверждения, <= 2 часа изгнания. |
+| Ратификация Совета | Губернаторский совет | При возникновении проблем с замерзанием задокументируйте решение, вложив его в билет опекуна и дайджест залога спора. | Проксима сессия совета или асинхронное голосование. |
+| Арбитражная панель | Cumplimiento + стюард | Вызов панели из 7 задач (сегодняшняя дорожная карта) с более ранними сообщениями через `sns governance dispute ballot`. Дополнительные ответы на анонимные голоса по пакету инцидентов. | Veredicto <=7 дней после депозита облигаций. |
+| Апеласьон | Хранители + совет | Las apelaciones duplican el Bond y repiten el proceso de jurados; регистратор манифестирует Norito `DisputeAppealV1` и первичный билет референсиара. | <=10 диам. |
+| Удаление заложенности и восстановление | Регистратор + оператор резольвера | Вызовите `sns governance unfreeze --selector <IH58> --ticket <id>`, обновите состояние регистратора и распространите различия GAR/резольвера. | Inmediato despues del veredicto. |Каноны экстренной помощи (активированные для опекунов <= 72 ч) остаются в силе.
+el Mismo Flujo Pero Requieren Requieren RetroActiva Del Consejo y una Nota De
+прозрачность в `docs/source/sns/regulatory/`.
 
-Los canones de emergencia (congelamientos activados por guardianes <=72 h) siguen
-el mismo flujo pero requieren revision retroactiva del consejo y una nota de
-transparencia en `docs/source/sns/regulatory/`.
+### 4.5 Распространение резольвера и шлюза
 
-### 4.5 Propagacion de resolver y gateway
-
-1. **Hook de evento:** Cada evento de registro emite al stream de eventos del
-   resolver (`tools/soradns-resolver` SSE). Ops de resolver se suscriben y
-   registran diffs via el tailer de transparencia
+1. **Привязка к событию:** Регистрируемое событие излучает поток событий
+   резольвер (`tools/soradns-resolver` SSE). Операции по разрешению проблем подписаны
+   Различия между регистраторами через el Tailer de Transparencia
    (`scripts/telemetry/run_soradns_transparency_tail.sh`).
-2. **Actualizacion de plantilla GAR:** Gateways deben actualizar plantillas GAR
-   referenciadas por `canonical_gateway_suffix()` y re-firmar la lista
-   `host_pattern`. Guardar diffs en `artifacts/sns/gar/<date>.patch`.
-3. **Publicacion de zonefile:** Usar el zonefile skeleton descrito en
-   `roadmap.md` (name, ttl, cid, proof) y empujarlo a Torii/SoraFS. Archivar el
-   JSON Norito en `artifacts/sns/zonefiles/<name>/<version>.json`.
-4. **Chequeo de transparencia:** Ejecutar `promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml`
-   para asegurar que las alertas permanecen verdes. Adjuntar la salida de texto
-   de Prometheus al reporte de transparencia semanal.
-5. **Auditoria de gateway:** Registrar muestras de headers `Sora-*` (politica de
-   cache, CSP, digest de GAR) y adjuntarlas al log de gobernanza para que
-   operadores puedan probar que el gateway sirvio el nuevo nombre con los
-   guardrails previstos.
+2. **Актуализация растений GAR:** Шлюзы должны быть актуализированы растениями GAR.
+   ссылки для `canonical_gateway_suffix()` и повторно утвердить список
+   `host_pattern`. Отличия Guardar в `artifacts/sns/gar/<date>.patch`.
+3. **Публикация файла зоны:** Используйте описание скелета файла зоны.
+   `roadmap.md` (имя, ttl, cid, доказательство) и установите Torii/SoraFS. Архив эль
+   JSON Norito и `artifacts/sns/zonefiles/<name>/<version>.json`.
+4. **Проверка прозрачности:** Выведите `promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml`.
+   Чтобы гарантировать, что оповещения будут постоянными. Добавление текста к тексту
+   Prometheus в отчете о прозрачности.
+5. **Аудитория шлюза:** Регистратор заголовков `Sora-*` (политика
+   кэш, CSP, дайджест GAR) и дополнения к журналу управления для этого
+   операторы могут проверить, что шлюз сирвио-эль-нуэво-номбре с лос-лос
+   ограждения превистос.
 
-## 5. Telemetria y reportes
+## 5. Телеметрия и отчеты
 
-| Senal | Fuente | Descripcion / Accion |
+| Сенал | Фуэнте | Описание/Действие |
 |--------|--------|----------------------|
-| `sns_registrar_status_total{result,suffix}` | Torii registrar handlers | Contador de exito/error para registros, renovaciones, congelamientos, transferencias; alerta cuando `result="error"` sube por sufijo. |
-| `torii_request_duration_seconds{route="/v1/sns/*"}` | Metricas de Torii | SLOs de latencia para handlers API; alimenta dashboards basados en `torii_norito_rpc_observability.json`. |
-| `soradns_bundle_proof_age_seconds` y `soradns_bundle_cid_drift_total` | Tailer de transparencia del resolver | Detecta pruebas obsoletas o drift de GAR; guardrails definidos en `dashboards/alerts/soradns_transparency_rules.yml`. |
-| `sns_governance_activation_total` | Governance CLI | Contador incrementado cuando un charter/addendum se activa; se usa para reconciliar decisiones del consejo vs addenda publicadas. |
-| `guardian_freeze_active` gauge | Guardian CLI | Rastrea ventanas de freeze soft/hard por selector; paginar a SRE si el valor queda en `1` mas alla del SLA declarado. |
-| KPI annex dashboards | Finanzas / Docs | Rollups mensuales publicados junto a memos regulatorios; el portal los embebe via [SNS KPI dashboard](./kpi-dashboard.md) para que stewards y reguladores accedan a la misma vista de Grafana. |
+| `sns_registrar_status_total{result,suffix}` | Torii обработчики регистратора | Контатор по выходу/ошибке в регистрации, обновлении, застывании, переносе; Оповещение о том, что `result="error"` будет отправлено на суд. |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | Метрики Torii | SLO задержки для API-обработчиков; Приборные панели alimenta basados ​​на `torii_norito_rpc_observability.json`. |
+| `soradns_bundle_proof_age_seconds` и `soradns_bundle_cid_drift_total` | Настройка прозрачности преобразователя | Обнаружены устаревшие или дрейфовые данные GAR; ограждения определены в `dashboards/alerts/soradns_transparency_rules.yml`. |
+| `sns_governance_activation_total` | Интерфейс командной строки управления | Contador приращено, когда устав/добавление действует; США предназначены для согласования решений совета и дополнений к публикациям. |
+| `guardian_freeze_active` манометр | Интерфейс командной строки Guardian | Переключатель режимов замораживания мягких/жестких пор; страница SRE, если это доблесть, указанная в `1`, с объявленным SLA. |
+| Информационные панели приложения KPI | Финансы / Документы | Свернутые мужские публикации вместе с нормативными записками; Портал встраивается через [панель мониторинга SNS KPI] (./kpi-dashboard.md), чтобы стюарды и регулирующие органы получили доступ к неправильному виду Grafana. |
 
-## 6. Requisitos de evidencia y auditoria
-
-| Accion | Evidencia a archivar | Almacen |
+## 6. Реквизиты для доказательств и аудиторий| Акцион | Свидетельство в архиве | Альмасен |
 |--------|----------------------|---------|
-| Cambio de carta / politica | Manifiesto Norito firmado, transcript CLI, diff KPI, acuse de steward. | `artifacts/sns/governance/<proposal-id>/` + `docs/source/sns/governance_addenda/`. |
-| Registro / renovacion | Payload `RegisterNameRequestV1`, `RevenueAccrualEventV1`, prueba de pago. | `artifacts/sns/payments/<tx>.json`, logs de API del registrador. |
-| Subasta | Manifiestos commit/reveal, semilla de aleatoriedad, spreadsheet de calculo de ganador. | `artifacts/sns/auctions/<name>/`. |
-| Congelar / descongelar | Ticket de guardian, hash de voto del consejo, URL de log de incidente, plantilla de comunicacion al cliente. | `artifacts/sns/guardian/<ticket>/`, `incident/<date>-sns-*.md`. |
-| Propagacion de resolver | Zonefile/GAR diff, extracto JSONL del tailer, snapshot Prometheus. | `artifacts/sns/resolver/<date>/` + reportes de transparencia. |
-| Ingreso regulatorio | Memo de ingreso, tracker de deadlines, acuse de steward, resumen de cambios KPI. | `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md`. |
+| Карта карты / политика | Манифесто Norito, расшифровка CLI, разница KPI, руководство стюарда. | `artifacts/sns/governance/<proposal-id>/` + `docs/source/sns/governance_addenda/`. |
+| Регистратура / реконструкция | Полезная нагрузка `RegisterNameRequestV1`, `RevenueAccrualEventV1`, prueba de pago. | `artifacts/sns/payments/<tx>.json`, журналы API регистратора. |
+| Субаста | Манифесты фиксации/раскрытия, таблица значений, электронная таблица расчета ганадора. | `artifacts/sns/auctions/<name>/`. |
+| Конгелярный/деконгелярный | Билет опекуна, хэш голоса совета, URL-адрес журнала инцидента, сообщение для клиента. | И18НИ00000141Х, И18НИ00000142Х. |
+| Распространение резольвера | Разница в файле зоны/GAR, экстракт JSONL хвостового файла, снимок Prometheus. | `artifacts/sns/resolver/<date>/` + отчеты о прозрачности. |
+| Ингресо регулирование | Записка о входе, отслеживание сроков, сигнал стюарда, возобновление выполнения KPI. | `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md`. |
 
-## 7. Checklist de gates de fase
+## 7. Контрольный список предварительных шагов
 
-| Fase | Criterios de salida | Bundle de evidencia |
+| Фаза | Критерии освобождения | Пакет доказательств |
 |-------|--------------------|--------------------|
-| N0 - Beta cerrada | Esquema de registro SN-1/SN-2, CLI de registrador manual, drill de guardian completado. | Motion de carta + ACK de steward, logs de dry-run del registrador, reporte de transparencia del resolver, entrada en `ops/drill-log.md`. |
-| N1 - Lanzamiento publico | Subastas + tiers de precio fijo activos para `.sora`/`.nexus`, registrador self-service, auto-sync de resolver, dashboards de facturacion. | Diff de hoja de precios, resultados CI del registrador, anexo de pagos/KPI, salida de tailer de transparencia, notas de ensayo de incidente. |
-| N2 - Expansion | `.dao`, APIs de reseller, portal de disputas, scorecards de steward, dashboards de analitica. | Capturas del portal, metricas SLA de disputas, exportes de scorecards de steward, charter de gobernanza actualizado con politicas de reseller. |
+| N0 - Бета-серрада | Инструкция по регистрации SN-1/SN-2, руководство по CLI для регистратора, полная тренировка по хранению. | Ходатайство о карте + подтверждение стюарда, журналы пробного запуска регистратора, отчет о прозрачности резольвера, ввод в `ops/drill-log.md`. |
+| N1 - Публичный доступ | Дополнительные + уровни активных действий для `.sora`/`.nexus`, самообслуживание регистратора, автоматическая синхронизация преобразователя, фактурные информационные панели. | Различия в ценах, результаты CI регистратора, привязки страниц/KPI, прозрачность информации о происшествии, заметки об инцидентах. |
+| N2 - Расширение | `.dao`, API реселлера, портал споров, системы показателей управляющего, аналитические панели мониторинга. | Захват портала, показатели SLA по спорам, экспорт оценочных карточек стюарда, актуализация правительственной хартии с политикой реселлера. |
 
-Las salidas de fase requieren drills tabletop registrados (registro happy path,
-freeze, outage de resolver) con artefactos adjuntos en `ops/drill-log.md`.
+Las salidas de fase requieren тренирует настольную регистрацию (счастливый путь регистра,
+зависание, отключение преобразователя) с дополнительными артефактами в `ops/drill-log.md`.
 
-## 8. Respuesta a incidentes y escalamiento
-
-| Trigger | Severidad | Dueno inmediato | Acciones obligatorias |
+## 8. Ответ на инцидент и эскалацию| Триггер | Северидад | Дуэно немедленно | Обязательные действия |
 |---------|----------|----------------|-----------------------|
-| Drift de resolver/GAR o pruebas obsoletas | Sev 1 | Resolver SRE + junta de guardianes | Paginar on-call del resolver, capturar salida del tailer, decidir si congelar nombres afectados, publicar estado cada 30 min. |
-| Caida de registrador, fallo de facturacion o errores API generalizados | Sev 1 | Duty manager del registrador | Detener nuevas subastas, cambiar a CLI manual, notificar stewards/tesoreria, adjuntar logs de Torii al doc de incidente. |
-| Disputa de nombre unico, mismatch de pago o escalamiento de cliente | Sev 2 | Steward + lider de soporte | Recopilar pruebas de pago, decidir si hace falta freeze soft, responder al solicitante dentro del SLA, registrar resultado en tracker de disputa. |
-| Hallazgo de auditoria de cumplimiento | Sev 2 | Enlace de cumplimiento | Redactar plan de remediacion, archivar memo en `docs/source/sns/regulatory/`, agendar sesion de consejo de seguimiento. |
-| Drill o ensayo | Sev 3 | PM del programa | Ejecutar escenario guionado desde `ops/drill-log.md`, archivar artefactos, marcar gaps como tareas del roadmap. |
+| Дрифт резолвера/GAR или устаревшие устройства | Сев 1 | Резольвер SRE + junta de Guardianes | Вызов дежурного решателя, захват хвостовика, решение замороженных проблемных номеров, публикация в штате каждый день 30 мин. |
+| Регистратор, фактурирование или общие ошибки API | Сев 1 | Дежурный регистратора | Определите новые подробности, создайте руководство по CLI, уведомите стюардов/сообщений, дополнительные журналы Torii в документах об инцидентах. |
+| Спор об уникальном номере, несоответствие адреса или запроса клиента | Сев 2 | Стюард + лидер сопорта | Получите ответ на запрос, примите решение, если он не будет заморожен, ответьте на запрос по SLA, регистрируйте результаты и отслеживайте споры. |
+| Зал аудиторий для повышения квалификации | Сев 2 | Enlace de cumplimento | Отредактируйте план исправления, заархивируйте заметку в `docs/source/sns/regulatory/`, запишитесь на сессию совета по следующему вопросу. |
+| Дрель или энсайо | Сев 3 | Премьера программы | Выполните сценарий, выполненный из `ops/drill-log.md`, артефакты архива, отметки пробелов в качестве дорожной карты. |
 
-Todos los incidentes deben crear `incident/YYYY-MM-DD-sns-<slug>.md` con tablas
-de ownership, logs de comandos y referencias a la evidencia producida en este
-playbook.
+Все инциденты, которые должны быть созданы `incident/YYYY-MM-DD-sns-<slug>.md` с таблицами
+право собственности, журналы команд и ссылки на доказательства, представленные в этом месте
+пьеса.
 
-## 9. Referencias
+## 9. Ссылки
 
 - [`registry-schema.md`](./registry-schema.md)
 - [`registrar-api.md`](./registrar-api.md)
@@ -228,9 +216,9 @@ playbook.
 - [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)
 - [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)
 - `ops/drill-log.md`
-- `roadmap.md` (SNS, DG, ADDR sections)
+- `roadmap.md` (разделы SNS, DG, ADDR)
 
-Mantener este playbook actualizado cuando cambien el texto de cartas, las
-superficies de CLI o los contratos de telemetria; las entradas del roadmap que
-referencian `docs/source/sns/governance_playbook.md` deben coincidir siempre con
-la revision mas reciente.
+Mantener este playbook актуализируется, когда вы добавляете текст карты, las
+интерфейсы CLI или контракты телеметрии; Лас-энтрадас-дель-дорожная карта, которая
+референт `docs/source/sns/governance_playbook.md` deben coincidir siempre con
+la ревизия mas reciente.

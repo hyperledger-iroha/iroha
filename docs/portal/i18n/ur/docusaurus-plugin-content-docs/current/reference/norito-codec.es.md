@@ -4,45 +4,45 @@ direction: rtl
 source: docs/portal/docs/reference/norito-codec.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Referencia del codec Norito
+# کوڈیک حوالہ Norito
 
-Norito es la capa de serializacion canonica de Iroha. Cada mensaje on-wire, payload en disco y API entre componentes usa Norito para que los nodos concuerden en bytes identicos incluso cuando ejecutan hardware distinto. Esta pagina resume las piezas moviles y apunta a la especificacion completa en `norito.md`.
+Norito Iroha کی کیننیکل سیریلائزیشن پرت ہے۔ ہر آن وائر پیغام ، ڈسک پے لوڈ ، اور اجزاء کے مابین API Norito استعمال کرتا ہے تاکہ نوڈس مختلف ہارڈ ویئر کو چلاتے وقت بھی یکساں بائٹس پر متفق ہوں۔ اس صفحے میں متحرک حصوں کا خلاصہ پیش کیا گیا ہے اور `norito.md` پر مکمل تصریح کی طرف اشارہ کیا گیا ہے۔
 
-## Diseno base
+## بیس ڈیزائن
 
-| Componente | Proposito | Fuente |
+| اجزاء | مقصد | ماخذ |
 | --- | --- | --- |
-| **Encabezado** | Encapsula los payloads con magic/version/schema hash, CRC64, longitud y etiqueta de compresion; v1 requiere `VERSION_MINOR = 0x00` y valida los flags del encabezado contra la mascara soportada (por defecto `0x00`). | `norito::header` - ver `norito.md` ("Header & Flags", raiz del repositorio) |
-| **Payload sin encabezado** | Codificacion determinista de valores usada para hashing/comparacion. El transporte on-wire siempre usa encabezado; los bytes sin encabezado son solo internos. | `norito::codec::{Encode, Decode}` |
-| **Compresion** | Zstd opcional (y aceleracion GPU experimental) seleccionada via el byte de compresion del encabezado. | `norito.md`, "Compression negotiation" |
+| ** ہیڈر ** | جادو/ورژن/اسکیما ہیش ، CRC64 ، لمبائی اور کمپریشن ٹیگ کے ساتھ پے لوڈ کو انفولیٹ کریں۔ V1 کو `VERSION_MINOR = 0x00` کی ضرورت ہوتی ہے اور سپورٹ ماسک (ڈیفالٹ `0x00`) کے خلاف ہیڈر کے جھنڈوں کی توثیق کرتا ہے۔ | `norito::header` - `norito.md` دیکھیں ("ہیڈر اور جھنڈے" ، ذخیرہ جڑ) |
+| ** ہیڈر کے بغیر پے لوڈ ** | ہیشنگ/مماثل کے لئے استعمال ہونے والی اقدار کا تعی .ن انکوڈنگ۔ آن وائر ٹرانسپورٹ ہمیشہ ہیڈر استعمال کرتی ہے۔ ہیڈر لیس بائٹس صرف اندرونی ہیں۔ | `norito::codec::{Encode, Decode}` |
+| ** کمپریشن ** | اختیاری ZSTD (اور تجرباتی GPU ایکسلریشن) ہیڈر کمپریشن بائٹ کے ذریعے منتخب کیا گیا۔ | `norito.md` ، "کمپریشن مذاکرات" |
 
-El registro de flags de layout (packed-struct, packed-seq, field bitset, compact lengths) vive en `norito::header::flags`. V1 usa flags `0x00` por defecto pero acepta flags explicitos dentro de la mascara soportada; los bits desconocidos se rechazan. `norito::header::Flags` se conserva para inspeccion interna y versiones futuras.
+لے آؤٹ پرچم رجسٹر (پیکڈ اسٹرک ، پیکڈ سیکس ، فیلڈ بیٹسیٹ ، کمپیکٹ لمبائی) `norito::header::flags` میں رہتا ہے۔ V1 `0x00` جھنڈوں کو بطور ڈیفالٹ استعمال کرتا ہے لیکن تائید شدہ ماسک کے اندر واضح جھنڈوں کو قبول کرتا ہے۔ نامعلوم بٹس کو مسترد کردیا جاتا ہے۔ `norito::header::Flags` کو داخلی معائنہ اور مستقبل کے اجراء کے لئے برقرار رکھا گیا ہے۔
 
-## Soporte de derive
+## سپورٹ حاصل کریں
 
-`norito_derive` ofrece derives `Encode`, `Decode`, `IntoSchema` y helpers JSON. Convenciones clave:
+`norito_derive` `Encode` ، `Decode` ، `IntoSchema` مشتق اور JSON مددگار پیش کرتا ہے۔ کلیدی کنونشنز:
 
-- Los derives generan rutas AoS y packed; v1 usa el layout AoS por defecto (flags `0x00`) salvo que los flags del encabezado opten por variantes packed. La implementacion vive en `crates/norito_derive/src/derive_struct.rs`.
-- Las funciones que afectan el layout (`packed-struct`, `packed-seq`, `compact-len`) son opt-in via flags del encabezado y deben codificarse/decodificarse de forma consistente entre peers.
-- Los helpers JSON (`norito::json`) proveen JSON determinista respaldado por Norito para APIs abiertas. Usa `norito::json::{to_json_pretty, from_json}` - nunca `serde_json`.
+- مشتق AOS اور بھرے راستے پیدا کرتا ہے۔ V1 پہلے سے طے شدہ AOS لے آؤٹ (جھنڈے `0x00`) کا استعمال کرتا ہے جب تک کہ ہیڈر کے جھنڈے بھری مختلف حالتوں کا انتخاب نہ کریں۔ عمل `crates/norito_derive/src/derive_struct.rs` میں رہتا ہے۔
+- وہ افعال جو لے آؤٹ کو متاثر کرتے ہیں (`packed-struct` ، `packed-seq` ، `compact-len`) ہیڈر جھنڈوں کے ذریعے آپٹ ان ہیں اور ہم عمروں کے مابین مستقل طور پر انکوڈ/ڈیکوڈ کیا جانا چاہئے۔
+- JSON مددگار (`norito::json`) کھلی APIs کے لئے Norito کے ذریعہ ڈٹرمینسٹک JSON فراہم کرتا ہے۔ `norito::json::{to_json_pretty, from_json}` استعمال کریں - کبھی `serde_json` نہیں۔
 
-## Multicodec y tablas de identificadores
+## ملٹی کوڈیک اور شناخت کنندہ میزیں
 
-Norito mantiene sus asignaciones multicodec en `norito::multicodec`. La tabla de referencia (hashes, tipos de clave, descriptores de payload) se mantiene en `multicodec.md` en la raiz del repositorio. Cuando se anade un nuevo identificador:
+Norito `norito::multicodec` میں اپنے ملٹی کوڈک اسائنمنٹس کو برقرار رکھتا ہے۔ ریفرنس ٹیبل (ہیش ، کلیدی اقسام ، پے لوڈ ڈسریکٹرز) کو ریپوزٹری کی جڑ میں `multicodec.md` پر برقرار رکھا جاتا ہے۔ جب ایک نیا شناخت کنندہ شامل کیا جاتا ہے:
 
-1. Actualiza `norito::multicodec::registry`.
-2. Extiende la tabla en `multicodec.md`.
-3. Regenera los bindings downstream (Python/Java) si consumen el mapa.
+1. `norito::multicodec::registry` کو اپ ڈیٹ کریں۔
+2. `multicodec.md` پر ٹیبل میں توسیع کریں۔
+3. اگر وہ نقشہ کھاتے ہیں تو بہاو بائنڈنگز (ازگر/جاوا) کو دوبارہ تخلیق کریں۔
 
-## Regenerar docs y fixtures
+## دستاویزات اور فکسچر کو دوبارہ تیار کریں
 
-Con el portal alojando por ahora un resumen en prosa, usa las fuentes Markdown upstream como fuente de verdad:
+پورٹل کے ساتھ اب کے لئے ایک پروس سمری کی میزبانی کرنے کے ساتھ ، یہ حقیقت کے ماخذ کے طور پر اپ اسٹریم مارک ڈاون ذرائع کو استعمال کرتا ہے۔
 
-- **Spec**: `norito.md`
-- **Tabla multicodec**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
-
-Cuando la automatizacion de Docusaurus entre en produccion, el portal se actualizara mediante un script de sync (seguido en `docs/portal/scripts/`) que extrae los datos de estos archivos. Hasta entonces, manten esta pagina alineada manualmente cada vez que cambie la spec.
+- ** مخصوص **: `norito.md`
+- ** ملٹی کوڈیک ٹیبل **: `multicodec.md`
+- ** بینچ مارک **: `crates/norito/benches/`
+- ** گولڈن ٹیسٹ **: `crates/norito/tests/`جب Docusaurus آٹومیشن پروڈکشن میں جاتا ہے تو ، پورٹل کو مطابقت پذیری اسکرپٹ (`docs/portal/scripts/` میں پیروی کیا جاتا ہے) کا استعمال کرتے ہوئے اپ ڈیٹ کیا جائے گا جو ان فائلوں سے ڈیٹا نکالتا ہے۔ اس وقت تک ، جب بھی آپ قیاس کو تبدیل کرتے ہیں تو اس صفحے کو دستی طور پر منسلک رکھیں۔

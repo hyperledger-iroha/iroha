@@ -4,46 +4,46 @@ direction: rtl
 source: docs/portal/docs/sorafs/multi-source-rollout.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: multi-source-rollout
-title: ملٹی سورس رول آؤٹ اور پرووائیڈر بلیک لسٹنگ رن بک
-sidebar_label: ملٹی سورس رول آؤٹ رن بک
-description: مرحلہ وار ملٹی سورس رول آؤٹس اور ہنگامی پرووائیڈر بلیک لسٹنگ کے لیے آپریشنل چیک لسٹ۔
+المعرف: طرح متعدد المصادر
+العنوان: رولات دوارة متعددة ومبتكرة للتعلم الآلي
+Sidebar_label: رول سورس متعدد آؤٹ رن بک
+الوصف: رحلة حرب متعددة الأدوار وسلسلة ألعاب كلاسيكية لشهر أبريل.
 ---
 
-:::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/runbooks/multi_source_rollout.md` کی عکاسی کرتا ہے۔ جب تک پرانا ڈاکیومنٹیشن سیٹ ریٹائر نہ ہو جائے، دونوں نقول کو ہم آہنگ رکھیں۔
+:::ملاحظة مستند ماخذ
+هذه هي الصفحة `docs/source/sorafs/runbooks/multi_source_rollout.md`. عندما لا يكون هناك أي مشكلة في خدعة القرصنة الإلكترونية، لا داعي للقلق.
 :::
 
-## مقصد
+## القصد
 
-یہ رن بک SRE اور آن کال انجینئرز کو دو اہم ورک فلو میں رہنمائی کرتی ہے:
+إنها SRE وهي من بين العاملين في مجال تطوير الأعمال:
 
-1. ملٹی سورس آرکسٹریٹر کو کنٹرولڈ ویوز میں رول آؤٹ کرنا۔
-2. موجودہ سیشنز کو غیر مستحکم کیے بغیر خراب کارکردگی والے پرووائیڈرز کو بلیک لسٹ کرنا یا ان کی ترجیح کم کرنا۔
+1. يلعب محررو الأخبار المتعددة دورًا رئيسيًا في التحكم في البيانات.
+2. تتوفر شبكات أخرى غير قابلة للاسترداد لبرامج العمل والمطورات التي تعمل على تقليص حجمها أو إرجاعها.
 
-یہ فرض کرتی ہے کہ SF-6 کے تحت فراہم کردہ orchestration stack پہلے ہی ڈیپلائے ہے (`sorafs_orchestrator`, gateway chunk-range API، اور telemetry exporters).
+يجب أن نفترض أن SF-6 موجود تحت إطار مكدس التزامن الذي تم تجميعه (`sorafs_orchestrator`، وواجهة برمجة التطبيقات (API) لمجموعة البوابة، ومصدري القياس عن بعد).
 
-> **مزید دیکھیں:** [آرکسٹریٹر آپریشنز رن بک](./orchestrator-ops.md) فی رن طریقۂ کار (scoreboard capture، مرحلہ وار rollout toggles، اور rollback) میں تفصیل دیتی ہے۔ لائیو تبدیلیوں کے دوران دونوں حوالوں کو ساتھ استعمال کریں۔
+> **المزيد من التفاصيل:** [تعليقات آركستر رن بك](./orchestrator-ops.md) فيرن تكتيك (التقاط لوحة النتائج، وتبديل بدء تشغيل الحرب، والتراجع) تفاصيل هذه المقالة. لايو تبديليوں من خلال دوران دونوں حوالو الذي يتم استخدامه في الكريں.
 
-## 1. قبل از عمل توثیق
-
-1. **گورننس ان پٹس کی تصدیق کریں۔**
-   - تمام امیدوار پرووائیڈرز کو range capability payloads اور stream budgets کے ساتھ `ProviderAdvertV1` envelopes شائع کرنے چاہئیں۔ `/v1/sorafs/providers` سے ویلیڈیٹ کریں اور متوقع capability فیلڈز سے موازنہ کریں۔
-   - latency/failure rates فراہم کرنے والے telemetry snapshots ہر canary رن سے پہلے 15 منٹ سے کم پرانے ہونے چاہئیں۔
-2. **کنفیگریشن اسٹیج کریں۔**
-   - آرکسٹریٹر کی JSON کنفیگریشن کو layered `iroha_config` ٹری میں محفوظ کریں:
+## 1. قبل القيام بالعمل الصحيح1. ** متابعة تصفح الإنترنت. **
+   - كل ما يتعلق بدوارات القدرة على نطاق الحمولات وميزانيات الدفق مثل مغلفات `ProviderAdvertV1` شائعة الاستخدام. `/v1/sorafs/providers` يتميز بقدرته على التوقع والقدرة على تحقيق الأداء المتوازن.
+   - معدلات الكمون/الفشل عرض لقطات القياس عن بعد لطائر الكناري لمدة 15 دقيقة فقط.
+2. **الكتابة التاريخية.**
+   - المؤلف الرئيسي لتكوين JSON ذو الطبقات `iroha_config` هو أحد أهم المقالات:
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     JSON میں rollout سے متعلق حدود (`max_providers`, retry budgets) اپڈیٹ کریں۔ staging/production میں وہی فائل دیں تاکہ فرق کم رہے۔
-3. **canonical fixtures چلائیں۔**
-   - manifest/token environment variables سیٹ کریں اور deterministic fetch چلائیں:
+     يتم تطبيق JSON على نطاق واسع (`max_providers`، إعادة محاولة الميزانيات) . التدريج / الإنتاج يتميز بفارق كبير.
+3. **التركيبات الأساسية.**
+   - متغيرات بيئة البيان/الرمز المميز ومتغيرات الجلب الحتمية:
 
      ```bash
      sorafs_cli fetch \
@@ -58,55 +58,50 @@ description: مرحلہ وار ملٹی سورس رول آؤٹس اور ہنگا
        --json-out artifacts/canary.fetch.json
      ```
 
-     environment variables میں manifest payload digest (hex) اور ہر canary پرووائیڈر کے لیے base64-encoded stream tokens شامل ہونے چاہئیں۔
-   - `artifacts/canary.scoreboard.json` کو پچھلے release سے compare کریں۔ کوئی نیا غیر اہل پرووائیڈر یا وزن میں >10% تبدیلی review مانگتی ہے۔
-4. **ٹیلیمیٹری کی وائرنگ چیک کریں۔**
-   - `docs/examples/sorafs_fetch_dashboard.json` میں Grafana export کھولیں۔ آگے بڑھنے سے پہلے یقینی بنائیں کہ `sorafs_orchestrator_*` metrics staging میں populate ہو رہی ہیں۔
+     تحتوي متغيرات البيئة على ملخص الحمولة الصافية (ست عشري) وملف كناري يحتوي على رموز دفق مشفرة بـ base64 تتضمن المزيد.
+   - مقارنة الإصدار `artifacts/canary.scoreboard.json` بالإصدار الجديد. أي جديد آخر هو الوزن أو العرض >10% مراجعة بديلة.
+4. **الطفل الصغير الصغير.**
+   - `docs/examples/sorafs_fetch_dashboard.json` Grafana قدرة التصدير. يتم نشر المزيد من البيانات عبر مقاييس `sorafs_orchestrator_*`.
 
-## 2. ہنگامی پرووائیڈر بلیک لسٹنگ
+## 2. إنشاء نسخة تجريبية إلكترونية
 
-جب کوئی پرووائیڈر خراب chunks فراہم کرے، مستقل timeouts دے، یا compliance checks میں فیل ہو تو یہ طریقہ کار اپنائیں۔
+عند تنفيذ هذه الخطوات، ستساعدك قطع قطع العمل والمهلات المستقلة وفحوصات الامتثال على تنفيذ هذه الخطوات.1. **ثبوت محفوظ الكري.**
+   - هذا هو أفضل ملخص لجلب البطاقات من إكسبورت (إخراج `--json-out`). لدينا مؤشرات قطعة، وأسماء مستعارة، وملخص عدم التطابق في السجلات.
+   - `telemetry::sorafs.fetch.*` أهداف سے متعلقہ لاگ مقتطفات محفوظ کریں۔
+2. **تجاوز فوري.**
+   - صانع لقطة القياس عن بعد يعاقب مارك كري (`penalty=true` أو `token_health` من المشبك `0`) کریں)۔ كل بناء لوحة النتائج هو الجزء الخاص بك الذي يستبعد كل شيء.
+   - اختبارات الدخان المخصصة لـ `sorafs_cli fetch` `--deny-provider gw-alpha` تعمل على نشر القياس عن بعد توقعًا لتمرين مسار الفشل.
+   - توسيع نطاق تحويل القياس عن بعد/حزمة التكوين إعادة النشر (التدريج → الكناري → الإنتاج). تم إنشاء سجل الحوادث هذا.
+3. **تجاوز التصنيف.**
+   - جلب لاعبا أساسيا أساسيا دوبارہ چلایں۔ لم يتم إثبات تسجيل لوحة النتائج `policy_denied` وقد أدى ذلك إلى ظهور علامة غير مؤهلة.
+   - `sorafs_orchestrator_provider_failures_total` لم تعد هناك حاجة إلى المزيد من تقنية الدفع.
+4. ** مغامرات طويلة الأمد.**
+   - إذا كان العرض > 24 ساعة لمدة 24 ساعة، يمكنك الإعلان عن تدوير أو تعليق تذكرة الحوكمة. لن يتم حذف تسجيل الدخول من قائمة رفض تسجيل اللقطات ولقطات القياس عن بعد.
+5. ** رول بيك بروتوكول.**- قم بتمديد القائمة التي تم رفضها، وإعادة نشر البطاقة، ولقطة جديدة للوحة النتائج محفوظات. تم العثور على حادثة تشريح الجثة بعد الوفاة والتي تسببت في مقتل منسلك.
 
-1. **ثبوت محفوظ کریں۔**
-   - تازہ ترین fetch summary ایکسپورٹ کریں (`--json-out` کا output)۔ ناکام chunk indices، پرووائیڈر aliases، اور digest mismatches ریکارڈ کریں۔
-   - `telemetry::sorafs.fetch.*` targets سے متعلقہ لاگ excerpts محفوظ کریں۔
-2. **فوری override لگائیں۔**
-   - آرکسٹریٹر کو دیے گئے telemetry snapshot میں پرووائیڈر کو penalized مارک کریں (`penalty=true` سیٹ کریں یا `token_health` کو `0` پر clamp کریں)۔ اگلا scoreboard build خود بخود پرووائیڈر کو exclude کر دے گا۔
-   - ad-hoc smoke tests کے لیے `sorafs_cli fetch` میں `--deny-provider gw-alpha` پاس کریں تاکہ telemetry propagation کا انتظار کیے بغیر failure path exercise ہو۔
-   - متاثرہ ماحول میں اپڈیٹ شدہ telemetry/config bundle دوبارہ deploy کریں (staging → canary → production)۔ تبدیلی کو incident log میں دستاویز کریں۔
-3. **override ویلیڈیٹ کریں۔**
-   - canonical fixture fetch دوبارہ چلائیں۔ تصدیق کریں کہ scoreboard نے پرووائیڈر کو `policy_denied` وجہ کے ساتھ ineligible مارک کیا ہے۔
-   - `sorafs_orchestrator_provider_failures_total` چیک کریں تاکہ انکار شدہ پرووائیڈر کے لیے کاؤنٹر مزید نہ بڑھے۔
-4. **طویل مدتی پابندی بڑھائیں۔**
-   - اگر پرووائیڈر >24 h کے لیے بلاک رہے گا تو اس کے advert کو rotate یا suspend کرنے کے لیے governance ticket بنائیں۔ ووٹ پاس ہونے تک deny list برقرار رکھیں اور telemetry snapshots اپڈیٹ کرتے رہیں تاکہ پرووائیڈر دوبارہ scoreboard میں نہ آئے۔
-5. **رول بیک پروٹوکول۔**
-   - پرووائیڈر بحال کرنے کے لیے اسے deny list سے ہٹا دیں، دوبارہ deploy کریں، اور نیا scoreboard snapshot محفوظ کریں۔ تبدیلی کو incident postmortem کے ساتھ منسلک کریں۔
+## 3.رحلہ حرب رول آؤٹپلان
 
-## 3. مرحلہ وار رول آؤٹ پلان
+| رحلةہ | دارہ کار | لا بد لي من سغنلز | Go/No-Go معاير |
+|-------|-----------|-------------|----------------|
+| **المعمل** | مخصوص التكامل کلسٹر | حمولات التركيبات ثابتة لجلب CLI | تمام القطع التي تم تسجيلها، عدادات فشل الموفر صفر في المرة الواحدة، نسبة إعادة المحاولة < 5%. |
+| ** التدريج ** | مکمل التحكم في مستوى التدريج | Grafana لوحة القيادة منسلک؛ قواعد التنبيه مخصصة للتحذير فقط | `sorafs_orchestrator_active_fetches` موجود بعد الصفر للواتس؛ لا يوجد توافق `warn/critical`. |
+| **كناري** | نسبة المشروع ≥10% | جهاز بيجر خاموش ٹیليمیٹری إدارة الوقت الحقيقي | نسبة إعادة المحاولة < 10%، تقتصر حالات فشل الموفر على النظراء المزعجين، خط الأساس المرحلي للرسم البياني لزمن الوصول ±20% وفقًا لذلك. |
+| **التوفر العام** | 100% رول آؤٹ | قواعد النداء فعال | 24 ساعة تک `NoHealthyProviders` کی صفر أخطاء، نسبة إعادة المحاولة مستحکم، لوحات SLA للوحة القيادة سبز. |
 
-| مرحلہ | دائرہ کار | لازمی سگنلز | Go/No-Go معیار |
-|-------|-----------|--------------|----------------|
-| **Lab** | مخصوص integration کلسٹر | fixtures payloads کے ساتھ دستی CLI fetch | تمام chunks کامیاب ہوں، provider failure counters صفر پر رہیں، retry ratio < 5%. |
-| **Staging** | مکمل control-plane staging | Grafana dashboard منسلک؛ alert rules صرف warning-only موڈ میں | `sorafs_orchestrator_active_fetches` ہر ٹیسٹ رن کے بعد صفر پر واپس آئے؛ کوئی `warn/critical` الرٹ نہ لگے۔ |
-| **Canary** | پروڈکشن ٹریفک کا ≤10% | pager خاموش مگر ٹیلیمیٹری real-time مانیٹر | retry ratio < 10%، provider failures صرف معلوم noisy peers تک محدود، latency histogram staging baseline ±20% کے مطابق۔ |
-| **General Availability** | 100% رول آؤٹ | pager rules فعال | 24 h تک `NoHealthyProviders` کی صفر errors، retry ratio مستحکم، dashboard SLA panels سبز۔ |
+ہررحلے میں:
 
-ہر مرحلے میں:
+1. مطلوب `max_providers` وإعادة محاولة الميزانيات لاستخدام برنامج JSON.
+2. تظهر التركيبات الأساسية والتحويلات غير الواضحة خلل `sorafs_cli fetch` أو اختبارات تكامل SDK.
+3. لوحة النتائج + الأعمال الفنية الموجزة محفوظات الكريں وسجل الإصدار الذي تم إصداره في كل مرة.
+4. قم برحلة عبر الإنترنت عبر الاتصال عبر لوحات معلومات القياس عن بعد عبر الإنترنت.## 4. إمكانية الملاحظة وخطافات الحوادث
 
-1. مطلوبہ `max_providers` اور retry budgets کے ساتھ آرکسٹریٹر JSON اپڈیٹ کریں۔
-2. canonical fixture اور ماحول کے نمائندہ manifest کے خلاف `sorafs_cli fetch` یا SDK integration tests چلائیں۔
-3. scoreboard + summary artifacts محفوظ کریں اور release record کے ساتھ منسلک کریں۔
-4. اگلے مرحلے پر جانے سے پہلے on-call انجینئر کے ساتھ telemetry dashboards ریویو کریں۔
+- **المقاييس:** تستخدم أداة Alertmanager `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` و`sorafs_orchestrator_retries_total` لإدارة المعلومات. تحدث اللغة بشكل عام بسبب البيانات التي تؤدي إلى تدهور البيانات.
+- **السجلات:** `telemetry::sorafs.fetch.*` تستهدف المزيد من الأهداف عبر الإنترنت. `event=complete status=failed` يتم إجراء عملية الفرز بشكل متزامن.
+- **لوحات النتائج:** هي لوحة النتائج قطعة أثرية طويلة الأمد محفوظ كريك. مراجعات امتثال JSON والتراجع المرحلي لتتبع الأدلة أيضًا.
+- **لوحات المعلومات:** لوحة Grafana الأساسية (`docs/examples/sorafs_fetch_dashboard.json`) التي تتضمن قواعد التنبيه الخاصة بمجلدات النسخ و`docs/examples/sorafs_fetch_alerts.yaml`.
 
-## 4. Observability اور Incident Hooks
+## 5. الاتصال والتوثيق
 
-- **Metrics:** یقینی بنائیں کہ Alertmanager `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` اور `sorafs_orchestrator_retries_total` کو مانیٹر کر رہا ہے۔ اچانک اسپائک عام طور پر یہ بتاتا ہے کہ پرووائیڈر لوڈ میں degrade ہو رہا ہے۔
-- **Logs:** `telemetry::sorafs.fetch.*` targets کو مشترکہ لاگ ایگریگیٹر پر روٹ کریں۔ `event=complete status=failed` کے لیے محفوظ تلاشیں بنائیں تاکہ triage تیز ہو۔
-- **Scoreboards:** ہر scoreboard artifact کو طویل مدتی اسٹوریج میں محفوظ کریں۔ JSON compliance reviews اور staged rollbacks کے لیے evidence trail بھی ہے۔
-- **Dashboards:** canonical Grafana board (`docs/examples/sorafs_fetch_dashboard.json`) کو پروڈکشن فولڈر میں کلون کریں اور `docs/examples/sorafs_fetch_alerts.yaml` کی alert rules شامل کریں۔
-
-## 5. Communication اور Documentation
-
-- ہر deny/boost تبدیلی کو operations changelog میں timestamp، آپریٹر، وجہ اور متعلقہ incident کے ساتھ لاگ کریں۔
-- جب provider weights یا retry budgets بدلیں تو SDK ٹیموں کو مطلع کریں تاکہ کلائنٹ سائیڈ توقعات ہم آہنگ رہیں۔
-- GA مکمل ہونے کے بعد `status.md` میں rollout summary اپڈیٹ کریں اور اس رن بک ریفرنس کو release notes میں archive کریں۔
+- يؤدي رفض/تعزيز تغيير سجل العمليات إلى الطابع الزمني، والسجل، وما يتعلق بالحادث الذي يستمر باستمرار.
+- عندما تقوم أوزان الموفر أو إعادة محاولة الميزانيات المتوافقة مع SDK بتوضيح كيفية توقع توقعات الشبكة.
+- تم استكمال GA بعد `status.md` بإصدار ملخص للكتابة وتسجيل الملاحظات في أرشيف ملاحظات الإصدار.

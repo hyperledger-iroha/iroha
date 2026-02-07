@@ -4,45 +4,47 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: بدء سريع ل Norito
-description: ابن وتحقق وانشر عقد Kotodama باستخدام ادوات الاصدار والشبكة الافتراضية ذات العقدة الواحدة.
-slug: /norito/quickstart
+Название: بدء سريع ل Norito
+описание: ابن وتحقق وانشر عقد Kotodama باستخدام ادوات الاصدار والشبكة الفتراضية ذات العقدة الواحدة.
+слизень: /norito/quickstart
 ---
 
-يعكس هذا الدليل العملي سير العمل الذي نتوقع ان يتبعه المطورون عند تعلم Norito و Kotodama لاول مرة: تشغيل شبكة حتمية بعقدة واحدة، تجميع عقد، اجراء dry-run محلي، ثم ارساله عبر Torii باستخدام CLI المرجعي.
+Он сказал, что Сэнсэй Уилсон был в центре внимания в конце прошлого года. Norito и Kotodama по запросу: Пробный запуск был выполнен с помощью Torii и запущен CLI.
 
-يكتب عقد المثال زوج مفتاح/قيمة في حساب المستدعي حتى تتمكن من التحقق من الاثر الجانبي مباشرة عبر `iroha_cli`.
+Он был показан Стоуном Миссисипи/Миссисипи в фильме "Старый человек". Во время установки `iroha_cli`.
 
 ## المتطلبات
 
-- [Docker](https://docs.docker.com/engine/install/) مع تفعيل Compose V2 (يستخدم لتشغيل peer العينة المحدد في `defaults/docker-compose.single.yml`).
-- سلسلة ادوات Rust (1.76+) لبناء الثنائيات المساعدة اذا لم تقم بتنزيل المنشورة.
-- الثنائيات `koto_compile` و`ivm_run` و`iroha_cli`. يمكنك بناؤها من checkout الـ workspace كما هو موضح ادناه او تنزيل artifacts الاصدار المطابقة:
+- [Docker](https://docs.docker.com/engine/install/) в Compose V2 (отключен одноранговый узел с `defaults/docker-compose.single.yml`).
+- Версия Rust (1.76+) была создана в 1999 году в 1980-х годах.
+- Проверьте `koto_compile` и `ivm_run` и `iroha_cli`. Чтобы получить возможность оформить заказ в рабочей области, вам нужно будет просмотреть артефакты:
 
 ```sh
 cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
-> الثنائيات اعلاه امنة للتثبيت بجانب بقية workspace.
-> لا ترتبط مطلقا بـ `serde`/`serde_json`؛ يتم فرض Norito codecs من البداية الى النهاية.
+> Откройте рабочее пространство для рабочего пространства.
+> لا ترتبط مطلقا بـ `serde`/`serde_json`; Кодеки Norito используются в различных приложениях.
 
 ## 1. تشغيل شبكة تطوير بعقدة واحدة
 
-يتضمن المستودع bundle من Docker Compose مولد بواسطة `kagami swarm` (`defaults/docker-compose.single.yml`). يقوم بربط genesis الافتراضي وتكوين العميل و health probes بحيث يكون Torii متاحا على `http://127.0.0.1:8080`.
+Создайте пакет для Docker. Создайте файл `kagami swarm` (`defaults/docker-compose.single.yml`). يقوم بربط Genesis الافتراضي وتكوين العميل и датчики здоровья بحيث يكون Torii متاحا على `http://127.0.0.1:8080`.
 
 ```sh
 docker compose -f defaults/docker-compose.single.yml up --build
 ```
 
-اترك الحاوية تعمل (في المقدمة او مفصولة). جميع اوامر CLI اللاحقة تستهدف هذا الـ peer عبر `defaults/client.toml`.
+اترك الحاوية تعمل (في المقدمة او مفصولة). Откройте CLI и подключите одноранговый узел `defaults/client.toml`.
 
 ## 2. كتابة العقد
 
-انشئ مجلد عمل واحفظ مثال Kotodama البسيط:
+Сообщение от пользователя Kotodama:
 
 ```sh
 mkdir -p target/quickstart
@@ -67,11 +69,11 @@ seiyaku Hello {
 KO
 ```
 
-> يفضل حفظ مصادر Kotodama تحت التحكم بالنسخ. توجد ايضا امثلة مستضافة على البوابة ضمن [معرض امثلة Norito](./examples/) اذا كنت تريد نقطة بداية اغنى.
+> يفضل حفظ مصادر Kotodama تحت التحكم بالنسخ. Вы можете получить доступ к файлу [Norito](./examples/) اذا. Он сказал, что это не так.
 
-## 3. التجميع و dry-run مع IVM
+## 3. Проверка и пробный запуск IVM
 
-قم بتجميع العقد الى bytecode IVM/Norito (`.to`) ثم نفذه محليا للتأكد من نجاح syscalls للمضيف قبل لمس الشبكة:
+Введите байт-код IVM/Norito (`.to`) для получения дополнительной информации. Системные вызовы вызываются при вызове:
 
 ```sh
 koto_compile target/quickstart/hello.ko \
@@ -82,16 +84,16 @@ koto_compile target/quickstart/hello.ko \
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-يطبع runner سجل `info("Hello from Kotodama")` ويجري syscall `SET_ACCOUNT_DETAIL` على المضيف الوهمي. اذا كان الثنائي الاختياري `ivm_tool` متاحا، فان `ivm_tool inspect target/quickstart/hello.to` يعرض ABI header و feature bits و entrypoints المصدرة.
+Вызовите бегуна `info("Hello from Kotodama")` и выполните системный вызов `SET_ACCOUNT_DETAIL` для запуска. Для этого используется `ivm_tool` и `ivm_tool inspect target/quickstart/hello.to` для заголовка ABI, функциональных битов и точек входа. المصدرة.
 
-## 4. ارسال bytecode عبر Torii
+## 4. Введите байт-код Torii.
 
-مع استمرار تشغيل العقدة، ارسل bytecode المترجم الى Torii باستخدام CLI. هوية التطوير الافتراضية مشتقة من المفتاح العام في `defaults/client.toml`، لذلك يكون معرّف الحساب:
+Загрузите байт-код в Torii для CLI. Он был создан в соответствии с требованиями `defaults/client.toml`, لذلك يكون. Автор сообщения:
 ```
 ih58...
 ```
 
-استخدم ملف التكوين لتوفير URL الخاص ب Torii و chain ID ومفتاح التوقيع:
+Чтобы получить доступ к URL-адресу Torii и идентификатору цепочки, выполните следующие действия:
 
 ```sh
 iroha --config defaults/client.toml \
@@ -99,11 +101,11 @@ iroha --config defaults/client.toml \
   --path target/quickstart/hello.to
 ```
 
-يقوم CLI بترميز المعاملة عبر Norito، وتوقيعها بالمفتاح التطويري، وارسالها الى الـ peer العامل. راقب سجلات Docker ل syscall `set_account_detail` او تابع خرج CLI ل hash المعاملة الملتزمة.
+Для запуска CLI используйте Norito, а затем установите флажок Он был сверстником. Вызовите Docker для системного вызова `set_account_detail` и откройте CLI для хеш-кода.
 
-## 5. التحقق من تغيير الحالة
+## 5. Сделай это в режиме реального времени.
 
-استخدم نفس ملف تعريف CLI لجلب account detail الذي كتبه العقد:
+Откройте детали учетной записи CLI и нажмите кнопку:
 
 ```sh
 iroha --config defaults/client.toml \
@@ -112,7 +114,7 @@ iroha --config defaults/client.toml \
   --key example | jq .
 ```
 
-يجب ان ترى payload JSON المعتمد على Norito:
+Отобразить полезную нагрузку JSON в формате Norito:
 
 ```json
 {
@@ -120,14 +122,12 @@ iroha --config defaults/client.toml \
 }
 ```
 
-اذا كانت القيمة مفقودة، تاكد من ان خدمة Docker compose ما زالت تعمل وان hash المعاملة الذي ابلغ عنه `iroha` وصل الى حالة `Committed`.
+Для этого необходимо создать хеш-код Docker и создать хеш-код. Установите флажок `iroha` и установите `Committed`.
 
-## الخطوات التالية
-
-- استكشف [معرض الامثلة](./examples/) المولد تلقائيا لرؤية
-  كيف تتطابق مقتطفات Kotodama الاكثر تقدما مع syscalls Norito.
+## الخطوات التالية- استكشف [معرض الامثلة](./examples/) المولد تلقائيا لرؤية
+  При вызове Kotodama происходит вызов системных вызовов Norito.
 - اقرأ [دليل البدء Norito](./getting-started) للحصول على شرح اعمق
-  لادوات المترجم/runner ونشر manifests وبيانات IVM الوصفية.
-- عند التكرار على عقودك، استخدم `npm run sync-norito-snippets` في
-  workspace لاعادة توليد المقتطفات القابلة للتنزيل حتى تبقى وثائق البوابة والartefacts
-  متزامنة مع المصادر تحت `crates/ivm/docs/examples/`.
+  Лаборатория/бегун Найт проявляет ошибку IVM.
+- عند التكرار على عقودك, استخدم `npm run sync-norito-snippets` في
+  рабочее пространство
+  Установите флажок `crates/ivm/docs/examples/`.

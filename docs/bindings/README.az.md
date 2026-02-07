@@ -7,82 +7,83 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf9773ecd75fc31ee89da58a3c5eda846b910eb6e131f1e042b565892e028f16
 source_last_modified: "2025-12-29T18:16:35.062011+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # SDK Binding & Fixture Governance
 
-WP1-E on the roadmap calls out “docs/bindings” as the canonical place to keep the
-cross-language binding state. This document records the binding inventory,
-regeneration commands, drift guards, and evidence locations so the GPU parity
-gates (WP1-E/F/G) and the cross-SDK cadence council have a single reference.
+Yol xəritəsindəki WP1-E sənədi saxlamaq üçün kanonik yer kimi “sənədlər/bağlamaları” çağırır.
+dillər arası bağlanma vəziyyəti. Bu sənəd məcburi inventar qeyd edir,
+regenerasiya əmrləri, sürüşmə qoruyucuları və sübut yerləri beləliklə GPU pariteti
+qapıları (WP1-E/F/G) və çarpaz SDK kadans şurasının tək istinadı var.
 
-## Shared guardrails
-- **Canonical playbook:** `docs/source/norito_binding_regen_playbook.md` spells out
-  the rotation policy, expected evidence, and the escalation workflow for Android,
-  Swift, Python, and future bindings.
-- **Norito schema parity:** `scripts/check_norito_bindings_sync.py` (invoked via
-  `scripts/check_norito_bindings_sync.sh` and gated in CI by
-  `ci/check_norito_bindings_sync.sh`) blocks builds when the Rust, Java, or Python
-  schema artefacts drift.
-- **Cadence watchdog:** `scripts/check_fixture_cadence.py` reads the
-  `artifacts/*_fixture_regen_state.json` files and enforces the Tue/Fri (Android,
-  Python) and Wed (Swift) windows so roadmap gates have auditable timestamps.
+## Birgə qoruyucu barmaqlıqlar
+- **Kanonik oyun kitabçası:** `docs/source/norito_binding_regen_playbook.md` açıqlanır
+  Android üçün fırlanma siyasəti, gözlənilən sübut və eskalasiya iş axını,
+  Swift, Python və gələcək bağlamalar.
+- **Norito sxem pariteti:** `scripts/check_norito_bindings_sync.py` (vasitəsilə çağırılır)
+  `scripts/check_norito_bindings_sync.sh` və CI-də qapalı
+  `ci/check_norito_bindings_sync.sh`) Rust, Java və ya Python istifadə edildikdə bloklar qurur.
+  sxem artefaktlarının sürüşməsi.
+- ** Cadence gözətçi:** `scripts/check_fixture_cadence.py` oxuyur
+  `artifacts/*_fixture_regen_state.json` faylları və Çərşənbə axşamı/Cümə (Android,
+  Python) və Wed (Swift) pəncərələri beləliklə, yol xəritəsi qapılarında yoxlanıla bilən vaxt nişanları var.
 
-## Binding matrix
+## Bağlama matrisi
 
-| Binding | Entry points | Fixture / regen command | Drift guards | Evidence |
+| Bağlama | Giriş nöqtələri | Quraşdırma / regen əmri | Drift qoruyucuları | Sübut |
 |---------|--------------|-------------------------|--------------|----------|
 | Android (Java) | `java/iroha_android/` (`java/iroha_android/README.md`) | `scripts/android_fixture_regen.sh` → `artifacts/android_fixture_regen_state.json` | `scripts/check_android_fixtures.py`, `ci/check_android_fixtures.sh`, `java/iroha_android/run_tests.sh` | `artifacts/android/fixture_runs/` |
-| Swift (iOS/macOS) | `IrohaSwift/` (`IrohaSwift/README.md`) | `scripts/swift_fixture_regen.sh` (optionally `SWIFT_FIXTURE_ARCHIVE`) → `artifacts/swift_fixture_regen_state.json` | `scripts/check_swift_fixtures.py`, `ci/check_swift_fixtures.sh`, `scripts/swift_fixture_archive.py` | `docs/source/swift_parity_triage.md`, `docs/source/sdk/swift/ios2_fixture_cadence_brief.md` |
+| Swift (iOS/macOS) | `IrohaSwift/` (`IrohaSwift/README.md`) | `scripts/swift_fixture_regen.sh` (istəyə görə `SWIFT_FIXTURE_ARCHIVE`) → `artifacts/swift_fixture_regen_state.json` | `scripts/check_swift_fixtures.py`, `ci/check_swift_fixtures.sh`, `scripts/swift_fixture_archive.py` | `docs/source/swift_parity_triage.md`, `docs/source/sdk/swift/ios2_fixture_cadence_brief.md` |
 | Python | `python/iroha_python/` (`python/iroha_python/README.md`) | `scripts/python_fixture_regen.sh` → `artifacts/python_fixture_regen_state.json` | `scripts/check_python_fixtures.py`, `python/iroha_python/scripts/run_checks.sh` | `docs/source/norito_binding_regen_playbook.md`, `docs/source/sdk/python/connect_end_to_end.md` |
 | JavaScript | `javascript/iroha_js/` (`docs/source/sdk/js/publishing.md`) | `npm run release:provenance`, `scripts/js_sbom_provenance.sh`, `scripts/js_signed_staging.sh` | `npm run test`, `javascript/iroha_js/scripts/verify-release-tarball.mjs`, `javascript/iroha_js/scripts/record-release-provenance.mjs` | `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`, `artifacts/js/verification/`, `artifacts/js/sbom/` |
 
-## Binding details
+## Bağlama detalları
 
 ### Android (Java)
-The Android SDK lives under `java/iroha_android/` and consumes the canonical Norito
-fixtures produced by `scripts/android_fixture_regen.sh`. That helper exports
-Fresh `.norito` blobs from the Rust toolchain, updates
-`artifacts/android_fixture_regen_state.json`, and records cadence metadata that
-`scripts/check_fixture_cadence.py` and governance dashboards consume. Drift is
-detected by `scripts/check_android_fixtures.py` (also wired into
-`ci/check_android_fixtures.sh`) and by `java/iroha_android/run_tests.sh`, which
-exercises the JNI bindings, WorkManager queue replay, and StrongBox fallbacks.
-Rotation evidence, failure notes, and rerun transcripts live under
+Android SDK `java/iroha_android/` altında yaşayır və kanonik Norito istehlak edir
+`scripts/android_fixture_regen.sh` tərəfindən istehsal olunan qurğular. Həmin köməkçi ixrac edir
+Rust alətlər silsiləsindəki təzə `.norito` ləkələri, yeniləmələr
+`artifacts/android_fixture_regen_state.json` və kadans metadatasını qeyd edir
+`scripts/check_fixture_cadence.py` və idarəetmə panelləri istehlak edir. Driftdir
+`scripts/check_android_fixtures.py` tərəfindən aşkar edilmişdir (həmçinin
+`ci/check_android_fixtures.sh`) və `java/iroha_android/run_tests.sh` tərəfindən,
+JNI bağlamalarını, WorkManager növbəsinin təkrarını və StrongBox ehtiyatlarını həyata keçirir.
+Fırlanma sübutları, uğursuzluq qeydləri və təkrar transkriptlər altında yaşayır
 `artifacts/android/fixture_runs/`.
 
 ### Swift (macOS/iOS)
-`IrohaSwift/` mirrors the same Norito payloads via `scripts/swift_fixture_regen.sh`.
-The script records rotation owner, cadence label, and source (`live` vs `archive`)
-inside `artifacts/swift_fixture_regen_state.json` and feeds the metadata into the
-cadence checker. `scripts/swift_fixture_archive.py` allows maintainers to ingest
-Rust-generated archives; `scripts/check_swift_fixtures.py` and
-`ci/check_swift_fixtures.sh` enforce byte-level parity plus SLA age limits, while
-`scripts/swift_fixture_regen.sh` supports `SWIFT_FIXTURE_EVENT_TRIGGER` for manual
-rotations. The escalation workflow, KPIs, and dashboards are documented in
-`docs/source/swift_parity_triage.md` and the cadence briefs under
+`IrohaSwift/` `scripts/swift_fixture_regen.sh` vasitəsilə eyni Norito faydalı yükləri əks etdirir.
+Skript fırlanma sahibini, kadans etiketini və mənbəyi qeyd edir (`live` və `archive`)
+`artifacts/swift_fixture_regen_state.json` daxilində və metaməlumatları daxil edir
+kadans yoxlayıcısı. `scripts/swift_fixture_archive.py` baxıcılara qəbul etməyə imkan verir
+Pasla yaradılan arxivlər; `scripts/check_swift_fixtures.py` və
+`ci/check_swift_fixtures.sh` bayt səviyyəli paritet və SLA yaş məhdudiyyətlərini tətbiq edir, eyni zamanda
+`scripts/swift_fixture_regen.sh` dərslik üçün `SWIFT_FIXTURE_EVENT_TRIGGER` dəstəkləyir
+fırlanmalar. Eskalasiya iş axını, KPI-lər və tablosunda sənədləşdirilmişdir
+`docs/source/swift_parity_triage.md` və altındakı kadans brifinqləri
 `docs/source/sdk/swift/`.
 
 ### Python
-The Python client (`python/iroha_python/`) shares the Android fixtures. Running
-`scripts/python_fixture_regen.sh` pulls the latest `.norito` payloads, refreshes
-`python/iroha_python/tests/fixtures/`, and will emit cadence metadata into
-`artifacts/python_fixture_regen_state.json` once the first post-roadmap rotation
-is captured. `scripts/check_python_fixtures.py` and
-`python/iroha_python/scripts/run_checks.sh` gate pytest, mypy, ruff, and fixture
-parity locally and in CI. The end-to-end docs (`docs/source/sdk/python/…`) and
-the binding regen playbook describe how to coordinate rotations with the Android
-owners.
+Python müştərisi (`python/iroha_python/`) Android qurğularını paylaşır. Qaçış
+`scripts/python_fixture_regen.sh` ən son `.norito` faydalı yükləri çəkir, yeniləyir
+`python/iroha_python/tests/fixtures/` və kadans metadatasını buraxacaq
+`artifacts/python_fixture_regen_state.json` bir dəfə yol xəritəsindən sonrakı ilk fırlanma
+tutulur. `scripts/check_python_fixtures.py` və
+`python/iroha_python/scripts/run_checks.sh` qapı pytest, mypy, ruff və armatur
+yerli və CI-də paritet. Başdan-ayağa sənədlər (`docs/source/sdk/python/…`) və
+məcburi regen oyun kitabı Android ilə fırlanmaların necə əlaqələndirilməsini təsvir edir
+sahibləri.
 
 ### JavaScript
-`javascript/iroha_js/` does not rely on local `.norito` files, but WP1-E tracks
-its release evidence so GPU CI lanes inherit complete provenance. Every release
-captures provenance via `npm run release:provenance` (powered by
-`javascript/iroha_js/scripts/record-release-provenance.mjs`), generates and signs
-SBOM bundles with `scripts/js_sbom_provenance.sh`, runs the signed staging dry-run
-(`scripts/js_signed_staging.sh`), and verifies the registry artefact with
-`javascript/iroha_js/scripts/verify-release-tarball.mjs`. The resulting metadata
-lands under `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`,
-`artifacts/js/sbom/`, and `artifacts/js/verification/`, providing deterministic
-evidence for roadmap JS5/JS6 and WP1-F benchmark runs. The publishing playbook in
-`docs/source/sdk/js/` ties the automation together.
+`javascript/iroha_js/` yerli `.norito` fayllarına etibar etmir, lakin WP1-E izləyir
+onun buraxılış sübutu beləliklə GPU CI zolaqları tam mənşəyi miras alır. Hər buraxılış
+mənşəyi `npm run release:provenance` vasitəsilə əldə edir (gücləndirici
+`javascript/iroha_js/scripts/record-release-provenance.mjs`), yaradır və işarələyir
+SBOM paketləri `scripts/js_sbom_provenance.sh` ilə imzalanmış quru iş rejimində işləyir
+(`scripts/js_signed_staging.sh`) və reyestr artefaktını təsdiqləyir
+`javascript/iroha_js/scripts/verify-release-tarball.mjs`. Nəticədə metadata
+torpaqlar `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`,
+Deterministik təmin edən `artifacts/js/sbom/` və `artifacts/js/verification/`
+yol xəritəsi JS5/JS6 və WP1-F benchmark sınaqları üçün sübut. Nəşriyyat kitabı
+`docs/source/sdk/js/` avtomatlaşdırmanı birləşdirir.

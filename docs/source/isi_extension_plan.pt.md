@@ -6,95 +6,94 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
 source_last_modified: "2026-01-03T18:07:57.214581+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# ISI Extension Plan (v1)
+# Plano de extensão ISI (v1)
 
-This note signs off on the priority order for the new Iroha Special Instructions and captures
-non-negotiable invariants for each instruction ahead of implementation. The ordering matches
-security and operability risk first, UX throughput second.
+Esta nota confirma a ordem de prioridade para as novas Instruções Especiais Iroha e captura
+invariantes não negociáveis para cada instrução antes da implementação. A ordem corresponde
+primeiro o risco de segurança e operabilidade, depois o rendimento de UX.
 
-## Priority Stack
+## Pilha de prioridade
 
-1. **RotateAccountSignatory** – Required for hygienic key rotation without destructive migrations.
-2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Provide deterministic contract
-   kill switches and storage reclamation for compromised deployments.
-3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Extend metadata parity to concrete asset
-   balances so observability tooling can tag holdings.
-4. **BatchMintAsset** / **BatchTransferAsset** – Deterministic fan-out helpers to keep payload size
-   and VM fallback pressure manageable.
+1. **RotateAccountSignatory** – Obrigatório para rotação higiênica de chaves sem migrações destrutivas.
+2. **DeactivateContractInstance** / **RemoveSmartContractBytes** – Fornece contrato determinístico
+   kill switches e recuperação de armazenamento para implantações comprometidas.
+3. **SetAssetKeyValue** / **RemoveAssetKeyValue** – Estenda a paridade de metadados para ativos concretos
+   saldos para que as ferramentas de observabilidade possam marcar os acervos.
+4. **BatchMintAsset** / **BatchTransferAsset** – Ajudantes de distribuição determinística para manter o tamanho da carga útil
+   e pressão de fallback de VM gerenciável.
 
-## Instruction Invariants
+## Invariantes de instrução
 
 ### SetAssetKeyValue / RemoveAssetKeyValue
-- Reuse the `AssetMetadataKey` namespace (`state.rs`) so canonical WSV keys stay stable.
-- Enforce JSON size and schema limits identically to account metadata helpers.
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` with the affected `AssetId`.
-- Require the same permission tokens as existing asset metadata edits (definition owner OR
-  `CanModifyAssetMetadata`-style grants).
-- Abort if the asset record is missing (no implicit creation).
+- Reutilize o namespace `AssetMetadataKey` (`state.rs`) para que as chaves WSV canônicas permaneçam estáveis.
+- Aplicar limites de esquema e tamanho JSON de forma idêntica aos auxiliares de metadados da conta.
+- Emitir `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` com o `AssetId` afetado.
+- Exigir os mesmos tokens de permissão que as edições de metadados de ativos existentes (proprietário da definição OU
+  Subsídios estilo `CanModifyAssetMetadata`).
+- Abortar se o registro do ativo estiver faltando (sem criação implícita).
 
 ### RotateAccountSignatory
-- Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
-  resources (assets, triggers, roles, permissions, pending events).
-- Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
-- Update all canonical keys that embed the account ID and invalidate caches before commit.
-- Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+- Troca atômica do signatário em `AccountId` preservando os metadados da conta e vinculados
+  recursos (ativos, gatilhos, funções, permissões, eventos pendentes).
+- Verifique se o signatário atual corresponde ao chamador (ou autoridade delegada por meio de token explícito).
+- Rejeite se a nova chave pública já respalda outra conta no mesmo domínio.
+- Atualize todas as chaves canônicas que incorporam o ID da conta e invalidam os caches antes do commit.
+- Emita um `AccountEvent::SignatoryRotated` dedicado com chaves antigas/novas para trilhas de auditoria.
+- Andaime de migração: introduza `AccountLabel` + `AccountRekeyRecord` (consulte `account::rekey`) para que
+  contas existentes podem ser mapeadas para rótulos estáveis durante uma atualização contínua sem quebras de hash.
 
-### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
-- Require the same governance permission set as activation, with policy hooks to disallow
-  deactivation of core system namespaces without elevated approval.
-- Reject when the instance is already inactive to keep event logs deterministic.
-- Emit a `ContractInstanceEvent::Deactivated` that downstream watchers can consume.
-
-### RemoveSmartContractBytes
-- Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
-  reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
-- Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
-  stale handles.
-- Emit `ContractCodeEvent::Removed` with hash and caller metadata.
+### DesativarContractInstance
+- Remover ou marcar para exclusão a ligação `(namespace, contract_id)` enquanto persiste os dados de proveniência
+  (quem, quando, código de razão) para solução de problemas.
+- Exigir o mesmo conjunto de permissões de governança que a ativação, com ganchos de política para proibir
+  desativação de namespaces do sistema principal sem aprovação elevada.
+- Rejeite quando a instância já estiver inativa para manter os logs de eventos determinísticos.
+- Emita um `ContractInstanceEvent::Deactivated` que os observadores downstream podem consumir.### RemoverSmartContractBytes
+- Permitir a remoção do bytecode armazenado por `code_hash` somente quando não houver manifestos ou instâncias ativas
+  referenciar o artefato; caso contrário, falhará com um erro descritivo.
+- Registro de espelhos de porta de permissão (`CanRegisterSmartContractCode`) mais um nível de operador
+  guarda (por exemplo, `CanManageSmartContractStorage`).
+- Verifique se o `code_hash` fornecido corresponde ao resumo do corpo armazenado antes da exclusão para evitar
+  alças obsoletas.
+- Emitir `ContractCodeEvent::Removed` com hash e metadados do chamador.
 
 ### BatchMintAsset / BatchTransferAsset
-- All-or-nothing semantics: either every tuple succeeds or the instruction aborts without side
-  effects.
-- Input vectors must be deterministically ordered (no implicit sorting) and bounded by config
+- Semântica de tudo ou nada: ou toda tupla é bem-sucedida ou a instrução é abortada sem lado
+  efeitos.
+- Os vetores de entrada devem ser ordenados de forma determinística (sem classificação implícita) e limitados pela configuração
   (`max_batch_isi_items`).
-- Emit per-item asset events so downstream accounting stays consistent; batch context is additive,
-  not a replacement.
-- Permission checks reuse existing single-item logic per target (asset owner, definition owner,
-  or granted capability) before state mutation.
-- Advisory access sets must union all read/write keys to keep optimistic concurrency correct.
+- Emitir eventos de ativos por item para que a contabilidade downstream permaneça consistente; o contexto do lote é aditivo,
+  não é um substituto.
+- As verificações de permissão reutilizam a lógica de item único existente por destino (proprietário do ativo, proprietário da definição,
+  ou capacidade concedida) antes da mutação do estado.
+- Os conjuntos de acesso consultivos devem unir todas as chaves de leitura/gravação para manter a simultaneidade otimista correta.
 
-## Implementation Scaffolding
+## Andaime de implementação
 
-- Data model now carries `SetAssetKeyValue` / `RemoveAssetKeyValue` scaffolds for balance metadata
-  edits (`transparent.rs`).
-- Executor visitors expose placeholders that will gate permissions once host wiring lands
+- O modelo de dados agora carrega estruturas `SetAssetKeyValue`/`RemoveAssetKeyValue` para metadados de equilíbrio
+  edições (`transparent.rs`).
+- Os visitantes do executor expõem espaços reservados que bloquearão as permissões assim que a fiação do host chegar
   (`default/mod.rs`).
-- Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
-  signatory migrations without touching the historical `AccountId` encoding.
+- Os tipos de protótipo Rekey (`account::rekey`) fornecem uma zona de destino para migrações contínuas.
+- O estado mundial inclui `account_rekey_records` codificado por `AccountLabel` para que possamos preparar o rótulo →
+  migrações de signatários sem tocar na codificação histórica `AccountId`.
 
-## IVM Syscall Drafting
+## IVM Elaboração de Syscall
 
-- Host shims for `DeactivateContractInstance` / `RemoveSmartContractBytes` ship as
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) and
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), both consuming Norito TLVs that mirror the
-  canonical ISI structs.
-- Extend `abi_syscall_list()` only after host handlers mirror `iroha_core` execution paths to keep
-  ABI hashes stable during development.
-- Update Kotodama lowering once syscall numbers stabilize; add golden coverage for the expanded
-  surface at the same time.
+- Calços de host para `DeactivateContractInstance` / `RemoveSmartContractBytes` enviados como
+  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) e
+  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44), ambos consumindo TLVs Norito que espelham o
+  estruturas ISI canônicas.
+- Estenda `abi_syscall_list()` somente depois que os manipuladores de host espelharem os caminhos de execução `iroha_core` para manter
+  Hashes ABI estáveis durante o desenvolvimento.
+- Atualização do Kotodama diminuindo assim que os números do syscall se estabilizarem; adicione cobertura dourada para o expandido
+  superfície ao mesmo tempo.
 
 ## Status
 
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+A ordenação e as invariantes acima estão prontas para implementação. As filiais de acompanhamento devem fazer referência
+este documento ao conectar caminhos de execução e exposição ao syscall.

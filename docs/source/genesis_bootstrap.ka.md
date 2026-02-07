@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6feb2b03bd8f6a41de693a0c3f3c4ffc058072bc7942e2bc50b3fd9770aa56d4
 source_last_modified: "2025-12-29T18:16:35.962003+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Genesis Bootstrap from Trusted Peers
+# Genesis Bootstrap სანდო თანატოლებისგან
 
-Iroha peers without a local `genesis.file` can fetch a signed genesis block from trusted peers
-using the Norito-encoded bootstrap protocol.
+Iroha თანატოლებს ადგილობრივი `genesis.file`-ის გარეშე შეუძლიათ მიიღონ ხელმოწერილი გენეზის ბლოკი სანდო თანატოლებისგან
+Norito-ში კოდირებული bootstrap პროტოკოლის გამოყენებით.
 
-- **Protocol:** peers exchange `GenesisRequest` (`Preflight` for metadata, `Fetch` for payload) and
-  `GenesisResponse` frames keyed by `request_id`. Responders include the chain id, signer pubkey,
-  hash, and an optional size hint; payloads are returned only on `Fetch`, and duplicate request ids
-  receive `DuplicateRequest`.
-- **Guards:** responders enforce an allowlist (`genesis.bootstrap_allowlist` or the trusted peers
-  set), chain-id/pubkey/hash matching, rate limits (`genesis.bootstrap_response_throttle`), and a
-  size cap (`genesis.bootstrap_max_bytes`). Requests outside the allowlist receive `NotAllowed`, and
-  payloads signed by the wrong key receive `MismatchedPubkey`.
-- **Requester flow:** when storage is empty and `genesis.file` is unset (and
-  `genesis.bootstrap_enabled=true`), the node preflights trusted peers with the optional
-  `genesis.expected_hash`, then fetches the payload, validates signatures via `validate_genesis_block`,
-  and persists `genesis.bootstrap.nrt` alongside Kura before applying the block. Bootstrap retries
-  honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval`, and
+- **პროტოკოლი:** თანატოლები ცვლიან `GenesisRequest` (`Preflight` მეტამონაცემებისთვის, `Fetch` დატვირთვისთვის) და
+  `GenesisResponse` ჩარჩოები ჩასმული `request_id`-ით. რესპონდენტებში შედის ჯაჭვის ID, ხელმომწერი pubkey,
+  ჰეში და სურვილისამებრ ზომის მინიშნება; ტვირთამწეობა ბრუნდება მხოლოდ `Fetch`-ზე და დუბლიკატი მოთხოვნის ID-ზე
+  მიიღეთ `DuplicateRequest`.
+- **მცველები:** მოპასუხეები აღასრულებენ უფლებათა სიას (`genesis.bootstrap_allowlist` ან სანდო თანატოლები
+  ნაკრები), chain-id/pubkey/hash შესატყვისი, განაკვეთის ლიმიტები (`genesis.bootstrap_response_throttle`) და
+  ზომის თავსახური (`genesis.bootstrap_max_bytes`). მოთხოვნები დაშვებული სიის გარეთ მიიღება `NotAllowed` და
+  არასწორი გასაღებით ხელმოწერილი ტვირთი იღებს `MismatchedPubkey`.
+- **მომთხოვნის ნაკადი:** როცა მეხსიერება ცარიელია და `genesis.file` არ არის დაყენებული (და
+  `genesis.bootstrap_enabled=true`), კვანძი აგზავნის სანდო თანატოლებს სურვილისამებრ
+  `genesis.expected_hash`, შემდეგ იღებს დატვირთვას, ამოწმებს ხელმოწერებს `validate_genesis_block`-ის საშუალებით,
+  და რჩება `genesis.bootstrap.nrt` კურასთან ერთად ბლოკის გამოყენებამდე. Bootstrap ხელახლა ცდილობს
+  პატივი `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval` და
   `genesis.bootstrap_max_attempts`.
-- **Failure modes:** requests are rejected for allowlist misses, chain/pubkey/hash mismatches, size
-  cap violations, rate limits, missing local genesis, or duplicate request ids. Conflicting hashes
-  across peers abort the fetch; no responders/timeouts fall back to local configuration.
-- **Operator steps:** ensure at least one trusted peer is reachable with a valid genesis, configure
-  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` and the retry knobs, and
-  optionally pin `expected_hash` to avoid accepting mismatched payloads. Persisted payloads can be
-  reused on subsequent boots by pointing `genesis.file` to `genesis.bootstrap.nrt`.
+- ** წარუმატებლობის რეჟიმები: ** მოთხოვნები უარყოფილია დაშვებული სიის გამოტოვებისთვის, ჯაჭვის/პუბლიკის/ჰეშის შეუსაბამობისთვის, ზომისთვის
+  ლიმიტის დარღვევა, ტარიფების ლიმიტები, გამოტოვებული ლოკალური გენეზისი ან დუბლიკატი მოთხოვნის ID. კონფლიქტური ჰეშები
+  თანატოლებს შორის შეწყვიტოს მიღება; არცერთი პასუხისმგებელი/დროის ამოწურვა არ უბრუნდება ადგილობრივ კონფიგურაციას.
+- **ოპერატორის ნაბიჯები:** დარწმუნდით, რომ მინიმუმ ერთი სანდო თანატოლი ხელმისაწვდომია სწორი გენეზისით, კონფიგურაცია
+  `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` და ხელახლა სცადეთ სახელურები, და
+  სურვილისამებრ დაამაგრეთ `expected_hash`, რათა თავიდან აიცილოთ შეუსაბამო ტვირთის მიღება. მუდმივი დატვირთვა შეიძლება იყოს
+  ხელახლა გამოიყენება მომდევნო ჩექმებზე `genesis.file`-ზე `genesis.bootstrap.nrt`-ზე მითითებით.

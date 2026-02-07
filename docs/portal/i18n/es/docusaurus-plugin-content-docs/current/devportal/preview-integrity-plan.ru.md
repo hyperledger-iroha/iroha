@@ -4,38 +4,36 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-integrity-plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # План предпросмотра с контролем checksum
 
-Этот план описывает оставшуюся работу, необходимую для того, чтобы каждый артефакт предпросмотра портала можно было проверить перед публикацией. Цель — гарантировать, что рецензенты скачивают точный снимок, собранный в CI, что манифест checksum неизменяем, и что предпросмотр доступен через SoraFS с метаданными Norito.
+Este plan describe cómo funciona el robot, no hay modo de hacerlo, estos son algunos de los artefactos que predisponen el portal. проверить перед публикацией. Asegúrese de garantizar que los registros registrados no sean válidos, de que la suma de comprobación del manifiesto no sea necesaria y del programa previo. Utilice el SoraFS con metadanos Norito.
 
 ## Цели
 
-- **Детерминированные сборки:** обеспечить, что `npm run build` дает воспроизводимый результат и всегда создает `build/checksums.sha256`.
-- **Проверенные предпросмотры:** требовать, чтобы каждый артефакт предпросмотра включал манифест checksum и запрещать публикацию при провале проверки.
-- **Метаданные, публикуемые через Norito:** сохранять дескрипторы предпросмотра (метаданные коммита, digest checksum, CID SoraFS) как Norito JSON, чтобы инструменты управления могли аудировать релизы.
-- **Инструменты для операторов:** предоставить одношаговый скрипт проверки, который потребители могут запускать локально (`./docs/portal/scripts/preview_verify.sh --build-dir build --descriptor <path> --archive <path>`); скрипт теперь оборачивает поток проверки checksum + дескриптора целиком. Стандартная команда предпросмотра (`npm run serve`) теперь автоматически вызывает этот помощник перед `docusaurus serve`, чтобы локальные снимки оставались под контролем checksum (при этом `npm run serve:verified` сохранен как явный алиас).
+- **Terminadores:** observe, que `npm run build` da su resultado y su fuente `build/checksums.sha256`.
+- **Proverennye предпросмотры:** требовать, чтобы каждый артефакт предпросмотра включал манифест checksum and запрещать публикацию. при провале проверки.
+- **Метаданные, публикуемые через Norito:** сохранять дескрипторы предпросмотра (метаданные комита, digest checksum, CID SoraFS) como Norito JSON, estos instrumentos mejoran las respuestas de audio.
+- **Instrumentos para los operadores:** Previamente se pueden descargar scripts locales y se pueden descargar archivos locales (`./docs/portal/scripts/preview_verify.sh --build-dir build --descriptor <path> --archive <path>`); скрипт теперь оборачивает поток проверки checksum + descriptor целиком. El controlador de comando estándar (`npm run serve`) se activa automáticamente antes de `docusaurus serve`, чтобы Los valores locales configuran la suma de comprobación del control (por ejemplo `npm run serve:verified` como un alias).
 
-## Фаза 1 — Контроль в CI
-
-1. Обновить `.github/workflows/docs-portal-preview.yml`, чтобы:
-   - Запускать `node docs/portal/scripts/write-checksums.mjs` после сборки Docusaurus (уже вызывается локально).
-   - Выполнять `cd build && sha256sum -c checksums.sha256` и проваливать job при несовпадении.
-   - Упаковывать директорию build в `artifacts/preview-site.tar.gz`, копировать манифест checksum, вызывать `scripts/generate-preview-descriptor.mjs` и выполнять `scripts/sorafs-package-preview.sh` с JSON-конфигурацией (см. `docs/examples/sorafs_preview_publish.json`), чтобы workflow выпускал и метаданные, и детерминированный SoraFS-бандл.
-   - Загружать статический сайт, артефакты метаданных (`docs-portal-preview`, `docs-portal-preview-metadata`) и SoraFS-бандл (`docs-portal-preview-sorafs`), чтобы манифест, сводка CAR и план могли быть проверены без повторной сборки.
-2. Добавить комментарий с CI-бейджем, резюмирующий результат проверки checksum в pull request (реализовано через шаг комментария GitHub Script в `docs-portal-preview.yml`).
-3. Задокументировать workflow в `docs/portal/README.md` (раздел CI) и дать ссылку на шаги проверки в чеклисте публикации.
+## Fase 1 — Control en CI1. Обновить `.github/workflows/docs-portal-preview.yml`, чтобы:
+   - Introduzca `node docs/portal/scripts/write-checksums.mjs` después de Docusaurus (muy localmente).
+   - Utilice `cd build && sha256sum -c checksums.sha256` y valide el trabajo según sus necesidades.
+   - Instalar el directorio build en `artifacts/preview-site.tar.gz`, copiar la suma de comprobación del manifiesto, eliminar `scripts/generate-preview-descriptor.mjs` y activar `scripts/sorafs-package-preview.sh` s Configuración JSON (como `docs/examples/sorafs_preview_publish.json`), cada flujo de trabajo personalizado y metadano y determinado por la banda SoraFS.
+   - Загружать статический сайт, артефакты метаданных (`docs-portal-preview`, `docs-portal-preview-metadata`) и SoraFS-bandl (`docs-portal-preview-sorafs`), чтобы манифест, сводка CAR and план могли быть проверены без повторной сборки.
+2. Agregue un comentario a CI-beйджем, reseñe el resultado de la suma de verificación de la solicitud de extracción (revise el comentario de GitHub Script en `docs-portal-preview.yml`).
+3. Complete el flujo de trabajo en `docs/portal/README.md` (parte CI) y consulte los datos de las publicaciones.
 
 ## Скрипт проверки
 
-`docs/portal/scripts/preview_verify.sh` проверяет скачанные артефакты предпросмотра без ручных вызовов `sha256sum`. Используйте `npm run serve` (или явный алиас `npm run serve:verified`), чтобы запустить скрипт и `docusaurus serve` за один шаг при распространении локальных снимков. Логика проверки:
-
-1. Запускает подходящий SHA-инструмент (`sha256sum` или `shasum -a 256`) против `build/checksums.sha256`.
-2. При необходимости сравнивает digest/имя файла дескриптора предпросмотра `checksums_manifest` и, если указан, digest/имя файла архива предпросмотра.
+`docs/portal/scripts/preview_verify.sh` проверяет скачанные артефакты предпросмотра без ручных вызовов `sha256sum`. Utilice `npm run serve` (o un alias `npm run serve:verified`), cómo descargar el script y `docusaurus serve` para el inicio de sesión распространении локальных снимков. Логика проверки:1. Utilice el instrumento SHA (`sha256sum` o `shasum -a 256`) junto con `build/checksums.sha256`.
+2. При необходимости сравнивает digest/имя файла descriptor предпросмотра `checksums_manifest` y, если указан, digest/имя файла архива предпросмотра.
 3. Завершается с ненулевым кодом при любом несоответствии, чтобы рецензенты могли блокировать подмененные предпросмотры.
 
-Пример использования (после извлечения артефактов CI):
+Primera implementación (después de la instalación de artefactos CI):
 
 ```bash
 ./docs/portal/scripts/preview_verify.sh \
@@ -44,37 +42,33 @@ generator: docs/portal/scripts/sync-i18n.mjs
   --archive artifacts/preview-site.tar.gz
 ```
 
-Инженеры CI и релизов должны вызывать скрипт каждый раз, когда скачивают пакет предпросмотра или прикрепляют артефакты к релизному тикету.
+Los dispositivos CI y las configuraciones correspondientes utilizan un script de código de barras, descargan paquetes previos al programa o ejecutan artefactos. к релизному тикету.
 
-## Фаза 2 — Публикация SoraFS
+## Faza 2 — Publicación SoraFS
 
-1. Расширить workflow предпросмотра задачей, которая:
+1. Расширить flujo de trabajo previo al proceso de ejecución, которая:
    - Загружает собранный сайт в staging-шлюз SoraFS с помощью `sorafs_cli car pack` и `manifest submit`.
-   - Захватывает возвращенный digest манифеста и CID SoraFS.
-   - Сериализует `{ commit, branch, checksum_manifest, cid }` в Norito JSON (`docs/portal/preview/preview_descriptor.json`).
-2. Хранить дескриптор рядом с артефактом сборки и отображать CID в комментарии pull request.
-3. Добавить интеграционные тесты, которые гоняют `sorafs_cli` в dry-run режиме, чтобы будущие изменения сохраняли совместимость схемы метаданных.
+   - Захватывает возвращенный digest манифеста and CID SoraFS.
+   - Serie `{ commit, branch, checksum_manifest, cid }` en Norito JSON (`docs/portal/preview/preview_descriptor.json`).
+2. Utilice el descriptor de pantalla de los artefactos y abra el CID en los comentarios de la solicitud de extracción.
+3. Realice pruebas integradas, use el botón `sorafs_cli` en el modo de ejecución en seco y seleccione la configuración adecuada. совместимость схемы метаданных.
 
-## Фаза 3 — Управление и аудит
-
-1. Опубликовать Norito-схему (`PreviewDescriptorV1`), описывающую структуру дескриптора, в `docs/portal/schemas/`.
-2. Обновить чеклист публикации DOCS-SORA, требуя:
-   - Запускать `sorafs_cli manifest verify` против загруженного CID.
-   - Фиксировать digest манифеста checksum и CID в описании релизного PR.
-3. Подключить автоматизацию управления для сверки дескриптора с манифестом checksum во время голосований по релизам.
+## Faza 3 — Actualización y auditoría1. Publique Norito-схему (`PreviewDescriptorV1`), una descripción de la estructura del escritorio, en `docs/portal/schemas/`.
+2. Consulte la lista de publicaciones DOCS-SORA, требуя:
+   - Introduzca `sorafs_cli manifest verify` para proteger el CID.
+   - Fije la suma de comprobación del resumen del resumen y el CID en las descripciones de configuración de PR.
+3. Puede automatizar la actualización del descriptor de pantalla con la suma de comprobación del manifiesto en el momento de la configuración.
 
 ## Результаты и владельцы
 
-| Этап | Владелец(ы) | Цель | Примечания |
+| Etapa | Владелец(ы) | Celo | Примечания |
 |------|------------|------|------------|
-| Контроль checksum в CI внедрен | Инфраструктура Docs | Неделя 1 | Добавляет gate отказа и загрузку артефактов. |
-| Публикация предпросмотров в SoraFS | Инфраструктура Docs / Команда Storage | Неделя 2 | Требует доступа к staging-учетным данным и обновлений схемы Norito. |
-| Интеграция управления | Лид Docs/DevRel / WG по управлению | Неделя 3 | Публикует схему и обновляет чеклисты и записи roadmap. |
+| Контроль checksum в CI внедрен | Documentos de infraestructura | Неделя 1 | Добавляет gate отказа и загрузку артефактов. |
+| Publicaciones previas a la transmisión en SoraFS | Infraestructura Docs / Almacenamiento de comandos | Неделя 2 | El trío está disponible para la puesta en escena de algunos y nuevos programas Norito. |
+| Integración superior | Лид Docs/DevRel / WG по управлению | Неделя 3 | Publica esto y actualiza listas y hojas de ruta breves. |
 
 ## Открытые вопросы
 
-- Какая среда SoraFS должна хранить артефакты предпросмотра (staging vs. выделенная preview lane)?
-- Нужны ли двойные подписи (Ed25519 + ML-DSA) на дескрипторе предпросмотра перед публикацией?
-- Должен ли workflow CI закреплять конфигурацию orchestrator (`orchestrator_tuning.json`) при запуске `sorafs_cli`, чтобы сохранять воспроизводимость манифестов?
-
-Зафиксируйте решения в `docs/portal/docs/reference/publishing-checklist.md` и обновите этот план после устранения неизвестных.
+- ¿Qué nombre tiene SoraFS?
+- ¿Hay dos archivos (Ed25519 + ML-DSA) en el descriptor previo al anuncio público?
+- Si el CI de flujo de trabajo elimina la configuración del orquestador (`orchestrator_tuning.json`) desde el puerto `sorafs_cli`, podrá configurar el CI. ¿manifestantes?Realice una revisión en `docs/portal/docs/reference/publishing-checklist.md` y elimine este plan después de una instalación no deseada.

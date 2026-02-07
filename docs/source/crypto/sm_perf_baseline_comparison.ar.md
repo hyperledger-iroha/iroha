@@ -6,15 +6,16 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: fb1b094c1b081620abe8f47079a8d94e774c1eea445784856a6d116c6a1a993d
 source_last_modified: "2026-01-03T18:07:57.091244+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-### SM Performance Snapshot (Apple Silicon)
+### لقطة أداء SM (أبل سيليكون)
 
-Benchmarks compare scalar, runtime auto-detection, and forced NEON runs (medians, µs).
+تقارن المعايير بين العددية والكشف التلقائي في وقت التشغيل وتشغيل النيون القسري (الوسيط، s).
 
-| Benchmark | Scalar | Auto | Neon-Force | Auto vs Scalar | Neon vs Scalar | Neon vs Auto |
-|-----------|--------|------|------------|----------------|---------------|--------------|
+| المعيار | العددية | تلقائي | قوة النيون | السيارات مقابل العددية | النيون مقابل العددية | النيون مقابل السيارات |
+|-----------|--------|------------|----------------|---------------|--------------|
 | sm2_vs_ed25519_sign/ed25519_sign |    32.83 |  32.91 |      32.82 |      +0.23% |       -0.03% |      -0.25% |
 | sm2_vs_ed25519_sign/sm2_sign |   302.19 | 301.51 |     301.98 |      -0.23% |       -0.07% |      +0.16% |
 | sm2_vs_ed25519_verify/verify/ed25519 |    35.43 |  35.80 |      35.47 |      +1.04% |       +0.12% |      -0.91% |
@@ -26,14 +27,12 @@ Benchmarks compare scalar, runtime auto-detection, and forced NEON runs (medians
 | sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt |     1.83 |   1.82 |       1.82 |      -0.17% |       -0.18% |      -0.01% |
 | sm4_vs_chacha20poly1305_encrypt/sm4_gcm_encrypt |    15.97 |  15.96 |      15.94 |      -0.01% |       -0.16% |      -0.14% |
 
-Metadata: scalar={'cpu': 'm3-pro-local', 'target_arch': 'aarch64', 'target_os': 'macos'}, auto={'cpu': 'm3-pro-local', 'target_arch': 'aarch64', 'target_os': 'macos'}, neon-force={'cpu': 'm3-pro-local', 'target_arch': 'aarch64', 'target_os': 'macos'}.
+البيانات الوصفية: العددية = {'وحدة المعالجة المركزية': 'm3-pro-local'، 'target_arch': 'aarch64'، 'target_os': 'macos'}، auto={'cpu': 'm3-pro-local'، 'target_arch': 'aarch64'، 'target_os': 'macos'}، قوة النيون = {'cpu': 'm3-pro-local'، 'target_arch': 'aarch64', 'target_os': 'macos'}.
 
-### SM Performance Snapshot (x86_64 Rosetta, Apple M3 Pro)
+### لقطة أداء SM (x86_64 Rosetta، Apple M3 Pro)
 
-Benchmarks compare scalar, runtime auto-detection, and forced NEON runs (medians, µs) captured under Rosetta.
-
-| Benchmark | Scalar | Auto | Neon-Force | Auto vs Scalar | Neon vs Scalar | Neon vs Auto |
-|-----------|--------|------|------------|----------------|---------------|--------------|
+تقارن المعايير بين العددية، والاكتشاف التلقائي في وقت التشغيل، وعمليات تشغيل النيون القسري (الوسيط، s) التي تم التقاطها تحت Rosetta.| المعيار | العددية | تلقائي | قوة النيون | السيارات مقابل العددية | النيون مقابل العددية | النيون مقابل السيارات |
+|-----------|--------|------------|----------------|---------------|--------------|
 | sm2_vs_ed25519_sign/ed25519_sign |    57.43 |  57.12 |      55.77 |          -0.53% |         -2.88% |        -2.36% |
 | sm2_vs_ed25519_sign/sm2_sign |   572.76 | 568.71 |     557.83 |          -0.71% |         -2.61% |        -1.91% |
 | sm2_vs_ed25519_verify/verify/ed25519 |    69.03 |  68.42 |      66.28 |          -0.88% |         -3.97% |        -3.12% |
@@ -45,4 +44,4 @@ Benchmarks compare scalar, runtime auto-detection, and forced NEON runs (medians
 | sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt |     1.96 |   2.00 |       1.93 |           2.23% |         -1.14% |        -3.30% |
 | sm4_vs_chacha20poly1305_encrypt/sm4_gcm_encrypt |    16.60 |  16.58 |      16.15 |          -0.10% |         -2.66% |        -2.57% |
 
-Metadata: scalar={'cpu': 'm3-pro-rosetta', 'target_arch': 'x86_64', 'target_os': 'macos'}, auto={'cpu': 'm3-pro-rosetta', 'target_arch': 'x86_64', 'target_os': 'macos'}, neon-force={'cpu': 'm3-pro-rosetta', 'target_arch': 'x86_64', 'target_os': 'macos'}.
+البيانات الوصفية: العددية = {'cpu': 'm3-pro-rosetta'، 'target_arch': 'x86_64'، 'target_os': 'macos'}، auto={'cpu': 'm3-pro-rosetta'، 'target_arch': 'x86_64'، 'target_os': 'macos'}، قوة النيون = {'cpu': 'm3-pro-rosetta', 'target_arch': 'x86_64', 'target_os': 'macos'}.

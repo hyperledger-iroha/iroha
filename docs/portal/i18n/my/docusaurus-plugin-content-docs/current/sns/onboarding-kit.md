@@ -6,27 +6,29 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS metrics & onboarding kit
 description: Dashboard, pricing, and automation artifacts referenced by roadmap item SN-8.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # SNS Metrics & Onboarding Kit
 
-Roadmap item **SN-8** bundles two promises:
+လမ်းပြမြေပုံ အကြောင်းအရာ **SN-8** သည် ကတိနှစ်ခုကို စုစည်းထားသည်-
 
-1. Publish dashboards that expose registrations, renewals, ARPU, disputes, and
-   freeze windows for `.sora`, `.nexus`, and `.dao`.
-2. Ship an onboarding kit so registrars and stewards can wire DNS, pricing, and
-   APIs consistently before any suffix goes live.
+1. မှတ်ပုံတင်ခြင်း၊ သက်တမ်းတိုးခြင်း၊ ARPU၊ အငြင်းပွားမှုများနှင့် ထုတ်ဖော်ပြသသည့် ဒက်ရှ်ဘုတ်များကို ထုတ်ဝေပါ။
+   `.sora`၊ `.nexus` နှင့် `.dao` အတွက် ပြတင်းပေါက်များကို အေးခဲထားပါ။
+2. မှတ်ပုံတင်သူများနှင့် ဘဏ္ဍာစိုးများသည် DNS၊ ဈေးနှုန်းနှင့် ချိတ်ဆက်နိုင်စေရန်အတွက် onboarding kit တစ်ခု ပို့ပေးပါ
+   နောက်ဆက်တွဲတစ်ခုမှ တိုက်ရိုက်မလွှင့်မီ APIs များကို တသမတ်တည်း လုပ်ဆောင်ပါ။
 
-This page mirrors the source version
+ဤစာမျက်နှာသည် အရင်းအမြစ်ဗားရှင်းကို ထင်ဟပ်စေသည်။
 [`docs/source/sns/onboarding_kit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/onboarding_kit.md)
-so external reviewers can follow the same procedure.
+ထို့ကြောင့် ပြင်ပသုံးသပ်သူများသည် တူညီသောလုပ်ငန်းစဉ်ကို လိုက်နာနိုင်သည်။
 
-## 1. Metric bundle
+## 1. မက်ထရစ်အတွဲ
 
-### Grafana dashboard & portal embed
+### Grafana ဒက်ရှ်ဘုတ်နှင့် ပေါ်တယ်ကို ထည့်သွင်းထားသည်။
 
-- Import `dashboards/grafana/sns_suffix_analytics.json` into Grafana (or another
-  analytics host) via the standard API:
+- `dashboards/grafana/sns_suffix_analytics.json` ကို Grafana သို့ တင်သွင်းပါ
+  စံ API မှတဆင့် ခွဲခြမ်းစိတ်ဖြာမှုလက်ခံသူ)
 
 ```bash
 curl -H "Content-Type: application/json" \
@@ -35,31 +37,31 @@ curl -H "Content-Type: application/json" \
      --data-binary @dashboards/grafana/sns_suffix_analytics.json
 ```
 
-- The same JSON powers this portal page’s iframe (see **SNS KPI Dashboard**).
-  Whenever you bump the dashboard, run
-  `npm run build && npm run serve-verified-preview` inside `docs/portal` to
-  confirm both Grafana and the embed stay in sync.
+- တူညီသော JSON သည် ဤပေါ်တယ်စာမျက်နှာ၏ iframe ကို စွမ်းအားပေးသည် (**SNS KPI Dashboard** ကိုကြည့်ပါ)။
+  ဒက်ရှ်ဘုတ်ကို ထိလိုက်တိုင်း ပြေးပါ။
+  `npm run build && npm run serve-verified-preview` အတွင်းရှိ `docs/portal` သို့
+  Grafana နှင့် embed နှစ်ခုလုံးသည် ထပ်တူကျနေစေရန် အတည်ပြုပါ။
 
-### Panels & evidence
+### အကွက်များနှင့် အထောက်အထားများ
 
-| Panel | Metrics | Governance evidence |
-|-------|---------|---------------------|
-| Registrations & renewals | `sns_registrar_status_total` (success + renewal resolver labels) | Per-suffix throughput + SLA tracking. |
-| ARPU / net units | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | Finance can match registrar manifests to revenue. |
-| Disputes & freezes | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | Shows active freezes, arbitration cadence, and guardian workload. |
-| SLA/error rates | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | Highlights API regressions before they impact customers. |
-| Bulk manifest tracker | `sns_bulk_release_manifest_total`, payment metrics with `manifest_id` labels | Connects CSV drops to settlement tickets. |
+| Panel | မက်ထရစ်များ | အုပ်ချုပ်မှု အထောက်အထား |
+|---------|---------|---------------------|
+| မှတ်ပုံတင်ခြင်းနှင့် သက်တမ်းတိုးခြင်း | `sns_registrar_status_total` (အောင်မြင်မှု + သက်တမ်းတိုးဖြေရှင်းမှု အညွှန်းများ) | Per-suffix throughput + SLA ခြေရာခံခြင်း။ |
+| ARPU / အသားတင်ယူနစ် | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | ဘဏ္ဍာရေးသည် မှတ်ပုံတင်အရာရှိ၏ ဖော်ပြချက်များကို ဝင်ငွေနှင့် ယှဉ်နိုင်သည်။ |
+| အငြင်းပွားမှုများ & အေးခဲခြင်း | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | တက်ကြွစွာ အေးခဲခြင်း၊ ခုံသမာဓိ စီရင်ဆုံးဖြတ်ခြင်း နှင့် အုပ်ထိန်းသူ အလုပ်တာဝန်တို့ကို ပြသသည်။ |
+| SLA/အမှားနှုန်းများ | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | ၎င်းတို့သည် သုံးစွဲသူများအပေါ် မသက်ရောက်မီ API ဆုတ်ယုတ်မှုများကို မီးမောင်းထိုးပြသည်။ |
+| အစုလိုက် ထင်ရှားသော ခြေရာခံကိရိယာ | `sns_bulk_release_manifest_total`၊ `manifest_id` တံဆိပ်များဖြင့် ငွေပေးချေမှု မက်ထရစ်များ | CSV အစက်များကို ငွေပေးချေမှုလက်မှတ်များသို့ ချိတ်ဆက်သည်။ |
 
-Export a PDF/CSV from Grafana (or the embedded iframe) during the monthly KPI
-review and attach it to the relevant annex entry under
-`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Stewards also capture the SHA-256
-of the exported bundle under `docs/source/sns/reports/` (for example,
-`steward_scorecard_2026q1.md`) so audits can replay the evidence path.
+လစဉ် KPI ကာလအတွင်း Grafana (သို့မဟုတ် ထည့်သွင်းထားသော iframe) မှ PDF/CSV ကို ထုတ်ယူပါ
+ပြန်လည်သုံးသပ်ပြီး သက်ဆိုင်ရာ နောက်ဆက်တွဲ ထည့်သွင်းမှုအောက်တွင် ပူးတွဲပါရှိသည်။
+`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`။ ဘဏ္ဍာစိုးများသည် SHA-256 ကိုလည်း ဖမ်းယူထားသည်။
+`docs/source/sns/reports/` အောက်တွင် တင်ပို့ထားသောအတွဲ၏ (ဥပမာ၊
+`steward_scorecard_2026q1.md`) ထို့ကြောင့် စာရင်းစစ်များသည် အထောက်အထားလမ်းကြောင်းကို ပြန်ဖွင့်နိုင်သည်။
 
-### Annex automation
+### နောက်ဆက်တွဲ အလိုအလျောက်စနစ်
 
-Generate annex files directly from the dashboard export so reviewers get a
-consistent digest:
+နောက်ဆက်တွဲဖိုင်များကို ဒက်ရှ်ဘုတ် ထုတ်ယူမှုမှ တိုက်ရိုက်ထုတ်လုပ်ခြင်းဖြင့် သုံးသပ်သူများ ရရှိစေသည်။
+တသမတ်တည်းအကြေ
 
 ```bash
 cargo xtask sns-annex \
@@ -72,77 +74,77 @@ cargo xtask sns-annex \
   --portal-entry docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md
 ```
 
-- The helper hashes the export, captures the UID/tags/panel count, and writes a
-  Markdown annex under `docs/source/sns/reports/.<suffix>/<cycle>.md` (see the
-  `.sora/2026-03` sample committed alongside this doc).
-- `--dashboard-artifact` copies the export into
-  `artifacts/sns/regulatory/<suffix>/<cycle>/` so the annex references the
-  canonical evidence path; use `--dashboard-label` only when you need to point
-  at an out-of-band archive.
-- `--regulatory-entry` points at the governing memo. The helper inserts (or
-  replaces) a `KPI Dashboard Annex` block that records the annex path, dashboard
-  artefact, digest, and timestamp so evidence stays in sync after re-runs.
-- `--portal-entry` keeps the Docusaurus copy (`docs/portal/docs/sns/regulatory/*.md`)
-  aligned so reviewers do not have to diff separate annex summaries manually.
-- If you skip `--regulatory-entry`/`--portal-entry`, attach the generated file to
-  the memos manually and still upload the PDF/CSV snapshots captured from Grafana.
-- For recurring exports, list the suffix/cycle pairs in
-  `docs/source/sns/regulatory/annex_jobs.json` and run
-  `python3 scripts/run_sns_annex_jobs.py --verbose`. The helper walks every entry,
-  copies the dashboard export (defaulting to `dashboards/grafana/sns_suffix_analytics.json`
-  when unspecified), and refreshes the annex block inside each regulatory (and,
-  when available, portal) memo in one pass.
-- Run `python3 scripts/check_sns_annex_schedule.py --jobs docs/source/sns/regulatory/annex_jobs.json --regulatory-root docs/source/sns/regulatory --report-root docs/source/sns/reports` (or `make check-sns-annex`) to prove the job list stays sorted/deduped, each memo carries the matching `sns-annex` marker, and the annex stub exists. The helper writes `artifacts/sns/annex_schedule_summary.json` beside the locale/hash summaries used in governance packets.
-This removes manual copy/paste steps and keeps SN-8 annex evidence consistent while
-guarding schedule, marker, and localization drift in CI.
+- အကူအညီပေးသူက ပို့ကုန်ကို hashes လုပ်ပြီး၊ UID/tags/panel count ကိုဖမ်းယူပြီး တစ်ခုရေးပါ။
+  `docs/source/sns/reports/.<suffix>/<cycle>.md` အောက်တွင် Markdown နောက်ဆက်တွဲ (ကိုကြည့်ပါ။
+  `.sora/2026-03` နမူနာကို ဤ doc နှင့်အတူ ပူးတွဲတင်ပြပါသည်။
+- `--dashboard-artifact` ထဲသို့ ပို့ကုန်ကို မိတ္တူကူးသည်။
+  `artifacts/sns/regulatory/<suffix>/<cycle>/` ထို့ကြောင့် နောက်ဆက်တွဲသည် ၎င်းကို ကိုးကားပါသည်။
+  canonical အထောက်အထားလမ်းကြောင်း; သင်ထောက်ပြရန် လိုအပ်မှသာ `--dashboard-label` ကို အသုံးပြုပါ။
+  တီးဝိုင်းပြင်ပ မှတ်တမ်းတွင်။
+- အုပ်ချုပ်ရေးမှတ်စုတွင် `--regulatory-entry` အမှတ်။ အထောက်အကူပေးသူက (သို့မဟုတ်
+  နောက်ဆက်တွဲလမ်းကြောင်းကိုမှတ်တမ်းတင်သော `KPI Dashboard Annex` ဘလောက်တစ်ခုကို အစားထိုးသည်၊
+  အထောက်အထား၊ အချေအတင်နှင့် အချိန်တံဆိပ်တုံးများ ပြန်လည်လုပ်ဆောင်ပြီးနောက် အထောက်အထားများ ထပ်တူကျနေမည်ဖြစ်သည်။
+- `--portal-entry` သည် Docusaurus မိတ္တူ (`docs/portal/docs/sns/regulatory/*.md`) ကို သိမ်းဆည်းသည်
+  ချိန်ညှိထားသောကြောင့် သုံးသပ်သူများသည် သီးခြား နောက်ဆက်တွဲ အနှစ်ချုပ်များကို ကိုယ်တိုင် ကွဲပြားရန် မလိုအပ်ပါ။
+- အကယ်၍ သင်သည် `--regulatory-entry`/`--portal-entry` ကိုကျော်သွားပါက ထုတ်လုပ်ထားသောဖိုင်ကို ပူးတွဲပါ
+  မှတ်စုတိုကို ကိုယ်တိုင်ပြုလုပ်ပြီး Grafana မှ ရိုက်ကူးထားသော PDF/CSV လျှပ်တစ်ပြက်ရိုက်ချက်များကို အပ်လုဒ်လုပ်ဆဲဖြစ်သည်။
+- ထပ်တလဲလဲ တင်ပို့မှုအတွက်၊ နောက်ဆက်တွဲ/သံသရာအတွဲများကို စာရင်းပြုစုပါ။
+  `docs/source/sns/regulatory/annex_jobs.json` နဲ့ run လိုက်ပါ။
+  `python3 scripts/run_sns_annex_jobs.py --verbose`။ အထောက်အကူပြုသူသည် ဝင်ပေါက်တိုင်းကို လျှောက်သွားသည်၊
+  ဒက်ရှ်ဘုတ်တင်ပို့မှုကို မိတ္တူကူးသည် (`dashboards/grafana/sns_suffix_analytics.json` သို့ ပုံသေဖြစ်သည်။
+  သတ်မှတ်မထားသည့်အချိန်တွင်) နှင့် စည်းမျဉ်းတစ်ခုစီအတွင်းရှိ နောက်ဆက်တွဲပိတ်ဆို့ကို ပြန်လည်စတင်သည် (နှင့်၊
+  ရနိုင်သည့်အခါ၊ ပေါ်တယ်) လက်မှတ်တစ်ခုတွင် မှတ်စုတို။
+- အလုပ်စာရင်းကို စီ/ခွဲထားသည်ကို သက်သေပြရန် `python3 scripts/check_sns_annex_schedule.py --jobs docs/source/sns/regulatory/annex_jobs.json --regulatory-root docs/source/sns/regulatory --report-root docs/source/sns/reports` (သို့မဟုတ် `make check-sns-annex`) ကိုဖွင့်ပါ၊ မှတ်စုတစ်ခုစီတွင် ကိုက်ညီသော `sns-annex` အမှတ်အသားကို သယ်ဆောင်ထားပြီး နောက်ဆက်တွဲ ဆောင်းပါးတိုလည်း ရှိနေပါသည်။ အကူအညီပေးသူက အုပ်ချုပ်မှုပက်ကတ်များတွင် အသုံးပြုသည့် ဒေသန္တရ/ hash အနှစ်ချုပ်များဘေးတွင် `artifacts/sns/annex_schedule_summary.json` ရေးသည်။
+၎င်းသည် မိမိကိုယ်တိုင် မိတ္တူကူးထည့်ခြင်း အဆင့်များကို ဖယ်ရှားပြီး SN-8 နောက်ဆက်တွဲ အထောက်အထားများကို တသမတ်တည်း ရှိနေစေပါသည်။
+အစောင့်အကြပ်အချိန်ဇယား၊ အမှတ်အသားနှင့် CI တွင် ပျံ့လွင့်နေသည်။
 
-## 2. Onboarding kit components
+## 2. Onboarding Kit အစိတ်အပိုင်းများ
 
-### Suffix wiring
+### နောက်ဆက်တွဲ ဝါယာကြိုး
 
-- Registry schema + selector rules:
+- Registry schema + selector စည်းမျဉ်းများ-
   [`docs/source/sns/registry_schema.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registry_schema.md)
-  and [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md).
-- DNS skeleton helper:
+  နှင့် [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md)။
+- DNS အရိုးစုအကူ-
   [`scripts/sns_zonefile_skeleton.py`](https://github.com/hyperledger-iroha/iroha/blob/master/scripts/sns_zonefile_skeleton.py)
-  with the rehearsal flow captured in the
-  [gateway/DNS runbook](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_owner_runbook.md).
-- For every registrar launch, file a short note under
-  `docs/source/sns/reports/` summarising selector samples, GAR proofs, and DNS hashes.
+  အစမ်းလေ့ကျင့်မှု စီးဆင်းမှုနှင့်အတူ
+  [gateway/DNS runbook](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_owner_runbook.md)။
+- မှတ်ပုံတင်သူ စတင်ခြင်းတိုင်းအတွက်၊ အောက်တွင် အတိုချုံးမှတ်စုကို ရေးပါ။
+  `docs/source/sns/reports/` သည် ရွေးချယ်သူနမူနာများ၊ GAR အထောက်အထားများနှင့် DNS hashe များကို အကျဉ်းချုပ်ဖော်ပြထားသည်။
 
-### Pricing cheatsheet
+### စျေးနှုံး
 
-| Label length | Base fee (USD equiv) |
-|--------------|---------------------|
+| တံဆိပ်အရှည် | အခြေခံအခကြေးငွေ (USD equiv) |
+|-----------------|---------------------|
 | 3 | $240 |
 | 4 | $90 |
 | 5 | $30 |
-| 6–9 | $12 |
+| ၆–၉ | $12 |
 | 10+ | $8 |
 
-Suffix coefficients: `.sora` = 1.0×, `.nexus` = 0.8×, `.dao` = 1.3×.  
-Term multipliers: 2‑year −5 %, 5‑year −12 %; grace window = 30 days, redemption
-= 60 days (20 % fee, min $5, max $200). Record negotiated deviations in the
-registrar ticket.
+Suffix coefficients- `.sora` = 1.0×, `.nexus` = 0.8×, `.dao` = 1.3×။  
+သက်တမ်းမြှောက်ကိန်းများ- 2-year −5%, 5-year −12%; ကျေးဇူးတော်ပြတင်းပေါက် = ရက် 30၊ ရွေးနှုတ်ခြင်း။
+= ရက် 60 (အခကြေးငွေ 20%၊ အနည်းဆုံး $5၊ အများဆုံး $200)။ ညှိနှိုင်းထားသော သွေဖည်မှုများကို မှတ်တမ်းတင်ပါ။
+မှတ်ပုံတင်လက်မှတ်။
 
-### Premium auctions vs renewals
+### ပရီမီယံလေလံပွဲများနှင့် သက်တမ်းတိုးခြင်းများ
 
-1. **Premium pool** — sealed-bid commit/reveal (SN-3). Track bids with
-   `sns_premium_commit_total`, and publish the manifest under
-   `docs/source/sns/reports/`.
-2. **Dutch reopen** — after grace + redemption expire, start a 7‑day Dutch sale
-   at 10× that decays 15 % per day. Label manifests with `manifest_id` so the
-   dashboard can surface progress.
-3. **Renewals** — monitor `sns_registrar_status_total{resolver="renewal"}` and
-   capture the autorenew checklist (notifications, SLA, fallback payment rails)
-   inside the registrar ticket.
+1. **ပရီမီယံရေကန်** — တံဆိပ်ခတ်ထားသော လေလံကတိကဝတ်/ထုတ်ဖော်မှု (SN-3)။ လေလံများကို ခြေရာခံပါ။
+   `sns_premium_commit_total` နှင့် manifest အောက်တွင် ထုတ်ဝေပါ။
+   `docs/source/sns/reports/`။
+2. **ဒတ်ခ်ျကို ပြန်ဖွင့်သည်** — ကျေးဇူးတော် + ရွေးနှုတ်မှု သက်တမ်းကုန်ပြီးနောက်၊ 7-ရက် ဒတ်ခ်ျရောင်းချမှုကို စတင်ပါ။
+   တစ်နေ့လျှင် 15% ပျက်စီးသည်။ အညွှန်းသည် `manifest_id` ဖြင့် ထင်ရှားသည်။
+   ဒက်ရှ်ဘုတ်သည် တိုးတက်မှုကို ပေါ်အောင်လုပ်နိုင်သည်။
+3. **သက်တမ်းတိုးခြင်း** — စောင့်ကြည့် `sns_registrar_status_total{resolver="renewal"}` နှင့်
+   အလိုအလျောက်သက်တမ်းတိုးစစ်ဆေးမှုစာရင်းကို ဖမ်းယူပါ (အကြောင်းကြားချက်များ၊ SLA၊ နောက်ပြန်ငွေပေးချေမှုသံလမ်းများ)
+   မှတ်ပုံတင်လက်မှတ်ထဲမှာ။
 
-### Developer APIs & automation
+### Developer APIs နှင့် အလိုအလျောက်စနစ်
 
-- API contracts: [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md).
-- Bulk helper & CSV schema:
-  [`docs/source/sns/bulk_onboarding_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/bulk_onboarding_toolkit.md).
-- Example command:
+- API စာချုပ်များ- [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md)။
+- အစုလိုက်အကူအညီပေးသူနှင့် CSV အစီအစဉ်-
+  [`docs/source/sns/bulk_onboarding_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/bulk_onboarding_toolkit.md)။
+- ဥပမာ command-
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -152,27 +154,27 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --submit-token-file ~/.config/sora/tokens/registrar.token
 ```
 
-Include the manifest ID (`--submission-log` output) in the KPI dashboard filter
-so finance can reconcile revenue panels per release.
+KPI ဒက်ရှ်ဘုတ် filter တွင် manifest ID (`--submission-log`) ကို ထည့်သွင်းပါ
+ထို့ကြောင့် ငွေကြေးသည် ထုတ်ဝေမှုတိုင်းတွင် ဝင်ငွေအကန့်များကို ညှိနှိုင်းနိုင်ပါသည်။
 
-### Evidence bundle
+### အထောက်အထား အတွဲ
 
-1. Registrar ticket with contacts, suffix scope, and payment rails.
-2. DNS/resolver evidence (zonefile skeletons + GAR proofs).
-3. Pricing worksheet + any overrides approved by governance.
-4. API/CLI smoke-test artefacts (`curl` samples, CLI transcripts).
-5. KPI dashboard screenshot + CSV export, attached to the monthly annex.
+1. အဆက်အသွယ်များ၊ နောက်ဆက်တွဲ နယ်ပယ်နှင့် ငွေပေးချေမှုလမ်းကြောင်းများပါရှိသော မှတ်ပုံတင်အရာရှိလက်မှတ်။
+2. DNS/resolver အထောက်အထားများ (ဇုန်ဖိုင်အရိုးစုများ + GAR အထောက်အထားများ)။
+3. စျေးနှုန်းသတ်မှတ်ရေးစာရွက် + အုပ်ချုပ်မှုမှ အတည်ပြုထားသော အစားထိုးမှုများ။
+4. API/CLI မီးခိုးစမ်းသပ်မှုလက်ရာများ (`curl` နမူနာများ၊ CLI မှတ်တမ်းများ)။
+5. KPI ဒက်ရှ်ဘုတ် ဖန်သားပြင်ဓာတ်ပုံ + CSV ထုတ်ယူမှု၊ လစဉ်နောက်ဆက်တွဲတွင် ပူးတွဲပါရှိသည်။
 
-## 3. Launch checklist
+## 3. စစ်ဆေးရန်စာရင်းကို စတင်ပါ။
 
-| Step | Owner | Artefact |
-|------|-------|----------|
-| Dashboard imported | Product Analytics | Grafana API response + dashboard UID |
-| Portal embed validated | Docs/DevRel | `npm run build` logs + preview screenshot |
-| DNS rehearsal complete | Networking/Ops | `sns_zonefile_skeleton.py` outputs + runbook log |
-| Registrar automation dry run | Registrar Eng | `sns_bulk_onboard.py` submissions log |
-| Governance evidence filed | Governance Council | Annex link + SHA-256 of exported dashboard |
+| အဆင့် | ပိုင်ရှင် | Artefact |
+|--------|------|----------|
+| ဒက်ရှ်ဘုတ် တင်သွင်း | ထုတ်ကုန်ပိုင်းခြားစိတ်ဖြာချက် | Grafana API တုံ့ပြန်မှု + ဒက်ရှ်ဘုတ် UID |
+| Portal embed validated | Docs/DevRel | `npm run build` မှတ်တမ်းများ + အစမ်းကြည့်ခြင်း စခရင်ရှော့ |
+| DNS အစမ်းလေ့ကျင့်မှု ပြီးပါပြီ | ကွန်ရက်ချိတ်ဆက်ခြင်း/ Ops | `sns_zonefile_skeleton.py` အထွက်များ + runbook မှတ်တမ်း |
+| မှတ်ပုံတင်သူ အလိုအလျောက်စနစ် ခြောက်သွေ့ခြင်း | မှတ်ပုံတင်အရာရှိ Eng | `sns_bulk_onboard.py` တင်ပြချက်များ မှတ်တမ်း |
+| အုပ်ချုပ်ရေးဆိုင်ရာ အထောက်အထားများ | အုပ်ချုပ်ရေးကောင်စီ | ထုတ်ယူထားသော ဒက်ရှ်ဘုတ် |
 
-Complete the checklist before activating a registrar or suffix. The signed
-bundle clears the SN-8 roadmap gate and gives auditors a single reference when
-reviewing marketplace launches.
+မှတ်ပုံတင်အရာရှိ သို့မဟုတ် နောက်ဆက်တွဲကို အသက်မသွင်းမီ စစ်ဆေးရန်စာရင်းကို အပြီးသတ်ပါ။ လက်မှတ်ရေးထိုးသည်။
+အစုအဝေးသည် SN-8 လမ်းပြမြေပုံတံခါးကို ရှင်းလင်းပြီး စာရင်းစစ်များအား ရည်ညွှန်းသည့်အခါ တစ်ခုတည်းကို ပေးသည်။
+စျေးကွက်မိတ်ဆက်မှုများကို ပြန်လည်သုံးသပ်ခြင်း။

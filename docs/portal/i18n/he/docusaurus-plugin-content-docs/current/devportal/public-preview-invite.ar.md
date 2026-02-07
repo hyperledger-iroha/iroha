@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/devportal/public-preview-invite.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # دليل دعوات المعاينة العامة
@@ -22,7 +24,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 اكمل هذه المهام قبل ارسال اي دعوة:
 
 1. اخر اثار المعاينة مرفوعة في CI (`docs-portal-preview`,
-   manifest checksum, descriptor, bundle SoraFS).
+   סכום ביקורת מניפסט, מתאר, חבילה SoraFS).
 2. `npm run --prefix docs/portal serve` (مقيد بالchecksum) تم اختباره على نفس tag.
 3. تذاكر تاهيل المراجعين معتمدة ومربوطة بموجة الدعوة.
 4. مستندات الامن والمراقبة والحوادث مؤكدة
@@ -101,14 +103,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
    احتفظ بـ `npm run serve` (`scripts/serve-verified-preview.mjs`) كخيار fallback ليتمكن
    المراجعون من تشغيل نسخة محلية اذا حدث خلل في preview edge.
 
-## جدول الاتصالات
-
-| اليوم | الاجراء | Owner |
+## جدول الاتصالات| יומי | الاجراء | בעלים |
 | --- | --- | --- |
 | D-3 | انهاء نص الدعوة، تحديث الاثار، تنفيذ dry-run للتحقق | Docs/DevRel |
-| D-2 | موافقة الحوكمة + تذكرة تغيير | Docs/DevRel + Governance |
+| D-2 | موافقة الحوكمة + تذكرة تغيير | Docs/DevRel + ממשל |
 | D-1 | ارسال الدعوات باستخدام القالب، تحديث tracker بقائمة المستلمين | Docs/DevRel |
-| D | مكالمة kickoff / office hours، مراقبة لوحات القياس | Docs/DevRel + On-call |
+| ד | مكالمة kickoff / office hours، مراقبة لوحات القياس | Docs/DevRel + כוננות |
 | D+7 | digest للfeedback في منتصف الموجة، triage للقضايا المانعة | Docs/DevRel |
 | D+14 | اغلاق الموجة، الغاء الوصول المؤقت، نشر ملخص في `status.md` | Docs/DevRel |
 
@@ -128,7 +128,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
    ```
 
    الاحداث المدعومة هي `invite-sent`, `acknowledged`, `feedback-submitted`,
-   `issue-opened`, و`access-revoked`. يعيش السجل افتراضيا في
+   `issue-opened`, ו-`access-revoked`. يعيش السجل افتراضيا في
    `artifacts/docs_portal_preview/feedback_log.json`; ارفقه بتذكرة موجة الدعوة
    مع نماذج الموافقة. استخدم مساعد summary لانتاج roll-up قابل للتدقيق قبل
    ملاحظة الاغلاق:
@@ -152,7 +152,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## feedback والاغلاق
 
-1. اجمع feedback في مستند مشترك او لوحة issues. ضع وسم `docs-preview/<wave>` حتى يتمكن
+1. משוב על נושאים בנושאי תקנות. ضع وسم `docs-preview/<wave>` حتى يتمكن
    اصحاب roadmap من العثور عليها بسهولة.
 2. استخدم مخرجات summary من preview logger لملء تقرير الموجة، ثم لخص المجموعة في
    `status.md` (المشاركون، ابرز الملاحظات، الاصلاحات المخطط لها) وحدّث `roadmap.md`

@@ -7,92 +7,87 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d5d0657539dfcca1869a0ab4fc9adee8665f18708f71b4c116dc8900ae5eae75
 source_last_modified: "2026-01-05T09:28:12.004169+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM Compliance Brief — Chinese Cryptography Law Obligations
-% Iroha Compliance & Crypto Working Groups
+% SM Compliance Brief — ჩინური კრიპტოგრაფიის კანონის ვალდებულებები
+% Iroha შესაბამისობის და კრიპტო სამუშაო ჯგუფები
 % 2026-02-12
 
-# Prompt
+# მოწოდება
 
-> You are LLM acting as a compliance analyst for the Hyperledger Iroha crypto and platform teams.  
-> Background:  
-> - Hyperledger Iroha is a Rust-based permissioned blockchain that now supports the Chinese GM/T SM2 (signatures), SM3 (hash), and SM4 (block cipher) primitives.  
-> - Operators in mainland China must comply with the PRC Cryptography Law (2019), the Multi-Level Protection Scheme (MLPS 2.0), State Cryptography Administration (SCA) filing rules, and import/export controls overseen by the Ministry of Commerce (MOFCOM) and the Customs Administration.  
-> - Iroha distributes open-source software internationally. Some operators will compile SM-enabled binaries domestically, while others may import pre-built artefacts.  
-> Requested analysis: Summarise the key legal obligations triggered by shipping SM2/SM3/SM4 support in open-source blockchain software, including: (a) classification under the commercial vs. core/common cryptography buckets; (b) filing/approval requirements for software that implements state commercial cryptography; (c) export controls for binaries and source; (d) operational obligations on network operators (key management, logging, incident response) under MLPS 2.0. Outline concrete action items for the Iroha project (documentation, manifests, compliance statements) and for operators deploying SM-enabled nodes inside China.
+> თქვენ ხართ LLM, მოქმედებს როგორც შესაბამისობის ანალიტიკოსი Hyperledger Iroha კრიპტო და პლატფორმის გუნდებისთვის.  
+> ფონი:  
+> - Hyperledger Iroha არის Rust-ზე დაფუძნებული ნებადართული ბლოკჩეინი, რომელიც ახლა მხარს უჭერს ჩინურ GM/T SM2 (ხელმოწერები), SM3 (ჰეში) და SM4 (ბლოკის შიფრი) პრიმიტივებს.  
+> - მატერიკული ჩინეთის ოპერატორებმა უნდა დაიცვან PRC კრიპტოგრაფიის კანონი (2019), მრავალ დონის დაცვის სქემა (MLPS 2.0), სახელმწიფო კრიპტოგრაფიის ადმინისტრაციის (SCA) წარდგენის წესები და იმპორტის/ექსპორტის კონტროლი, რომელსაც ზედამხედველობს ვაჭრობის სამინისტრო (MOFCOM) და საბაჟო ადმინისტრაცია.  
+> - Iroha ავრცელებს ღია კოდის პროგრამულ უზრუნველყოფას საერთაშორისო დონეზე. ზოგიერთი ოპერატორი შეაგროვებს SM-ით ჩართული ორობითი ფაილებს შიდა ქვეყნებში, ზოგი კი შეიძლება წინასწარ ჩაშენებული არტეფაქტების იმპორტს.  
+> მოთხოვნილი ანალიზი: შეაჯამეთ ძირითადი სამართლებრივი ვალდებულებები, რომლებიც გამოწვეულია SM2/SM3/SM4 მხარდაჭერით გადაზიდვით ღია კოდის ბლოკჩეინის პროგრამულ უზრუნველყოფაში, მათ შორის: (ა) კლასიფიკაცია კომერციული და ძირითადი/საერთო კრიპტოგრაფიული თაიგულების მიხედვით; (ბ) პროგრამული უზრუნველყოფის შეტანის/დამტკიცების მოთხოვნები, რომელიც ახორციელებს სახელმწიფო კომერციულ კრიპტოგრაფიას; (c) ორობითი და წყაროს ექსპორტის კონტროლი; (დ) საოპერაციო ვალდებულებები ქსელის ოპერატორებზე (საკვანძო მენეჯმენტი, ჟურნალის აღრიცხვა, ინციდენტზე რეაგირება) MLPS 2.0-ის მიხედვით. გამოიკვეთეთ კონკრეტული სამოქმედო პუნქტები Iroha პროექტისთვის (დოკუმენტაცია, მანიფესტები, შესაბამისობის განცხადებები) და ოპერატორებისთვის, რომლებიც განათავსებენ SM-ჩართული კვანძებს ჩინეთის შიგნით.
 
-# Executive Summary
+# აღმასრულებელი რეზიუმე
 
-- **Classification:** SM2/SM3/SM4 implementations fall under “state commercial cryptography” (商业密码) rather than “core” or “common” cryptography because they are published public algorithms sanctioned for civilian/commercial usage. Open-source distribution is permitted but subject to filing when used in commercial products or services offered in China.
-- **Project obligations:** Provide algorithm provenance, deterministic build instructions, and a compliance statement noting that binaries implement state commercial cryptography. Maintain Norito manifests that flag SM capability so downstream integrators can complete filings.
-- **Operator obligations:** Chinese operators must file products/services using SM algorithms with the provincial SCA bureau, complete MLPS 2.0 registration (likely Level 3 for financial networks), deploy approved key-management and logging controls, and ensure export/import declarations align with MOFCOM catalogue exemptions.
+- **კლასიფიკაცია:** SM2/SM3/SM4 დანერგვა მიეკუთვნება „სახელმწიფო კომერციულ კრიპტოგრაფიას“ (商业密码) და არა „ძირითად“ ან „საერთო“ კრიპტოგრაფიას, რადგან ისინი გამოქვეყნებულია საჯარო ალგორითმები, რომლებიც სანქცირებულია სამოქალაქო/კომერციული გამოყენებისთვის. ღია კოდის გავრცელება ნებადართულია, მაგრამ ექვემდებარება შეტანას, როდესაც გამოიყენება ჩინეთში შემოთავაზებულ კომერციულ პროდუქტებში ან სერვისებში.
+- **პროექტის ვალდებულებები:** მიაწოდეთ ალგორითმის წარმოშობა, განმსაზღვრელი აგების ინსტრუქციები და შესაბამისობის განცხადება, სადაც აღნიშნულია, რომ ბინარები ახორციელებენ სახელმწიფო კომერციულ კრიპტოგრაფიას. შენარჩუნება Norito ცხადყოფს, რომ დროშის SM შესაძლებლობები, ასე რომ, ქვედა დინების ინტეგრატორებს შეუძლიათ შეავსონ ფაილები.
+- **ოპერატორის ვალდებულებები:** ჩინელმა ოპერატორებმა უნდა წარადგინონ პროდუქტები/მომსახურებები SM ალგორითმების გამოყენებით პროვინციულ SCA ბიუროში, დაასრულონ MLPS 2.0 რეგისტრაცია (სავარაუდოდ მე-3 დონე ფინანსური ქსელებისთვის), განათავსონ დამტკიცებული გასაღების მენეჯმენტი და ჟურნალის კონტროლი და უზრუნველყონ ექსპორტის/იმპორტის დეკლარაციების შესაბამისობა MOFCOM კატალოგთან.exemption კატალოგთან.
 
-# Regulatory Landscape
+# მარეგულირებელი ლანდშაფტი| რეგულაცია | ფარგლები | გავლენა Iroha SM მხარდაჭერაზე |
+|------------|-------|---------------------------|
+| **PRC-ის კრიპტოგრაფიის კანონი (2019)** | განსაზღვრავს ძირითად/საერთო/კომერციულ კრიპტოგრაფიას, მანდატების მართვის სისტემას, შეტანას და სერტიფიცირებას. | SM2/SM3/SM4 არის „კომერციული კრიპტოგრაფია“ და უნდა დაიცვან შეტანის/სერთიფიკაციის წესები, როდესაც ისინი უზრუნველყოფილნი არიან როგორც პროდუქტები/მომსახურებები ჩინეთში. |
+| **SCA ადმინისტრაციული ღონისძიებები კომერციული კრიპტოგრაფიული პროდუქტებისთვის** | აკონტროლებს წარმოებას, რეალიზაციას და მომსახურებას; მოითხოვს პროდუქტის შეტანას ან სერთიფიკატს. | ღია კოდის პროგრამული უზრუნველყოფა, რომელიც ახორციელებს SM ალგორითმებს, საჭიროებს ოპერატორის შეტანას კომერციულ შეთავაზებებში გამოყენებისას; დეველოპერებმა უნდა წარმოადგინონ დოკუმენტაცია შეტანის დასახმარებლად. |
+| **MLPS 2.0 (კიბერუსაფრთხოების კანონი + MLPS რეგულაციები)** | მოითხოვს ოპერატორებს საინფორმაციო სისტემების კლასიფიკაციას და უსაფრთხოების კონტროლის განხორციელებას; მე-3 ან ზემოთ დონეს სჭირდება კრიპტოგრაფიის შესაბამისობის მტკიცებულება. | ბლოკჩეინის კვანძები, რომლებიც ამუშავებენ ფინანსურ/იდენტურ მონაცემებს, როგორც წესი, რეგისტრირდება MLPS მე-3 დონეზე; ოპერატორებმა უნდა დაადასტურონ SM-ის გამოყენება, გასაღების მართვა, ხე-ტყის აღრიცხვა და ინციდენტების მართვა. |
+| **MOFCOM ექსპორტის კონტროლის კატალოგი და საბაჟო იმპორტის წესები** | აკონტროლებს კრიპტოგრაფიული პროდუქტების ექსპორტს, მოითხოვს გარკვეული ალგორითმების/ტექნიკის ნებართვებს. | წყაროს კოდის გამოქვეყნება, როგორც წესი, თავისუფლდება „საჯარო დომენის“ დებულებებიდან, მაგრამ კომპილირებული ორობითი ფაილების ექსპორტი SM შესაძლებლობით შეიძლება გამოიწვიოს კატალოგი, თუ არ გაიგზავნება დამტკიცებულ მიმღებებზე; იმპორტიორებმა უნდა განაცხადონ სახელმწიფო კომერციული კრიპტოგრაფია. |
 
-| Regulation | Scope | Impact on Iroha SM support |
-|------------|-------|----------------------------|
-| **Cryptography Law of the PRC (2019)** | Defines core/common/commercial cryptography, mandates management system, filing, and certification. | SM2/SM3/SM4 are “commercial cryptography” and must follow filing/certification rules when provided as products/services in China. |
-| **SCA Administrative Measures for Commercial Cryptography Products** | Governs production, sale, and service provision; requires product filing or certification. | Open-source software that implements SM algorithms needs operator filings when used in commercial offerings; developers should provide documentation to assist filings. |
-| **MLPS 2.0 (Cybersecurity Law + MLPS regulations)** | Requires operators to classify information systems and implement security controls; Level 3 or above needs cryptography compliance evidence. | Blockchain nodes handling financial/identity data typically register at MLPS Level 3; operators must document SM usage, key management, logging, and incident handling. |
-| **MOFCOM Export Control Catalogue & Customs Import Rules** | Controls export of cryptographic products, requires permits for certain algorithms/hardware. | Source code publication generally exempt under “public domain” provisions, but exporting compiled binaries with SM capability may trigger the catalogue unless shipped to approved recipients; importers must declare state commercial cryptography. |
+# ძირითადი ვალდებულებები
 
-# Key Obligations
+## 1. პროდუქტისა და სერვისის შეტანა (სახელმწიფო კრიპტოგრაფიის ადმინისტრაცია)
 
-## 1. Product & Service Filing (State Cryptography Administration)
+- **ვინ აფიქსირებს:** პროდუქციის/მომსახურების მომწოდებელი ჩინეთში (მაგ., ოპერატორი, SaaS პროვაიდერი). ღია კოდის შემსრულებლებს არ მოეთხოვებათ ფაილების წარდგენა, მაგრამ შეფუთვის ინსტრუქციებმა უნდა ჩართოს ქვემოთ მოყვანილი ფაილები.
+- **მიწოდება:** ალგორითმის აღწერა, უსაფრთხოების დიზაინის დოკუმენტები, ტესტირების მტკიცებულებები, მიწოდების ჯაჭვის წარმოშობა და საკონტაქტო დეტალები.
+- **Iroha ქმედება:** გამოაქვეყნეთ „SM კრიპტოგრაფიის განცხადება“, რომელიც მოიცავს ალგორითმის დაფარვას, დეტერმინისტულ აგების ნაბიჯებს, დამოკიდებულების ჰეშებს და დაკავშირებას უსაფრთხოების შეკითხვებისთვის.
 
-- **Who files:** The entity providing the product/service in China (e.g., operator, SaaS provider). Open-source maintainers are not required to file, but packaging guidance must enable downstream filings.
-- **Deliverables:** Algorithm description, security design docs, testing evidence, supply-chain provenance, and contact details.
-- **Iroha action:** Publish an “SM cryptography statement” including algorithm coverage, deterministic build steps, dependency hashes, and contact for security inquiries.
+## 2. სერტიფიცირება და ტესტირება
 
-## 2. Certification & Testing
+- ზოგიერთ სექტორს (ფინანსები, ტელეკომი, კრიტიკული ინფრასტრუქტურა) შეიძლება მოითხოვდეს აკრედიტებული ლაბორატორიული ტესტირება ან სერტიფიცირება (მაგ., CC-Grade/OSCCA სერთიფიკატი).
+- ჩართეთ რეგრესიის ტესტის არტეფაქტები, რომლებიც აჩვენებენ შესაბამისობას GM/T სპეციფიკაციებთან.
 
-- Certain sectors (finance, telecom, critical infrastructure) may require accredited lab testing or certification (e.g., CC-Grade/OSCCA certification).
-- Include regression test artefacts demonstrating compliance with GM/T specifications.
+## 3. MLPS 2.0 ოპერატიული კონტროლი
 
-## 3. MLPS 2.0 Operational Controls
+ოპერატორებმა უნდა:1. **დაარეგისტრირეთ ბლოკჩეინის სისტემა** საზოგადოებრივი უსაფრთხოების ბიუროში, კრიპტოგრაფიის გამოყენების შეჯამების ჩათვლით.
+2. **გასაღების მართვის პოლიტიკის განხორციელება**: გასაღების გენერირება, განაწილება, როტაცია, განადგურება, რომელიც შეესაბამება SM2/SM4 მოთხოვნებს; სასიცოცხლო ციკლის ძირითადი მოვლენების ჩაწერა.
+3. **უსაფრთხოების აუდიტის ჩართვა**: SM-ზე ჩართული ტრანზაქციების ჟურნალების აღბეჭდვა, კრიპტოგრაფიული ოპერაციების მოვლენები და ანომალიების გამოვლენა; შეინარჩუნოს ჟურნალები ≥6 თვის განმავლობაში.
+4. **ინციდენტის რეაგირება:** შეინარჩუნეთ რეაგირების დოკუმენტირებული გეგმები, რომლებიც მოიცავს კრიპტოგრაფიის კომპრომისის პროცედურებს და მოხსენების ვადებს.
+5. **მიმწოდებლის მენეჯმენტი:** უზრუნველყოს პროგრამული უზრუნველყოფის ზედა ნაკადის პროვაიდერებს (Iroha პროექტი) შეუძლიათ მიაწოდონ დაუცველობის შეტყობინებები და პატჩები.
 
-Operators must:
+## 4. იმპორტის/ექსპორტის მოსაზრებები
 
-1. **Register the blockchain system** with the Public Security Bureau, including cryptography usage summaries.
-2. **Implement key management policies**: key generation, distribution, rotation, destruction aligned with SM2/SM4 requirements; log key lifecycle events.
-3. **Enable security auditing**: capture SM-enabled transaction logs, cryptographic operation events, and anomaly detection; retain logs ≥6 months.
-4. **Incident response:** maintain documented response plans that include cryptography compromise procedures and reporting timelines.
-5. **Vendor management:** ensure upstream software providers (Iroha project) can supply vulnerability notifications and patches.
+- **ღია კოდის კოდი:** ჩვეულებრივ გათავისუფლებულია საჯარო დომენის გამონაკლისების შემთხვევაში, მაგრამ შემსრულებლებმა უნდა უმასპინძლონ ჩამოტვირთვებს სერვერებზე, რომლებიც თვალყურს ადევნებენ წვდომის ჟურნალებს და მოიცავს სახელმწიფო კომერციულ კრიპტოგრაფიაზე მითითებულ ლიცენზიას/უარყოფას.
+- ** წინასწარ ჩაშენებული ორობითი ფაილები:** ექსპორტიორებმა, რომლებიც აგზავნიან SM-ით ჩართული ორობითი ფაილებს ჩინეთში/გარეთ, უნდა დაადასტურონ, არის თუ არა საქონელი დაფარული „კომერციული კრიპტოგრაფიის ექსპორტის კონტროლის კატალოგში“. ზოგადი დანიშნულების პროგრამული უზრუნველყოფისთვის სპეციალიზებული აპარატურის გარეშე, შეიძლება საკმარისი იყოს ორმაგი დანიშნულების მარტივი დეკლარაცია; შემსრულებლებმა არ უნდა გაავრცელონ ორობითი ფაილები უფრო მკაცრი კონტროლის მქონე იურისდიქციებიდან, თუ ადგილობრივი ადვოკატი არ დაამტკიცებს.
+- **ოპერატორის იმპორტი:** სუბიექტებმა, რომლებიც შემოაქვთ ბინარებს ჩინეთში, უნდა განაცხადონ კრიპტოგრაფიის გამოყენება. უზრუნველყოს ჰეშის მანიფესტები და SBOM საბაჟო ინსპექტირების გასამარტივებლად.
 
-## 4. Import/Export Considerations
+# რეკომენდირებული პროექტის მოქმედებები
 
-- **Open-source source code:** Typically exempt under public-domain exception, but maintainers should host downloads on servers that track access logs and include licence/disclaimer referencing state commercial cryptography.
-- **Pre-built binaries:** Exporters shipping SM-enabled binaries into/out of China should confirm whether the item is covered by the “Commercial Cryptography Export Control Catalogue”. For general-purpose software without specialised hardware, a simple dual-use declaration may suffice; maintainers should not distribute binaries from jurisdictions with stricter controls unless local counsel approves.
-- **Operator import:** Entities bringing binaries into China must declare cryptography usage. Provide hash manifests and SBOM to simplify customs inspection.
+1. **დოკუმენტაცია**
+   - დაამატეთ შესაბამისობის დანართი `docs/source/crypto/sm_program.md`-ს, სადაც მითითებულია სახელმწიფო კომერციული კრიპტოგრაფიის სტატუსი, შეტანის მოლოდინები და საკონტაქტო პუნქტები.
+   - გამოაქვეყნეთ Norito მანიფესტის ველი (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`), რომელიც ოპერატორებს შეუძლიათ გამოიყენონ ფაილების მომზადებისას.
+   - დარწმუნდით, რომ Torii `/v1/node/capabilities` რეკლამა (და `iroha runtime capabilities` CLI მეტსახელი) ყოველი გამოშვებით იგზავნება, რათა ოპერატორებმა შეძლონ გადაიღონ `crypto.sm` მანიფესტის სურათი MLPS/密 评 მტკიცებულებისთვის.
+   - უზრუნველყოს ორენოვანი (EN/ZH) შესაბამისობის სწრაფი დაწყების შემაჯამებელი ვალდებულებები.
+2. ** არტეფაქტების გამოშვება **
+   - გაგზავნეთ SBOM/CycloneDX ფაილები SM-ჩართული კონსტრუქციებისთვის.
+   - ჩართეთ დეტერმინისტული build სკრიპტები და რეპროდუცირებადი Dockerfiles.
+3. **მხარდაჭერა ოპერატორის შეტანის შესახებ **
+   - გთავაზობთ შაბლონის ასოებს, რომლებიც ადასტურებს ალგორითმის შესაბამისობას (მაგ., GM/T მითითებები, ტესტის გაშუქება).
+   - შეინახეთ უსაფრთხოების რჩევების დაგზავნის სია, რათა დააკმაყოფილოთ გამყიდველის შეტყობინების მოთხოვნები.
+4. **შიდა მმართველობა**
+   - თვალყური ადევნეთ SM შესაბამისობის საგუშაგოებს გამოშვების საკონტროლო სიაში (აუდიტი დასრულებულია, დოკუმენტაცია განახლებულია, მანიფესტის ველები ადგილზეა).
 
-# Recommended Project Actions
+# ოპერატორის სამოქმედო ელემენტი (ჩინეთი)1. განსაზღვრეთ, არის თუ არა განლაგება „კომერციული კრიპტოგრაფიის პროდუქტი/მომსახურება“ (საწარმოთა ქსელების უმეტესობა ამას აკეთებს).
+2. პროდუქტის/მომსახურების წარდგენა პროვინციულ SCA ბიუროში; დაურთეთ Iroha შესაბამისობის განცხადება, SBOM, ტესტის ანგარიშები.
+3. დაარეგისტრირეთ ბლოკჩეინის სისტემა MLPS 2.0, სამიზნე მე-3 დონის კონტროლის ქვეშ; Iroha ჟურნალების ინტეგრირება უსაფრთხოების მონიტორინგში.
+4. ჩამოაყალიბეთ SM გასაღების სასიცოცხლო ციკლის პროცედურები (საჭიროების შემთხვევაში გამოიყენეთ დამტკიცებული KMS/HSM).
+5. კრიპტოგრაფიის კომპრომისული სცენარების ჩართვა ინციდენტზე რეაგირების წვრთნებში; დააყენეთ ესკალაციის კონტაქტები Iroha შემსრულებლებთან.
+6. მონაცემთა ტრანსსასაზღვრო ნაკადისთვის, დაადასტურეთ დამატებითი CAC (კიბერსივრცის ადმინისტრაცია) ჩანაწერები, თუ პერსონალური მონაცემები ექსპორტირებულია.
 
-1. **Documentation**
-   - Add a compliance appendix to `docs/source/crypto/sm_program.md` noting state commercial cryptography status, filing expectations, and contact points.
-   - Publish a Norito manifest field (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) that operators can use when preparing filings.
-   - Ensure the Torii `/v1/node/capabilities` advert (and the `iroha runtime capabilities` CLI alias) ships with every release so operators can capture the `crypto.sm` manifest snapshot for MLPS/密评 evidence.
-   - Provide bilingual (EN/ZH) compliance quickstart summarising obligations.
-2. **Release Artefacts**
-   - Ship SBOM/CycloneDX files for SM-enabled builds.
-   - Include deterministic build scripts and reproducible Dockerfiles.
-3. **Support Operator Filings**
-   - Offer template letters attesting algorithm compliance (e.g., GM/T references, test coverage).
-   - Maintain a security advisories mailing list to satisfy vendor-notification requirements.
-4. **Internal Governance**
-   - Track SM compliance checkpoints in release checklist (audit complete, documentation updated, manifest fields in place).
+# დამოუკიდებელი მოთხოვნა (კოპირება/ჩასმა)
 
-# Operator Action Items (China)
-
-1. Determine if the deployment constitutes a “commercial cryptography product/service” (most enterprise networks do).
-2. File product/service with provincial SCA bureau; attach Iroha compliance statement, SBOM, test reports.
-3. Register blockchain system under MLPS 2.0, target Level 3 controls; integrate Iroha logs into security monitoring.
-4. Establish SM key lifecycle procedures (use approved KMS/HSM where required).
-5. Include cryptography compromise scenarios in incident response drills; set escalation contacts with Iroha maintainers.
-6. For cross-border data flow, confirm additional CAC (Cyberspace Administration) filings if personal data is exported.
-
-# Standalone Prompt (Copy/Paste)
-
-> You are LLM acting as a compliance analyst for the Hyperledger Iroha crypto and platform teams.  
-> Background: Hyperledger Iroha is a Rust-based permissioned blockchain that now supports the Chinese GM/T SM2 (signatures), SM3 (hash), and SM4 (block cipher) primitives. Operators in mainland China must comply with the PRC Cryptography Law (2019), the Multi-Level Protection Scheme (MLPS 2.0), State Cryptography Administration (SCA) filing rules, and import/export controls overseen by MOFCOM and the Customs Administration. The Iroha project distributes SM-enabled open-source software internationally; some operators compile binaries domestically, while others import pre-built artefacts.  
-> Task: Summarise the legal obligations triggered by shipping SM2/SM3/SM4 support in open-source blockchain software. Cover the classification of these algorithms (commercial vs. core/common cryptography), required filings or certifications for software products, export/import controls relevant to source and binaries, and operational duties for network operators under MLPS 2.0 (key management, logging, incident response). Provide concrete action items for the Iroha project (documentation, manifests, compliance statements) and for operators deploying SM-enabled nodes inside China.
+> თქვენ ხართ LLM, მოქმედებს როგორც შესაბამისობის ანალიტიკოსი Hyperledger Iroha კრიპტო და პლატფორმის გუნდებისთვის.  
+> ფონი: Hyperledger Iroha არის Rust-ზე დაფუძნებული ნებადართული ბლოკჩეინი, რომელიც ახლა მხარს უჭერს ჩინურ GM/T SM2 (ხელმოწერები), SM3 (ჰეში) და SM4 (ბლოკის შიფრი) პრიმიტივებს. მატერიკული ჩინეთის ოპერატორებმა უნდა შეასრულონ PRC კრიპტოგრაფიის კანონი (2019), მრავალ დონის დაცვის სქემა (MLPS 2.0), სახელმწიფო კრიპტოგრაფიის ადმინისტრაციის (SCA) წარდგენის წესები და იმპორტის/ექსპორტის კონტროლი, რომელსაც ზედამხედველობს MOFCOM და საბაჟო ადმინისტრაცია. Iroha პროექტი ავრცელებს SM-ზე ჩართული ღია კოდის პროგრამულ უზრუნველყოფას საერთაშორისო დონეზე; ზოგიერთი ოპერატორი აწყობს ბინარებს შიდა, ზოგი კი იმპორტს წინასწარ აშენებულ არტეფაქტებს.  
+> ამოცანა: შეაჯამეთ იურიდიული ვალდებულებები, რომლებიც გამოწვეულია SM2/SM3/SM4 მხარდაჭერის მიწოდებით ღია კოდის ბლოკჩეინის პროგრამულ უზრუნველყოფაში. მოიცავს ამ ალგორითმების კლასიფიკაციას (კომერციული და ძირითადი/საერთო კრიპტოგრაფია), საჭირო ფაილები ან სერთიფიკატები პროგრამული პროდუქტებისთვის, ექსპორტის/იმპორტის კონტროლი, რომელიც შეესაბამება წყაროს და ბინარებს, და ქსელის ოპერატორების ოპერატიულ მოვალეობებს MLPS 2.0-ის ქვეშ (გასაღების მართვა, აღრიცხვა, ინციდენტზე რეაგირება). მიაწოდეთ კონკრეტული სამოქმედო პუნქტები Iroha პროექტისთვის (დოკუმენტაცია, მანიფესტები, შესაბამისობის განცხადებები) და ოპერატორებისთვის, რომლებიც განათავსებენ SM-ჩართული კვანძებს ჩინეთის შიგნით.

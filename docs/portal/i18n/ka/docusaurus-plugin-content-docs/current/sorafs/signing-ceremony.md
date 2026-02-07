@@ -8,61 +8,63 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Signing Ceremony Replacement
 description: How the Sora Parliament approves and distributes SoraFS chunker fixtures (SF-1b).
 sidebar_label: Signing Ceremony
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> საგზაო რუკა: **SF-1b — სორას პარლამენტის ნაგებობების დამტკიცება.**
 
-The manual signing ritual used for SoraFS chunker fixtures is retired. All
-approvals now flow through the **Sora Parliament**, the sortition-based DAO that
-governs Nexus. Parliament members bond XOR to gain citizenship, rotate across
-panels, and cast on-chain votes that approve, reject, or roll back fixture
-releases. This guide explains the process and developer tooling.
+ხელით ხელმოწერის რიტუალი, რომელიც გამოიყენება SoraFS ჭუნკერის მოწყობილობებზე, ამოღებულია. ყველა
+დამტკიცებები ახლა გადის **სორას პარლამენტში**, დახარისხებაზე დაფუძნებული DAO
+მართავს Nexus. პარლამენტის წევრები აკავშირებენ XOR-ს მოქალაქეობის მოსაპოვებლად, ტრიალებენ
+პანელები და მიეცით ჯაჭვური ხმები, რომლებიც ამტკიცებენ, უარყოფენ ან უკან აბრუნებენ მოწყობილობას
+რელიზები. ეს სახელმძღვანელო განმარტავს პროცესს და დეველოპერის ხელსაწყოებს.
 
-## Parliament overview
+## პარლამენტის მიმოხილვა
 
-- **Citizenship** — Operators bond the required XOR to enrol as citizens and
-  become eligible for sortition.
-- **Panels** — Responsibilities are split across rotating panels (Infrastructure,
-  Moderation, Treasury, …). The Infrastructure Panel owns SoraFS fixture
-  approvals.
-- **Sortition & rotation** — Panel seats are re-drawn at the cadence specified in
-  the Parliament constitution so no single group monopolises approvals.
+- **მოქალაქეობა** — ოპერატორები აკავშირებენ საჭირო XOR-ს მოქალაქეებად დასარეგისტრირებლად და
+  გახდეს დახარისხების უფლება.
+- **პანელები** - პასუხისმგებლობები იყოფა მბრუნავ პანელებზე (ინფრასტრუქტურა,
+  ზომიერება, ხაზინა, ...). ინფრასტრუქტურის პანელი ფლობს SoraFS მოწყობილობას
+  მოწონებები.
+- **დახარისხება და როტაცია** - პანელის სავარძლები ხელახლა დახატულია მითითებულ კადენსზე
+  პარლამენტის კონსტიტუცია ასე რომ, არც ერთი ჯგუფი არ მონოპოლიზებს დამტკიცებას.
 
-## Fixture approval flow
+## მოწყობილობების დამტკიცების ნაკადი
 
-1. **Proposal submission**
-   - The Tooling WG uploads the candidate `manifest_blake3.json` bundle plus
-     fixture diff to the on-chain registry via `sorafs.fixtureProposal`.
-   - The proposal records the BLAKE3 digest, semantic version, and change notes.
-2. **Review & voting**
-   - The Infrastructure Panel receives the assignment through the Parliament task
-     queue.
-   - Panel members inspect CI artefacts, run parity tests, and cast weighted
-     votes on-chain.
-3. **Finalisation**
-   - Once quorum is met, the runtime emits an approval event that includes the
-     canonical manifest digest and Merkle commitment to the fixture payload.
-   - The event is mirrored into the SoraFS registry so clients can fetch the
-     latest Parliament-approved manifest.
-4. **Distribution**
-   - CLI helpers (`cargo xtask sorafs-fetch-fixture`) pull the approved manifest
-     from Nexus RPC. The repository’s JSON/TS/Go constants stay in sync by
-     re-running `export_vectors` and validating the digest against the on-chain
-     record.
+1. **წინადადების წარდგენა **
+   - Tooling WG ატვირთავს კანდიდატ `manifest_blake3.json` პაკეტს პლუს
+     მოწყობილობა განსხვავდება ჯაჭვის რეესტრიდან `sorafs.fixtureProposal`-ის საშუალებით.
+   - წინადადებაში ჩაიწერება BLAKE3 დაიჯესტი, სემანტიკური ვერსია და შენიშვნების შეცვლა.
+2. ** განხილვა და ხმის მიცემა **
+   - ინფრასტრუქტურის პანელი დავალებას პარლამენტის დავალების მეშვეობით იღებს
+     რიგში.
+   - პანელის წევრები ამოწმებენ CI არტეფაქტებს, ატარებენ პარიტეტის ტესტებს და აწონებენ
+     ხმები ჯაჭვზე.
+3. ** დასრულება **
+   - კვორუმის დაკმაყოფილების შემდეგ, გაშვების დრო გამოსცემს დამტკიცების მოვლენას, რომელიც მოიცავს
+     კანონიკური მანიფესტის დაიჯესტი და მერკლის ვალდებულება მოწყობილობების დატვირთვის მიმართ.
+   - ღონისძიება აისახება SoraFS რეესტრში, რათა კლიენტებმა მიიღონ
+     პარლამენტის მიერ დამტკიცებული უახლესი მანიფესტი.
+4. **დისტრიბუცია**
+   - CLI დამხმარეები (`cargo xtask sorafs-fetch-fixture`) იღებენ დამტკიცებულ მანიფესტს
+     Nexus RPC-დან. საცავის JSON/TS/Go მუდმივები სინქრონიზებული რჩება
+     ხელახლა გაშვება `export_vectors` და დაიჯესტის ვალიდაცია ჯაჭვზე
+     ჩანაწერი.
 
-## Developer workflow
+## დეველოპერის სამუშაო პროცესი
 
-- Regenerate fixtures with:
+- მოწყობილობების რეგენერაცია:
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Use the Parliament fetch helper to download the approved envelope, verify
-  signatures, and refresh local fixtures. Point `--signatures` at the
-  Parliament-published envelope; the helper resolves the accompanying manifest,
-  recomputes the BLAKE3 digest, and enforces the canonical
-  `sorafs.sf1@1.0.0` profile.
+- გამოიყენეთ პარლამენტის მოზიდვის დამხმარე დამტკიცებული კონვერტის ჩამოსატვირთად, გადაამოწმეთ
+  ხელმოწერები და განაახლეთ ადგილობრივი თამაშები. წერტილი `--signatures` ზე
+  პარლამენტის მიერ გამოქვეყნებული კონვერტი; დამხმარე წყვეტს თანმხლებ მანიფესტს,
+  ხელახლა გამოთვლის BLAKE3 დაიჯესტს და ახორციელებს კანონიკურს
+  `sorafs.sf1@1.0.0` პროფილი.
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
@@ -70,11 +72,11 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+გაიარეთ `--manifest`, თუ მანიფესტი ცხოვრობს სხვა URL-ზე. ხელმოუწერელი კონვერტები
+უარი თქვეს, თუ `--allow-unsigned` არ არის დაყენებული ადგილობრივი კვამლებისთვის.
 
-- When validating a manifest through a staging gateway, target Torii instead of
-  local payloads:
+- მანიფესტის ვალიდაციისას დადგმის კარიბჭის მეშვეობით, მიმართეთ Torii-ის ნაცვლად
+  ადგილობრივი დატვირთვები:
 
 ```bash
 sorafs-fetch \
@@ -85,31 +87,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Local CI no longer requires a `signer.json` roster.
-  `ci/check_sorafs_fixtures.sh` compares the repo state against the latest
-  on-chain commitment and fails when they diverge.
+- ლოკალური CI აღარ საჭიროებს `signer.json` სიას.
+  `ci/check_sorafs_fixtures.sh` ადარებს რეპო მდგომარეობას უახლესთან
+  ჯაჭვური ვალდებულება და მარცხდება, როდესაც ისინი განსხვავდებიან.
 
-## Governance notes
+## მმართველობის შენიშვნები
 
-- The Parliament constitution governs quorum, rotation, and escalation—no
-  crate-level configuration is needed.
-- Emergency rollbacks are handled through the Parliament moderation panel. The
-  Infrastructure Panel files a revert proposal referencing the prior manifest
-  digest, which replaces the release once approved.
-- Historical approvals remain available in the SoraFS registry for forensic
-  replay.
+- პარლამენტის კონსტიტუცია არეგულირებს კვორუმს, როტაციას და ესკალაციას - არა
+  საჭიროა კრატის დონის კონფიგურაცია.
+- გადაუდებელი გადახვევები მუშავდება პარლამენტის მოდერაციის პანელის მეშვეობით. The
+  ინფრასტრუქტურის პანელი წარადგენს დაბრუნების წინადადებას წინა მანიფესტზე მითითებით
+  დაიჯესტი, რომელიც ცვლის გამოშვებას დამტკიცების შემდეგ.
+- ისტორიული დამტკიცებები რჩება ხელმისაწვდომი სასამართლო ექსპერტიზის SoraFS რეესტრში
+  გამეორება.
 
 ## FAQ
 
-- **Where did `signer.json` go?**  
-  It was removed. All signer attribution lives on-chain; `manifest_signatures.json`
-  in the repository is only a developer fixture that must match the latest
-  approval event.
+- **სად წავიდა `signer.json`?**  
+  ამოიღეს. ყველა ხელმომწერის ატრიბუტი ცხოვრობს ჯაჭვზე; `manifest_signatures.json`
+  საცავში არის მხოლოდ დეველოპერის მოწყობილობა, რომელიც უნდა შეესაბამებოდეს უახლესს
+  დამტკიცების ღონისძიება.
 
-- **Do we still require local Ed25519 signatures?**  
-  No. Parliament approvals are stored as on-chain artefacts. Local fixtures exist
-  for reproducibility but are validated against the Parliament digest.
+- ** მაინც გვჭირდება ადგილობრივი Ed25519 ხელმოწერები?**  
+  არა. პარლამენტის დამტკიცებები ინახება როგორც არტეფაქტები. ადგილობრივი მოწყობილობები არსებობს
+  განმეორებადობისთვის, მაგრამ დამოწმებულია პარლამენტის დაიჯესტის წინააღმდეგ.
 
-- **How do teams monitor approvals?**  
-  Subscribe to the `ParliamentFixtureApproved` event or query the registry via
-  Nexus RPC to retrieve the current manifest digest and panel roll call.
+- **როგორ აკონტროლებენ გუნდები დამტკიცებებს?**  
+  გამოიწერეთ `ParliamentFixtureApproved` ღონისძიება ან მოიკითხეთ რეესტრის მეშვეობით
+  Nexus RPC მიმდინარე მანიფესტის დაიჯესტის და პანელის განმეორებითი ზარის მისაღებად.

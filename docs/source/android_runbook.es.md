@@ -6,322 +6,309 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: da7119ab99121dbcfc268f5406f43b16ac9149cef6500a45c6717ad16c02ab80
 source_last_modified: "2026-01-28T17:01:56.615899+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android SDK Operations Runbook
+# Runbook de operaciones del SDK de Android
 
-This runbook supports operators and support engineers managing Android SDK
-deployments for AND7 and beyond. Pair with the Android Support Playbook for SLA
-definitions and escalation paths.
+Este runbook es compatible con operadores e ingenieros de soporte que administran el SDK de Android.
+implementaciones para AND7 y más allá. Emparéjelo con el Playbook de soporte de Android para SLA
+definiciones y vías de escalada.
 
-> **Note:** When updating incident procedures, also refresh the shared
-> troubleshooting matrix (`docs/source/sdk/android/troubleshooting.md`) so the
-> scenario table, SLAs, and telemetry references stay aligned with this runbook.
+> **Nota:** Al actualizar los procedimientos de incidentes, actualice también el archivo compartido
+> matriz de solución de problemas (`docs/source/sdk/android/troubleshooting.md`) para que el
+> la tabla de escenarios, los SLA y las referencias de telemetría se mantienen alineados con este runbook.
 
-## 0. Quickstart (when pagers fire)
+## 0. Inicio rápido (cuando se activan los buscapersonas)
 
-Keep this sequence handy for Sev 1/Sev 2 alerts before diving into the detailed
-sections below:
+Tenga esta secuencia a mano para las alertas Sev1/Sev2 antes de profundizar en los detalles.
+secciones siguientes:
 
-1. **Confirm the active config:** Capture the `ClientConfig` manifest checksum
-   emitted at app startup and compare it to the pinned manifest in
-   `configs/android_client_manifest.json`. If hashes diverge, halt releases and
-   file a config drift ticket before touching telemetry/overrides (see §1).
-2. **Run the schema diff gate:** Execute the `telemetry-schema-diff` CLI against
-   the accepted snapshot
+1. **Confirme la configuración activa:** Capture la suma de comprobación del manifiesto `ClientConfig`
+   emitido al inicio de la aplicación y compararlo con el manifiesto anclado en
+   `configs/android_client_manifest.json`. Si los hashes divergen, detenga las liberaciones y
+   presente un ticket de deriva de configuración antes de tocar telemetría/anulaciones (consulte §1).
+2. **Ejecute la puerta de diferenciación del esquema:** Ejecute la CLI `telemetry-schema-diff` contra
+   la instantánea aceptada
    (`docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`).
-   Treat any `policy_violations` output as Sev 2 and block exports until the
-   discrepancy is understood (see §2.6).
-3. **Check dashboards + status CLI:** Open the Android Telemetry Redaction and
-   Exporter Health boards, then run
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>`. If
-   authorities are under the floor or exports error, capture screenshots and
-   CLI output for the incident doc (see §2.4–§2.5).
-4. **Decide on overrides:** Only after the above steps and with incident/owner
-   recorded, issue a limited override via `scripts/android_override_tool.sh`
-   and log it in `telemetry_override_log.md` (see §3). Default expiry: <24 h.
-5. **Escalate per contact list:** Page the Android on-call and Observability TL
-   (contacts in §8), then follow the escalation tree in §4.1. If attestation or
-   StrongBox signals are involved, pull the latest bundle and run the harness
-   checks from §7 before re-enabling exports.
+   Trate cualquier salida `policy_violations` como Sev2 y bloquee las exportaciones hasta que
+   se entiende la discrepancia (ver §2.6).
+3. **Verifique los paneles + CLI de estado:** Abra la redacción de telemetría de Android y
+   Tableros de salud del exportador, luego ejecute
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>`. si
+   las autoridades están bajo el piso o exportan error, capturar capturas de pantalla y
+   Salida CLI para el documento del incidente (consulte §2.4–§2.5).
+4. **Decida las anulaciones:** Solo después de los pasos anteriores y con el incidente/propietario
+   grabado, emita una anulación limitada a través de `scripts/android_override_tool.sh`
+   y regístrelo en `telemetry_override_log.md` (ver §3). Caducidad predeterminada: <24h.
+5. **Escalar por lista de contactos:** Localice el TL de observación y de guardia de Android
+   (contactos en §8), luego siga el árbol de escalada en §4.1. Si la certificación o
+   Las señales de StrongBox están involucradas, extraiga el último paquete y ejecute el arnés.
+   controles del artículo 7 antes de volver a permitir las exportaciones.
 
-## 1. Configuration & Deployment
+## 1. Configuración e implementación
 
-- **ClientConfig sourcing:** Ensure Android clients load Torii endpoint, TLS
-  policies, and retry knobs from `iroha_config`-derived manifests. Validate
-  values during app startup and log checksum of the active manifest.
-  Implementation reference: `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
-  threads `TelemetryOptions` from `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/TelemetryOptions.java`
-  (plus the generated `TelemetryObserver`) so hashed authorities are emitted automatically.
-- **Hot reload:** Use the configuration watcher to pick up `iroha_config`
-  updates without app restarts. Failed reloads should emit the
-  `android.telemetry.config.reload` event and trigger retry with exponential
-  backoff (max 5 attempts).
-- **Fallback behaviour:** When configuration is missing or invalid, fall back to
-  safe defaults (read-only mode, no pending queue submission) and surface a user
-  prompt. Record the incident for follow-up.
+- **Abastecimiento de ClientConfig:** Asegúrese de que los clientes de Android carguen el punto final Torii, TLS
+  políticas y reintentar botones de manifiestos derivados de `iroha_config`. Validar
+  valores durante el inicio de la aplicación y la suma de comprobación del registro del manifiesto activo.
+  Referencia de implementación: `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
+  hilos `TelemetryOptions` de `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/TelemetryOptions.java`
+  (más el `TelemetryObserver` generado) para que las autoridades hash se emitan automáticamente.
+- **Recarga en caliente:** Utilice el observador de configuración para seleccionar `iroha_config`
+  actualizaciones sin reinicios de la aplicación. Las recargas fallidas deberían emitir el
+  Evento `android.telemetry.config.reload` y reintento de activación con exponencial
+  retroceso (máximo 5 intentos).
+- **Comportamiento alternativo:** Cuando la configuración falta o no es válida, recurra a
+  valores predeterminados seguros (modo de solo lectura, sin envío de cola pendiente) y mostrar un usuario
+  rápido. Registre el incidente para su seguimiento.
 
-### 1.1 Config reload diagnostics
-
-- The config watcher emits `android.telemetry.config.reload` signals with
-  `source`, `result`, `duration_ms`, and optional `digest`/`error` fields (see
-  `configs/android_telemetry.json` and
+### 1.1 Diagnóstico de recarga de configuración- El monitor de configuración emite señales `android.telemetry.config.reload` con
+  `source`, `result`, `duration_ms` y campos opcionales `digest`/`error` (consulte
+  `configs/android_telemetry.json` y
   `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ConfigWatcher.java`).
-  Expect a single `result:"success"` event per applied manifest; repeated
-  `result:"error"` records indicate the watcher exhausted its 5 backoff attempts
-  starting at 50 ms.
-- During an incident, capture the latest reload signal from the collector
-  (OTLP/span store or the redaction status endpoint) and log the `digest` +
-  `source` in the incident doc. Compare the digest to
-  `configs/android_client_manifest.json` and the release manifest distributed to
-  operators.
-- If the watcher continues to emit errors, run the targeted harness to reproduce
-  the parse failure with the suspect manifest:
+  Espere un único evento `result:"success"` por manifiesto aplicado; repetido
+  Los registros `result:"error"` indican que el observador agotó sus 5 intentos de retroceso
+  a partir de 50 ms.
+- Durante un incidente, capture la última señal de recarga del recolector
+  (OTLP/span store o el punto final de estado de redacción) y registre el `digest` +
+  `source` en el documento del incidente. Compara el resumen con
+  `configs/android_client_manifest.json` y el manifiesto de lanzamiento distribuido a
+  operadores.
+- Si el observador continúa emitiendo errores, ejecute el arnés de destino para reproducir
+  el error de análisis con el manifiesto sospechoso:
   `ci/run_android_tests.sh org.hyperledger.iroha.android.client.ConfigWatcherTests`.
-  Attach the test output and the failing manifest to the incident bundle so SRE
-  can diff it against the baked configuration schema.
-- When reload telemetry is missing, confirm the active `ClientConfig` carries a
-  telemetry sink and that the OTLP collector still accepts the
-  `android.telemetry.config.reload` ID; otherwise treat it as a Sev 2 telemetry
-  regression (same path as §2.4) and pause releases until the signal returns.
+  Adjunte el resultado de la prueba y el manifiesto fallido al paquete de incidentes para que SRE
+  puede diferenciarlo del esquema de configuración preparado.
+- Cuando falta la telemetría de recarga, confirme que el `ClientConfig` activo lleva un
+  sumidero de telemetría y que el recopilador OTLP aún acepta el
+  Identificación `android.telemetry.config.reload`; de lo contrario, trátelo como una telemetría Sev2
+  regresión (mismo camino que §2.4) y pausar las liberaciones hasta que la señal regrese.
 
-### 1.2 Deterministic key export bundles
-- Software exports now emit v3 bundles with per-export salt + nonce, `kdf_kind`, and `kdf_work_factor`.
-  The exporter prefers Argon2id (64 MiB, 3 iterations, parallelism = 2) and falls back to
-  PBKDF2-HMAC-SHA256 with a 350 k iteration floor when Argon2id is unavailable on the device. Bundle
-  AAD still binds to the alias; passphrases must be at least 12 characters for v3 exports and the
-  importer rejects all-zero salt/nonce seeds.
-  `KeyExportBundle.decode(Base64|bytes)`, import with the original passphrase, and re-export to v3 to
-  move to the memory-hard format. The importer rejects all-zero or reused salt/nonce pairs; always
-  rotate bundles instead of reusing old exports between devices.
-- Negative-path tests in `ci/run_android_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests`
-  rejection. Clear passphrase char arrays after use and capture both the bundle version and `kdf_kind`
-  in incident notes when recovery fails.
+### 1.2 Paquetes de exportación clave deterministas
+- Las exportaciones de software ahora emiten paquetes v3 con salt + nonce por exportación, `kdf_kind` e `kdf_work_factor`.
+  El exportador prefiere Argon2id (64 MiB, 3 iteraciones, paralelismo = 2) y recurre a
+  PBKDF2-HMAC-SHA256 con un piso de iteración de 350 k cuando Argon2id no está disponible en el dispositivo. paquete
+  AAD todavía se vincula al alias; Las frases de contraseña deben tener al menos 12 caracteres para las exportaciones v3 y el
+  El importador rechaza las semillas totalmente cero sal/nonce.
+  `KeyExportBundle.decode(Base64|bytes)`, importe con la frase de contraseña original y vuelva a exportar a v3 para
+  pasar al formato de memoria dura. El importador rechaza los pares de sal/nonce totalmente cero o reutilizados; siempre
+  rote paquetes en lugar de reutilizar exportaciones antiguas entre dispositivos.
+- Pruebas de camino negativo en `ci/run_android_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests`
+  rechazo. Borre las matrices de caracteres de frase de contraseña después de su uso y capture tanto la versión del paquete como `kdf_kind`
+  en notas de incidentes cuando falla la recuperación.
 
-## 2. Telemetry & Redaction
+## 2. Telemetría y redacción
 
-> Quick reference: see
+> Referencia rápida: ver
 > [`telemetry_redaction_quick_reference.md`](sdk/android/telemetry_redaction_quick_reference.md)
-> for the condensed command/threshold checklist used during enablement
-> sessions and incident bridges.
-
-- **Signal inventory:** Refer to `docs/source/sdk/android/telemetry_redaction.md`
-  for the full list of emitted spans/metrics/events and
+> para la lista de verificación condensada de comando/umbral utilizada durante la habilitación
+> sesiones y puentes de incidencias.- **Inventario de señales:** Consulte `docs/source/sdk/android/telemetry_redaction.md`
+  para obtener la lista completa de intervalos/métricas/eventos emitidos y
   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md`
-  for owner/validation details and outstanding gaps.
-- **Canonical schema diff:** The approved AND7 snapshot is
+  para obtener detalles del propietario/validación y lagunas pendientes.
+- **Diferencia de esquema canónico:** La instantánea AND7 aprobada es
   `docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`.
-  Every new CLI run must be compared against this artefact so reviewers can see
-  that the accepted `intentional_differences` and `android_only_signals` still
-  match the policy tables documented in
-  `docs/source/sdk/android/telemetry_schema_diff.md` §3. The CLI now adds
-  `policy_violations` when any intentional difference is missing a
-  `status:"accepted"`/`"policy_allowlisted"` (or when Android-only records lose
-  their accepted status), so treat non-empty violations as Sev 2 and stop
-  exports. The `jq` snippets below remain as a manual sanity check on archived
-  artefacts:
+  Cada nueva ejecución de CLI debe compararse con este artefacto para que los revisores puedan ver
+  que los `intentional_differences` e `android_only_signals` aceptados todavía
+  coincidir con las tablas de políticas documentadas en
+  `docs/source/sdk/android/telemetry_schema_diff.md` §3. La CLI ahora agrega
+  `policy_violations` cuando falta alguna diferencia intencional
+  `status:"accepted"`/`"policy_allowlisted"` (o cuando los registros solo de Android se pierden
+  su estado aceptado), así que trate las violaciones no vacías como Sev2 y detenga
+  exportaciones. Los fragmentos `jq` que aparecen a continuación permanecen como una verificación manual de integridad en archivos archivados.
+  artefactos:
   ```bash
   jq '.intentional_differences[] | select(.status != "accepted" and .status != "policy_allowlisted")' "$OUT"
   jq '.android_only_signals[] | select(.status != "accepted")' "$OUT"
   jq '.field_mismatches[] | {signal, field, android, rust}' "$OUT"
   ```
-  Treat any output from these commands as a schema regression that needs an
-  AND7 readiness bug before telemetry exports continue; `field_mismatches`
-  must stay empty per `telemetry_schema_diff.md` §5. The helper now writes
-  `artifacts/android/telemetry/schema_diff.prom` automatically; pass
-  `--textfile-dir /var/lib/node_exporter/textfile_collector` (or set
-  `ANDROID_SCHEMA_DIFF_TEXTFILE_DIR`) when running on staging/production hosts
-  so the `telemetry_schema_diff_run_status` gauge flips to `policy_violation`
-  automatically if the CLI detects drift.
-- **CLI helper:** `scripts/telemetry/check_redaction_status.py` inspects
-  `artifacts/android/telemetry/status.json` by default; pass `--status-url` to
-  query staging and `--write-cache` to refresh the local copy for offline
-  drills. Use `--min-hashed 214` (or set
-  `ANDROID_TELEMETRY_MIN_HASHED_AUTHORITIES=214`) to enforce the governance
-  floor on hashed authorities during every status poll.
-- **Authority hashing:** All authorities are hashed using Blake2b-256 with the
-  quarterly rotation salt stored in the secure secrets vault. Rotations occur on
-  the first Monday of each quarter at 00:00 UTC. Verify the exporter picks up
-  the new salt by checking the `android.telemetry.redaction.salt_version` metric.
-- **Device profile buckets:** Only `emulator`, `consumer`, and `enterprise`
-  tiers are exported (alongside SDK major version). Dashboards compare these
-  counts against Rust baselines; variance >10% raises alerts.
-- **Network metadata:** Android exports `network_type` and `roaming` flags only.
-  Carrier names are never emitted; operators should not request subscriber
-  information in incident logs. The sanitised snapshot is emitted as the
-  `android.telemetry.network_context` event, so ensure apps register a
-  `NetworkContextProvider` (either via
-  `ClientConfig.Builder.setNetworkContextProvider(...)` or the convenience
-  `enableAndroidNetworkContext(...)` helper) before Torii calls are issued.
-- **Grafana pointer:** The `Android Telemetry Redaction` dashboard is the
-  canonical visual check for the CLI output above—confirm the
-  `android.telemetry.redaction.salt_version` panel matches the current salt epoch
-  and the `android_telemetry_override_tokens_active` widget stays at zero
-  whenever no drills or incidents are running. Escalate if either panel drifts
-  before the CLI scripts report a regression.
+  Trate cualquier resultado de estos comandos como una regresión de esquema que necesita una
+  Error de preparación de AND7 antes de que continúen las exportaciones de telemetría; `field_mismatches`
+  debe permanecer vacío según `telemetry_schema_diff.md` §5. El ayudante ahora escribe
+  `artifacts/android/telemetry/schema_diff.prom` automáticamente; pasar
+  `--textfile-dir /var/lib/node_exporter/textfile_collector` (o configurar
+  `ANDROID_SCHEMA_DIFF_TEXTFILE_DIR`) cuando se ejecuta en hosts de ensayo/producción
+  entonces el indicador `telemetry_schema_diff_run_status` cambia a `policy_violation`
+  automáticamente si la CLI detecta una desviación.
+- **Ayudante de CLI:** `scripts/telemetry/check_redaction_status.py` inspecciona
+  `artifacts/android/telemetry/status.json` por defecto; pasar `--status-url` a
+  preparación de consultas e `--write-cache` para actualizar la copia local sin conexión
+  taladros. Utilice `--min-hashed 214` (o configure
+  `ANDROID_TELEMETRY_MIN_HASHED_AUTHORITIES=214`) para hacer cumplir la gobernanza
+  piso sobre las autoridades hash durante cada encuesta de estado.
+- **Hashing de autoridades:** Todas las autoridades se procesan usando Blake2b-256 con el
+  Sal de rotación trimestral almacenada en la bóveda secreta segura. Las rotaciones ocurren en
+  el primer lunes de cada trimestre a las 00:00 UTC. Verificar que el exportador recoja
+  la nueva sal comprobando la métrica `android.telemetry.redaction.salt_version`.
+- **Grupos de perfil de dispositivo:** Solo `emulator`, `consumer` e `enterprise`
+  Los niveles se exportan (junto con la versión principal del SDK). Los paneles comparan estos
+  cuenta contra las líneas base de Rust; La variación >10% genera alertas.
+- **Metadatos de red:** Android exporta únicamente los indicadores `network_type` e `roaming`.
+  Los nombres de los operadores nunca se emiten; Los operadores no deben solicitar abonado.
+  información en los registros de incidentes. La instantánea desinfectada se emite como
+  Evento `android.telemetry.network_context`, así que asegúrese de que las aplicaciones registren un
+  `NetworkContextProvider` (ya sea a través de
+  `ClientConfig.Builder.setNetworkContextProvider(...)` o la conveniencia
+  `enableAndroidNetworkContext(...)` helper) antes de que se emitan las llamadas Torii.
+- **Puntero Grafana:** El tablero `Android Telemetry Redaction` es el
+  verificación visual canónica para la salida CLI anterior: confirme la
+  El panel `android.telemetry.redaction.salt_version` coincide con la época de sal actual
+  y el widget `android_telemetry_override_tokens_active` se queda en cero
+  siempre que no se estén ejecutando simulacros o incidencias. Escalar si alguno de los paneles se desvía
+  antes de que los scripts CLI informen una regresión.
 
-### 2.1 Export pipeline workflow
+### 2.1 Exportar flujo de trabajo de canalización1. **Distribución de configuración.** `ClientConfig.telemetry.redaction` está enhebrado desde
+   `iroha_config` y recargado en caliente por `ConfigWatcher`. Cada recarga registra el
+   resumen manifiesto más época de sal: capture esa línea en incidentes y durante
+   ensayos.
+2. **Instrumentación.** Los componentes del SDK emiten intervalos/métricas/eventos en el
+   `TelemetryBuffer`. El búfer etiqueta cada carga útil con el perfil del dispositivo y
+   época de sal actual para que el exportador pueda verificar las entradas de hash de manera determinista.
+3. **Filtro de redacción.** `RedactionFilter` hashes `authority`, `alias` y
+   identificadores de dispositivo antes de que abandonen el dispositivo. Las fallas emiten
+   `android.telemetry.redaction.failure` y bloquear el intento de exportación.
+4. **Exportador + recolector.** Las cargas útiles desinfectadas se envían a través de Android
+   Exportador de OpenTelemetry a la implementación `android-otel-collector`. el
+   salidas de los ventiladores del recopilador a trazas (Tempo), métricas (Prometheus) e Norito
+   fregaderos de troncos.
+5. **Ganchos de observabilidad.** `scripts/telemetry/check_redaction_status.py` lee
+   contadores colectores (`android.telemetry.export.status`,
+   `android.telemetry.redaction.salt_version`) y genera el paquete de estado
+   referenciado a lo largo de este runbook.
 
-1. **Config distribution.** `ClientConfig.telemetry.redaction` is threaded from
-   `iroha_config` and hot-reloaded by `ConfigWatcher`. Each reload logs the
-   manifest digest plus salt epoch—capture that line in incidents and during
-   rehearsals.
-2. **Instrumentation.** SDK components emit spans/metrics/events into the
-   `TelemetryBuffer`. The buffer tags every payload with the device profile and
-   current salt epoch so the exporter can verify hashing inputs deterministically.
-3. **Redaction filter.** `RedactionFilter` hashes `authority`, `alias`, and
-   device identifiers before they leave the device. Failures emit
-   `android.telemetry.redaction.failure` and block the export attempt.
-4. **Exporter + collector.** Sanitised payloads are shipped through the Android
-   OpenTelemetry exporter to the `android-otel-collector` deployment. The
-   collector fans outputs to traces (Tempo), metrics (Prometheus), and Norito
-   log sinks.
-5. **Observability hooks.** `scripts/telemetry/check_redaction_status.py` reads
-   collector counters (`android.telemetry.export.status`,
-   `android.telemetry.redaction.salt_version`) and produces the status bundle
-   referenced throughout this runbook.
+### 2.2 Puertas de validación
 
-### 2.2 Validation gates
-
-- **Schema diff:** Run
+- **Diferencia de esquema:** Ejecutar
   `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json`
-  whenever manifests change. After each run, confirm every
-  `intentional_differences[*]` and `android_only_signals[*]` entry is stamped
-  `status:"accepted"` (or `status:"policy_allowlisted"` for hashed/bucketed
-  fields) as recommended in `telemetry_schema_diff.md` §3 before attaching the
-  artefact to incidents and chaos lab reports. Use the approved snapshot
-  (`android_vs_rust-20260305.json`) as a guardrail and lint the freshly emitted
-  JSON before it is filed:
+  siempre que los manifiestos cambien. Después de cada ejecución, confirme cada
+  La entrada `intentional_differences[*]` e `android_only_signals[*]` está estampada
+  `status:"accepted"` (o `status:"policy_allowlisted"` para hash/bucketed
+  campos) como se recomienda en `telemetry_schema_diff.md` §3 antes de adjuntar el
+  artefacto hasta incidentes y caos en informes de laboratorio. Utilice la instantánea aprobada
+  (`android_vs_rust-20260305.json`) como barandilla y pelusa el recién emitido
+  JSON antes de archivarlo:
   ```bash
   LATEST=docs/source/sdk/android/readiness/schema_diffs/$(date -u +%Y%m%d).json
   jq '.intentional_differences[] | select(.status != "accepted" and .status != "policy_allowlisted") | {signal, field, status}' "$LATEST"
   jq '.android_only_signals[] | select(.status != "accepted") | {signal, status}' "$LATEST"
   ```
-  Compare `$LATEST` against
+  Comparar `$LATEST` con
   `docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`
-  to prove that the allowlist stayed unchanged. Missing or blank `status`
-  entries (for example on `android.telemetry.redaction.failure` or
-  `android.telemetry.redaction.salt_version`) are now treated as regressions and
-  must be resolved before the review can close; the CLI surfaces the accepted
-  state directly, so the manual §3.4 cross-reference only applies when
-  explaining why a non-`accepted` status appears.
+  para demostrar que la lista de permitidos se mantuvo sin cambios. `status` faltante o en blanco
+  entradas (por ejemplo en `android.telemetry.redaction.failure` o
+  `android.telemetry.redaction.salt_version`) ahora se tratan como regresiones y
+  debe resolverse antes de que se pueda cerrar la revisión; la CLI muestra el aceptado
+  estado directamente, por lo que la referencia cruzada del manual §3.4 solo se aplica cuando
+  explicando por qué aparece un estado que no es `accepted`.
 
-  **Canonical AND7 signals (2026-03-05 snapshot)**
-
-  | Signal | Channel | Status | Governance note | Validation hook |
+  **Señales AND7 canónicas (instantánea del 5 de marzo de 2026)**| Señal | Canal | Estado | Nota de gobernanza | Gancho de validación |
   |--------|---------|--------|-----------------|-----------------|
-  | `android.telemetry.redaction.override` | Event | `accepted` | Mirrors override manifests and must match `telemetry_override_log.md` entries. | Watch `android_telemetry_override_tokens_active` and archive manifests per §3. |
-  | `android.telemetry.network_context` | Event | `accepted` | Android intentionally redacts carrier names; only `network_type` and `roaming` are exported. | Ensure apps register a `NetworkContextProvider` and confirm the event volume follows Torii traffic on `Android Telemetry Overview`. |
-  | `android.telemetry.redaction.failure` | Counter | `accepted` | Emits whenever hashing fails; governance now requires explicit status metadata in the schema diff artefact. | The `Redaction Compliance` dashboard panel and CLI output from `check_redaction_status.py` must stay at zero except during drills. |
-  | `android.telemetry.redaction.salt_version` | Gauge | `accepted` | Proves the exporter is using the current quarterly salt epoch. | Compare Grafana’s salt widget with the secrets-vault epoch and ensure schema diff runs retain the `status:"accepted"` annotation. |
+  | `android.telemetry.redaction.override` | Evento | `accepted` | Los espejos anulan los manifiestos y deben coincidir con las entradas `telemetry_override_log.md`. | Mire `android_telemetry_override_tokens_active` y archive los manifiestos según §3. |
+  | `android.telemetry.network_context` | Evento | `accepted` | Android redacta intencionalmente los nombres de los operadores; solo se exportan `network_type` e `roaming`. | Asegúrese de que las aplicaciones registren un `NetworkContextProvider` y confirmen que el volumen del evento sigue al tráfico Torii en `Android Telemetry Overview`. |
+  | `android.telemetry.redaction.failure` | Mostrador | `accepted` | Emite cada vez que falla el hash; La gobernanza ahora requiere metadatos de estado explícitos en el artefacto de diferenciación del esquema. | El panel del tablero `Redaction Compliance` y la salida CLI de `check_redaction_status.py` deben permanecer en cero, excepto durante los simulacros. |
+  | `android.telemetry.redaction.salt_version` | Calibre | `accepted` | Demuestra que el exportador está utilizando la época de sal trimestral actual. | Compare el widget salt de Grafana con la época de la bóveda de secretos y asegúrese de que las ejecuciones de diferencias de esquema conserven la anotación `status:"accepted"`. |
 
-  If any entry in the table above drops a `status`, the diff artefact must be
-  regenerated **and** `telemetry_schema_diff.md` updated before the AND7
-  governance packet is circulated. Include the refreshed JSON in
-  `docs/source/sdk/android/readiness/schema_diffs/` and link it from the
-  incident, chaos lab, or enablement report that triggered the rerun.
-- **CI/unit coverage:** `ci/run_android_tests.sh` must pass before
-  publishing builds; the suite enforces hashing/override behaviour by exercising
-  the telemetry exporters with sample payloads.
-- **Injector sanity checks:** Use
-  `scripts/telemetry/inject_redaction_failure.sh --dry-run` ahead of rehearsals
-  to confirm failure injection works and that alerts fire when hashing guards
-  are tripped. Always clear the injector with `--clear` once validation
-  completes.
+  Si alguna entrada en la tabla anterior arroja un `status`, el artefacto diferencial debe ser
+  regenerado **y** `telemetry_schema_diff.md` actualizado antes del AND7
+  Se distribuye el paquete de gobernanza. Incluya el JSON actualizado en
+  `docs/source/sdk/android/readiness/schema_diffs/` y vincúlelo desde el
+  incidente, laboratorio de caos o informe de habilitación que desencadenó la repetición.
+- **Cobertura de CI/unidad:** `ci/run_android_tests.sh` debe pasar antes
+  compilaciones editoriales; la suite impone un comportamiento de hash/anulación mediante el ejercicio
+  los exportadores de telemetría con cargas útiles de muestra.
+- **Comprobaciones de integridad del inyector:** Uso
+  `scripts/telemetry/inject_redaction_failure.sh --dry-run` antes de los ensayos
+  para confirmar fallas en los trabajos de inyección y que alerta de fuego cuando se hacen hash a los guardias
+  están tropezados. Limpie siempre el inyector con `--clear` una vez validado
+  completa.
 
-### 2.3 Mobile ↔ Rust telemetry parity checklist
+### 2.3 Lista de verificación de paridad de telemetría móvil ↔ Rust
 
-Keep the Android exporters and Rust node services aligned while respecting the
-different redaction requirements documented in
-`docs/source/sdk/android/telemetry_redaction.md`. The table below serves as the
-dual allowlist referenced in the AND7 roadmap entry—update it whenever the
-schema diff introduces or removes fields.
-
-| Category | Android exporters | Rust services | Validation hook |
+Mantenga alineados los exportadores de Android y los servicios del nodo Rust respetando la
+diferentes requisitos de redacción documentados en
+`docs/source/sdk/android/telemetry_redaction.md`. La siguiente tabla sirve como
+lista de permitidos dual a la que se hace referencia en la entrada de la hoja de ruta de AND7: actualícela cada vez que
+Schema diff introduce o elimina campos.| Categoría | Exportadores de Android | Servicios de óxido | Gancho de validación |
 |----------|-------------------|---------------|-----------------|
-| Authority / route context | Hash `authority`/`alias` via Blake2b-256 and drop raw Torii hostnames before export; emit `android.telemetry.redaction.salt_version` to prove salt rotation. | Emit full Torii hostnames and peer IDs for correlation. | Compare `android.torii.http.request` vs `torii.http.request` entries in the latest schema diff under `readiness/schema_diffs/`, then confirm `android.telemetry.redaction.salt_version` matches the cluster salt by running `scripts/telemetry/check_redaction_status.py`. |
-| Device & signer identity | Bucket `hardware_tier`/`device_profile`, hash controller aliases, and never export serial numbers. | No device metadata; nodes emit validator `peer_id` and controller `public_key` verbatim. | Mirror the mappings in `docs/source/sdk/mobile_device_profile_alignment.md`, audit `PendingQueueInspector` outputs during labs, and ensure the alias hashing tests inside `ci/run_android_tests.sh` remain green. |
-| Network metadata | Export only `network_type` + `roaming` booleans; `carrier_name` is dropped. | Rust retains peer hostnames plus full TLS endpoint metadata. | Store the latest diff JSON in `readiness/schema_diffs/` and confirm that the Android side still omits `carrier_name`. Alert if Grafana’s “Network Context” widget shows any carrier strings. |
-| Override / chaos evidence | Emit `android.telemetry.redaction.override` and `android.telemetry.chaos.scenario` events with masked actor roles. | Rust services emit override approvals without role masking and no chaos-specific spans. | Cross-check `docs/source/sdk/android/readiness/and7_operator_enablement.md` after every drill to ensure override tokens and chaos artefacts are archived alongside the unmasked Rust events. |
+| Autoridad/contexto de ruta | Hash `authority`/`alias` a través de Blake2b-256 y elimine los nombres de host Torii sin procesar antes de exportar; emite `android.telemetry.redaction.salt_version` para probar la rotación de la sal. | Emita nombres de host Torii completos e ID de pares para correlación. | Compare las entradas `android.torii.http.request` con `torii.http.request` en la última diferencia de esquema en `readiness/schema_diffs/`, luego confirme que `android.telemetry.redaction.salt_version` coincida con la sal del clúster ejecutando `scripts/telemetry/check_redaction_status.py`. |
+| Dispositivo e identidad del firmante | Bucket `hardware_tier`/`device_profile`, alias de controlador hash y nunca exporte números de serie. | Sin metadatos del dispositivo; Los nodos emiten el validador `peer_id` y el controlador `public_key` palabra por palabra. | Refleje las asignaciones en `docs/source/sdk/mobile_device_profile_alignment.md`, audite las salidas de `PendingQueueInspector` durante las prácticas de laboratorio y asegúrese de que las pruebas de hash de alias dentro de `ci/run_android_tests.sh` permanezcan en verde. |
+| Metadatos de red | Exportar solo valores booleanos `network_type` + `roaming`; `carrier_name` se elimina. | Rust conserva los nombres de host de los pares más los metadatos completos del punto final TLS. | Almacene el JSON de diferencia más reciente en `readiness/schema_diffs/` y confirme que el lado de Android aún omite `carrier_name`. Alerta si el widget "Contexto de red" de Grafana muestra alguna cadena de operador. |
+| Anulación/evidencia de caos | Emite eventos `android.telemetry.redaction.override` e `android.telemetry.chaos.scenario` con roles de actor enmascarados. | Los servicios de Rust emiten aprobaciones de anulación sin enmascaramiento de roles y sin intervalos específicos de caos. | Verifique `docs/source/sdk/android/readiness/and7_operator_enablement.md` después de cada ejercicio para garantizar que los tokens de anulación y los artefactos del caos se archiven junto con los eventos de Rust desenmascarados. |
 
-Parity workflow:
+Flujo de trabajo de paridad:
 
-1. After each manifest or exporter change, run
+1. Después de cada cambio de manifiesto o exportador, ejecute
    `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json --out docs/source/sdk/android/readiness/schema_diffs/$(date -u +%Y%m%d).json --textfile-dir /var/lib/node_exporter/textfile_collector`
-   so the JSON artefact and the mirrored metrics both land in the evidence bundle
-   (the helper still writes `artifacts/android/telemetry/schema_diff.prom` by default).
-2. Review the diff against the table above; if Android now emits a field that is
-   only allowed on Rust (or vice versa), file an AND7 readiness bug and update
-   the redaction plan.
-3. During weekly checks, run
+   por lo que el artefacto JSON y las métricas reflejadas se encuentran en el paquete de evidencia.
+   (el ayudante todavía escribe `artifacts/android/telemetry/schema_diff.prom` de forma predeterminada).
+2. Revise la diferencia con la tabla anterior; si Android ahora emite un campo que es
+   solo permitido en Rust (o viceversa), presente un error de preparación de AND7 y actualice
+   el plan de redacción.
+3. Durante las comprobaciones semanales, ejecute
    `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`
-   to confirm salt epochs match the Grafana widget and note the epoch in the
-   on-call journal.
-4. Record any deltas in
-   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` so
-   governance can audit parity decisions.
+   para confirmar que las épocas de sal coincidan con el widget Grafana y anote la época en el
+   diario de guardia.
+4. Registre cualquier delta en
+   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` entonces
+   La gobernanza puede auditar las decisiones de paridad.
 
-### 2.4 Observability dashboards & alert thresholds
+### 2.4 Paneles de observabilidad y umbrales de alerta
 
-Keep dashboards and alerts aligned with the AND7 schema diff approvals when
-reviewing `scripts/telemetry/check_redaction_status.py` output:
+Mantenga los paneles y las alertas alineados con las aprobaciones de diferencias de esquema AND7 cuando
+revisando la salida `scripts/telemetry/check_redaction_status.py`:
 
-- `Android Telemetry Redaction` — Salt epoch widget, override token gauge.
-- `Redaction Compliance` — `android.telemetry.redaction.failure` counter and
-  injector trend panels.
-- `Exporter Health` — `android.telemetry.export.status` rate breakdowns.
-- `Android Telemetry Overview` — device profile buckets and network context volume.
+- `Android Telemetry Redaction`: widget de época de sal, anulación del indicador de token.
+- `Redaction Compliance` — `android.telemetry.redaction.failure` contador y
+  Paneles de tendencia del inyector.
+- `Exporter Health` — `android.telemetry.export.status` desgloses de tarifas.
+- `Android Telemetry Overview`: depósitos de perfil de dispositivo y volumen de contexto de red.
 
-The following thresholds mirror the quick-reference card and must be enforced
-during incident response and rehearsals:
-
-| Metric / panel | Threshold | Action |
+Los siguientes umbrales reflejan la tarjeta de referencia rápida y deben aplicarse
+durante la respuesta a incidentes y los ensayos:| Métrico/panel | Umbral | Acción |
 |----------------|-----------|--------|
-| `android.telemetry.redaction.failure` (`Redaction Compliance` board) | >0 over a rolling 15 min window | Investigate failing signal, run injector clear, log CLI output + Grafana screenshot. |
-| `android.telemetry.redaction.salt_version` (`Android Telemetry Redaction` board) | Differs from secrets-vault salt epoch | Halt releases, coordinate with secrets rotation, file AND7 note. |
-| `android.telemetry.export.status{status="error"}` (`Exporter Health` board) | >1 % of exports | Inspect collector health, capture CLI diagnostics, escalate to SRE. |
-| `android.telemetry.device_profile{tier="enterprise"}` vs Rust parity (`Android Telemetry Overview`) | Variance >10 % from Rust baseline | File governance follow-up, verify fixture pools, annotate schema diff artefact. |
-| `android.telemetry.network_context` volume (`Android Telemetry Overview`) | Drops to zero while Torii traffic exists | Confirm `NetworkContextProvider` registration, rerun schema diff to ensure fields unchanged. |
-| `android.telemetry.redaction.override` / `android_telemetry_override_tokens_active` (`Android Telemetry Redaction`) | Non-zero outside approved override/drill window | Tie token to an incident, regenerate digest, revoke via workflow in §3. |
+| `android.telemetry.redaction.failure` (placa `Redaction Compliance`) | >0 durante una ventana móvil de 15 minutos | Investigue la señal defectuosa, ejecute la limpieza del inyector, registre la salida CLI + captura de pantalla Grafana. |
+| `android.telemetry.redaction.salt_version` (placa `Android Telemetry Redaction`) | Se diferencia de la época de la sal de la bóveda secreta | Detener las liberaciones, coordinar con la rotación de secretos, presentar la nota AND7. |
+| `android.telemetry.export.status{status="error"}` (placa `Exporter Health`) | >1% de las exportaciones | Inspeccione el estado del recopilador, capture diagnósticos de CLI y escale a SRE. |
+| `android.telemetry.device_profile{tier="enterprise"}` frente a la paridad de Rust (`Android Telemetry Overview`) | Variación >10 % respecto de la línea base de Rust | Seguimiento de la gobernanza de archivos, verificar grupos de dispositivos, anotar artefactos de diferencias de esquema. |
+| Volumen `android.telemetry.network_context` (`Android Telemetry Overview`) | Cae a cero mientras existe tráfico Torii | Confirme el registro `NetworkContextProvider`, vuelva a ejecutar la diferencia de esquema para garantizar que los campos no se modifiquen. |
+| `android.telemetry.redaction.override` / `android_telemetry_override_tokens_active` (`Android Telemetry Redaction`) | Ventana de anulación/perforación aprobada fuera de cero | Vincular el token a un incidente, regenerar el resumen y revocarlo mediante el flujo de trabajo en §3. |
 
-### 2.5 Operator readiness & enablement trail
+### 2.5 Ruta de preparación y habilitación del operador
 
-Roadmap item AND7 calls out a dedicated operator curriculum so support, SRE, and
-release stakeholders understand the parity tables above before the runbook goes
-GA. Use the outline in
-`docs/source/sdk/android/telemetry_readiness_outline.md` for canonical logistics
-(agenda, presenters, timeline) and `docs/source/sdk/android/readiness/and7_operator_enablement.md`
-for the detailed checklist, evidence links, and action log. Keep the following
-phases in sync whenever the telemetry plan changes:
-
-| Phase | Description | Evidence bundle | Primary owner |
+El elemento de la hoja de ruta AND7 incluye un plan de estudios de operador dedicado para que el soporte, SRE y
+Las partes interesadas en la versión comprenden las tablas de paridad anteriores antes de que se publique el runbook.
+GA. Utilice el esquema en
+`docs/source/sdk/android/telemetry_readiness_outline.md` para logística canónica
+(agenda, presentadores, cronograma) y `docs/source/sdk/android/readiness/and7_operator_enablement.md`
+para obtener la lista de verificación detallada, los enlaces de evidencia y el registro de acciones. Mantenga lo siguiente
+fases sincronizadas cada vez que cambia el plan de telemetría:| Fase | Descripción | Paquete de pruebas | Propietario principal |
 |-------|-------------|-----------------|---------------|
-| Pre-read distribution | Send the policy pre-read, `telemetry_redaction.md`, and the quick-reference card at least five business days before the briefing. Track acknowledgements in the outline’s comms log. | `docs/source/sdk/android/telemetry_readiness_outline.md` (Session Logistics + Communications Log) and the archived email in `docs/source/sdk/android/readiness/archive/<YYYY-MM>/`. | Docs/Support manager |
-| Live readiness session | Deliver the 60-minute training (policy deep dive, runbook walkthrough, dashboards, chaos lab demo) and keep the recording running for asynchronous viewers. | Recording + slides stored under `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` with references captured in §2 of the outline. | LLM (acting AND7 owner) |
-| Chaos lab execution | Run at least C2 (override) + C6 (queue replay) from `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` immediately after the live session and attach logs/screenshots to the enablement kit. | Scenario reports and screenshots inside `docs/source/sdk/android/readiness/labs/reports/<YYYY-MM>/` and `/screenshots/<YYYY-MM>/`. | Android Observability TL + SRE on-call |
-| Knowledge check & attendance | Collect quiz submissions, remediate anyone scoring <90 %, and record attendance/quiz statistics. Keep the quick-reference questions aligned with the parity checklist. | Quiz exports in `docs/source/sdk/android/readiness/forms/responses/`, summary Markdown/JSON produced via `scripts/telemetry/generate_and7_quiz_summary.py`, and the attendance table inside `and7_operator_enablement.md`. | Support engineering |
-| Archive & follow-ups | Update the enablement kit’s action log, upload artefacts to the archive, and note the completion in `status.md`. Any remediation or override tokens issued during the session must be copied into `telemetry_override_log.md`. | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 (action log), `.../archive/<YYYY-MM>/checklist.md`, and the override log referenced in §3. | LLM (acting AND7 owner) |
+| Distribución de lectura previa | Envíe la lectura previa de la póliza, `telemetry_redaction.md`, y la tarjeta de referencia rápida al menos cinco días hábiles antes de la sesión informativa. Realice un seguimiento de los reconocimientos en el registro de comunicaciones del esquema. | `docs/source/sdk/android/telemetry_readiness_outline.md` (Logística de sesión + Registro de comunicaciones) y el correo electrónico archivado en `docs/source/sdk/android/readiness/archive/<YYYY-MM>/`. | Administrador de Documentos/Soporte |
+| Sesión de preparación en vivo | Ofrezca la capacitación de 60 minutos (análisis profundo de políticas, tutorial del runbook, paneles, demostración del laboratorio del caos) y mantenga la grabación en ejecución para los espectadores asincrónicos. | Grabación + diapositivas almacenadas en `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` con referencias capturadas en el §2 del esquema. | LLM (propietario interino de AND7) |
+| Ejecución en el laboratorio del caos | Ejecute al menos C2 (anulación) + C6 (reproducción en cola) desde `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` inmediatamente después de la sesión en vivo y adjunte registros/capturas de pantalla al kit de habilitación. | Informes de escenarios y capturas de pantalla dentro de `docs/source/sdk/android/readiness/labs/reports/<YYYY-MM>/` e `/screenshots/<YYYY-MM>/`. | Observabilidad Android TL + SRE de guardia |
+| Verificación de conocimientos y asistencia | Recopile envíos de cuestionarios, corrija a cualquiera que obtenga una puntuación <90 % y registre las estadísticas de asistencia y cuestionarios. Mantenga las preguntas de referencia rápida alineadas con la lista de verificación de paridad. | Exportaciones de cuestionarios en `docs/source/sdk/android/readiness/forms/responses/`, resumen Markdown/JSON producido a través de `scripts/telemetry/generate_and7_quiz_summary.py` y la tabla de asistencia dentro de `and7_operator_enablement.md`. | Ingeniería de soporte |
+| Archivo y seguimientos | Actualice el registro de acciones del kit de habilitación, cargue artefactos en el archivo y anote la finalización en `status.md`. Cualquier token de corrección o anulación emitido durante la sesión se debe copiar en `telemetry_override_log.md`. | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 (registro de acciones), `.../archive/<YYYY-MM>/checklist.md` y el registro de anulación al que se hace referencia en §3. | LLM (propietario interino de AND7) |
 
-When the curriculum is rerun (quarterly or before major schema changes), refresh
-the outline with the new session date, keep the attendee roster current, and
-regenerate the quiz summary JSON/Markdown artefacts so governance packets can
-reference consistent evidence. The `status.md` entry for AND7 should link to the
-latest archive folder once each enablement sprint closes.
+Cuando se vuelva a ejecutar el plan de estudios (trimestralmente o antes de cambios importantes en el esquema), actualice
+el esquema con la nueva fecha de la sesión, mantener actualizada la lista de asistentes y
+regenerar los artefactos JSON/Markdown del resumen del cuestionario para que los paquetes de gobernanza puedan
+hacer referencia a evidencia consistente. La entrada `status.md` para AND7 debe vincularse al
+la última carpeta de archivo una vez que se cierra cada sprint de habilitación.
 
-### 2.6 Schema diff allowlists & policy checks
+### 2.6 Listas permitidas de diferencias de esquema y comprobaciones de políticas
 
-The roadmap explicitly calls out a dual-allowlist policy (mobile redactions vs
-Rust retention) that is enforced by the `telemetry-schema-diff` CLI housed under
-`tools/telemetry-schema-diff`. Every diff artefact recorded in
-`docs/source/sdk/android/readiness/schema_diffs/` must document which fields are
-hashed/bucketed on Android, which fields remain unhashed on Rust, and whether
-any non-allowlisted signal slipped into the build. Capture those decisions
-directly in the JSON by running:
+La hoja de ruta menciona explícitamente una política de lista doble permitida (redacciones móviles vs.
+Retención de óxido) que aplica la CLI `telemetry-schema-diff` alojada en
+`tools/telemetry-schema-diff`. Cada artefacto diferencial registrado en
+`docs/source/sdk/android/readiness/schema_diffs/` debe documentar qué campos están
+hash/bucketed en Android, qué campos permanecen sin hash en Rust y si
+cualquier señal no permitida se deslizó en la compilación. Captar esas decisiones
+directamente en el JSON ejecutando:
 
 ```bash
 cargo run -p telemetry-schema-diff -- \
@@ -334,51 +321,47 @@ if jq -e '.policy_violations | length > 0' "$LATEST" >/dev/null; then
   jq '.policy_violations[]' "$LATEST"
   exit 1
 fi
-```
+```El `jq` final se evalúa como no operativo cuando el informe está limpio. Trate cualquier salida
+de ese comando como un error de preparación de Sev2: un `policy_violations` poblado
+matriz significa que la CLI descubrió una señal que no está en la lista de solo Android
+ni en la lista de exenciones exclusivas de Rust documentada en
+`docs/source/sdk/android/telemetry_schema_diff.md`. Cuando esto ocurra, detenga
+exporta, presenta un ticket AND7 y vuelve a ejecutar la diferencia solo después de que el módulo de política
+y se han corregido las instantáneas del manifiesto. Almacene el JSON resultante en
+`docs/source/sdk/android/readiness/schema_diffs/` con el sufijo de fecha y nota
+la ruta dentro del incidente o informe de laboratorio para que la gobernanza pueda reproducir las comprobaciones.
 
-The final `jq` evaluates to a no-op when the report is clean. Treat any output
-from that command as a Sev 2 readiness bug: a populated `policy_violations`
-array means the CLI discovered a signal that is neither on the Android-only list
-nor on the Rust-only exemption list documented in
-`docs/source/sdk/android/telemetry_schema_diff.md`. When this occurs, halt
-exports, file an AND7 ticket, and rerun the diff only after the policy module
-and manifest snapshots have been corrected. Store the resulting JSON in
-`docs/source/sdk/android/readiness/schema_diffs/` with the date suffix and note
-the path inside the incident or lab report so governance can replay the checks.
+**Matriz de hash y retención**
 
-**Hashing & retention matrix**
-
-| Signal.field | Android handling | Rust handling | Allowlist tag |
+| Campo.de.señal | Manejo de Android | Manejo de óxido | Etiqueta de lista permitida |
 |--------------|-----------------|---------------|---------------|
-| `torii.http.request.authority` | Blake2b-256 hashed (`representation: "blake2b_256"`) | Stored verbatim for traceability | `policy_allowlisted` (mobile hash) |
-| `attestation.result.alias` | Blake2b-256 hashed | Plain text alias (attestation archives) | `policy_allowlisted` |
-| `attestation.result.device_tier` | Bucketed (`representation: "bucketed"`) | Plain tier string | `policy_allowlisted` |
-| `hardware.profile.hardware_tier` | Absent — Android exporters drop the field entirely | Present without redaction | `rust_only` (documented in §3 of `telemetry_schema_diff.md`) |
-| `android.telemetry.redaction.override.*` | Android-only signal with masked actor roles | No equivalent signal emitted | `android_only` (must stay `status:"accepted"`) |
+| `torii.http.request.authority` | Blake2b-256 hash (`representation: "blake2b_256"`) | Almacenado palabra por palabra para su trazabilidad | `policy_allowlisted` (hash móvil) |
+| `attestation.result.alias` | Blake2b-256 hash | Alias ​​de texto sin formato (archivos de certificación) | `policy_allowlisted` |
+| `attestation.result.device_tier` | En cubos (`representation: "bucketed"`) | Cadena de niveles lisos | `policy_allowlisted` |
+| `hardware.profile.hardware_tier` | Ausente: los exportadores de Android abandonan el campo por completo | Presente sin redacción | `rust_only` (documentado en §3 de `telemetry_schema_diff.md`) |
+| `android.telemetry.redaction.override.*` | Señal solo para Android con roles de actores enmascarados | No se emite ninguna señal equivalente | `android_only` (debe permanecer `status:"accepted"`) |
 
-When new signals appear, add them to the schema diff policy module **and** the
-table above so the runbook mirrors the enforcement logic shipped in the CLI.
-Schema runs now fail if any Android-only signal omits an explicit `status` or if
-the `policy_violations` array is non-empty, so keep this checklist in sync with
-`telemetry_schema_diff.md` §3 and the latest JSON snapshots referenced in
+Cuando aparezcan nuevas señales, agréguelas al módulo de política de diferencias de esquema **y** el
+tabla anterior para que el runbook refleje la lógica de aplicación incluida en la CLI.
+La ejecución del esquema ahora falla si alguna señal solo de Android omite un `status` explícito o si
+la matriz `policy_violations` no está vacía, así que mantenga esta lista de verificación sincronizada con
+`telemetry_schema_diff.md` §3 y las últimas instantáneas JSON a las que se hace referencia en
 `telemetry_redaction_minutes_*.md`.
 
-## 3. Override Workflow
+## 3. Anular el flujo de trabajo
 
-Overrides are the “break glass” option when hashing regressions or privacy
-alerts block customers. Apply them only after recording the full decision trail
-in the incident doc.
-
-1. **Confirm drift and scope.** Wait for the PagerDuty alert or the schema diff
-   gate to fire, then run
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>` to
-   prove mismatched authorities. Attach the CLI output and Grafana screenshots
-   to the incident record.
-2. **Prepare a signed request.** Populate
-   `docs/examples/android_override_request.json` with the ticket id, requester,
-   expiry, and justification. Store the file next to the incident artefacts so
-   compliance can audit the inputs.
-3. **Issue the override.** Invoke
+Las anulaciones son la opción "romper el cristal" al aplicar hash en regresiones o privacidad
+Las alertas bloquean a los clientes. Aplicarlos sólo después de registrar el proceso de decisión completo.
+en el documento del incidente.1. **Confirmar deriva y alcance.** Espere la alerta de PagerDuty o la diferencia de esquema.
+   puerta para disparar, luego correr
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>` a
+   demostrar autoridades no coincidentes. Adjunte la salida CLI y las capturas de pantalla Grafana
+   al registro del incidente.
+2. **Prepare una solicitud firmada.** Completar
+   `docs/examples/android_override_request.json` con el ID del ticket, solicitante,
+   caducidad y justificación. Guarde el archivo junto a los artefactos del incidente para que
+   El cumplimiento puede auditar las entradas.
+3. **Emitir la anulación.** Invocar
    ```bash
    scripts/android_override_tool.sh apply \
      --request docs/examples/android_override_request.json \
@@ -387,310 +370,294 @@ in the incident doc.
      --event-log docs/source/sdk/android/readiness/override_logs/override_events.ndjson \
      --actor-role <support|sre|docs|compliance|program|other>
    ```
-   The helper prints the override token, writes the manifest, and appends a row
-   to the Markdown audit log. Never post the token in chat; deliver it directly
-   to the Torii operators applying the override.
-4. **Monitor the effect.** Within five minutes verify a single
-   `android.telemetry.redaction.override` event was emitted, the collector
-   status endpoint shows `override_active=true`, and the incident doc lists the
-   expiry. Watch the Android Telemetry Overview dashboard’s “Override tokens
-   active” panel (`android_telemetry_override_tokens_active`) for the same
-   token count and continue running the status CLI every 10 minutes until
-   hashing stabilises.
-5. **Revoke and archive.** As soon as the mitigation lands, run
-  `scripts/android_override_tool.sh revoke --token <token>` so the audit log
-  captures the revocation time, then execute
+   El asistente imprime el token de anulación, escribe el manifiesto y agrega una fila
+   al registro de auditoría de Markdown. Nunca publiques el token en el chat; entregarlo directamente
+   a los operadores Torii que aplican la anulación.
+4. **Monitorear el efecto.** En cinco minutos, verifique un único
+   Se emitió el evento `android.telemetry.redaction.override`, el recopilador
+   El punto final de estado muestra `override_active=true` y el documento del incidente enumera los
+   caducidad. Mire el panel "Anular tokens" del panel de descripción general de telemetría de Android.
+   panel activo” (`android_telemetry_override_tokens_active`) para el mismo
+   recuento de tokens y continúe ejecutando la CLI de estado cada 10 minutos hasta
+   El hash se estabiliza.
+5. **Revocar y archivar.** Tan pronto como llegue la mitigación, ejecute
+  `scripts/android_override_tool.sh revoke --token <token>` para que el registro de auditoría
+  captura el tiempo de revocación, luego ejecuta
   `scripts/android_override_tool.sh digest --out docs/source/sdk/android/readiness/override_logs/override_digest_$(date -u +%Y%m%dT%H%M%SZ).json`
-  to refresh the sanitised snapshot that governance expects. Attach the
-  manifest, digest JSON, CLI transcripts, Grafana snapshots, and the NDJSON log
-  produced via `--event-log` to
-  `docs/source/sdk/android/readiness/screenshots/<date>/` and cross-link the
-  entry from `docs/source/sdk/android/telemetry_override_log.md`.
+  para actualizar la instantánea desinfectada que espera la gobernanza. Adjunte el
+  manifiesto, resumen JSON, transcripciones CLI, instantáneas Grafana y el registro NDJSON
+  producido a través de `--event-log` para
+  `docs/source/sdk/android/readiness/screenshots/<date>/` y reticular el
+  entrada de `docs/source/sdk/android/telemetry_override_log.md`.
 
-Overrides exceeding 24 hours require SRE Director and Compliance approval and
-must be highlighted in the next weekly AND7 review.
+Las anulaciones que excedan las 24 horas requieren la aprobación del Director de SRE y de Cumplimiento y
+debe destacarse en la próxima revisión semanal de AND7.
 
-### 3.1 Override escalation matrix
+### 3.1 Anular matriz de escalamiento
 
-| Situation | Max duration | Approvers | Required notifications |
+| Situación | Duración máxima | Aprobadores | Notificaciones requeridas |
 |-----------|--------------|-----------|------------------------|
-| Single-tenant investigation (hashed authority mismatch, customer Sev 2) | 4 hours | Support engineer + SRE on-call | Ticket `SUP-OVR-<id>`, `android.telemetry.redaction.override` event, incident log |
-| Fleet-wide telemetry outage or SRE-requested reproduction | 24 hours | SRE on-call + Program Lead | PagerDuty note, override log entry, update in `status.md` |
-| Compliance/forensics request or any case exceeding 24 hours | Until explicitly revoked | SRE Director + Compliance lead | Governance mailing list, override log, AND7 weekly status |
+| Investigación de inquilino único (no coincide la autoridad hash, cliente Sev2) | 4 horas | Ingeniero de soporte + SRE de guardia | Ticket `SUP-OVR-<id>`, evento `android.telemetry.redaction.override`, registro de incidentes |
+| Interrupción de telemetría en toda la flota o reproducción solicitada por SRE | 24 horas | SRE de guardia + Líder de programa | Nota de PagerDuty, anular entrada de registro, actualización en `status.md` |
+| Solicitud de cumplimiento/forense o cualquier caso que exceda las 24 horas | Hasta que sea revocado explícitamente | Director SRE + Líder de Cumplimiento | Lista de correo de gobernanza, registro de anulación, estado semanal de AND7 |
 
-#### Role responsibilities
-
-| Role | Responsibilities | SLA / Notes |
+#### Responsabilidades del rol| Rol | Responsabilidades | SLA / Notas |
 |------|------------------|-------------|
-| Android telemetry on-call (Incident Commander) | Drive detection, execute the override tooling, record approvals in the incident doc, and ensure revocation happens before expiry. | Acknowledge PagerDuty within 5 minutes and log progress every 15 minutes. |
-| Android Observability TL (Haruka Yamamoto) | Validate the drift signal, confirm exporter/collector state, and sign off on the override manifest before it is handed to operators. | Join the bridge within 10 minutes; delegate to the staging cluster owner if unavailable. |
-| SRE liaison (Liam O’Connor) | Apply the manifest to collectors, monitor backlog, and coordinate with Release Engineering for Torii-side mitigations. | Log every `kubectl` action in the change request and paste command transcripts in the incident doc. |
-| Compliance (Sofia Martins / Daniel Park) | Approve overrides longer than 30 minutes, verify the audit log row, and advise on regulator/customer messaging. | Post acknowledgement in `#compliance-alerts`; for production events file a compliance note before the override is issued. |
-| Docs/Support Manager (Priya Deshpande) | Archive manifests/CLI output under `docs/source/sdk/android/readiness/…`, keep the override log tidy, and schedule follow-up labs if gaps surface. | Confirms evidence retention (13 months) and files AND7 follow-ups before closing the incident. |
+| Telemetría de Android de guardia (Incident Commander) | Impulse la detección, ejecute las herramientas de anulación, registre las aprobaciones en el documento del incidente y asegúrese de que la revocación se realice antes de que expire. | Reconozca PagerDuty dentro de los 5 minutos y registre el progreso cada 15 minutos. |
+| Observabilidad de Android TL (Haruka Yamamoto) | Valide la señal de deriva, confirme el estado del exportador/recolector y firme el manifiesto de anulación antes de entregarlo a los operadores. | Únase al puente en 10 minutos; delega al propietario del clúster provisional si no está disponible. |
+| Enlace de SRE (Liam O'Connor) | Aplique el manifiesto a los recopiladores, supervise el trabajo pendiente y coordine con Release Engineering las mitigaciones del lado Torii. | Registre cada acción `kubectl` en la solicitud de cambio y pegue las transcripciones del comando en el documento del incidente. |
+| Cumplimiento (Sofía Martins / Daniel Park) | Aprobar anulaciones de más de 30 minutos, verificar la fila del registro de auditoría y asesorar sobre los mensajes del regulador/cliente. | Publicar acuse de recibo en `#compliance-alerts`; para eventos de producción, presente una nota de cumplimiento antes de que se emita la anulación. |
+| Gerente de Documentos/Soporte (Priya Deshpande) | Archive los manifiestos/la salida CLI en `docs/source/sdk/android/readiness/…`, mantenga ordenado el registro de anulación y programe laboratorios de seguimiento si surgen lagunas. | Confirma la retención de evidencia (13 meses) y archiva AND7 seguimientos antes de cerrar el incidente. |
 
-Escalate immediately if any override token approaches its expiry without a
-documented revocation plan.
+Escalar inmediatamente si algún token de anulación se acerca a su vencimiento sin una
+plan de revocación documentado.
 
-## 4. Incident Response
+## 4. Respuesta a incidentes
 
-- **Alerts:** PagerDuty service `android-telemetry-primary` covers redaction
-  failures, exporter outages, and bucket drift. Acknowledge within SLA windows
-  (see support playbook).
-- **Diagnostics:** Run `scripts/telemetry/check_redaction_status.py` to gather
-  current exporter health, recent alerts, and hashed authority metrics. Include
-  output in the incident timeline (`incident/YYYY-MM-DD-android-telemetry.md`).
-- **Dashboards:** Monitor the Android Telemetry Redaction, Android Telemetry
-  Overview, Redaction Compliance, and Exporter Health dashboards. Capture
-  screenshots for incident records and annotate any salt-version or override
-  token deviations before closing an incident.
-- **Coordination:** Engage Release Engineering for exporter issues, Compliance
-  for override/PII questions, and Program Lead for Sev 1 incidents.
+- **Alertas:** El servicio PagerDuty `android-telemetry-primary` cubre la redacción
+  fallas, interrupciones del exportador y deriva del balde. Confirmar dentro de las ventanas SLA
+  (ver manual de estrategias de soporte).
+- **Diagnóstico:** Ejecute `scripts/telemetry/check_redaction_status.py` para recopilar
+  Estado actual del exportador, alertas recientes y métricas de autoridad hash. incluir
+  salida en la línea de tiempo del incidente (`incident/YYYY-MM-DD-android-telemetry.md`).
+- **Paneles:** Supervisar la redacción de telemetría de Android, telemetría de Android
+  Paneles de descripción general, cumplimiento de redacción y estado del exportador. Capturar
+  capturas de pantalla para registros de incidentes y anotar cualquier versión salt o anulación
+  desviaciones simbólicas antes de cerrar un incidente.
+- **Coordinación:** Engage Release Engineering para temas de exportadores, Cumplimiento
+  para preguntas de anulación/PII y líder de programa para incidentes del nivel 1.
 
-### 4.1 Escalation flow
+### 4.1 Flujo de escalamiento
 
-Android incidents are triaged using the same severity levels as the Android
-Support Playbook (§2.1). The table below summarises who must be paged and how
-quickly each responder is expected to join the bridge.
+Los incidentes de Android se clasifican utilizando los mismos niveles de gravedad que los de Android.
+Manual de estrategias de soporte (§2.1). La siguiente tabla resume quién debe ser localizado y cómo
+Se espera que cada socorrista se una rápidamente al puente.| Gravedad | Impacto | Respondedor primario (≤5min) | Escalada secundaria (≤10min) | Notificaciones adicionales | Notas |
+|----------|--------|----------------------|--------------------------------|--------------------------|---------------|
+| Grave1 | Interrupción de atención al cliente, violación de la privacidad o fuga de datos | Telemetría de Android de guardia (`android-telemetry-primary`) | Torii de guardia + Líder de programa | Cumplimiento + Gobernanza SRE (`#sre-governance`), propietarios de clústeres provisionales (`#android-staging`) | Inicie War Room inmediatamente y abra un documento compartido para el registro de comandos. |
+| Grave2 | Degradación de la flota, anulación de uso indebido o acumulación prolongada de reproducciones | Telemetría Android de guardia | Fundamentos de Android TL + Docs/Administrador de soporte | Líder de programa, enlace de ingeniería de lanzamiento | Escalar a Cumplimiento si las anulaciones exceden las 24 horas. |
+| Sev3 | Problema de inquilino único, ensayo de laboratorio o alerta de aviso | Ingeniero de soporte | Android de guardia (opcional) | Docs/Apoyo para la concientización | Convierta a Sev2 si el alcance se expande o si varios inquilinos se ven afectados. |
 
-| Severity | Impact | Primary responder (≤5 min) | Secondary escalation (≤10 min) | Additional notifications | Notes |
-|----------|--------|----------------------------|--------------------------------|--------------------------|-------|
-| Sev 1 | Customer-facing outage, privacy breach, or data leak | Android telemetry on-call (`android-telemetry-primary`) | Torii on-call + Program Lead | Compliance + SRE Governance (`#sre-governance`), staging cluster owners (`#android-staging`) | Start war room immediately and open a shared doc for command logging. |
-| Sev 2 | Fleet degradation, override misuse, or prolonged replay backlog | Android telemetry on-call | Android Foundations TL + Docs/Support Manager | Program Lead, Release Engineering liaison | Escalate to Compliance if overrides exceed 24 hours. |
-| Sev 3 | Single-tenant issue, lab rehearsal, or advisory alert | Support engineer | Android on-call (optional) | Docs/Support for awareness | Convert to Sev 2 if scope expands or multiple tenants are affected. |
-
-| Window | Action | Owner(s) | Evidence/Notes |
+| Ventana | Acción | Propietario(s) | Evidencia/Notas |
 |--------|--------|----------|----------------|
-| 0–5 min | Acknowledge PagerDuty, assign an incident commander (IC), and create `incident/YYYY-MM-DD-android-telemetry.md`. Drop the link plus one-line status in `#android-sdk-support`. | On-call SRE / Support engineer | Screenshot of PagerDuty ack + incident stub committed beside other incident logs. |
-| 5–15 min | Run `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status` and paste the summary in the incident doc. Ping Android Observability TL (Haruka Yamamoto) and Support lead (Priya Deshpande) for real-time hand-off. | IC + Android Observability TL | Attach CLI output JSON, note dashboard URLs opened, and mark who owns diagnostics. |
-| 15–25 min | Engage staging cluster owners (Haruka Yamamoto for observability, Liam O’Connor for SRE) to reproduce on `android-telemetry-stg`. Seed load with `scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg` and capture queue dumps from the Pixel + emulator to confirm symptom parity. | Staging cluster owners | Upload sanitized `pending.queue` + `PendingQueueInspector` output to the incident folder. |
-| 25–40 min | Decide on overrides, Torii throttling, or StrongBox fallback. If PII exposure or non-deterministic hashing is suspected, page Compliance (Sofia Martins, Daniel Park) via `#compliance-alerts` and notify the Program Lead in the same incident thread. | IC + Compliance + Program Lead | Link override tokens, Norito manifests, and approval comments. |
-| ≥40 min | Provide 30-minute status updates (PagerDuty notes + `#android-sdk-support`). Schedule war-room bridge if not already active, document mitigation ETA, and ensure Release Engineering (Alexei Morozov) is on standby to roll collector/SDK artifacts. | IC | Time-stamped updates plus decision logs stored in the incident file and summarized in `status.md` during the next weekly refresh. |
+| 0–5 minutos | Reconozca PagerDuty, asigne un comandante de incidente (IC) y cree `incident/YYYY-MM-DD-android-telemetry.md`. Suelte el enlace más el estado de una línea en `#android-sdk-support`. | SRE de guardia / Ingeniero de soporte | Captura de pantalla del reconocimiento de PagerDuty + resguardo de incidente cometido junto a otros registros de incidentes. |
+| 5–15 minutos | Ejecute `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status` y pegue el resumen en el documento del incidente. Haga ping a Android Observability TL (Haruka Yamamoto) y al líder de soporte (Priya Deshpande) para una transferencia en tiempo real. | IC + Observabilidad de Android TL | Adjunte el JSON de salida de la CLI, observe las URL del panel abiertas y marque quién es el propietario de los diagnósticos. |
+| 15-25 minutos | Involucre a los propietarios del clúster de preparación (Haruka Yamamoto para la observabilidad, Liam O'Connor para SRE) para reproducirlo en `android-telemetry-stg`. Carga inicial con `scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg` y captura de volcados de cola desde el emulador Pixel + para confirmar la paridad de síntomas. | Propietarios de clústeres de ensayo | Cargue la salida desinfectada `pending.queue` + `PendingQueueInspector` a la carpeta del incidente. |
+| 25–40 minutos | Decida las anulaciones, la limitación Torii o el respaldo de StrongBox. Si se sospecha exposición de PII o hash no determinista, contacte a Cumplimiento (Sofia Martins, Daniel Park) a través de `#compliance-alerts` y notifique al líder del programa en el mismo hilo del incidente. | IC + Cumplimiento + Líder de Programa | Tokens de anulación de enlaces, manifiestos Norito y comentarios de aprobación. |
+| ≥40min | Proporcione actualizaciones de estado cada 30 minutos (notas de PagerDuty + `#android-sdk-support`). Programe el puente de la sala de guerra si aún no está activo, documente la ETA de mitigación y asegúrese de que Ingeniería de lanzamiento (Alexei Morozov) esté en espera para lanzar los artefactos del recopilador/SDK. | CI | Actualizaciones con marca de tiempo más registros de decisiones almacenados en el archivo de incidentes y resumidos en `status.md` durante la próxima actualización semanal. |- Todas las escaladas deben permanecer reflejadas en el documento del incidente utilizando la tabla "Propietario/Próxima actualización" del Manual de soporte de Android.
+- Si ya hay otro incidente abierto, únase a la sala de guerra existente y agregue el contexto de Android en lugar de crear uno nuevo.
+- Cuando el incidente afecte a las lagunas del runbook, cree tareas de seguimiento en la epopeya AND7 JIRA y etiquete `telemetry-runbook`.
 
-- All escalations must stay mirrored in the incident doc using the “Owner / Next update time” table from the Android Support Playbook.
-- If another incident is already open, join the existing war room and append Android context rather than spinning up a new one.
-- When the incident touches runbook gaps, create follow-up tasks in the AND7 JIRA epic and tag `telemetry-runbook`.
+## 5. Ejercicios de caos y preparación
 
-## 5. Chaos & Readiness Exercises
-
-- Execute the scenarios detailed in
-  `docs/source/sdk/android/telemetry_chaos_checklist.md` quarterly and prior to
-  major releases. Log outcomes with the lab report template.
-- Store evidence (screenshots, logs) under
+- Ejecutar los escenarios detallados en
+  `docs/source/sdk/android/telemetry_chaos_checklist.md` trimestralmente y antes de
+  lanzamientos importantes. Registre los resultados con la plantilla de informe de laboratorio.
+- Almacenar evidencia (capturas de pantalla, registros) en
   `docs/source/sdk/android/readiness/screenshots/`.
-- Track remediation tickets in the AND7 epic with label `telemetry-lab`.
-- Scenario map: C1 (redaction fault), C2 (override), C3 (exporter brownout), C4
-  (schema diff gate using `run_schema_diff.sh` with a drifted config), C5
-  (device-profile skew seeded via `generate_android_load.sh`), C6 (Torii timeout
-  + queue replay), C7 (attestation rejection). Keep this numbering aligned with
-  `telemetry_lab_01.md` and the chaos checklist when adding drills.
+- Seguimiento de tickets de remediación en la epopeya AND7 con etiqueta `telemetry-lab`.
+- Mapa de escenario: C1 (fallo de redacción), C2 (anulación), C3 (caída del exportador), C4
+  (puerta de diferenciación de esquema usando `run_schema_diff.sh` con una configuración derivada), C5
+  (desviación del perfil del dispositivo sembrada a través de `generate_android_load.sh`), C6 (tiempo de espera de Torii
+  + repetición de cola), C7 (rechazo de atestación). Mantenga esta numeración alineada con
+  `telemetry_lab_01.md` y la lista de verificación del caos al agregar ejercicios.
 
-### 5.1 Redaction drift & override drill (C1/C2)
+### 5.1 Ejercicio de derivación y anulación de redacción (C1/C2)
 
-1. Inject a hashing failure via
-   `scripts/telemetry/inject_redaction_failure.sh` and wait for the PagerDuty
-   alert (`android.telemetry.redaction.failure`). Capture the CLI output from
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>` for
-   the incident record.
-2. Clear the failure with `--clear` and confirm the alert resolves within
-   10 minutes; attach Grafana screenshots of the salt/authority panels.
-3. Create a signed override request using
-   `docs/examples/android_override_request.json`, apply it with
-   `scripts/android_override_tool.sh apply`, and verify the unhashed sample by
-   inspecting the exporter payload in staging (look for
+1. Inyecte un error de hash a través de
+   `scripts/telemetry/inject_redaction_failure.sh` y espere el PagerDuty
+   alerta (`android.telemetry.redaction.failure`). Capture la salida CLI de
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>` para
+   el registro del incidente.
+2. Borre la falla con `--clear` y confirme que la alerta se resuelva dentro de
+   10 minutos; adjunte capturas de pantalla Grafana de los paneles de sal/autoridad.
+3. Cree una solicitud de anulación firmada usando
+   `docs/examples/android_override_request.json`, aplicarlo con
+   `scripts/android_override_tool.sh apply` y verifique la muestra sin procesar mediante
+   inspeccionar la carga útil del exportador en la etapa de preparación (busque
    `android.telemetry.redaction.override`).
-4. Revoke the override with `scripts/android_override_tool.sh revoke --token <token>`,
-   append the override token hash plus ticket reference to
-   `docs/source/sdk/android/telemetry_override_log.md`, and mint a digest JSON
-   under `docs/source/sdk/android/readiness/override_logs/`. This closes the
-   C2 scenario in the chaos checklist and keeps the governance evidence fresh.
+4. Revocar la anulación con `scripts/android_override_tool.sh revoke --token <token>`,
+   agregue el hash del token de anulación más la referencia del ticket a
+   `docs/source/sdk/android/telemetry_override_log.md` y crear un resumen JSON
+   bajo `docs/source/sdk/android/readiness/override_logs/`. Esto cierra el
+   Escenario C2 en la lista de verificación del caos y mantiene actualizada la evidencia de gobernanza.
 
-### 5.2 Exporter brownout & queue replay drill (C3/C6)
+### 5.2 Caída del exportador y simulacro de repetición de cola (C3/C6)1. Reduzca la escala del recopilador de etapas (`escala kubectl
+   implementar/android-otel-collector --replicas=0`) para simular un exportador
+   apagón. Realice un seguimiento de las métricas del búfer a través de la CLI de estado y confirme que se activen las alertas en
+   la marca de los 15 minutos.
+2. Restaure el recopilador, confirme el drenaje del trabajo pendiente y archive el registro del recopilador.
+   Fragmento que muestra la finalización de la repetición.
+3. Tanto en el píxel de prueba como en el emulador, siga el Escenario C6: instalar
+   `examples/android/operator-console`, alternar modo avión, enviar la demostración
+   transferencias, luego deshabilite el modo avión y observe las métricas de profundidad de la cola.
+4. Extraiga cada cola pendiente (`adb shell run-as  cat files/pending.queue >
+   /tmp/.queue`), compile the inspector (`gradle -p java/iroha_android
+   :core:clases >/dev/null`), and run `java -cp build/clases
+   org.hyperledger.iroha.android.tools.PendingQueueInspector --archivo
+   /tmp/.queue --json > queue-replay-.json`. Adjuntar decodificado
+   sobres más hashes de repetición en el registro del laboratorio.
+5. Actualice el informe de caos con la duración de la interrupción del exportador, la profundidad de la cola antes/después,
+   y confirmación de que `android_sdk_offline_replay_errors` seguía siendo 0.
 
-1. Scale the staging collector down (`kubectl scale
-   deploy/android-otel-collector --replicas=0`) to simulate an exporter
-   brownout. Track buffer metrics via the status CLI and confirm alerts fire at
-   the 15-minute mark.
-2. Restore the collector, confirm backlog drain, and archive the collector log
-   snippet showing replay completion.
-3. On both the staging Pixel and emulator, follow Scenario C6: install
-   `examples/android/operator-console`, toggle airplane mode, submit the demo
-   transfers, then disable airplane mode and watch queue depth metrics.
-4. Pull each pending queue (`adb shell run-as <app-id> cat files/pending.queue >
-   /tmp/<serial>.queue`), compile the inspector (`gradle -p java/iroha_android
-   :core:classes >/dev/null`), and run `java -cp build/classes
-   org.hyperledger.iroha.android.tools.PendingQueueInspector --file
-   /tmp/<serial>.queue --json > queue-replay-<serial>.json`. Attach decoded
-   envelopes plus replay hashes to the lab log.
-5. Update the chaos report with exporter outage duration, queue depth before/after,
-   and confirmation that `android_sdk_offline_replay_errors` remained 0.
+### 5.3 Script de preparación del caos del clúster (android-telemetry-stg)
 
-### 5.3 Staging cluster chaos script (android-telemetry-stg)
+Propietarios del clúster de puesta en escena Haruka Yamamoto (Android Observability TL) y Liam O'Connor
+(SRE) siga este guión siempre que esté programado un ensayo. La secuencia se mantiene
+participantes alineados con la lista de verificación del caos de telemetría al tiempo que garantizan que
+los artefactos se capturan para la gobernanza.
 
-Staging cluster owners Haruka Yamamoto (Android Observability TL) and Liam O’Connor
-(SRE) follow this script whenever a rehearsal run is scheduled. The sequence keeps
-participants aligned with the telemetry chaos checklist while guaranteeing that
-artefacts are captured for governance.
+**Participantes**
 
-**Participants**
-
-| Role | Responsibilities | Contact |
+| Rol | Responsabilidades | Contacto |
 |------|------------------|---------|
-| Android on-call IC | Drives the drill, coordinates PagerDuty notes, owns command log | PagerDuty `android-telemetry-primary`, `#android-sdk-support` |
-| Staging cluster owners (Haruka, Liam) | Gate change windows, run `kubectl` actions, snapshot cluster telemetry | `#android-staging` |
-| Docs/Support manager (Priya) | Record evidence, track labs checklist, publish follow-up tickets | `#docs-support` |
+| IC de guardia de Android | Conduce el taladro, coordina las notas de PagerDuty, posee el registro de comandos | Buscapersonas `android-telemetry-primary`, `#android-sdk-support` |
+| Propietarios del clúster de puesta en escena (Haruka, Liam) | Ventanas de cambio de puerta, ejecutar acciones `kubectl`, telemetría de clúster de instantáneas | `#android-staging` |
+| Gerente de Documentos/Soporte (Priya) | Registrar evidencia, realizar un seguimiento de la lista de verificación de los laboratorios, publicar tickets de seguimiento | `#docs-support` |
 
-**Pre-flight coordination**
+**Coordinación previa al vuelo**
 
-- 48 hours before the drill, file a change request that lists the planned
-  scenarios (C1–C7) and paste the link in `#android-staging` so cluster owners
-  can block clashing deployments.
-- Collect the latest `ClientConfig` hash and `kubectl --context staging get pods
-  -n android-telemetry-stg` output to establish the baseline state, then store
-  both under `docs/source/sdk/android/readiness/labs/reports/<date>/`.
-- Confirm device coverage (Pixel + emulator) and ensure
-  `ci/run_android_tests.sh` compiled the tools used during the lab
-  (`PendingQueueInspector`, telemetry injectors).
+- 48 horas antes del simulacro, presente una solicitud de cambio que enumere lo planeado.
+  escenarios (C1–C7) y pegue el enlace en `#android-staging` para que los propietarios del clúster
+  puede bloquear implementaciones conflictivas.
+- Recopile el último hash `ClientConfig` y `kubectl --context staging get pods
+  -n salida android-telemetry-stg` para establecer el estado de referencia y luego almacenar
+  ambos bajo `docs/source/sdk/android/readiness/labs/reports/<date>/`.
+- Confirme la cobertura del dispositivo (Pixel + emulador) y asegúrese
+  `ci/run_android_tests.sh` compiló las herramientas utilizadas durante el laboratorio.
+  (`PendingQueueInspector`, inyectores de telemetría).
 
-**Execution checkpoints**
+**Puntos de control de ejecución**
 
-- Announce “chaos start” in `#android-sdk-support`, begin the bridge recording,
-  and keep `docs/source/sdk/android/telemetry_chaos_checklist.md` visible so
-  every command is narrated for the scribe.
-- Have a staging owner mirror each injector action (`kubectl scale`, exporter
-  restarts, load generators) so both Observability and SRE confirm the step.
-- Capture the output from `scripts/telemetry/check_redaction_status.py
-  --status-url https://android-telemetry-stg/api/redaction/status` after each
-  scenario and paste it into the incident doc.
+- Anuncie “inicio del caos” en `#android-sdk-support`, comience la grabación del puente,
+  y mantenga `docs/source/sdk/android/telemetry_chaos_checklist.md` visible para que
+  cada orden es narrada para el escriba.
+- Haga que un propietario provisional refleje cada acción del inyector (`kubectl scale`, exportador
+  se reinicia, carga generadores) para que tanto Observability como SRE confirmen el paso.
+- Capture la salida de `scripts/telemetry/check_redaction_status.py
+  --status-url https://android-telemetry-stg/api/redaction/status` después de cada
+  escenario y péguelo en el documento del incidente.
 
-**Recovery**
+**Recuperación**- No abandone el puente hasta que se hayan limpiado todos los inyectores (`inject_redaction_failure.sh --clear`,
+  `kubectl scale ... --replicas=1`) e Grafana muestran el estado verde.
+- Volcados de cola de archivos de Docs/Support, registros CLI y capturas de pantalla en
+  `docs/source/sdk/android/readiness/screenshots/<date>/` y marca el archivo
+  lista de verificación antes de que se cierre la solicitud de cambio.
+- Registre tickets de seguimiento con la etiqueta `telemetry-chaos` para cualquier escenario que
+  falló o produjo métricas inesperadas y haga referencia a ellas en `status.md`
+  durante la próxima revisión semanal.
 
-- Do not leave the bridge until all injectors are cleared (`inject_redaction_failure.sh --clear`,
-  `kubectl scale ... --replicas=1`) and Grafana dashboards show green status.
-- Docs/Support archives queue dumps, CLI logs, and screenshots under
-  `docs/source/sdk/android/readiness/screenshots/<date>/` and ticks the archive
-  checklist before the change request closes.
-- Log follow-up tickets with the `telemetry-chaos` label for any scenario that
-  failed or produced unexpected metrics, and reference them in `status.md`
-  during the next weekly review.
-
-| Time | Action | Owner(s) | Artefact |
+| Hora | Acción | Propietario(s) | Artefacto |
 |------|--------|----------|----------|
-| T−30 min | Verify `android-telemetry-stg` health: `kubectl --context staging get pods -n android-telemetry-stg`, confirm no pending upgrades, and note collector versions. | Haruka | `docs/source/sdk/android/readiness/screenshots/<date>/cluster-health.png` |
-| T−20 min | Seed baseline load (`scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg --duration 20m`) and capture stdout. | Liam | `readiness/labs/reports/<date>/load-generator.log` |
-| T−15 min | Copy `docs/source/sdk/android/readiness/incident/telemetry_chaos_template.md` to `docs/source/sdk/android/readiness/incident/<date>-telemetry-chaos.md`, list scenarios to run (C1–C7), and assign scribes. | Priya Deshpande (Support) | Incident markdown committed before rehearsal starts. |
-| T−10 min | Confirm Pixel + emulator online, latest SDK installed, and `ci/run_android_tests.sh` compiled the `PendingQueueInspector`. | Haruka, Liam | `readiness/screenshots/<date>/device-checklist.png` |
-| T−5 min | Start Zoom bridge, begin screen recording, and announce “chaos start” in `#android-sdk-support`. | IC / Docs/Support | Recording saved under `readiness/archive/<month>/`. |
-| +0 min | Execute the selected scenario from `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` (typically C2 + C6). Keep the lab guide visible and call out command invocations as they happen. | Haruka drives, Liam mirrors results | Logs attached to the incident file in real time. |
-| +15 min | Pause to collect metrics (`scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`) and grab Grafana screenshots. | Haruka | `readiness/screenshots/<date>/status-<scenario>.png` |
-| +25 min | Restore any injected failures (`inject_redaction_failure.sh --clear`, `kubectl scale ... --replicas=1`), replay queues, and confirm alerts close. | Liam | `readiness/labs/reports/<date>/recovery.log` |
-| +35 min | Debrief: update incident doc with pass/fail per scenario, list follow-ups, and push artefacts to git. Notify Docs/Support that the archive checklist can be completed. | IC | Incident doc updated, `readiness/archive/<month>/checklist.md` ticked. |
+| T-30 min | Verifique el estado de `android-telemetry-stg`: `kubectl --context staging get pods -n android-telemetry-stg`, confirme que no haya actualizaciones pendientes y anote las versiones del recopilador. | Haruka | `docs/source/sdk/android/readiness/screenshots/<date>/cluster-health.png` |
+| T-20 min | Carga de línea base inicial (`scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg --duration 20m`) y salida estándar de captura. | Liam | `readiness/labs/reports/<date>/load-generator.log` |
+| T-15min | Copie `docs/source/sdk/android/readiness/incident/telemetry_chaos_template.md` a `docs/source/sdk/android/readiness/incident/<date>-telemetry-chaos.md`, enumere los escenarios para ejecutar (C1-C7) y asigne escribas. | Priya Deshpande (Apoyo) | Rebaja del incidente cometido antes de que comience el ensayo. |
+| T-10 min | Confirme el emulador Pixel + en línea, el último SDK instalado y `ci/run_android_tests.sh` compiló el `PendingQueueInspector`. | Haruka, Liam | `readiness/screenshots/<date>/device-checklist.png` |
+| T-5mín | Inicie Zoom Bridge, comience a grabar la pantalla y anuncie "inicio del caos" en `#android-sdk-support`. | IC / Documentos/Soporte | Grabación guardada en `readiness/archive/<month>/`. |
+| +0min | Ejecute el escenario seleccionado de `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` (normalmente C2 + C6). Mantenga la guía de laboratorio visible y diga las invocaciones de comandos a medida que ocurren. | Haruka conduce, Liam refleja los resultados | Registros adjuntos al expediente de incidencias en tiempo real. |
+| +15min | Haga una pausa para recopilar métricas (`scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`) y obtenga capturas de pantalla de Grafana. | Haruka | `readiness/screenshots/<date>/status-<scenario>.png` |
+| +25min | Restaure cualquier falla inyectada (`inject_redaction_failure.sh --clear`, `kubectl scale ... --replicas=1`), reproduzca colas y confirme el cierre de las alertas. | Liam | `readiness/labs/reports/<date>/recovery.log` |
+| +35min | Informe: actualice el documento de incidentes con aprobación/falla por escenario, enumere los seguimientos y envíe artefactos a git. Notifique a Docs/Support que se puede completar la lista de verificación del archivo. | CI | Documento de incidente actualizado, `readiness/archive/<month>/checklist.md` marcado. |
 
-- Keep the staging owners on the bridge until exporters are healthy and all alerts have cleared.
-- Store raw queue dumps in `docs/source/sdk/android/readiness/labs/reports/<date>/queues/` and reference their hashes in the incident log.
-- If a scenario fails, immediately create a JIRA ticket labelled `telemetry-chaos` and cross-link it from `status.md`.
-- Automation helper: `ci/run_android_telemetry_chaos_prep.sh` wraps the load generator, status snapshots, and queue export plumbing. Set `ANDROID_TELEMETRY_DRY_RUN=false` when staging access is available and `ANDROID_PENDING_QUEUE_EXPORTS=pixel8=/tmp/pixel.queue,emulator=/tmp/emulator.queue` (etc.) so the script copies each queue file, emits `<label>.sha256`, and runs `PendingQueueInspector` to produce `<label>.json`. Use `ANDROID_PENDING_QUEUE_INSPECTOR=false` only when JSON emission must be skipped (e.g., no JDK available). **Always export the expected salt identifiers before running the helper** by setting `ANDROID_TELEMETRY_EXPECTED_SALT_EPOCH=<YYYYQ#>` and `ANDROID_TELEMETRY_EXPECTED_SALT_ROTATION=<id>` so the embedded `check_redaction_status.py` calls fail fast if the captured telemetry diverges from the Rust baseline.
+- Mantenga a los propietarios provisionales en el puente hasta que los exportadores estén sanos y se hayan eliminado todas las alertas.
+- Almacene volcados de cola sin procesar en `docs/source/sdk/android/readiness/labs/reports/<date>/queues/` y haga referencia a sus hashes en el registro de incidentes.
+- Si un escenario falla, cree inmediatamente un ticket JIRA con la etiqueta `telemetry-chaos` y vincúlelo desde `status.md`.
+- Ayudante de automatización: `ci/run_android_telemetry_chaos_prep.sh` envuelve el generador de carga, las instantáneas de estado y la tubería de exportación de colas. Configure `ANDROID_TELEMETRY_DRY_RUN=false` cuando el acceso provisional esté disponible y `ANDROID_PENDING_QUEUE_EXPORTS=pixel8=/tmp/pixel.queue,emulator=/tmp/emulator.queue` (etc.) para que el script copie cada archivo de cola, emita `<label>.sha256` y ejecute `PendingQueueInspector` para producir `<label>.json`. Utilice `ANDROID_PENDING_QUEUE_INSPECTOR=false` solo cuando se deba omitir la emisión JSON (por ejemplo, no hay JDK disponible). **Exporte siempre los identificadores de sal esperados antes de ejecutar el asistente** configurando `ANDROID_TELEMETRY_EXPECTED_SALT_EPOCH=<YYYYQ#>` e `ANDROID_TELEMETRY_EXPECTED_SALT_ROTATION=<id>` para que las llamadas `check_redaction_status.py` integradas fallen rápidamente si la telemetría capturada difiere de la línea base de Rust.
 
-## 6. Documentation & Enablement
-
-- **Operator enablement kit:** `docs/source/sdk/android/readiness/and7_operator_enablement.md`
-  links the runbook, telemetry policy, lab guide, archive checklist, and knowledge
-  checks into a single AND7-ready package. Reference it when preparing SRE
-  governance pre-reads or scheduling the quarterly refresh.
-- **Enablement sessions:** A 60-minute enablement recording runs on 2026-02-18
-  with quarterly refreshes. Materials live under
+## 6. Documentación y habilitación- **Kit de habilitación del operador:** `docs/source/sdk/android/readiness/and7_operator_enablement.md`
+  vincula el runbook, la política de telemetría, la guía de laboratorio, la lista de verificación de archivos y el conocimiento
+  se registra en un único paquete listo para AND7. Consúltelo al preparar SRE
+  lecturas previas de gobernanza o programación de la actualización trimestral.
+- **Sesiones de habilitación:** El 18 de febrero de 2026 se realizará una grabación de habilitación de 60 minutos.
+  con actualizaciones trimestrales. Los materiales viven debajo.
   `docs/source/sdk/android/readiness/`.
-- **Knowledge checks:** Staff must score ≥90% via the readiness form. Store
-  results in `docs/source/sdk/android/readiness/forms/responses/`.
-- **Updates:** Whenever telemetry schemas, dashboards, or override policies
-  change, update this runbook, the support playbook, and `status.md` in the same
+- **Verificaciones de conocimientos:** El personal debe obtener una puntuación ≥90% a través del formulario de preparación. Tienda
+  da como resultado `docs/source/sdk/android/readiness/forms/responses/`.
+- **Actualizaciones:** Siempre que se anulen esquemas de telemetría, paneles o políticas
+  cambiar, actualice este runbook, el playbook de soporte e `status.md` en el mismo
   PR.
-- **Weekly review:** After each Rust release candidate (or at least weekly), verify
-  `java/iroha_android/README.md` and this runbook still reflect current automation,
-  fixture rotation procedures, and governance expectations. Capture the review in
-  `status.md` so the Foundations milestone audit can trace documentation freshness.
+- **Revisión semanal:** Después de cada lanzamiento candidato de Rust (o al menos semanalmente), verifique
+  `java/iroha_android/README.md` y este runbook aún reflejan la automatización actual,
+  procedimientos de rotación de partidos y expectativas de gobernanza. Capture la reseña en
+  `status.md` para que la auditoría de hitos de Foundations pueda rastrear la actualización de la documentación.
 
-## 7. StrongBox Attestation Harness
-
-- **Purpose:** Validate hardware-backed attestation bundles before promoting devices into the
-  StrongBox pool (AND2/AND6). The harness consumes captured certificate chains and verifies them
-  against trusted roots using the same policy that production code executes.
-- **Reference:** See `docs/source/sdk/android/strongbox_attestation_harness_plan.md` for the full
-  capture API, alias lifecycle, CI/Buildkite wiring, and ownership matrix. Treat that plan as the
-  source of truth when onboarding new lab technicians or updating finance/compliance artefacts.
-- **Workflow:**
-  1. Collect an attestation bundle on-device (alias, `challenge.hex`, and `chain.pem` with the
-     leaf→root order) and copy it to the workstation.
-  2. Run `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>
-     [--trust-root-dir <dir>] --require-strongbox --output <report.json>` using the appropriate
-     Google/Samsung root (directories allow you to load whole vendor bundles).
-  3. Archive the JSON summary alongside raw attestation material in
+## 7. Arnés de certificación StrongBox- **Propósito:** Validar paquetes de atestación respaldados por hardware antes de promocionar dispositivos en el
+  Grupo StrongBox (AND2/AND6). El arnés consume cadenas de certificados capturadas y las verifica.
+  contra raíces confiables usando la misma política que ejecuta el código de producción.
+- **Referencia:** Consulte `docs/source/sdk/android/strongbox_attestation_harness_plan.md` para obtener la información completa.
+  API de captura, ciclo de vida de alias, cableado CI/Buildkite y matriz de propiedad. Trate ese plan como el
+  fuente de confianza al incorporar nuevos técnicos de laboratorio o actualizar artefactos de finanzas/cumplimiento.
+- **Flujo de trabajo:**
+  1. Recopile un paquete de atestación en el dispositivo (alias, `challenge.hex` e `chain.pem` con el
+     orden hoja→raíz) y cópielo a la estación de trabajo.
+  2. Ejecute `scripts/android_keystore_attestation.sh --bundle-dir  --trust-root 
+     [--trust-root-dir ] --require-strongbox --output ` usando el archivo apropiado
+     Raíz de Google/Samsung (los directorios le permiten cargar paquetes completos de proveedores).
+  3. Archive el resumen JSON junto con el material de certificación sin procesar en
      `artifacts/android/attestation/<device-tag>/`.
-- **Bundle format:** Follow `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  for the required file layout (`chain.pem`, `challenge.hex`, `alias.txt`, `result.json`).
-- **Trusted roots:** Obtain vendor-supplied PEMs from the device lab secrets store; pass multiple
-  `--trust-root` arguments or point `--trust-root-dir` to the directory that holds the anchors when
-  the chain terminates in a non-Google anchor.
-- **CI harness:** Use `scripts/android_strongbox_attestation_ci.sh` to batch-verify archived bundles
-  on lab machines or CI runners. The script scans `artifacts/android/attestation/**` and invokes the
-  harness for every directory containing the documented files, writing refreshed `result.json`
-  summaries in place.
-- **CI lane:** After syncing new bundles, run the Buildkite step defined in
+- **Formato del paquete:** Siga `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
+  para el diseño de archivo requerido (`chain.pem`, `challenge.hex`, `alias.txt`, `result.json`).
+- **Raíces confiables:** Obtenga PEM proporcionados por el proveedor del almacén de secretos del laboratorio de dispositivos; pasar múltiples
+  argumentos `--trust-root` o apunte `--trust-root-dir` al directorio que contiene los anclajes cuando
+  la cadena termina en un ancla que no es de Google.
+- **Arnés de CI:** Utilice `scripts/android_strongbox_attestation_ci.sh` para verificar por lotes los paquetes archivados
+  en máquinas de laboratorio o corredores de CI. El script escanea `artifacts/android/attestation/**` e invoca el
+  arnés para cada directorio que contiene los archivos documentados, escribiendo `result.json` actualizado
+  resúmenes en su lugar.
+- **Carril CI:** Después de sincronizar nuevos paquetes, ejecute el paso Buildkite definido en
   `.buildkite/android-strongbox-attestation.yml` (`buildkite-agent pipeline upload --pipeline .buildkite/android-strongbox-attestation.yml`).
-  The job executes `scripts/android_strongbox_attestation_ci.sh`, generates a summary with
-  `scripts/android_strongbox_attestation_report.py`, uploads the report to `artifacts/android_strongbox_attestation_report.txt`,
-  and annotates the build as `android-strongbox/report`. Investigate any failures immediately and
-  link the build URL from the device matrix.
-- **Reporting:** Attach the JSON output to governance reviews and update the device matrix entry in
-  `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` with the attestation date.
-- **Mock rehearsal:** When hardware is unavailable, run `scripts/android_generate_mock_attestation_bundles.sh`
-  (which uses `scripts/android_mock_attestation_der.py`) to mint deterministic test bundles plus a shared mock root so CI and docs can exercise the harness end-to-end.
-- **In-code guardrails:** `ci/run_android_tests.sh --tests
-  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` covers empty vs challenged
-  attestation regeneration (StrongBox/TEE metadata) and emits `android.keystore.attestation.failure`
-  on challenge mismatch so cache/telemetry regressions are caught before shipping new bundles.
+  El trabajo ejecuta `scripts/android_strongbox_attestation_ci.sh`, genera un resumen con
+  `scripts/android_strongbox_attestation_report.py`, sube el informe a `artifacts/android_strongbox_attestation_report.txt`,
+  y anota la compilación como `android-strongbox/report`. Investigue cualquier falla inmediatamente y
+  vincule la URL de compilación desde la matriz del dispositivo.
+- **Informes:** Adjunte la salida JSON a las revisiones de gobernanza y actualice la entrada de la matriz del dispositivo en
+  `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` con la fecha de atestación.
+- **Ensayo simulado:** Cuando el hardware no esté disponible, ejecute `scripts/android_generate_mock_attestation_bundles.sh`
+  (que usa `scripts/android_mock_attestation_der.py`) para crear paquetes de pruebas deterministas más una raíz simulada compartida para que CI y los documentos puedan ejercitar el arnés de un extremo a otro.
+- **Valores de seguridad en el código:** `ci/run_android_tests.sh --tests
+  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` cubre vacíos versus desafiados
+  regeneración de certificación (metadatos StrongBox/TEE) y emite `android.keystore.attestation.failure`
+  en la discrepancia del desafío para que las regresiones de caché/telemetría se detecten antes de enviar nuevos paquetes.
 
-## 8. Contacts
+## 8. Contactos
 
-- **Support Engineering On-call:** `#android-sdk-support`
-- **SRE Governance:** `#sre-governance`
-- **Docs/Support:** `#docs-support`
-- **Escalation Tree:** See Android Support Playbook §2.1
+- **Ingeniería de soporte de guardia:** `#android-sdk-support`
+- **Gobernanza SRE:** `#sre-governance`
+- **Documentos/Soporte:** `#docs-support`
+- **Árbol de escalada:** Consulte la guía de soporte de Android §2.1
 
-## 9. Troubleshooting Scenarios
+## 9. Escenarios de solución de problemasEl elemento de la hoja de ruta AND7-P2 menciona tres clases de incidentes que repetidamente paginan el
+Android de guardia: Torii/tiempos de espera de red, fallas de certificación de StrongBox y
+`iroha_config` deriva manifiesta. Analice la lista de verificación correspondiente antes de presentar la solicitud
+Sev1/2 hace seguimiento y archiva la evidencia en `incident/<date>-android-*.md`.
 
-Roadmap item AND7-P2 calls out three incident classes that repeatedly page the
-Android on-call: Torii/network timeouts, StrongBox attestation failures, and
-`iroha_config` manifest drift. Work through the relevant checklist before filing
-Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
+### 9.1 Torii y tiempos de espera de red
 
-### 9.1 Torii & Network Timeouts
+**Señales**
 
-**Signals**
+- Alertas en `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`,
+  `android_sdk_offline_replay_errors` y la tasa de error Torii `/v1/pipeline`.
+- Widgets `operator-console` (ejemplos/android) que muestran drenaje de cola estancado o
+  Los reintentos se atascan en un retroceso exponencial.
 
-- Alerts on `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`,
-  `android_sdk_offline_replay_errors`, and the Torii `/v1/pipeline` error rate.
-- `operator-console` widgets (examples/android) showing stalled queue drain or
-  retries stuck in exponential backoff.
+**Respuesta inmediata**
 
-**Immediate response**
+1. Reconozca PagerDuty (`android-networking`) e inicie un registro de incidentes.
+2. Capture instantáneas Grafana (latencia de envío + profundidad de cola) que cubran el
+   últimos 30 minutos.
+3. Registre el hash `ClientConfig` activo de los registros del dispositivo (`ConfigWatcher`
+   imprime el resumen del manifiesto cada vez que una recarga tiene éxito o falla).
 
-1. Acknowledge PagerDuty (`android-networking`) and start an incident log.
-2. Capture Grafana snapshots (Submission Latency + Queue Depth) covering the
-   last 30 minutes.
-3. Record the active `ClientConfig` hash from the device logs (`ConfigWatcher`
-   prints the manifest digest whenever a reload succeeds or fails).
+**Diagnóstico**
 
-**Diagnostics**
-
-- **Queue health:** Pull the configured queue file from a staging device or the
-  emulator (`adb shell run-as <app-id> cat files/pending.queue >
-  /tmp/pending.queue`). Decode the envelopes with
-  `OfflineSigningEnvelopeCodec` as described in
-  `docs/source/sdk/android/offline_signing.md#4-queueing--replay` to confirm the
-  backlog matches operator expectations. Attach the decoded hashes to the
-  incident.
-- **Hash inventory:** After downloading the queue file, run the inspector helper
-  to capture canonical hashes/aliases for the incident artefacts:
+- **Estado de la cola:** Extraiga el archivo de cola configurado desde un dispositivo de prueba o el
+  emulador (`adb shell run-as  archivos cat/pending.queue >
+  /tmp/pending.queue`). Decodifica los sobres con
+  `OfflineSigningEnvelopeCodec` como se describe en
+  `docs/source/sdk/android/offline_signing.md#4-queueing--replay` para confirmar el
+  el trabajo pendiente coincide con las expectativas del operador. Adjunte los hashes decodificados al
+  incidente.
+- **Inventario de hash:** Después de descargar el archivo de cola, ejecute el asistente del inspector
+  para capturar hashes/alias canónicos para los artefactos incidentes:
 
   ```bash
   gradle -p java/iroha_android :core:classes >/dev/null  # compiles classes if needed
@@ -698,187 +665,181 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
     --file /tmp/pending.queue --json > queue-inspector.json
   ```
 
-  Attach `queue-inspector.json` and the pretty-printed stdout to the incident
-  and link it from the AND7 lab report for Scenario D.
-- **Torii connectivity:** Run the HTTP transport harness locally to rule out SDK
-  regressions: `ci/run_android_tests.sh` exercises
-  `HttpClientTransportTests`, `HttpClientTransportHarnessTests`, and
-  `ToriiMockServerTests`. Failures here indicate a client bug rather than a
-  Torii outage.
-- **Fault injection rehearsal:** On the staging Pixel (StrongBox) and the AOSP
-  emulator, toggle connectivity to reproduce pending-queue growth:
-  `adb shell cmd connectivity airplane-mode enable` → submit two demo
-  transactions via operator-console → `adb shell cmd connectivity airplane-mode
-  disable` → verify the queue drains and `android_sdk_offline_replay_errors`
-  remains 0. Record hashes of the replayed transactions.
-- **Alert parity:** When tuning thresholds or after Torii changes, execute
-  `scripts/telemetry/test_torii_norito_rpc_alerts.sh` so Prometheus rules stay
-  aligned with the dashboards.
+  Adjunte `queue-inspector.json` y la salida estándar bastante impresa al incidente.
+  y vincúlelo desde el informe de laboratorio AND7 para el Escenario D.
+- **Conectividad Torii:** Ejecute el arnés de transporte HTTP localmente para descartar el SDK
+  regresiones: ejercicios `ci/run_android_tests.sh`
+  `HttpClientTransportTests`, `HttpClientTransportHarnessTests` y
+  `ToriiMockServerTests`. Las fallas aquí indican un error del cliente en lugar de un
+  Torii interrupción.
+- **Ensayo de inyección de fallos:** En el escenario Pixel (StrongBox) y el AOSP
+  emulador, alterne la conectividad para reproducir el crecimiento de la cola pendiente:
+  `adb shell cmd connectivity airplane-mode enable` → enviar dos demostraciones
+  transacciones a través de la consola del operador → `adb shell cmd conectividad modo avión
+  desactivar` → verify the queue drains and `android_sdk_offline_replay_errors`
+  permanece 0. Registre los hashes de las transacciones reproducidas.
+- **Paridad de alerta:** Al ajustar los umbrales o después de cambios en Torii, ejecute
+  `scripts/telemetry/test_torii_norito_rpc_alerts.sh` por lo que las reglas Prometheus permanecen
+  alineados con los tableros.
 
-**Recovery**
+**Recuperación**
 
-1. If Torii is degraded, engage the Torii on-call and continue replaying the
-   queue once `/v1/pipeline` accepts traffic.
-2. Reconfigure affected clients only via signed `iroha_config` manifests. The
-   `ClientConfig` hot-reload watcher must emit a success log before the incident
-   can close.
-3. Update the incident with the queue size before/after replay plus hashes of
-   any dropped transactions.
+1. Si Torii está degradado, active el Torii de guardia y continúe reproduciendo el
+   cola una vez que `/v1/pipeline` acepta el tráfico.
+2. Reconfigure los clientes afectados únicamente mediante manifiestos `iroha_config` firmados. el
+   El observador de recarga en caliente `ClientConfig` debe emitir un registro de éxito antes del incidente
+   puede cerrar.
+3. Actualice el incidente con el tamaño de la cola antes/después de la reproducción más los hashes de
+   cualquier transacción cancelada.
 
-### 9.2 StrongBox & Attestation Failures
+### 9.2 Caja fuerte y fallas de certificación
 
-**Signals**
-
-- Alerts on `android_sdk_strongbox_success_rate` or
+**Señales**- Alertas en `android_sdk_strongbox_success_rate` o
   `android.keystore.attestation.failure`.
-- `android.keystore.keygen` telemetry now records the requested
-  `KeySecurityPreference` and the route used (`strongbox`, `hardware`,
-  `software`) with a `fallback=true` flag when a StrongBox preference lands in
-  TEE/software. STRONGBOX_REQUIRED requests now fail fast instead of silently
-  returning TEE keys.
-- Support tickets referencing `KeySecurityPreference.STRONGBOX_ONLY` devices
-  falling back to software keys.
+- La telemetría `android.keystore.keygen` ahora registra lo solicitado
+  `KeySecurityPreference` y la ruta utilizada (`strongbox`, `hardware`,
+  `software`) con un indicador `fallback=true` cuando una preferencia StrongBox aterriza en
+  TEE/software. Las solicitudes STRONGBOX_REQUIRED ahora fallan rápidamente en lugar de silenciosamente
+  devolver llaves TEE.
+- Tickets de soporte que hacen referencia a dispositivos `KeySecurityPreference.STRONGBOX_ONLY`
+  recurriendo a las claves de software.
 
-**Immediate response**
+**Respuesta inmediata**
 
-1. Acknowledge PagerDuty (`android-crypto`) and capture the affected alias label
-   (salted hash) plus device profile bucket.
-2. Check the attestation matrix entry for the device in
-   `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` and
-   record the last verified date.
+1. Reconozca PagerDuty (`android-crypto`) y capture la etiqueta de alias afectada
+   (hachís salado) más depósito de perfil de dispositivo.
+2. Verifique la entrada de la matriz de certificación para el dispositivo en
+   `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` y
+   registre la última fecha verificada.
 
-**Diagnostics**
+**Diagnóstico**
 
-- **Bundle verification:** Run
+- **Verificación del paquete:** Ejecutar
   `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>`
-  on the archived attestation to confirm whether the failure is due to device
-  misconfiguration or a policy change. Attach the generated `result.json`.
-- **Challenge regen:** Challenges are not cached. Each challenge request regenerates a fresh
-  attestation and caches by `(alias, challenge)`; challenge-less calls reuse the cache. Unsupported
-- **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` so every
-  stored bundle is revalidated; this guards against systemic issues introduced
-  by new trust anchors.
-- **Device drill:** On hardware without StrongBox (or by forcing the emulator),
-  set the SDK to require StrongBox only, submit a demo transaction, and confirm
-  the telemetry exporter emits the `android.keystore.attestation.failure` event
-  with the expected reason. Repeat on a StrongBox-capable Pixel to ensure the
-  happy path stays green.
-- **SDK regression check:** Run `ci/run_android_tests.sh` and pay
-  attention to the attestation-focused suites (`AndroidKeystoreBackendDetectionTests`,
+  en la certificación archivada para confirmar si la falla se debe al dispositivo
+  una mala configuración o un cambio de política. Adjunte el `result.json` generado.
+- **Regeneración de desafíos:** Los desafíos no se almacenan en caché. Cada solicitud de desafío regenera una nueva
+  atestación y cachés por `(alias, challenge)`; Las llamadas sin desafío reutilizan el caché. No compatible
+- **Barrido CI:** Ejecute `scripts/android_strongbox_attestation_ci.sh` para que cada
+  se revalida el paquete almacenado; esto protege contra problemas sistémicos introducidos
+  por nuevas anclas de confianza.
+- **Dispositivo taladro:** En hardware sin StrongBox (o forzando el emulador),
+  configure el SDK para que solo requiera StrongBox, envíe una transacción de demostración y confirme
+  el exportador de telemetría emite el evento `android.keystore.attestation.failure`
+  con el motivo esperado. Repita esto en un Pixel compatible con StrongBox para garantizar que
+  El camino feliz permanece verde.
+- **Verificación de regresión del SDK:** Ejecute `ci/run_android_tests.sh` y pague
+  atención a las suites centradas en la certificación (`AndroidKeystoreBackendDetectionTests`,
   `AttestationVerifierTests`, `IrohaKeyManagerDeterministicExportTests`,
-  `KeystoreKeyProviderTests` for cache/challenge separation). Failures here
-  indicate a client-side regression.
+  `KeystoreKeyProviderTests` para separación de caché/desafío). Fallos aquí
+  indicar una regresión del lado del cliente.
 
-**Recovery**
+**Recuperación**
 
-1. Regenerate attestation bundles if the vendor rotated certificates or if the
-   device recently received a major OTA.
-2. Upload the refreshed bundle to `artifacts/android/attestation/<device>/` and
-   update the matrix entry with the new date.
-3. If StrongBox is unavailable in production, follow the override workflow in
-   Section 3 and document the fallback duration; long-term mitigation requires
-   device replacement or a vendor fix.
+1. Regenerar paquetes de atestación si el proveedor rotó los certificados o si el
+   El dispositivo recibió recientemente una OTA importante.
+2. Cargue el paquete actualizado en `artifacts/android/attestation/<device>/` y
+   actualice la entrada de la matriz con la nueva fecha.
+3. Si StrongBox no está disponible en producción, siga el flujo de trabajo de anulación en
+   Sección 3 y documentar la duración de la reserva; la mitigación a largo plazo requiere
+   reemplazo del dispositivo o una reparación del proveedor.
 
-### 9.2a Deterministic Export Recovery
+### 9.2a Recuperación determinista de las exportaciones
 
-- **Formats:** Current exports are v3 (per-export salt/nonce + Argon2id, recorded as
-- **Passphrase policy:** v3 enforces ≥12 character passphrases. If users supply shorter
-  passphrases, instruct them to re-export with a compliant passphrase; v0/v1 imports are
-  exempt but should be rewrapped as v3 immediately after import.
-- **Tamper/reuse guards:** Decoders reject zero/short salt or nonce lengths and repeated
-  salt/nonce pairs surface as `salt/nonce reuse` errors. Regenerate the export to clear
-  the guard; do not attempt to force reuse.
-  `SoftwareKeyProvider.importDeterministic(...)` to rehydrate the key, then
-  `exportDeterministic(...)` to emit a v3 bundle so desktop tooling records the new KDF
-  parameters.
+- **Formatos:** Las exportaciones actuales son v3 (sal por exportación/nonce + Argon2id, registrado como
+- **Política de frase de contraseña:** v3 aplica frases de contraseña de ≥12 caracteres. Si los usuarios suministran más cortos
+  frases de contraseña, indíqueles que reexporten con una frase de contraseña compatible; Las importaciones v0/v1 son
+  está exento pero debe volver a empaquetarse como v3 inmediatamente después de la importación.
+- **Protectores contra manipulación/reutilización:** Los decodificadores rechazan longitudes cero/sal corta o nonce y se repiten.
+  Los pares salt/nonce aparecen como errores `salt/nonce reuse`. Regenerar la exportación para borrar
+  el guardia; no intente forzar la reutilización.
+  `SoftwareKeyProvider.importDeterministic(...)` para rehidratar la llave, luego
+  `exportDeterministic(...)` para emitir un paquete v3 para que las herramientas de escritorio registren el nuevo KDF
+  parámetros.### 9.3 Discrepancias entre manifiesto y configuración
 
-### 9.3 Manifest & Config Mismatches
+**Señales**
 
-**Signals**
+- Errores de recarga de `ClientConfig`, nombres de host de Torii no coincidentes o telemetría
+  diferencias de esquema marcadas por la herramienta de diferencias AND7.
+- Los operadores informan sobre diferentes perillas de reintento/retroceso en todos los dispositivos del mismo
+  flota.
 
-- `ClientConfig` reload failures, mismatched Torii hostnames, or telemetry
-  schema diffs flagged by the AND7 diff tool.
-- Operators reporting different retry/backoff knobs across devices in the same
-  fleet.
+**Respuesta inmediata**
 
-**Immediate response**
-
-1. Capture the `ClientConfig` digest printed in the Android logs and the
-   expected digest from the release manifest.
-2. Dump the running node configuration for comparison:
+1. Capture el resumen `ClientConfig` impreso en los registros de Android y el
+   resumen esperado del manifiesto de lanzamiento.
+2. Vuelque la configuración del nodo en ejecución para compararla:
    `iroha_cli config show --actual > /tmp/iroha_config.actual.json`.
 
-**Diagnostics**
+**Diagnóstico**
 
-- **Schema diff:** Run `scripts/telemetry/run_schema_diff.sh --android-config
-  <android.json> --rust-config <rust.json> --textfile-dir /var/lib/node_exporter/textfile_collector`
-  to generate a Norito diff report, refresh the Prometheus textfile, and attach the
-  JSON artefact plus metrics evidence to the incident and AND7 telemetry readiness log.
-- **Manifest validation:** Use `iroha_cli runtime capabilities` (or the runtime
-  audit command) to retrieve the node’s advertised crypto/ABI hashes and ensure
-  they match the mobile manifest. A mismatch confirms the node was rolled back
-  without reissuing the Android manifest.
-- **SDK regression check:** `ci/run_android_tests.sh` covers
-  `ClientConfigNoritoRpcTests`, `ClientConfig.ValidationTests`, and
-  `HttpClientTransportStatusTests`. Failures signal that the shipped SDK cannot
-  parse the manifest format currently deployed.
+- **Diferencia de esquema:** Ejecute `scripts/telemetry/run_schema_diff.sh --android-config
+   --rust-config  --textfile-dir /var/lib/node_exporter/textfile_collector`
+  para generar un informe de diferencias Norito, actualice el archivo de texto Prometheus y adjunte el
+  Artefacto JSON más evidencia de métricas para el incidente y registro de preparación de telemetría AND7.
+- **Validación de manifiesto:** Utilice `iroha_cli runtime capabilities` (o el tiempo de ejecución
+  comando de auditoría) para recuperar los hashes criptográficos/ABI anunciados del nodo y garantizar
+  coinciden con el manifiesto móvil. Una discrepancia confirma que el nodo se revirtió
+  sin volver a emitir el manifiesto de Android.
+- **Verificación de regresión del SDK:** `ci/run_android_tests.sh` cubre
+  `ClientConfigNoritoRpcTests`, `ClientConfig.ValidationTests` y
+  `HttpClientTransportStatusTests`. Los fallos indican que el SDK enviado no puede
+  analizar el formato de manifiesto actualmente implementado.
 
-**Recovery**
+**Recuperación**
 
-1. Regenerate the manifest via the authorized pipeline (usually
-   `iroha_cli runtime Capabilities` → signed Norito manifest → config bundle) and
-   redeploy it through the operator channel. Never edit `ClientConfig`
-   overrides on-device.
-2. Once a corrected manifest lands, watch for the `ConfigWatcher` “reload ok”
-   message on each fleet tier and close the incident only after the telemetry
-   schema diff reports parity.
-3. Record the manifest hash, schema diff artefact path, and incident link in
-   `status.md` under the Android section for auditability.
+1. Regenerar el manifiesto a través de la canalización autorizada (normalmente
+   `iroha_cli runtime Capabilities` → manifiesto Norito firmado → paquete de configuración) y
+   volver a implementarlo a través del canal del operador. Nunca edite `ClientConfig`
+   anula en el dispositivo.
+2. Una vez que llegue un manifiesto corregido, esté atento al mensaje `ConfigWatcher` "recargar bien"
+   mensaje en cada nivel de flota y cerrar el incidente solo después de la telemetría
+   La diferencia de esquema informa la paridad.
+3. Registre el hash del manifiesto, la ruta del artefacto de diferenciación del esquema y el enlace del incidente en
+   `status.md` en la sección de Android para auditabilidad.
 
-## 10. Operator enablement curriculum
+## 10. Plan de estudios de habilitación de operadores
 
-Roadmap item **AND7** requires a repeatable training package so operators,
-support engineers, and SRE can adopt the telemetry/redaction updates without
-guesswork. Pair this section with
-`docs/source/sdk/android/readiness/and7_operator_enablement.md`, which contains
-the detailed checklist and artefact links.
+El elemento de la hoja de ruta **AND7** requiere un paquete de capacitación repetible para que los operadores,
+ingenieros de soporte, y SRE puede adoptar las actualizaciones de telemetría/redacción sin
+conjeturas. Empareja esta sección con
+`docs/source/sdk/android/readiness/and7_operator_enablement.md`, que contiene
+la lista de verificación detallada y los enlaces de artefactos.
 
-### 10.1 Session modules (60-minute briefing)
+### 10.1 Módulos de sesión (información de 60 minutos)
 
-1. **Telemetry architecture (15 min).** Walk through the exporter buffer,
-   redaction filter, and schema diff tooling. Demo
-   `scripts/telemetry/run_schema_diff.sh --textfile-dir /var/lib/node_exporter/textfile_collector` plus
-   `scripts/telemetry/check_redaction_status.py` so attendees see how parity is
-   enforced.
-2. **Runbook + chaos labs (20 min).** Highlight Sections 2–9 of this runbook,
-   rehearse one scenario from `readiness/labs/telemetry_lab_01.md`, and show how
-   to archive artefacts under `readiness/labs/reports/<stamp>/`.
-3. **Override + compliance workflow (10 min).** Review Section 3 overrides,
-   demonstrate `scripts/android_override_tool.sh` (apply/revoke/digest), and
-   update `docs/source/sdk/android/telemetry_override_log.md` plus the latest
-   digest JSON.
-4. **Q&A / knowledge check (15 min).** Use the quick-reference card in
-   `readiness/cards/telemetry_redaction_qrc.md` to anchor questions, then
-   capture follow-ups in `readiness/and7_operator_enablement.md`.
+1. **Arquitectura de telemetría (15 min).** Recorra el búfer del exportador.
+   filtro de redacción y herramientas de diferenciación de esquemas. Demostración
+   `scripts/telemetry/run_schema_diff.sh --textfile-dir /var/lib/node_exporter/textfile_collector` más
+   `scripts/telemetry/check_redaction_status.py` para que los asistentes vean cómo es la paridad
+   aplicado.
+2. **Runbook + laboratorios de caos (20 min).** Resalte las secciones 2 a 9 de este runbook.
+   ensayar un escenario de `readiness/labs/telemetry_lab_01.md` y mostrar cómo
+   para archivar artefactos bajo `readiness/labs/reports/<stamp>/`.
+3. **Anulación + flujo de trabajo de cumplimiento (10 min).** Revisar las anulaciones de la Sección 3,
+   demostrar `scripts/android_override_tool.sh` (aplicar/revocar/digerir), y
+   actualice `docs/source/sdk/android/telemetry_override_log.md` más la última
+   digerir JSON.
+4. **Preguntas y respuestas/verificación de conocimientos (15 min).** Utilice la tarjeta de referencia rápida en
+   `readiness/cards/telemetry_redaction_qrc.md` para anclar preguntas, luego
+   capturar seguimientos en `readiness/and7_operator_enablement.md`.### 10.2 Cadencia de activos y propietarios
 
-### 10.2 Asset cadence & owners
-
-| Asset | Cadence | Owner(s) | Archive location |
+| Activo | Cadencia | Propietario(s) | Ubicación del archivo |
 |-------|---------|----------|------------------|
-| Recorded walkthrough (Zoom/Teams) | Quarterly or before every salt rotation | Android Observability TL + Docs/Support manager | `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` (recording + checklist) |
-| Slide deck & quick-reference card | Update whenever policy/runbook changes | Docs/Support manager | `docs/source/sdk/android/readiness/deck/` and `/cards/` (export PDF + Markdown) |
-| Knowledge check + attendance sheet | After each live session | Support engineering | `docs/source/sdk/android/readiness/forms/responses/` and `and7_operator_enablement.md` attendance block |
-| Q&A backlog / action log | Rolling; updated after every session | LLM (acting DRI) | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 |
+| Tutorial grabado (Zoom/Teams) | Trimestralmente o antes de cada rotación de sal | Observabilidad de Android TL + Administrador de documentos/soporte | `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` (grabación + lista de verificación) |
+| Presentación de diapositivas y tarjeta de referencia rápida | Actualizar cada vez que cambie la política/runbook | Administrador de Documentos/Soporte | `docs/source/sdk/android/readiness/deck/` y `/cards/` (exportar PDF + Markdown) |
+| Verificación de conocimientos + hoja de asistencia | Después de cada sesión en vivo | Ingeniería de soporte | Bloque de asistencia `docs/source/sdk/android/readiness/forms/responses/` y `and7_operator_enablement.md` |
+| Trabajo pendiente de preguntas y respuestas/registro de acciones | Laminación; actualizado después de cada sesión | LLM (DRI en funciones) | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 |
 
-### 10.3 Evidence & feedback loop
+### 10.3 Circuito de evidencia y retroalimentación
 
-- Store session artefacts (screenshots, incident drills, quiz exports) in the
-  same dated directory used for chaos rehearsals so governance can audit both
-  readiness tracks together.
-- When a session completes, update `status.md` (Android section) with links to
-  the archive directory and note any open follow-ups.
-- Outstanding questions from the live Q&A must be turned into issues or doc
-  pull requests within one week; reference the roadmap epics (AND7/AND8) in the
-  ticket description so owners stay aligned.
-- SRE syncs review the archive checklist plus the schema diff artefact listed in
-  Section 2.3 before declaring the curriculum closed for the quarter.
+- Almacenar artefactos de sesión (capturas de pantalla, simulacros de incidentes, exportaciones de cuestionarios) en el
+  El mismo directorio fechado utilizado para los ensayos del caos para que la gobernanza pueda auditar ambos.
+  pistas de preparación juntas.
+- Cuando se complete una sesión, actualice `status.md` (sección de Android) con enlaces a
+  el directorio de archivos y anote cualquier seguimiento abierto.
+- Las preguntas pendientes de las preguntas y respuestas en vivo deben convertirse en problemas o documentos.
+  solicitudes de extracción dentro de una semana; haga referencia a las epopeyas de la hoja de ruta (AND7/AND8) en el
+  descripción del ticket para que los propietarios se mantengan alineados.
+- Las sincronizaciones de SRE revisan la lista de verificación del archivo más el artefacto de diferenciación de esquema enumerado en
+  Apartado 2.3 antes de declarar cerrado el plan de estudios del trimestre.

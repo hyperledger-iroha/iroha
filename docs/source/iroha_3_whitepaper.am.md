@@ -7,110 +7,107 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 07e149429887b0dfc38cf0619552cbefcbae4dd1ec9fe9e9d47a05371ed08f29
 source_last_modified: "2025-12-29T18:16:35.968351+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha v3.0 (Nexus Preview)
+# Iroha v3.0 (Nexus ቅድመ እይታ)
 
-This document captures the forward-looking Hyperledger Iroha v3 architecture, focusing on the multi-lane
-pipeline, Nexus data spaces, and the Asset Exchange Toolkit (AXT). It complements the Iroha v2 whitepaper by
-describing upcoming capabilities that are actively under development.
+ይህ ሰነድ በባለብዙ መስመር ላይ በማተኮር ወደፊት ያለውን Hyperledger Iroha v3 አርክቴክቸርን ይይዛል።
+ቧንቧ መስመር፣ Nexus የመረጃ ቦታዎች፣ እና የንብረት ልውውጥ Toolkit (AXT)። የ Iroha v2 ነጭ ወረቀት በ
+በግንባታ ላይ ያሉ መጪ አቅሞችን በመግለጽ።
 
 ---
 
-## 1. Overview
+## 1. አጠቃላይ እይታ
 
-Iroha v3 extends the deterministic foundation of v2 with horizontal scalability and richer cross-domain
-workflows. The release, codenamed **Nexus**, introduces:
+Iroha v3 የv2 ወሳኙን መሠረት በአግድመት ሚዛን እና በበለጸገ ጎራ አቋራጭ ያራዝመዋል።
+የስራ ፍሰቶች. **Nexus** የሚል ስም ያለው ልቀቱ የሚከተለውን ያስተዋውቃል፡-
 
-- A single, globally shared network called **SORA Nexus**. All Iroha v3 peers participate in this universal
-  ledger rather than operating isolated deployments. Organisations join by registering their own data spaces,
-  which remain isolated for policy and privacy while anchoring into the common ledger.
-- A shared codebase: the same repository builds both Iroha v2 (self-hosted networks) and Iroha v3 (SORA Nexus).
-  Configuration selects the target mode so operators can adopt Nexus features without switching software
-  stacks. The Iroha Virtual Machine (IVM) is identical across both releases, so Kotodama contracts and bytecode
-  artefacts run seamlessly on self-hosted networks and the global Nexus ledger.
-- Multi-lane block production to process independent workloads in parallel.
-- Data spaces (DS) that isolate execution environments while remaining composable through on-chain anchors.
-- The Asset Exchange Toolkit (AXT) for atomic, cross-space value transfers and contract-controlled swaps.
-- Enhanced reliability through Reliable Broadcast Commit (RBC) lanes, deterministic deadlines, and proof
-  sampling budgets.
+- ነጠላ፣ በአለምአቀፍ ደረጃ የተጋራ አውታረ መረብ **SORA Nexus**። ሁሉም Iroha v3 እኩዮች በዚህ ሁለንተናዊ ውስጥ ይሳተፋሉ
+  የገለልተኛ ማሰማራትን ከማካሄድ ይልቅ ደብተር። ድርጅቶች የራሳቸውን የመረጃ ቦታ በመመዝገብ ይቀላቀላሉ፣
+  ወደ የጋራ መዝገብ ውስጥ በሚገቡበት ጊዜ ለፖሊሲ እና ለግላዊነት የተገለሉ ።
+- የጋራ ኮድ ቤዝ፡- ተመሳሳይ ማከማቻ ሁለቱንም Iroha v2 (በራስ የሚስተናገዱ አውታረ መረቦች) እና Iroha v3 (SORA Nexus) ይገነባል።
+  ኦፕሬተሮች ሶፍትዌርን ሳይቀይሩ የ Nexus ባህሪያትን እንዲቀበሉ ማዋቀር የዒላማ ሁነታን ይመርጣል
+  ቁልል. Iroha ቨርቹዋል ማሽን (IVM) በሁለቱም ልቀቶች ላይ ተመሳሳይ ነው፣ ስለዚህ Kotodama ኮንትራቶች እና ባይትኮድ
+  ቅርሶች በራስ በሚስተናገዱ ኔትወርኮች እና በአለምአቀፍ የNexus መዝገብ ላይ ያለምንም ችግር ይሰራሉ።
+- ባለብዙ መስመር የማገጃ ምርት በትይዩ ገለልተኛ የስራ ጫናዎችን ለማስኬድ።
+- በሰንሰለት መልህቆች በኩል ተቀናጅተው ሲቀሩ የማስፈጸሚያ አካባቢዎችን የሚለዩ የመረጃ ክፍተቶች (DS)።
+- የንብረት ልውውጥ መሣሪያ ስብስብ (AXT) ለአቶሚክ፣ ቦታ ተሻጋሪ እሴት ዝውውሮች እና በኮንትራት ቁጥጥር የሚደረግ ሽግግር።
+- በአስተማማኝ የብሮድካስት ኮሚቴ (RBC) መስመሮች፣ የሚወስን የግዜ ገደቦች እና ማረጋገጫ በኩል የተሻሻለ አስተማማኝነት
+  የናሙና በጀቶችን.
 
-These features remain under active development; APIs and layouts may evolve before the v3 general
-availability milestone. Refer to `nexus.md`, `nexus_transition_notes.md`, and `new_pipeline.md` for
-engineering-level detail.
+እነዚህ ባህሪያት በንቃት እድገት ውስጥ ይቆያሉ; APIs እና አቀማመጦች ከ v3 አጠቃላይ በፊት ሊሻሻሉ ይችላሉ።
+የተገኝነት ደረጃ. ለ `nexus.md`፣ `nexus_transition_notes.md` እና `new_pipeline.md` ይመልከቱ።
+የምህንድስና-ደረጃ ዝርዝር.
 
-## 2. Multi-lane architecture
+## 2. ባለብዙ መስመር አርክቴክቸር
 
-- **Scheduler:** The Nexus scheduler partitions work into lanes based on data space identifiers and
-  composability groups. Lanes execute in parallel while preserving deterministic ordering guarantees within
-  each lane.
-- **Lane groups:** Related data spaces share a `LaneGroupId`, enabling coordinated execution for workflows that
-  span multiple components (e.g., a CBDC DS and its payment dApp DS).
-- **Deadlines:** Each lane tracks deterministic deadlines (block, proof, data-availability) to guarantee
-  progress and bounded resource usage.
-- **Telemetry:** Lane-level metrics expose throughput, queue depth, deadline violations, and bandwidth usage.
-  CI scripts assert the presence of these counters to keep dashboards aligned with the scheduler.
+- ** መርሐግብር አውጪ፡** የNexus መርሐግብር ክፍልፍሎች በመረጃ ቦታ መለያዎች ላይ ተመስርተው ወደ መስመሮች ይሠራሉ።
+  የተዋሃዱ ቡድኖች. በውስጥም ወሳኙ የትዕዛዝ ዋስትናዎችን በመጠበቅ መስመሮች በትይዩ ይሰራሉ
+  እያንዳንዱ መስመር.
+- **የሌይን ቡድኖች፡** ተዛማጅ የመረጃ ቦታዎች `LaneGroupId` ይጋራሉ፣ ይህም ለሥራ ፍሰቶች የተቀናጀ አፈፃፀም እንዲኖር ያስችላል።
+  በርካታ ክፍሎችን (ለምሳሌ፣ ሲቢሲሲ ዲኤስ እና ክፍያ dApp DS) ይሸፍናል።
+- ** ቀነ-ገደቦች: *** እያንዳንዱ መስመር ዋስትና ለመስጠት የሚወስን የጊዜ ገደቦችን ይከታተላል (ማገድ ፣ ማረጋገጫ ፣ የውሂብ-ተገኝነት)
+  እድገት እና የተገደበ ሀብት አጠቃቀም.
+- **ቴሌሜትሪ፡** የሌይን-ደረጃ መለኪያዎች የውጤት መጠንን፣ የወረፋ ጥልቀትን፣ የጊዜ ገደብ ጥሰቶችን እና የመተላለፊያ ይዘት አጠቃቀምን ያጋልጣሉ።
+  የ CI ስክሪፕቶች ዳሽቦርዶች ከመርሐግብር አውጪው ጋር እንዲጣጣሙ ለማድረግ የእነዚህ ቆጣሪዎች መኖራቸውን ያረጋግጣሉ።
 
-## 3. Data spaces (Nexus)
+## 3. የውሂብ ክፍተቶች (Nexus)- ** ማግለል፡** እያንዳንዱ የመረጃ ቦታ የራሱን የጋራ ስምምነት መስመር፣ የዓለም ግዛት ክፍል እና የኩራ ማከማቻን ይጠብቃል። ይህ
+  ዓለም አቀፉን የSORA Nexus ደብተር በመልህቆች በኩል ወጥነት እንዲኖረው በማድረግ የግላዊነት ጎራዎችን ይደግፋል።
+- ** መልህቆች፡** መደበኛ ስራዎች የዲኤስን ሁኔታ የሚያጠቃልሉ መልህቅ ቅርሶችን ያመርታሉ (የመርክል ሥሮች፣ ማስረጃዎች፣
+  ቁርጠኝነት) እና ለኦዲትነት ወደ አለምአቀፍ መስመር ያትሟቸው።
+- **የሌይን ቡድኖች እና የመገጣጠም ችሎታ፡** የመረጃ ቦታዎች አቶሚክ AXTን የሚፈቅዱ የተዋሃዱ ቡድኖችን ሊያውጁ ይችላሉ።
+  በተፈቀደላቸው ተሳታፊዎች ላይ ግብይቶች. አስተዳደር የአባልነት ለውጦችን እና የነቃ ጊዜን ይቆጣጠራል።
+- ** በኮድ የተሰረዘ ማከማቻ፡** ኩራ እና WSV ቅጽበታዊ ገጽ እይታዎች መረጃን ለመለካት የመደምሰስ ኮድ መለኪያዎችን `(k, m)` ይጠቀማሉ።
+  ቆራጥነትን ሳይቆጥብ መገኘት. የማገገሚያ ልማዶች የጎደሉትን ቁርጥራጮች በቆራጥነት ወደነበሩበት ይመልሳሉ።
 
-- **Isolation:** Each data space maintains its own consensus lane, world state segment, and Kura storage. This
-  supports privacy domains while keeping the global SORA Nexus ledger coherent through anchors.
-- **Anchors:** Regular commits produce anchor artifacts that summarise the DS state (Merkle roots, proofs,
-  commitments) and publish them to the global lane for auditability.
-- **Lane groups and composability:** Data spaces may declare composability groups that permit atomic AXT
-  transactions across approved participants. Governance controls membership changes and activation epochs.
-- **Erasure-coded storage:** Kura and WSV snapshots adopt erasure coding parameters `(k, m)` to scale data
-  availability without sacrificing determinism. Recovery routines restore missing fragments deterministically.
+## 4. የንብረት ልውውጥ Toolkit (AXT)
 
-## 4. Asset Exchange Toolkit (AXT)
+- ** ገላጭ እና ማሰር፡** ደንበኞች ቆራጥ የAXT ገላጭዎችን ይገነባሉ። የ `axt_binding` ሃሽ መልህቆች
+  ለግል ኤንቨሎፕ ገላጭ፣ ድጋሚ መጫወትን መከላከል እና የጋራ መግባባት ተሳታፊዎች ባይት ለ-
+  ባይት Norito ጭነቶች.
+- ** ሲሳይክልስ፡** IVM `AXT_BEGIN`፣ `AXT_TOUCH`፣ እና `AXT_COMMIT` syscallsን ያጋልጣል። ኮንትራቶች መያዛቸውን ያሳያሉ
+  ስብስቦችን በየመረጃ ቦታ አንብብ/መፃፍ፣ ይህም አስተናጋጁ በየሌኖቹ ላይ ያለውን ጥፋት እንዲያስፈጽም ያስችለዋል።
+- ** እጀታዎች እና ዘመናት: *** የኪስ ቦርሳዎች ከ `(dataspace_id, epoch_id, sub_nonce)` ጋር የተቆራኙ የችሎታ እጀታዎችን ያገኛሉ።
+  ተጓዳኝ ግጭቶችን በቆራጥነት ይጠቀማል፣ ገደቦች ሲሆኑ ቀኖናዊ `AxtTrap` ኮዶችን ይመልሳል
+  ተጥሷል።
+- **የፖሊሲ ማስፈጸሚያ፡** ኮር አስተናጋጆች አሁን የAXT ፖሊሲ ቅጽበተ-ፎቶዎችን ከSpace Directory በWSV ውስጥ ያገኙታል።
+  አንጸባራቂ ስር፣ ዒላማ መስመር፣ ማግበር-ዘመን፣ ንዑስ-ኖንስ እና የአገልግሎት ጊዜው ያለፈበት ቼኮችን ማስፈጸም (`current_slot >= expiry_slot`
+  ውርጃዎች) በትንሹ የሙከራ አስተናጋጆች ውስጥ እንኳን. ፖሊሲዎች በዳታ ቦታ መታወቂያ የተከፈቱ እና ከሌይን ካታሎግ የተገነቡ ናቸው።
+  እጀታዎች ከሚያወጡት መስመር ማምለጥ አይችሉም ወይም የቆየ መግለጫዎችን መጠቀም አይችሉም።
+  - ውድቅ የተደረገባቸው ምክንያቶች ቆራጥ ናቸው፡ ያልታወቀ የውሂብ ቦታ፣ የስርወ አለመመጣጠን፣ የዒላማ መስመር አለመዛመድ፣
+    እጀታ_era ከአንጸባራቂ ማግበር በታች፣ ከመመሪያው ወለል በታች ንዑስ_ኖንስ፣ ጊዜው ያለፈበት እጀታ፣ ለንክኪ ጠፍቷል
+    መያዣው የውሂብ ቦታ ፣ ወይም አስፈላጊ ሆኖ ሲገኝ ማረጋገጫ ይጎድላል።
+- **ማስረጃዎች እና ቀነ-ገደቦች፡** በነቃ መስኮት Δ አረጋጋጮች ማስረጃዎችን ይሰበስባሉ፣ የውሂብ ተገኝነት ናሙናዎች፣
+  እና ይገለጣል. ቀነ-ገደቦችን ማሟላት አለመቻል ለደንበኛ ዳግም ሙከራዎች መመሪያ በመስጠት AXTን በቆራጥነት ያስወግዳል።
+- **የመንግስት ውህደት፡** የፖሊሲ ሞጁሎች የትኞቹ የመረጃ ቦታዎች በ AXT፣ ተመን-ገደብ ውስጥ መሳተፍ እንደሚችሉ ይገልፃሉ።
+  ቃል ኪዳኖችን፣ ውድቀቶችን እና የክስተት ምዝግብ ማስታወሻዎችን የሚይዝ ለኦዲተር ተስማሚ መግለጫዎችን ይይዛል እና ያትማል።
 
-- **Descriptor and binding:** Clients construct deterministic AXT descriptors. The `axt_binding` hash anchors
-  descriptors to individual envelopes, preventing replay and ensuring consensus participants validate byte-for-
-  byte Norito payloads.
-- **Syscalls:** The IVM exposes `AXT_BEGIN`, `AXT_TOUCH`, and `AXT_COMMIT` syscalls. Contracts declare their
-  read/write sets per data space, allowing the host to enforce atomicity across lanes.
-- **Handles and epochs:** Wallets obtain capability handles bound to `(dataspace_id, epoch_id, sub_nonce)`.
-  Concurrent uses conflict deterministically, returning canonical `AxtTrap` codes when constraints are
-  violated.
-- **Policy enforcement:** Core hosts now derive AXT policy snapshots from Space Directory manifests in WSV,
-  enforcing manifest root, target lane, activation-era, sub-nonce, and expiry checks (`current_slot >= expiry_slot`
-  aborts) even in minimal test hosts. Policies are keyed by dataspace id and built from the lane catalog so
-  handles cannot escape their issuing lane or use stale manifests.
-  - Rejection reasons are deterministic: unknown dataspace, manifest root mismatch, target lane mismatch,
-    handle_era below manifest activation, sub_nonce below the policy floor, expired handle, missing touch for
-    the handle dataspace, or missing proof when required.
-- **Proofs and deadlines:** During an active window Δ, validators collect proofs, data availability samples,
-  and manifests. Failure to meet deadlines aborts the AXT deterministically with guidance for client retries.
-- **Governance integration:** Policy modules define which data spaces can participate in AXT, rate-limit
-  handles, and publish auditor-friendly manifests capturing commitments, nullifiers, and event logs.
+## 5. አስተማማኝ የብሮድካስት ኮሚቴ (RBC) መስመሮች- ** ሌይን-ተኮር DA:** እያንዳንዱ ባለብዙ መስመር ቧንቧ መስመር የተለየ ውሂብ እንዳለው በማረጋገጥ የ RBC መስመሮች የመስታወት መስመር ቡድኖች
+  ተገኝነት ዋስትናዎች.
+- ** የናሙና በጀቶች፡** ማረጋገጫዎችን ለማረጋገጥ ቆራጥ የሆኑ ናሙና ደንቦችን (`q_in_slot_per_ds`) ይከተላሉ
+  እና የምሥክርነት ቁሳቁስ ያለ ማዕከላዊ ቅንጅት.
+- **የኋላ ግፊት ግንዛቤዎች፡** Sumeragi የልብ ምት ሰሪ ክስተቶች የቆሙትን መስመሮችን ለመመርመር ከRBC ስታቲስቲክስ ጋር ይዛመዳሉ።
+  (`scripts/sumeragi_backpressure_log_scraper.py` ይመልከቱ)።
 
-## 5. Reliable Broadcast Commit (RBC) lanes
+## 6. ኦፕሬሽንስ እና ፍልሰት
 
-- **Lane-specific DA:** RBC lanes mirror lane groups, ensuring each multi-lane pipeline has dedicated data
-  availability guarantees.
-- **Sampling budgets:** Validators follow deterministic sampling rules (`q_in_slot_per_ds`) to validate proofs
-  and witness material without central coordination.
-- **Backpressure insights:** Sumeragi pacemaker events correlate with RBC statistics to diagnose stalled lanes
-  (see `scripts/sumeragi_backpressure_log_scraper.py`).
+- **የሽግግር እቅድ፡** `nexus_transition_notes.md` ደረጃውን የጠበቀ ፍልሰት ከአንድ መስመር (Iroha v2) ይዘረዝራል።
+  ባለብዙ መስመር (Iroha v3)፣ የቴሌሜትሪ ስቴጅንግ፣ ኮንግንግ ጋቲንግ እና የዘፍጥረት ዝመናዎችን ጨምሮ።
+- ** ሁለንተናዊ አውታረ መረብ: *** SORA Nexus እኩዮች የጋራ ዘፍጥረት እና የአስተዳደር ቁልል ያካሂዳሉ። አዲስ ኦፕሬተሮች በቦርዱ ላይ
+  የውሂብ ቦታ (DS) መፍጠር እና የ Nexus የመግቢያ ፖሊሲዎችን ገለልተኛ አውታረ መረቦችን ከመጀመር ይልቅ ማርካት።
+- ** ውቅር፡** አዲስ የማዋቀር ቁልፎች የመንገድ በጀቶችን፣ የማረጋገጫ ቀነ-ገደቦችን፣ AXT ኮታዎችን እና የውሂብ-ቦታ ዲበ ውሂብን ይሸፍናሉ።
+  ኦፕሬተሮች ወደ Nexus ሁነታ እስኪመርጡ ድረስ ነባሪዎች ወግ አጥባቂ ሆነው ይቆያሉ።
+- **ሙከራ፡** ወርቃማ ሙከራዎች የ AXT ገላጭዎችን፣ የሌይን መግለጫዎችን እና የሳይካል ዝርዝሮችን ይይዛሉ። የውህደት ሙከራዎች
+  (`integration_tests/tests/repo.rs`፣ `crates/ivm/tests/axt_host_flow.rs`) የአካል ብቃት እንቅስቃሴ ከጫፍ እስከ ጫፍ ፍሰቶችን።
+- ** መሳሪያ ማድረግ፡** `kagami` Nexus-አዋቂ ዘፍጥረት ማመንጨትን አግኝቷል፣ እና የዳሽቦርድ ስክሪፕቶች የሌይን ፍሰትን ያረጋግጣሉ፣
+  ማረጋገጫ በጀቶች, እና RBC ጤና.
 
-## 6. Operations and migration
+## 7. የመንገድ ካርታ
 
-- **Transition plan:** `nexus_transition_notes.md` outlines phased migration from single-lane (Iroha v2) to
-  multi-lane (Iroha v3), including telemetry staging, config gating, and genesis updates.
-- **Universal network:** SORA Nexus peers run a common genesis and governance stack. New operators onboard by
-  creating a data space (DS) and satisfying Nexus admission policies instead of launching standalone networks.
-- **Configuration:** New config knobs cover lane budgets, proof deadlines, AXT quotas, and data-space metadata.
-  Defaults remain conservative until operators opt into Nexus mode.
-- **Testing:** Golden tests capture AXT descriptors, lane manifests, and syscall lists. Integration tests
-  (`integration_tests/tests/repo.rs`, `crates/ivm/tests/axt_host_flow.rs`) exercise end-to-end flows.
-- **Tooling:** `kagami` gains Nexus-aware genesis generation, and dashboard scripts validate lane throughput,
-  proof budgets, and RBC health.
+- **ደረጃ 1:** ነጠላ-ጎራ ባለብዙ መስመር አፈጻጸምን በአካባቢያዊ AXT ድጋፍ እና ኦዲት ያንቁ።
+- **ደረጃ 2:** ለተፈቀዱ የጎራ አቋራጭ AXT የተዋሃዱ ቡድኖችን ያግብሩ እና የቴሌሜትሪ ሽፋንን ያስፋፉ።
+- **ደረጃ 3:** ሙሉ የNexus ዳታ-ክፍተት ፌደሬሽን፣ የተሰረዘ ኮድ ማከማቻ እና የላቀ የማረጋገጫ መጋራት ይልቀቁ።
 
-## 7. Roadmap
-
-- **Phase 1:** Enable single-domain multi-lane execution with local AXT support and auditing.
-- **Phase 2:** Activate composability groups for permissioned cross-domain AXT and expand telemetry coverage.
-- **Phase 3:** Roll out full Nexus data-space federation, erasure-coded storage, and advanced proof sharing.
-
-Status updates live in `roadmap.md` and `status.md`. Contributions aligning with the Nexus design should follow
-the deterministic execution and governance policies established for v3.
+የሁኔታ ዝማኔዎች በ`roadmap.md` እና `status.md` ውስጥ ይኖራሉ። ከNexus ንድፍ ጋር የሚጣጣሙ አስተዋፆዎች መከተል አለባቸው
+ለ v3 የተቋቋመው የመወሰን አፈጻጸም እና የአስተዳደር ፖሊሲዎች.

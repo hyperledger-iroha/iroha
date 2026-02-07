@@ -7,82 +7,79 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 097ea58d49f48d059cda762cd719bc62f0b2d6f6ddecedef3f9bac030ae46aec
 source_last_modified: "2025-12-29T18:16:35.934098+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-#! Connect Architecture Feedback Checklist
+#！连接架构反馈清单
 
-This checklist captures the open questions from the Connect Session Architecture
-strawman that require input from the Android and JavaScript leads before the
-Feb 2026 cross-SDK workshop. Use it to collect comments asynchronously, track
-ownership, and unblock the workshop agenda.
+此清单捕获了 Connect 会话架构中的未决问题
+需要来自 Android 和 JavaScript 的输入的稻草人
+2026 年 2 月跨 SDK 研讨会。用它来异步收集评论，跟踪
+所有权，并畅通研讨会议程。
 
-> Status / Notes column captured final responses from Android and JS leads as of
-> the Feb 2026 pre-workshop sync; link new follow-up issues inline if decisions
-> evolve.
+> 状态/备注栏捕获了 Android 和 JS 线索的最终回复
+> 2026 年 2 月研讨会前同步；如果决策内联新的后续问题
+> 进化。
 
-## Session Lifecycle & Transport
+## 会话生命周期和传输
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| WebSocket reconnect back-off strategy (exponential vs. capped linear) | Android Networking TL | JS Lead | ✅ Agreed on exponential back-off with jitter, capped at 60 s; JS mirrors same constants for browser/node parity. |
-| Offline buffer capacity defaults (current strawman: 32 frames) | Android Networking TL | JS Lead | ✅ Confirmed 32-frame default with config override; Android persists via `ConnectQueueConfig`, JS respects `window.connectQueueMax`. |
-| Push-style reconnect notifications (FCM/APNS vs. polling) | Android Networking TL | JS Lead | ✅ Android will expose optional FCM hook for wallet apps; JS remains polling-based with exponential back-off, noting browser push constraints. |
-| Ping/pong cadence guardrails for mobile clients | Android Networking TL | JS Lead | ✅ Standardised 30 s ping with 3× miss tolerance; Android balances Doze impact, JS clamps to ≥15 s to avoid browser throttling. |
+|主题 |安卓机主 | JS 所有者 |状态/注释|
+|--------|-------------|----------|----------------|
+| WebSocket 重新连接退避策略（指数与上限线性）| Android 网络 TL | JS 主管 | ✅ 同意带抖动的指数退避，上限为 60 秒； JS 镜像了浏览器/节点奇偶校验的相同常量。 |
+|离线缓冲区容量默认值（当前稻草人：32 帧）| Android 网络 TL | JS 主管 | ✅ 确认 32 帧默认值并覆盖配置； Android 通过 `ConnectQueueConfig` 持久化，JS 尊重 `window.connectQueueMax`。 |
+|推送式重新连接通知（FCM/APNS 与轮询）| Android 网络 TL | JS 主管 | ✅ Android 将为钱包应用程序公开可选的 FCM 挂钩； JS 仍然基于轮询，具有指数退避，并注意浏览器推送限制。 |
+|适用于移动客户端的乒乓球节奏护栏 | Android 网络 TL | JS 主管 | ✅ 标准化 30 秒 ping，具有 3 倍失误容忍度； Android平衡Doze影响，JS钳位到≥15s以避免浏览器限流。 |
 
-## Encryption & Key Management
+## 加密和密钥管理
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| X25519 key storage expectations (StrongBox, WebCrypto secure contexts) | Android Crypto TL | JS Lead | ✅ Android stores X25519 in StrongBox when available (falls back to TEE); JS mandates secure-context WebCrypto for dApps, falling back to the native `iroha_js_host` bridge in Node. |
-| ChaCha20-Poly1305 nonce management sharing across SDKs | Android Crypto TL | JS Lead | ✅ Adopt shared `sequence` counter API with 64-bit wrap guard and shared tests; JS uses BigInt counters to match Rust behaviour. |
-| Hardware-backed attestation payload schema | Android Crypto TL | JS Lead | ✅ Schema finalised: `attestation { platform, evidence_b64, statement_hash }`; JS optional (browser), Node uses HSM plug-in hook. |
-| Recovery flow for lost wallets (key rotation handshake) | Android Crypto TL | JS Lead | ✅ Wallet rotation handshake accepted: dApp issues `rotate` control, wallet replies with new pubkey + signed acknowledgment; JS re-keys WebCrypto material immediately. |
+|主题 |安卓机主 | JS 所有者 |状态/注释|
+|--------|-------------|----------|----------------|
+| X25519 关键存储期望（StrongBox、WebCrypto 安全上下文）| Android 加密 TL | JS 主管 | ✅ Android 在可用时将 X25519 存储在 StrongBox 中（回退到 TEE）； JS 要求 dApp 使用安全上下文 WebCrypto，回退到 Node.js 中的本机 `iroha_js_host` 桥。 |
+| ChaCha20-Poly1305 跨 SDK 共享随机数管理 | Android 加密 TL | JS 主管 | ✅ 采用共享 `sequence` 计数器 API，具有 64 位包装防护和共享测试； JS 使用 BigInt 计数器来匹配 Rust 行为。 |
+|硬件支持的证明负载架构 | Android 加密 TL | JS 主管 | ✅ 架构最终确定：`attestation { platform, evidence_b64, statement_hash }`； JS可选（浏览器），Node使用HSM插件钩子。 |
+|丢失钱包的恢复流程（密钥轮换握手）| Android 加密 TL | JS 主管 | ✅ 接受钱包轮换握手：dApp 发出 `rotate` 控制权，钱包回复新的公钥 + 签名确认； JS 立即重新加密 WebCrypto 材料。 |
 
-## Permissions & Proof Bundles
+## 权限和证明包|主题 |安卓机主 | JS 所有者 |状态/注释|
+|--------|-------------|----------|----------------|
+| GA 的最低权限架构（方法/事件/资源）| Android 数据模型 TL | JS 主管 | ✅ GA基线：`methods`、`events`、`resources`、`constraints`； JS 将 TypeScript 类型与 Rust 清单保持一致。 |
+|钱包拒绝负载（`reason_code`，本地化消息）| Android 网络 TL | JS 主管 | ✅ 代码最终确定（`user_declined`、`permissions_mismatch`、`compliance_failed`、`internal_error`）以及可选的 `localized_message`。 |
+|证明包可选字段（合规性/KYC 附件）| Android 数据模型 TL | JS 主管 | ✅ 所有 SDK 均接受可选的 `attachments[]` (Norito `AttachmentRef`) 和 `compliance_manifest_id`；无需改变行为。 |
+| Norito JSON 模式与桥生成的结构的对齐 | Android 数据模型 TL | JS 主管 | ✅ 决策：更喜欢桥生成的结构； JSON 路径保留仅用于调试，JS 保留 `Value` 适配器。 |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Minimum permission schema (methods/events/resources) for GA | Android Data Model TL | JS Lead | ✅ GA baseline: `methods`, `events`, `resources`, `constraints`; JS aligns TypeScript types with Rust manifest. |
-| Wallet rejection payload (`reason_code`, localized messages) | Android Networking TL | JS Lead | ✅ Codes finalised (`user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`) plus optional `localized_message`. |
-| Proof bundle optional fields (compliance/KYC attachments) | Android Data Model TL | JS Lead | ✅ All SDKs accept optional `attachments[]` (Norito `AttachmentRef`) and `compliance_manifest_id`; no behaviour change required. |
-| Alignment on Norito JSON schema vs. bridge-generated structs | Android Data Model TL | JS Lead | ✅ Decision: prefer bridge-generated structs; JSON path remains for debugging only, JS keeps `Value` adapter. |
+## SDK 外观和 API 形状
 
-## SDK Facades & API Shape
+|主题 |安卓机主 | JS 所有者 |状态/注释|
+|--------|-------------|----------|----------------|
+|高级异步接口（`Flow`，异步迭代器）奇偶校验 | Android 网络 TL | JS 主管 | ✅ Android 暴露 `Flow<ConnectEvent>`； JS使用`AsyncIterable<ConnectEvent>`；两者都映射到共享 `ConnectEventKind`。 |
+|错误分类映射（`ConnectError`，类型化子类）| Android 网络 TL | JS 主管 | ✅ 采用共享枚举 {`Transport`、`Codec`、`Authorization`、`Timeout`、`QueueOverflow`、`Internal`} 以及特定于平台的负载详细信息。 |
+|飞行中标志请求的取消语义 | Android 网络 TL | JS 主管 | ✅ 引入`cancelRequest(hash)`控件；这两个 SDK 都提供了尊重钱包确认的可取消协程/承诺。 |
+|共享遥测挂钩（事件、指标命名）| Android 网络 TL | JS 主管 | ✅ 对齐的指标名称：`connect.queue_depth`、`connect.latency_ms`、`connect.reconnects_total`；记录了样本出口商。 |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| High-level async interfaces (`Flow`, async iterators) parity | Android Networking TL | JS Lead | ✅ Android exposes `Flow<ConnectEvent>`; JS uses `AsyncIterable<ConnectEvent>`; both map to shared `ConnectEventKind`. |
-| Error taxonomy mapping (`ConnectError`, typed subclasses) | Android Networking TL | JS Lead | ✅ Adopt shared enum {`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`} with platform-specific payload details. |
-| Cancellation semantics for in-flight sign requests | Android Networking TL | JS Lead | ✅ Introduced `cancelRequest(hash)` control; both SDKs surface cancellable coroutines/promises respecting wallet acknowledgment. |
-| Shared telemetry hooks (events, metrics naming) | Android Networking TL | JS Lead | ✅ Metric names aligned: `connect.queue_depth`, `connect.latency_ms`, `connect.reconnects_total`; sample exporters documented. |
+## 离线持久化和日志记录
 
-## Offline Persistence & Journaling
+|主题 |安卓机主 | JS 所有者 |状态/注释|
+|--------|-------------|----------|----------------|
+|排队帧的存储格式（二进制 Norito 与 JSON）| Android 数据模型 TL | JS 主管 | ✅ 到处存储二进制 Norito (`.to`)； JS 使用 IndexedDB `ArrayBuffer`。 |
+|期刊保留政策和大小上限 | Android 网络 TL | JS 主管 | ✅ 默认保留 24 小时，每次会话 1MiB；可通过 `ConnectQueueConfig` 进行配置。 |
+|双方重播帧时的冲突解决 | Android 网络 TL | JS 主管 | ✅ 使用 `sequence` + `payload_hash`；忽略重复项，与遥测事件冲突触发 `ConnectError.Internal`。 |
+|队列深度和重放成功的遥测 | Android 网络 TL | JS 主管 | ✅ 发出 `connect.queue_depth` 仪表和 `connect.replay_success_total` 计数器；两个 SDK 都连接到共享的 Norito 遥测模式。 |
 
-| Topic | Android owner | JS owner | Status / Notes |
-|-------|---------------|----------|----------------|
-| Storage format for queued frames (binary Norito vs. JSON) | Android Data Model TL | JS Lead | ✅ Store binary Norito (`.to`) everywhere; JS uses IndexedDB `ArrayBuffer`. |
-| Journal retention policy & size caps | Android Networking TL | JS Lead | ✅ Default retention 24 h and 1 MiB per session; configurable via `ConnectQueueConfig`. |
-| Conflict resolution when both sides replay frames | Android Networking TL | JS Lead | ✅ Use `sequence` + `payload_hash`; duplicates ignored, conflicts trigger `ConnectError.Internal` with telemetry event. |
-| Telemetry for queue depth and replay success | Android Networking TL | JS Lead | ✅ Emit `connect.queue_depth` gauge and `connect.replay_success_total` counter; both SDKs hook into shared Norito telemetry schema. |
+## 实施峰值和参考- **Rust 桥接装置：** `crates/connect_norito_bridge/src/lib.rs` 和相关测试涵盖每个 SDK 使用的规范编码/解码路径。
+- **Swift 演示工具：** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` 练习将会话流与模拟传输连接起来。
+- **Swift CI 门控：** 在更新 Connect 工件时运行 `make swift-ci`，以在与其他 SDK 共享之前验证夹具奇偶校验、仪表板源和 Buildkite `ci/xcframework-smoke:<lane>:device_tag` 元数据。
+- **JavaScript SDK 集成测试：** `javascript/iroha_js/test/integrationTorii.test.js` 根据 Torii 验证连接状态/会话帮助程序。
+- **Android 客户端弹性注释：** `java/iroha_android/README.md:150` 记录了激发队列/回退默认值的当前连接实验。
 
-## Implementation Spikes & References
+## 研讨会准备物品
 
-- **Rust bridge fixtures:** `crates/connect_norito_bridge/src/lib.rs` and associated tests cover the canonical encode/decode paths used by every SDK.
-- **Swift demo harness:** `examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests/ConnectViewModelTests.swift` exercises Connect session flows with mocked transports.
-- **Swift CI gating:** run `make swift-ci` when updating Connect artifacts to validate fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata before sharing with other SDKs.
-- **JavaScript SDK integration tests:** `javascript/iroha_js/test/integrationTorii.test.js` validate Connect status/session helpers against Torii.
-- **Android client resilience notes:** `java/iroha_android/README.md:150` documents the current connectivity experiments that inspired the queue/back-off defaults.
+- [x] Android：为上面的每个表格行分配重点人员。
+- [x] JS：为上面的每个表格行指定负责人。
+- [x] 收集现有实施峰值或实验的链接。
+- [x] 在 2026 年 2 月理事会之前安排工作前审查（与 Android TL、JS Lead、Swift Lead 于 2026 年 1 月 29 日 15:00 UTC 预订）。
+- [x] 使用已接受的答案更新 `docs/source/connect_architecture_strawman.md`。
 
-## Workshop Prep Items
+## 预读包
 
-- [x] Android: assign point person for each table row above.
-- [x] JS: assign point person for each table row above.
-- [x] Collect links to existing implementation spikes or experiments.
-- [x] Schedule pre-work review before Feb 2026 council (Booked for 2026-01-29 15:00 UTC with Android TL, JS Lead, Swift Lead).
-- [x] Update `docs/source/connect_architecture_strawman.md` with accepted answers.
-
-## Pre-read Package
-
-- ✅ Bundle recorded under `artifacts/connect/pre-read/20260129/` (generated via `make docs-html` after refreshing the strawman, SDK guides, and this checklist).
-- 📄 Summary + distribution steps live in `docs/source/project_tracker/connect_architecture_pre_read.md`; include the link in the Feb 2026 workshop invite and in the `#sdk-council` reminder.
-- 🔁 When refreshing the bundle, update the path and hash inside the pre-read note and archive the announcement in `status.md` under the IOS7/AND7 readiness logs.
+- ✅ 记录在 `artifacts/connect/pre-read/20260129/` 下的捆绑包（刷新稻草人、SDK 指南和此清单后通过 `make docs-html` 生成）。
+- 📄 总结 + 分发步骤位于 `docs/source/project_tracker/connect_architecture_pre_read.md` 中；将该链接包含在 2026 年 2 月研讨会邀请和 `#sdk-council` 提醒中。
+- 🔁 刷新捆绑包时，更新预读注释中的路径和哈希，并将公告存档在 IOS7/AND7 就绪日志下的 `status.md` 中。

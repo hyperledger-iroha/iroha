@@ -6,16 +6,17 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: ce2f95b8b287c18c39232418333fbefdd300c030391be9dbfa4e29a3fd5f3e14
 source_last_modified: "2026-01-03T18:07:57.109606+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Notes on verifying SM2 Annex D vectors using RustCrypto crates.
+//! Примечания по проверке векторов SM2 Приложение D с использованием крейтов RustCrypto.
 
-# SM2 Annex D Vector Verification (RustCrypto)
+# SM2 Приложение D Векторная проверка (RustCrypto)
 
-This walkthrough captures the steps we used to validate (and debug) the GM/T 0003 Annex D example with RustCrypto’s `sm2` crate. The canonical Annex Example 1 data (identity `ALICE123@YAHOO.COM`, message `"message digest"`, and the published `(r, s)`) is now recorded in `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`. OpenSSL/Tongsuo/gmssl happily verify the signature (see `sm_vectors.md`), but RustCrypto’s `sm2 v0.13.3` still rejects the point with `signature::Error`, so CLI parity is confirmed while the Rust harness remains pending an upstream fix.
+В этом пошаговом руководстве описаны шаги, которые мы использовали для проверки (и отладки) примера GM/T 0003 Приложение D с использованием крейта RustCrypto `sm2`. Канонические данные примера 1 приложения (идентификатор `ALICE123@YAHOO.COM`, сообщение `"message digest"` и опубликованное `(r, s)`) теперь записываются в `crates/iroha_crypto/tests/fixtures/sm_known_answers.toml`. OpenSSL/Tongsuo/gmssl с радостью проверяет подпись (см. `sm_vectors.md`), но `sm2 v0.13.3` RustCrypto по-прежнему отклоняет точку с `signature::Error`, поэтому четность CLI подтверждена, в то время как жгут Rust остается в ожидании исправления восходящего потока.
 
-## Temporary crate
+## Временный ящик
 
 ```bash
 cargo new /tmp/sm2_verify --bin
@@ -64,14 +65,14 @@ fn main() {
 }
 ```
 
-## Findings
+## Выводы
 
-- Verifying against the canonical Annex Example 1 `(r, s)` currently fails because `sm2::VerifyingKey::from_sec1_bytes` returns `signature::Error`; track upstream/root cause (likely due to curve-parameter mismatch in the crate’s current release).
-- The harness compiles cleanly with `sm2 v0.13.3` and will become an automated regression test once RustCrypto (or a patched fork) accepts the Annex Example 1 point/signature pair.
-- OpenSSL/Tongsuo/gmssl verification succeeds with the commands in `sm_vectors.md`; LibreSSL (macOS default) still lacks SM2/SM3 support, hence the local gap.
+- Проверка на соответствие каноническому примеру 1 приложения 1 `(r, s)` в настоящее время завершается неудачей, поскольку `sm2::VerifyingKey::from_sec1_bytes` возвращает `signature::Error`; отслеживать исходную/основную причину (вероятно, из-за несоответствия параметров кривой в текущей версии крейта).
+- Пакет компилируется без ошибок с помощью `sm2 v0.13.3` и станет автоматическим регрессионным тестом, как только RustCrypto (или исправленная вилка) примет пару точка/сигнатура из примера 1 приложения.
+- Проверка OpenSSL/Tongsuo/gmssl прошла успешно с помощью команд `sm_vectors.md`; В LibreSSL (по умолчанию для macOS) по-прежнему отсутствует поддержка SM2/SM3, отсюда и локальный пробел.
 
-## Next steps
+## Следующие шаги
 
-1. Re-test once `sm2` exposes an API that accepts the Annex Example 1 point (or after upstream confirms the curve parameters) so the harness can pass locally.
-2. Keep a CLI sanity check (OpenSSL/Tongsuo/gmssl) in CI pipelines to guard the canonical Annex Example until the RustCrypto fix lands.
-3. Promote the harness into Iroha’s regression suite after both RustCrypto and OpenSSL parity checks succeed.
+1. Повторите тестирование, как только `sm2` предоставит API, который принимает точку примера 1 приложения (или после того, как восходящий поток подтвердит параметры кривой), чтобы жгут проводов мог проходить локально.
+2. Поддерживайте проверку работоспособности CLI (OpenSSL/Tongsuo/gmssl) в конвейерах CI, чтобы защитить канонический пример приложения до тех пор, пока не появится исправление RustCrypto.
+3. Добавьте этот жгут в пакет регрессии Iroha после того, как проверки четности RustCrypto и OpenSSL пройдут успешно.

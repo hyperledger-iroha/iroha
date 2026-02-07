@@ -7,49 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c389a2121f577bcf8893a0d5c0b898ec2ff5330f2f1727de3387da98f8369915
 source_last_modified: "2025-12-29T18:16:35.904297+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Try It sandbox
+# དཔྱད་གཞིའི་བྱེམ་སྒམ་།
 
-The developer portal ships an optional “Try it” console so you can call Torii
-endpoints without leaving the documentation. The console relays requests
-through the bundled proxy so browsers can bypass CORS limits while still
-enforcing rate limits and authentication.
+གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་འདི་གིས་ གདམ་ཁ་ཅན་གྱི་ “Try it” ཀོན་སོལ་ཅིག་ བཏངམ་ཨིན།
+ཡིག་ཆ་བཞག་མ་བཞག་པར་མཐའ་ཐིག་ཚུ། ཀོན་སོལ་ བརྒྱུད་འཕྲིན་གྱི་ཞུ་བ་ཚུ།
+བརྡ་འཚོལ་ཚུ་གིས་ CORS གི་ཚད་གཞི་ཚུ་ བརྒལ་ཚུགས་པའི་སྐབས་ བརྡ་འཚོལ་གྱི་ ངོ་ཚབ་བརྒྱུད་དེ་ཨིན།
+ཚད་གཞི་ཚད་གཞི་དང་བདེན་བཤད་བསྟར་སྤྱོད་འབད་ནི།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Node.js 18.18 or newer (matches the portal build requirements)
-- Network access to a Torii staging environment
-- A bearer token that can call the Torii routes you plan to exercise
+- Node.js 18.18 ཡང་ན་ གསརཔ་ (ཡོངས་འབྲེལ་གྱི་དགོས་མཁོ་ཚུ་དང་མཐུན་སྒྲིག་འབད།)
+- Torii མཐའ་འཁོར་གནས་སྟངས་ལུ་ཡོངས་འབྲེལ་འཛུལ་སྤྱོད་འབད་ནི།
+- ཁྱོད་ཀྱིས་ལག་ལེན་འཐབ་ནིའི་འཆར་གཞི་ཡོད་མི་ Torii གི་འགྲུལ་ལམ་ཟེར་སླབ་ཚུགས་པའི་ bearer token ཅིག།
 
-All proxy configuration is done through environment variables. The table below
-lists the most important knobs:
+པོརོག་སི་རིམ་སྒྲིག་ཆ་མཉམ་མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་བརྒྱུད་དེ་འབདཝ་ཨིན། འོག་གི་ཐིག་ཁྲམ་
+གལ་ཆེ་ཤོས་ཀྱི་ མཛུབ་མོ་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
 
-| Variable | Purpose | Default |
+| འགྱུར་ཅན་ | དམིགས་ཡུལ། | སྔོན་སྒྲིག་ |
 | --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | Base Torii URL that the proxy forwards requests to | **Required** |
-| `TRYIT_PROXY_LISTEN` | Listen address for local development (format `host:port` or `[ipv6]:port`) | `127.0.0.1:8787` |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins that may call the proxy | `http://localhost:3000` |
-| `TRYIT_PROXY_BEARER` | Default bearer token forwarded to Torii | _empty_ |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Allow end users to supply their own token via `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request body size (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout in milliseconds | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | Requests allowed per rate window per client IP | `60` |
-| `TRYIT_PROXY_RATE_WINDOW_MS` | Sliding window for rate limiting (ms) | `60000` |
+| `TRYIT_PROXY_TARGET` | གཞི་རྟེན་ Torii URL པོརོ་སི་གདོང་ཕྱོགས་ཚུ་གིས་ ཞུ་བ་འབདཝ་ཨིན། | *དགོས་མཁོ།** |
+| `TRYIT_PROXY_LISTEN` | ས་གནས་གོང་འཕེལ་གྱི་དོན་ལུ་ཁ་བྱང་ཉན་ (རྩ་སྒྲིག་ `host:port` ཡང་ན་ `[ipv6]:port`) | `127.0.0.1:8787` |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | ངོ་ཚབ་ཟེར་སླབ་མི་ འབྱུང་ཁུངས་ཐོ་ཡིག་ | `http://localhost:3000` |
+| `TRYIT_PROXY_BEARER` | སྔོན་སྒྲིག་འབག་མི་ཊོ་ཀེན་འདི་ Torii ལུ་སྤོ་བཤུད་འབདཝ་ཨིན། | _སྟོང་པ་_ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | མཐའ་མཇུག་ལག་ལེན་པ་ཚུ་གིས་ `X-TryIt-Auth` བརྒྱུད་དེ་ རང་སོའི་རྟགས་མཚན་བཀྲམ་སྤེལ་འབད་བཅུག། | `0` |
+| `TRYIT_PROXY_MAX_BODY` | མཐོ་ཤོས་ཞུ་བ་གཟུགས་ཚད་ (bytes) | `1048576` |
+| `TRYIT_PROXY_TIMEOUT_MS` | མི་ལི་སྐར་ཆ་ནང་ ཡར་འཕེལ་གྱི་དུས་ཚོད་བཏོན་ནི། | `10000` |
+| `TRYIT_PROXY_RATE_LIMIT` | མཁོ་སྤྲོད་པ་རེ་ལུ་ ཆོག་ཐམ་བྱིན་ཆོག་པའི་ཞུ་བ་ཚུ་ IP | `60` |
+| `TRYIT_PROXY_RATE_WINDOW_MS` | ཚད་གཞི་ (ms) གི་དོན་ལུ་ བཤུད་སྒོ་སྒྲིག་ (ms) | `60000` |
 
-The proxy also exposes `GET /healthz`, returns structured JSON errors, and
-redacts bearer tokens from log output.
+ངོ་ཚབ་འདི་གིས་ `GET /healthz` གིས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ JSON འཛོལ་བ་ཚུ་སླར་ལོག་འབདཝ་ཨིནམ་དང་ དེ་ལས་ དང་ དེ་ལས་ གསལ་སྟོན་འབདཝ་ཨིན།
+དྲན་ཐོ་ཨའུཊི་པུཊི་ལས་ རྡུལ་ཕྲན་བེ་ཊོ་ཀེན་ཚུ།
 
-## Start the proxy locally
+## ས་གནས་ནང་ ངོ་ཚབ་འགོ་བཙུགས།
 
-Install dependencies the first time you set up the portal:
+ཁྱོད་ཀྱིས་ དྲྭ་ཚིགས་འདི་གཞི་སྒྲིག་འབད་བའི་སྐབས་ བརྟེན་པ་གཞི་བཙུགས་འབད་ནི།
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-Run the proxy and point it at your Torii instance:
+ངོ་ཚབ་འདི་གཡོག་བཀོལ་ཞིནམ་ལས་ ཁྱོད་རའི་ Torii གི་དཔེ་ལུ་སྟོན་དགོ།
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -59,13 +60,13 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-The script logs the bound address and forwards requests from `/proxy/*` to the
-configured Torii origin.
+ཡིག་ཚུགས་འདི་གིས་ མཐའ་མཚམས་ཁ་བྱང་དང་ གདོང་ཕྱོགས་ཀྱི་ཞུ་བ་ཚུ་ `/proxy/*` ལས་ ནང་བསྐྱོད་འབདཝ་ཨིན།
+རིམ་སྒྲིག་འབད་ཡོད་པའི་ Torii འབྱུང་ཁུངས་།
 
-## Wire the portal widgets
+## དྲྭ་ཐག་ཝིཌི་གེཊསི།
 
-When you build or serve the developer portal, set the URL that the widgets
-should use for the proxy:
+ཁྱོད་ཀྱིས་ གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་འདི་ བཟོ་བསྐྲུན་ ཡང་ན་ ཕྱག་ཞུ་བའི་སྐབས་ ཝིཌི་གེཊི་ཚུ་ལུ་ ཡུ་ཨར་ཨེལ་ གཞི་སྒྲིག་འབད།
+པོརོག་སི་གི་དོན་ལུ་ལག་ལེན་འཐབ་དགོཔ་::
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -73,29 +74,27 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-The following components read these values from `docusaurus.config.js`:
+འོག་གི་ཆ་ཤས་ཚུ་གིས་ `docusaurus.config.js` ལས་ གནས་གོང་འདི་ཚུ་ལྷག་ཡོདཔ་ཨིན།
 
-- **Swagger UI** — rendered at `/reference/torii-swagger`; uses a request
-  interceptor to attach bearer tokens automatically.
-- **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field
-  and supports try-it requests against the proxy.
-- **Try it console** — embedded on the API overview page; lets you send custom
-  requests, view headers, and inspect response bodies.
+- **Swagger UI*** — `/reference/torii-swagger` ལུ་བཏོནམ་ཨིན། ཞུ་བ་ཅིག་ལག་ལེན་འཐབ་ཨིན།
+  བེ་རི་སི་ཊར་ལུ་ བེ་ར་ཊོ་ཀེན་ཚུ་ རང་བཞིན་གྱིས་ མཉམ་སྦྲགས་འབདཝ་ཨིན།
+- **RapiDoc** — `/reference/torii-rapidoc` ལུ་བཀོད་ཡོདཔ། མེ་ལོང་གིས་ ཊོ་ཀན་གྱི་ས་སྒོ།
+  དང་ ངོ་ཚབ་ལུ་ འབད་རྩོལ་བསྐྱེད་མི་ ཞུ་བ་ཚུ་ལུ་ རྒྱབ་སྐྱོར་འབདཝ་ཨིན།
+- **དེ་ མཉམ་བསྡོམས་** — ཨེ་པི་ཨའི་ སྤྱི་མཐོང་ཤོག་ལེབ་གུ་བཙུགས་ཡོདཔ་ཨིན། ཁྱོད་ཀྱིས་ སྲོལ་སྒྲིག་གཏངམ་ཨིན།
+  ཞུ་བ་དང་ མགོ་ཡིག་བལྟ་ནི་ དེ་ལས་ ལན་འདེབས་ཚོགས་སྡེ་ཚུ་ བརྟག་དཔྱད་འབད།
 
-Changing the token in any widget only affects the current browser session; the
-proxy never persists or logs the supplied token.
+ཝིཌི་གེཊི་གང་རུང་ཅིག་ནང་ ཊོ་ཀེན་འདི་བསྒྱུར་བཅོས་འབད་མི་འདི་གིས་ ད་ལྟོའི་བརྡ་འཚོལ་ལཱ་ཡུན་ལུ་རྐྱངམ་ཅིག་ ཕན་གནོད་ཡོདཔ་ཨིན། ཚིག༌ཕྲད
+པོརོག་སི་ནམ་ཡང་མ་གནས་པ་ ཡང་ན་ བཀྲམ་སྤེལ་འབད་ཡོད་པའི་བརྡ་མཚོན་འདི་ དྲན་ཐོ་བཀོད།
 
-## Observability & operations
+## བལྟ་རྟོག་དང་བཀོལ་སྤྱོད།
 
-Every request is logged once with method, path, origin, upstream status, and the
-authentication source (`override`, `default`, or `client`). Tokens are never
-stored—both bearer headers and `X-TryIt-Auth` values are redacted before
-logging—so you can forward stdout to a central collector without worrying about
-secrets leaking.
+ཞུ་བ་རེ་རེ་བཞིན་དུ་ ཐབས་ལམ་དང་ འགྲུལ་ལམ་ འབྱུང་ཁུངས་ ཡར་འགྲོས་གནས་རིམ་ དེ་ལས་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན།
+བདེན་བཤད་འབྱུང་ཁུངས་ (`override`, `default`, ཡང་ན་ `client`). ཊོ་ཀེན་ཚུ་ནམ་ཡང་མེན།
+གསོག་འཇོག་འབད་ཡོདཔ་—བེ་ཡར་མགོ་ཡིག་དང་ `X-TryIt-Auth` གནས་གོང་ཚུ་ ཧེ་མ་གི་ཧེ་མ་ལས་ བསྒྱུར་བཅོས་འབད་ཡོདཔ་ཨིན།
+ནང་བསྐྱོད་—དེ་ལས་ ཁྱོད་ཀྱིས་ stdout འདི་ ཚ་གྱང་མ་ལང་པར་ ལྟེ་བ་བསྡུ་གསོག་འབད་མི་ཅིག་ལུ་ གདོང་བསྐྱོད་འབད་ཚུགས།
+།གསང་བ་འཛེགས་པ།
 
-### Health probes & alerting
-
-Run the bundled probe during deployments or on a schedule:
+### གསོ་བའི་ཞིབ་དཔྱད་དང་ཉེན་བརྡ།བཀྲམ་སྤེལ་འབད་བའི་སྐབས་ ཡང་ན་ ལས་རིམ་ཅིག་གུ་ ཡང་ན་ ལས་རིམ་ཅིག་གུ་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་ འཚོལ་ཞིབ་འདི་ གཡོག་བཀོལ།
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
@@ -104,18 +103,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+ཁོར་ཡུག་གི་མཛུབ་མོ་།
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — optional Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — གདམ་ཁའི་ Torii གི་ལམ་ (`/proxy` མེད་པར་) ལུས་སྦྱོང་འབད་ནིའི་དོན་ལུ་ཨིན།
+- `TRYIT_PROXY_SAMPLE_METHOD` — `GET` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། འབྲི་ནིའི་ལམ་ཚུ་གི་དོན་ལུ་ `POST` ལུ་གཞི་སྒྲིག་འབད་ཡོདཔ།
+- `TRYIT_PROXY_PROBE_TOKEN` — དཔེ་ཚད་འབོད་བརྡ་གི་དོན་ལུ་ གནས་སྐབས་ཀྱི་ བེ་ཊར་ཊོ་ཀེན་ཅིག་ བཙུགསཔ་ཨིན།
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — སྔོན་སྒྲིག་ ༥ཨེསི་དུས་ཚོད་བཏོན་ཡོདཔ་ཨིན།
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — གདམ་ཁའི་ Prometheus ཚིག་ཡིག་ཡིག་སྣོད་ཀྱི་འགྲོ་ཡུལ་ `probe_success`/Torii.
+- `TRYIT_PROXY_PROBE_LABELS` — ལྷོད་རྟགས་ཁ་ཕྱེ་ཡོད་པའི་ `key=value` ཆ་ཚུ་ མེ་ཊིག་ཚུ་ལུ་ མཐུད་ཡོདཔ་ཨིན། (`job=tryit-proxy` དང་ `instance=<proxy URL>`)
 
-Feed the results into a textfile collector by pointing the probe at a writable
-path (for example, `/var/lib/node_exporter/textfile_collector/tryit.prom`) and
-adding any custom labels:
+གྲུབ་འབྲས་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ ཞིབ་དཔྱད་འདི་ གསལ་བཏོན་འབད་དེ་ ཚིག་ཡིག་ཡིག་སྣོད་བསྡུ་སྒྲིག་འབད་མི་ཅིག་ལུ་ ལྟོ་བྱིན།
+ལམ་ (དཔེར་ན་ `/var/lib/node_exporter/textfile_collector/tryit.prom`) དང་།
+སྲོལ་སྒྲིག་ཁ་ཡིག་གང་རུང་ཅིག་ཁ་སྐོང་བརྐྱབ།
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -124,11 +123,11 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" \
 npm run probe:tryit-proxy
 ```
 
-The script rewrites the metrics file atomically so your collector always reads a
-complete payload.
+ཡིག་ཚུགས་འདི་གིས་ མེ་ཊིགསི་ཡིག་སྣོད་ཚུ་ རྡུལ་ཕྲན་གྱི་ཐོག་ལས་ ལོག་བྲིས་དོ་ཡོདཔ་ལས་ ཁྱོད་རའི་བསྡུ་གསོག་པ་གིས་ ཨ་རྟག་ར་ a ལྷགཔ་ཨིན།
+ཆ་ཚང་སྤྲོད་ལེན་ཆ་ཚང་།
 
-For lightweight alerting, wire the probe into your monitoring stack. A Prometheus
-example that pages after two consecutive failures:
+ལྗིད་ཚད་མར་ཕབ་ཀྱི་ཉེན་བརྡ་གི་དོན་ལུ་ ཁྱོད་རའི་ལྟ་རྟོག་བང་རིམ་ནང་ལུ་ འཚོལ་ཞིབ་འདི་ གློག་ཐག་འབད། A I 18NT00000001X
+དཔེ་འབད་བ་ཅིན་ རིམ་མཐུན་འཐུས་ཤོར་གཉིས་ཀྱི་ཤུལ་ལས་ ཤོག་ལེབ་ཚུ་:
 
 ```yaml
 groups:
@@ -145,11 +144,11 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### Rollback automation
+### བསྐོར་རྒྱབ་རང་འགུལ།
 
-Use the management helper to update or restore the target Torii URL. The script
-stores the previous configuration in `.env.tryit-proxy.bak` so rollbacks are a
-single command.
+དམིགས་གཏད་ Torii URL དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ འཛིན་སྐྱོང་གྲོགས་རམ་པ་ལག་ལེན་འཐབ། ༡ ཡིག་གཟུགས་འདི།
+ཧེ་མའི་རིམ་སྒྲིག་འདི་ `.env.tryit-proxy.bak` ནང་ལུ་གསོག་འཇོག་འབདཝ་ཨིན།
+བརྡ་བཀོད་རྐྱང་པ།
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -159,5 +158,5 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-Override the env file path with `--env` or `TRYIT_PROXY_ENV` if your deployment
-stores configuration elsewhere.
+ཁྱོད་ཀྱི་བཀྲམ་སྤེལ་འབད་བ་ཅིན་ `--env` ཡང་ན་ `TRYIT_PROXY_ENV` དང་ཅིག་ཁར་ env ཡིག་སྣོད་འགྲུལ་ལམ་འདི་བཀག་བཞག།
+རིམ་སྒྲིག་གཞན་ཁར་གསོག་འཇོག་འབདཝ་ཨིན།

@@ -8,22 +8,23 @@ source_hash: 1017858988f6bbc1c58029ca0476e2eee7b011c3c65ba5b33a80c049165600ca
 source_last_modified: "2025-12-29T18:16:35.115752+00:00"
 translation_last_reviewed: 2026-02-07
 title: Norito-RPC Overview
+translator: machine-google-reviewed
 ---
 
-# Norito-RPC Overview
+# Norito-RPC მიმოხილვა
 
-Norito-RPC is the binary transport for Torii APIs. It reuses the same HTTP paths
-as `/v1/pipeline` but exchanges Norito-framed payloads that include schema
-hashes and checksums. Use it when you need deterministic, validated responses or
-when pipeline JSON responses become a bottleneck.
+Norito-RPC არის ორობითი ტრანსპორტი Torii API-ებისთვის. ის ხელახლა იყენებს იგივე HTTP ბილიკებს
+როგორც `/v1/pipeline`, მაგრამ ცვლის Norito ჩარჩოს მქონე დატვირთვას, რომელიც მოიცავს სქემას
+ჰეშები და ჩეკსუმები. გამოიყენეთ იგი, როდესაც გჭირდებათ განმსაზღვრელი, დადასტურებული პასუხები ან
+როდესაც მილსადენის JSON პასუხები ხდება ბოთლი.
 
-## Why switch?
-- Deterministic framing with CRC64 and schema hashes reduces decoding errors.
-- Shared Norito helpers across SDKs let you reuse existing data-model types.
-- Torii already tags Norito sessions in telemetry, so operators can monitor
-adoption with the provided dashboards.
+## რატომ გადართვა?
+- დეტერმინისტული კადრირება CRC64-ით და სქემის ჰეშებით ამცირებს დეკოდირების შეცდომებს.
+- გაზიარებული Norito დამხმარეები SDK-ებში საშუალებას გაძლევთ ხელახლა გამოიყენოთ არსებული მონაცემთა მოდელის ტიპები.
+- Torii უკვე მონიშნავს Norito სესიებს ტელემეტრიაში, ასე რომ ოპერატორებს შეუძლიათ მონიტორინგი
+მიღება მოწოდებული დაფებით.
 
-## Making a request
+## მოთხოვნის გაკეთება
 
 ```bash
 curl \
@@ -34,62 +35,62 @@ curl \
   https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
-1. Serialize your payload with the Norito codec (`iroha_client`, SDK helpers, or
+1. დაალაგეთ თქვენი დატვირთვა Norito კოდეკით (`iroha_client`, SDK დამხმარეები, ან
    `norito::to_bytes`).
-2. Send the request with `Content-Type: application/x-norito`.
-3. Request a Norito response using `Accept: application/x-norito`.
-4. Decode the response using the matching SDK helper.
+2. გაგზავნეთ მოთხოვნა `Content-Type: application/x-norito`-ით.
+3. მოითხოვეთ Norito პასუხი `Accept: application/x-norito`-ის გამოყენებით.
+4. პასუხის გაშიფვრა შესაბამისი SDK დამხმარე გამოყენებით.
 
-SDK-specific guidance:
-- **Rust**: `iroha_client::Client` negotiates Norito automatically when you set
-  the `Accept` header.
-- **Python**: use `NoritoRpcClient` from `iroha_python.norito_rpc`.
-- **Android**: use `NoritoRpcClient` and `NoritoRpcRequestOptions` in the
+SDK-ს სპეციფიკური მითითებები:
+- **Rust**: `iroha_client::Client` აწარმოებს მოლაპარაკებას Norito ავტომატურად, როცა დააყენებთ
+  `Accept` სათაური.
+- **პითონი**: გამოიყენეთ `NoritoRpcClient` `iroha_python.norito_rpc`-დან.
+- **Android**: გამოიყენეთ `NoritoRpcClient` და `NoritoRpcRequestOptions`
   Android SDK.
-- **JavaScript/Swift**: helpers are tracked in `docs/source/torii/norito_rpc_tracker.md`
-  and will land as part of NRPC-3.
+- ** JavaScript/Swift**: დამხმარეების თვალყურის დევნება ხდება `docs/source/torii/norito_rpc_tracker.md`-ში
+  და დაეშვება NRPC-3-ის შემადგენლობაში.
 
-## Try It console sample
+## სცადეთ კონსოლის ნიმუში
 
-The developer portal ships a Try It proxy so reviewers can replay Norito
-payloads without writing bespoke scripts.
+დეველოპერის პორტალი აგზავნის Try It პროქსის, რათა მიმომხილველებმა შეძლონ Norito-ის გამეორება
+დატვირთვები შეკვეთილი სკრიპტების დაწერის გარეშე.
 
-1. [Start the proxy](./try-it.md#start-the-proxy-locally) and set
-   `TRYIT_PROXY_PUBLIC_URL` so the widgets know where to send traffic.
-2. Open the **Try it** card on this page or the `/reference/torii-swagger`
-   panel and select an endpoint such as `POST /v1/pipeline/submit`.
-3. Switch the **Content-Type** to `application/x-norito`, choose the **Binary**
-   editor, and upload `fixtures/norito_rpc/transfer_asset.norito`
-   (or any payload listed in
+1. [გაუშვით პროქსი](./try-it.md#start-the-proxy-locally) და დააყენეთ
+   `TRYIT_PROXY_PUBLIC_URL`, რათა ვიჯეტებმა იცოდნენ სად გაგზავნონ ტრაფიკი.
+2. გახსენით **სცადეთ** ბარათი ამ გვერდზე ან `/reference/torii-swagger`
+   პანელი და აირჩიეთ საბოლოო წერტილი, როგორიცაა `POST /v1/pipeline/submit`.
+3. გადართეთ **Content-Type** `application/x-norito`-ზე, აირჩიეთ **ორობითი**
+   რედაქტორი და ატვირთეთ `fixtures/norito_rpc/transfer_asset.norito`
+   (ან ჩამოთვლილი ნებისმიერი დატვირთვა
    `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
-4. Provide a bearer token via the OAuth device-code widget or the manual token
-   field (the proxy accepts `X-TryIt-Auth` overrides when configured with
+4. მიაწოდეთ გადამტანი ჟეტონი OAuth მოწყობილობის კოდის ვიჯეტის ან სახელმძღვანელო ჟეტონის მეშვეობით
+   ველი (პროქსი იღებს `X-TryIt-Auth` უგულებელყოფას კონფიგურაციისას
    `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
-5. Submit the request and verify that Torii echoes the `schema_hash` listed in
-   `fixtures/norito_rpc/schema_hashes.json`. Matching hashes confirm that the
-   Norito header survived the browser/proxy hop.
+5. გაგზავნეთ მოთხოვნა და შეამოწმეთ, რომ Torii ეხმიანება `schema_hash`-ს, რომელიც ჩამოთვლილია
+   `fixtures/norito_rpc/schema_hashes.json`. შესატყვისი ჰეშები ადასტურებს, რომ
+   Norito სათაური გადაურჩა ბრაუზერის/პროქსი ჰოპს.
 
-For roadmap evidence, pair the Try It screenshot with a run of
-`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"`. The script wraps
-`cargo xtask norito-rpc-verify`, writes the JSON summary to
-`artifacts/norito_rpc/<timestamp>/`, and captures the same fixtures that the
-portal consumed.
+საგზაო რუქის მტკიცებულებისთვის, დააწყვილეთ Try It ეკრანის ანაბეჭდი გაშვებით
+`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"`. სცენარი შეფუთულია
+`cargo xtask norito-rpc-verify`, წერს JSON-ის რეზიუმეს
+`artifacts/norito_rpc/<timestamp>/` და იჭერს იმავე მოწყობილობებს, რასაც
+პორტალი მოხმარებული.
 
-## Troubleshooting
+## პრობლემების მოგვარება
 
-| Symptom | Where it appears | Likely cause | Fix |
+| სიმპტომი | სად ჩანს | სავარაუდო მიზეზი | შესწორება |
 | --- | --- | --- | --- |
-| `415 Unsupported Media Type` | Torii response | Missing or incorrect `Content-Type` header | Set `Content-Type: application/x-norito` before sending the payload. |
-| `X-Iroha-Error-Code: schema_mismatch` (HTTP 400) | Torii response body/headers | Fixture schema hash differs from the Torii build | Regenerate fixtures with `cargo xtask norito-rpc-fixtures` and confirm the hash in `fixtures/norito_rpc/schema_hashes.json`; fall back to JSON if the endpoint has not enabled Norito yet. |
-| `{"error":"origin_forbidden"}` (HTTP 403) | Try It proxy response | Request came from an origin that is not listed in `TRYIT_PROXY_ALLOWED_ORIGINS` | Add the portal origin (e.g., `https://docs.devnet.sora.example`) to the env var and restart the proxy. |
-| `{"error":"rate_limited"}` (HTTP 429) | Try It proxy response | Per-IP quota exceeded the `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` budget | Increase the limit for internal load testing or wait until the window resets (see `retryAfterMs` in the JSON response). |
-| `{"error":"upstream_timeout"}` (HTTP 504) or `{"error":"upstream_error"}` (HTTP 502) | Try It proxy response | Torii timed out or the proxy could not reach the configured backend | Verify that `TRYIT_PROXY_TARGET` is reachable, check Torii health, or retry with a larger `TRYIT_PROXY_TIMEOUT_MS`. |
+| `415 Unsupported Media Type` | Torii პასუხი | აკლია ან არასწორია `Content-Type` სათაური | დააყენეთ `Content-Type: application/x-norito` ტვირთის გაგზავნამდე. |
+| `X-Iroha-Error-Code: schema_mismatch` (HTTP 400) | Torii საპასუხო ორგანო/სათაურები | მოწყობილობების სქემის ჰეში განსხვავდება Torii კონსტრუქციისგან | განაახლეთ მოწყობილობები `cargo xtask norito-rpc-fixtures`-ით და დაადასტურეთ ჰეში `fixtures/norito_rpc/schema_hashes.json`-ში; დაუბრუნდით JSON-ს, თუ ბოლო წერტილს ჯერ არ აქვს ჩართული Norito. |
+| `{"error":"origin_forbidden"}` (HTTP 403) | სცადეთ პროქსი პასუხი | მოთხოვნა მოვიდა წარმოშობიდან, რომელიც არ არის ჩამოთვლილი `TRYIT_PROXY_ALLOWED_ORIGINS` | დაამატეთ პორტალის საწყისი (მაგ., `https://docs.devnet.sora.example`) env var-ში და გადატვირთეთ პროქსი. |
+| `{"error":"rate_limited"}` (HTTP 429) | სცადეთ პროქსი პასუხი | თითო IP კვოტა გადააჭარბა `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` ბიუჯეტს | გაზარდეთ შიდა დატვირთვის ტესტირების ლიმიტი ან დაელოდეთ ფანჯრის გადატვირთვას (იხილეთ `retryAfterMs` JSON პასუხში). |
+| `{"error":"upstream_timeout"}` (HTTP 504) ან `{"error":"upstream_error"}` (HTTP 502) | სცადეთ პროქსი პასუხი | Torii-ის დრო ამოიწურა ან პროქსი ვერ მიაღწია კონფიგურირებულ ბექენდს | შეამოწმეთ, რომ `TRYIT_PROXY_TARGET` ხელმისაწვდომია, შეამოწმეთ Torii სიჯანსაღე ან ხელახლა სცადეთ უფრო დიდი `TRYIT_PROXY_TIMEOUT_MS`. |
 
-More Try It diagnostics and OAuth tips live in
+მეტი Try It დიაგნოსტიკა და OAuth რჩევები ცოცხალია
 [`devportal/try-it.md`](./try-it.md#norito-rpc-samples).
 
-## Additional resources
-- Transport RFC: `docs/source/torii/norito_rpc.md`
-- Executive summary: `docs/source/torii/norito_rpc_brief.md`
-- Action tracker: `docs/source/torii/norito_rpc_tracker.md`
-- Try-It proxy instructions: `docs/portal/docs/devportal/try-it.md`
+## დამატებითი რესურსები
+- ტრანსპორტის RFC: `docs/source/torii/norito_rpc.md`
+- რეზიუმე: `docs/source/torii/norito_rpc_brief.md`
+- მოქმედების ტრეკერი: `docs/source/torii/norito_rpc_tracker.md`
+- Try-It proxy ინსტრუქციები: `docs/portal/docs/devportal/try-it.md`

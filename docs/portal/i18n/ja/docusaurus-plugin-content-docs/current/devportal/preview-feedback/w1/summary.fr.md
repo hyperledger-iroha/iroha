@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/summary.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-summary
-title: Resume feedback et sortie W1
-sidebar_label: Resume W1
-description: Constats, actions et preuves de sortie pour la vague de preview partenaires/integrateurs Torii.
+id: プレビュー-フィードバック-w1-まとめ
+タイトル: フィードバック再開と出撃 W1
+Sidebar_label: W1 を再開します
+説明: コンステータス、アクションおよび出撃のプレビュー パートナー/統合者の漠然としたプレビュー Torii。
 ---
 
-| Element | Details |
+|要素 |詳細 |
 | --- | --- |
-| Vague | W1 - Partenaires et integrateurs Torii |
-| Fenetre d'invitation | 2025-04-12 -> 2025-04-26 |
-| Tag d'artefact | `preview-2025-04-12` |
-| Issue tracker | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, gateway-ops-01 |
+|あいまい | W1 - パートナーと統合者 Torii |
+|フェネトル・ドゥ・インビテーション | 2025-04-12 -> 2025-04-26 |
+|タグ・ダルティファクト | `preview-2025-04-12` |
+|問題追跡ツール | `DOCS-SORA-Preview-W1` |
+|参加者 | sorafs-op-01...03、torii-int-01...02、sdk-partner-01...02、gateway-ops-01 |
 
-## Points saillants
+## ポイントの船員
 
-1. **Workflow checksum** - Tous les reviewers ont verifie le descriptor/archive via `scripts/preview_verify.sh`; les logs ont ete stockes avec les accuses d'invitation.
-2. **Telemetrie** - Les dashboards `docs.preview.integrity`, `TryItProxyErrors` et `DocsPortal/GatewayRefusals` sont restes verts pendant toute la vague; aucun incident ni page d'alerte.
-3. **Feedback docs (`docs-preview/w1`)** - Deux nits mineurs ont ete signales:
-   - `docs-preview/w1 #1`: clarifier la formulation de navigation dans la section Try it (resolu).
-   - `docs-preview/w1 #2`: mettre a jour la capture Try it (resolu).
-4. **Parite runbook** - Les operateurs SoraFS ont confirme que les nouveaux cross-links entre `orchestrator-ops` et `multi-source-rollout` ont traite leurs points W0.
+1. **ワークフロー チェックサム** - レビュアーは `scripts/preview_verify.sh` 経由でファイル記述子/アーカイブを検証しません。招待状を告発するために在庫を記録します。
+2. **テレメトリ** - ダッシュボード `docs.preview.integrity`、`TryItProxyErrors` および `DocsPortal/GatewayRefusals` ソン レスト ヴェール ペンダント トゥート ラ 曖昧;オークン事件のページです。
+3. **フィードバック ドキュメント (`docs-preview/w1`)** - シグナルに関する詳細なマイナー:
+   - `docs-preview/w1 #1`: ナビゲーションのセクションの明確化剤を試してみてください (解決策)。
+   - `docs-preview/w1 #2`: メトレ・ア・ジュール・ラ・キャプチャー 試してみてください (解決策)。
+4. **パリテ ランブック** - オペレータ SoraFS は、ヌーヴォー クロスリンクの確認を行っていません。`orchestrator-ops` および `multi-source-rollout` は、特性ルール ポイント W0 を確認しています。
 
-## Actions
+## アクション
 
-| ID | Description | Responsable | Statut |
+| ID |説明 |責任者 |法令 |
 | --- | --- | --- | --- |
-| W1-A1 | Mettre a jour la formulation de navigation Try it selon `docs-preview/w1 #1`. | Docs-core-02 | Termine (2025-04-18). |
-| W1-A2 | Rafraichir la capture Try it selon `docs-preview/w1 #2`. | Docs-core-03 | Termine (2025-04-19). |
-| W1-A3 | Resumer les constats partenaires et la preuve telemetrie dans roadmap/status. | Docs/DevRel lead | Termine (voir tracker + status.md). |
+| W1-A1 |ナビゲーションを使って、ジュール ラ フォーミュレーションを試してみてください。 `docs-preview/w1 #1`。 |ドキュメント-コア-02 |テルミネ (2025-04-18)。 |
+| W1-A2 |ラフラチラ ラ攻略 Try it selon `docs-preview/w1 #2`。 |ドキュメントコア-03 |テルミネ (2025-04-19)。 |
+| W1-A3 |ロードマップ/ステータスに関する履歴書とプレユーブのテレメトリ。 |ドキュメント/DevRel リード |終了 (voir トラッカー + status.md)。 |
 
-## Resume de sortie (2025-04-26)
+## 出撃再開 (2025-04-26)
 
-- Les huit reviewers ont confirme la fin pendant les office hours finales, purge les artefacts locaux et leurs acces ont ete revoques.
-- La telemetrie est restee verte jusqu'a la sortie; snapshots finaux attaches a `DOCS-SORA-Preview-W1`.
-- Le log d'invitations a ete mis a jour avec les accuses de sortie; le tracker a marque W1 comme termine et ajoute les checkpoints.
-- Bundle de preuve (descriptor, checksum log, probe output, transcript du proxy Try it, screenshots de telemetrie, feedback digest) archive sous `artifacts/docs_preview/W1/`.
+- ユイットの査読者は、オフィスアワーのフィナーレを確認し、遺物を削除し、ロコーとルールにアクセスして取り消しを確認してください。
+- 出撃するまでの間、遠隔測定を行ってください。スナップショット finaux は `DOCS-SORA-Preview-W1` を接続します。
+- Le log d'invitations a ete miss a jour avec les accuss de sortie;トラッカーは、W1 の終点とチェックポイントを追跡します。
+- バンドル ド プリューブ (記述子、チェックサム ログ、プローブ出力、プロキシ Try it のトランスクリプト、テレメトリのスクリーンショット、フィードバック ダイジェスト) アーカイブ `artifacts/docs_preview/W1/`。
 
-## Prochaines etapes
+## プロカインエテープ
 
-- Preparer le plan d'intake communautaire W2 (approbation governance + ajustements du template de demande).
-- Rafraichir le tag d'artefact preview pour la vague W2 et relancer le script de preflight une fois les dates finalisees.
-- Porter les constats applicables de W1 dans roadmap/status pour que la vague communautaire ait les dernieres indications.
+- コミュナウテール計画 W2 (ガバナンスの承認 + 要求のテンプレートによる調整) の作成者。
+- 曖昧な W2 とリランサーのスクリプトを作成し、最終的な日付を確認します。
+- ポーターは、W1 のロードマップ/ステータスに関する、曖昧なコミュニケーションに関する適切な情報を提供します。

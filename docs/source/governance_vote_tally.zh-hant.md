@@ -8,102 +8,101 @@ source_hash: 2ebff8477d06e2aac8840988d31762704d05ded353d3f900a87db3ea5091e718
 source_last_modified: "2026-01-04T08:19:26.508527+00:00"
 translation_last_reviewed: 2026-02-07
 title: Governance ZK Vote Tally
+translator: machine-google-reviewed
 ---
 
-## Overview
+## 概述
 
-Iroha’s governance tally flow relies on a Halo2/IPA circuit that verifies a bit vote commitment and its membership in the eligible voter set. This note captures the circuit parameters, public inputs, and auditing fixtures so reviewers can regenerate the verifying key and proofs used in tests.
+Iroha 的治理計數流程依賴於 Halo2/IPA 電路，該電路驗證比特投票承諾及其在合格選民集中的成員資格。本註釋捕獲電路參數、公共輸入和審核裝置，以便審核人員可以重新生成測試中使用的驗證密鑰和證明。
 
-## Circuit Summary
+## 電路總結
 
-- **Circuit identifier**: `halo2/pasta/vote-bool-commit-merkle8-v1`
-- **Implementation**: `VoteBoolCommitMerkle::<8>` in `iroha_core::zk::depth`
-- **Domain size**: `k = 6`
-- **Backend**: Transparent Halo2/IPA over Pasta (ZK1 envelope: `IPAK` + `H2VK` for VKs, `PROF` + `I10P` for proofs)
-- **Witness shape**:
-  - ballot bit `v ∈ {0,1}`
-  - randomness scalar `ρ`
-  - eight sibling scalars for the Merkle path
-  - direction bits (all zero in the reference witnesses)
-- **Merkle compressor**: `H(x, y) = 2·(x + 7)^5 + 3·(y + 13)^5 (mod p)` where `p` is the Pasta scalar modulus
-- **Public inputs**:
-  - column 0: `commit`
-  - column 1: Merkle root
-  - exposed via the `I10P` TLV (`cols = 2`, `rows = 1`)
+- **電路標識符**：`halo2/pasta/vote-bool-commit-merkle8-v1`
+- **實現**：`VoteBoolCommitMerkle::<8>` 中的 `iroha_core::zk::depth`
+- **域名大小**：`k = 6`
+- **後端**：透明Halo2/IPA over Pasta（ZK1信封：`IPAK` + `H2VK`用於VK，`PROF` + `I10P`用於校樣）
+- **見證形狀**：
+  - 選票位 `v ∈ {0,1}`
+  - 隨機標量 `ρ`
+  - Merkle 路徑的八個同級標量
+  - 方向位（參考見證中全為零）
+- **Merkle 壓縮器**：`H(x, y) = 2·(x + 7)^5 + 3·(y + 13)^5 (mod p)`，其中 `p` 是 Pasta 標量模數
+- **公共投入**：
+  - 第 0 列：`commit`
+  - 第 1 列：Merkle 根
+  - 通過 `I10P` TLV 暴露（`cols = 2`、`rows = 1`）
 
-### Circuit layout
+### 電路佈局
 
-- **Advice columns**:
-  - `v` – ballot bit constrained to be boolean.
-  - `ρ` – blinding scalar used in the vote commitment.
-  - `sibling[i]` for `i ∈ [0, 7]` – Merkle path element at depth `i`.
-  - `dir[i]` for `i ∈ [0, 7]` – direction bit selecting left (`0`) or right (`1`) branch.
-  - `node[i]` for `i ∈ [0, 7]` – Merkle accumulator after depth `i`.
-- **Instance columns**:
-  - `commit` – public commitment published by the voter.
-  - `root` – Merkle root of the eligible voter set.
-- **Selector**: `s_vote` enables the gate on the single populated row.
+- **建議欄**：
+  - `v` – 選票位限制為布爾值。
+  - `ρ` – 投票承諾中使用的致盲標量。
+  - `sibling[i]` for `i ∈ [0, 7]` – 深度 `i` 處的 Merkle 路徑元素。
+  - `dir[i]` 用於 `i ∈ [0, 7]` – 方向位選擇左 (`0`) 或右 (`1`) 分支。
+  - `node[i]` for `i ∈ [0, 7]` – 深度 `i` 後的 Merkle 累加器。
+- **實例列**：
+  - `commit` – 選民發布的公開承諾。
+  - `root` – 合格選民集的 Merkle 根。
+- **選擇器**：`s_vote` 啟用單個填充行上的門。
 
-All advice cells are assigned in the first (and only) row of the region; the circuit uses a `SimpleFloorPlanner`.
+所有建議單元格都分配在該區域的第一行（也是唯一一行）；該電路使用 `SimpleFloorPlanner`。
 
-### Gate system
+### 門系統
 
-Let `H` be the compressor defined above and `prev_0 = H(v, ρ)`. The gate enforces:
+令 `H` 為上面定義的壓縮器，`prev_0 = H(v, ρ)` 為。門強制執行：
 
-1. `s_vote · v · (v - 1) = 0` – boolean ballot bit.
-2. `s_vote · (H(v, ρ) - commit) = 0` – commitment consistency.
-3. For each depth `i`:
-   - `s_vote · dir[i] · (dir[i] - 1) = 0` – boolean path direction.
+1. `s_vote · v · (v - 1) = 0` – 布爾選票位。
+2. `s_vote · (H(v, ρ) - commit) = 0` – 承諾一致性。
+3. 對於每個深度 `i`：
+   - `s_vote · dir[i] · (dir[i] - 1) = 0` – 布爾路徑方向。
    - `left = H(prev_i, sibling[i])`
    - `right = H(sibling[i], prev_i)`
    - `expected = (1 - dir[i]) · left + dir[i] · right`
    - `s_vote · (node[i] - expected) = 0`
    - `prev_{i+1} = node[i]`
-4. `s_vote · (prev_8 - root) = 0` – accumulator equals the public Merkle root.
+4. `s_vote · (prev_8 - root) = 0` – 累加器等於公共 Merkle 根。
 
-The compressor uses quintic shapes only; no lookup tables are required. All arithmetic is performed in the Pasta scalar field, and the row count `k = 6` allocates `2^k = 64` rows — only row zero is populated.
+壓縮器僅使用五次形狀；不需要查找表。所有算術都在 Pasta 標量字段中執行，行計數 `k = 6` 分配 `2^k = 64` 行 — 僅填充第 0 行。
 
-### Canonical fixture
+### 規範夾具
 
-The deterministic harness (`zk_testkit::vote_merkle8_bundle`) populates the witness with:
+確定性工具 (`zk_testkit::vote_merkle8_bundle`) 向見證人填充：
 
 - `v = 1`
 - `ρ = 12345`
-- `sibling[i] = 10 + i` for `i ∈ [0, 7]`
+- `sibling[i] = 10 + i` 為 `i ∈ [0, 7]`
 - `dir[i] = 0`
-- `node[i] = H(node[i-1], sibling[i])` with `node[-1] = H(v, ρ)`
+- `node[i] = H(node[i-1], sibling[i])` 與 `node[-1] = H(v, ρ)`
 
-This produces the public values:
+這產生了公共價值觀：
 
 ```text
 commit = 0x20574662a58708e02e0000000000000000000000000000000000000000000000
 root   = 0xb63752ff429362c3a9b3cd5966c23567fdb757ce3b38af724b9303a5ea2f5817
 ```
 
-The `public_inputs_schema_hash` recorded in the verifying-key registry is `blake2b-256(commit_bytes || root_bytes)` with the least significant bit forced to `1`, yielding:
+驗證密鑰註冊表中記錄的 `public_inputs_schema_hash` 是 `blake2b-256(commit_bytes || root_bytes)`，最低有效位強制為 `1`，產生：
 
 ```text
 public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3
 ```
 
-### Verifying key record
+### 驗證密鑰記錄
 
-Governance registers the verifier under:
-
-- `backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"`
+治理將驗證者註冊為：- `backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"`
 - `circuit_id = "halo2/pasta/vote-bool-commit-merkle8-v1"`
 - `backend tag = BackendTag::Halo2IpaPasta`
 - `curve = "pallas"`
 - `public_inputs_schema_hash = 0xfae4…64d3`
-- `commitment = sha256(backend || vk_bytes)` (32-byte digest)
+- `commitment = sha256(backend || vk_bytes)`（32字節摘要）
 
-The canonical bundle includes an inline verifying key (`key = Some(VerifyingKeyBox { … })`) together with the proof envelope. `vk_len`, `max_proof_bytes`, and optional metadata URIs are populated from the generated artefacts.
+規範捆綁包包括一個內聯驗證密鑰 (`key = Some(VerifyingKeyBox { … })`) 以及證明信封。 `vk_len`、`max_proof_bytes` 和可選元數據 URI 是從生成的工件中填充的。
 
-## Reference Fixtures
+## 參考賽程
 
-Use `cargo xtask zk-vote-tally-bundle --print-hashes` to regenerate the inline verifying key and proof bundle consumed by integration tests (outputs land in `fixtures/zk/vote_tally/` by default). The command prints a short summary (`backend`, `commit`, `root`, schema hash, lengths) and optionally the file hashes so auditors can capture attestation notes. Pass `--summary-json -` to emit the same data as JSON (or supply a path to write it to disk). Pass `--attestation attestation.json` (or `-` for stdout) to write a Norito JSON manifest containing the summary plus Blake2b-256 digests and sizes for every bundle artifact so attestation packets can be archived with the fixtures. When run with `--verify`, providing `--attestation <path>` checks that the manifest’s bundle metadata and artifact lengths match the freshly regenerated bundle (it does not compare the per-run proof digest, which changes with transcript randomness).
+使用 `cargo xtask zk-vote-tally-bundle --print-hashes` 重新生成集成測試消耗的內聯驗證密鑰和證明包（默認情況下輸出位於 `fixtures/zk/vote_tally/` 中）。該命令打印一個簡短的摘要（`backend`、`commit`、`root`、模式哈希、長度）以及可選的文件哈希，以便審核員可以捕獲證明註釋。傳遞 `--summary-json -` 以發出與 JSON 相同的數據（或提供將其寫入磁盤的路徑）。傳遞 `--attestation attestation.json`（或標準輸出的 `-`）來編寫 Norito JSON 清單，其中包含摘要以及每個捆綁包工件的 Blake2b-256 摘要和大小，以便可以將證明數據包與固定裝置一起存檔。使用 `--verify` 運行時，提供 `--attestation <path>` 檢查清單的捆綁包元數據和工件長度是否與新生成的捆綁包相匹配（它不會比較每次運行的證明摘要，該摘要會隨轉錄隨機性而變化）。
 
-Regenerate the canonical fixtures and manifest:
+重新生成規範的裝置和清單：
 
 ```bash
 cargo xtask zk-vote-tally-bundle \
@@ -112,7 +111,7 @@ cargo xtask zk-vote-tally-bundle \
   --attestation fixtures/zk/vote_tally/bundle.attestation.json
 ```
 
-Verify the checked-in artifacts remain current (requires the fixture directory to contain the baseline bundle):
+驗證簽入的工件是否保持最新（要求固定裝置目錄包含基線包）：
 
 ```bash
 cargo xtask zk-vote-tally-bundle \
@@ -121,7 +120,7 @@ cargo xtask zk-vote-tally-bundle \
   --attestation fixtures/zk/vote_tally/bundle.attestation.json
 ```
 
-Example manifest:
+清單示例：
 
 ```jsonc
 {
@@ -157,43 +156,41 @@ Example manifest:
 }
 ```
 
-Store the current manifest next to your canonical artifacts (for example at `fixtures/zk/vote_tally/bundle.attestation.json`). The upstream repository keeps this directory empty to avoid committing large binary bundles, so seed it locally before relying on `--verify`.
+將當前清單存儲在規範工件旁邊（例如 `fixtures/zk/vote_tally/bundle.attestation.json`）。上游存儲庫將此目錄保持為空，以避免提交大型二進制包，因此在依賴 `--verify` 之前在本地播種。
 
-`generated_unix_ms` is derived deterministically from the commitment/verifying-key fingerprint so it remains stable across regenerations. The generator uses a fixed ChaCha20 transcript, so the metadata, verifying key, and proof envelope hashes are reproducible. Any digest mismatch now indicates drift that must be investigated. Auditors should record the emitted values alongside the artefacts they attest.
+`generated_unix_ms` 是從承諾/驗證密鑰指紋確定性派生的，因此它在再生過程中保持穩定。生成器使用固定的 ChaCha20 轉錄本，因此元數據、驗證密鑰和證明信封哈希是可重現的。現在，任何摘要不匹配都表明必須調查漂移。審核員應記錄發出的值以及他們證明的偽影。
 
-Workflow reminder:
+工作流程提醒：
 
-1. Run `cargo xtask zk-vote-tally-bundle --out fixtures/zk/vote_tally --print-hashes --attestation fixtures/zk/vote_tally/bundle.attestation.json` to seed the bundle locally.
-2. Commit or archive the resulting artefacts as needed.
-3. Use `--verify` on subsequent regenerations to ensure the attestation matches the canonical bundle.
+1. 運行 `cargo xtask zk-vote-tally-bundle --out fixtures/zk/vote_tally --print-hashes --attestation fixtures/zk/vote_tally/bundle.attestation.json` 在本地為捆綁包做種。
+2. 根據需要提交或歸檔生成的工件。
+3. 在後續重新生成時使用 `--verify` 以確保證明與規範包匹配。
 
-Internally the task runs the deterministic generator in `xtask/src/vote_tally.rs`, which:
+該任務在內部運行 `xtask/src/vote_tally.rs` 中的確定性生成器，其中：
 
-1. Samples the witnesses (`v = 1`, `ρ = 12345`, siblings `10..17`)
-2. Runs `keygen_vk`/`keygen_pk`
-3. Produces a Halo2 proof and wraps it in a ZK1 envelope (including public instances)
-4. Emits the verifying key record with the appropriate `public_inputs_schema_hash`
+1. 對證人進行採樣（`v = 1`、`ρ = 12345`、兄弟姐妹 `10..17`）
+2. 運行 `keygen_vk`/`keygen_pk`
+3. 生成 Halo2 證明並將其包裝在 ZK1 信封中（包括公共實例）
+4. 使用適當的 `public_inputs_schema_hash` 發出驗證密鑰記錄
 
-## Tamper Coverage
+## 篡改覆蓋率
 
-`crates/iroha_core/tests/zk_vote_tally_audit.rs` loads the bundle and checks:
+`crates/iroha_core/tests/zk_vote_tally_audit.rs` 加載捆綁包並檢查：
 
-- The genuine proof verifies against the bundled inline VK.
-- Flipping any byte in the commitment column causes verification to fail.
-- Flipping any byte in the root column causes verification to fail.
+- 真實證據與捆綁的內聯 VK 進行驗證。
+- 翻轉承諾列中的任何字節都會導致驗證失敗。
+- 翻轉根列中的任何字節都會導致驗證失敗。這些回歸測試保證 Torii（和主機）拒絕其公共輸入在證明生成後被篡改的信封。
 
-These regression tests guarantee Torii (and hosts) reject envelopes whose public inputs are tampered after proof generation.
-
-Run the regression locally with:
+使用以下命令在本地運行回歸：
 
 ```bash
 cargo test -p iroha_core zk_vote_tally_audit -- --nocapture
 ```
 
-## Audit Checklist
+## 審核清單
 
-1. Review `VoteBoolCommitMerkle::<8>` for constraint completeness and constant selection.
-2. Re-run `cargo xtask zk-vote-tally-bundle --verify --print-hashes` to reproduce the VK/proof and confirm the recorded hashes.
-3. Confirm Torii’s tally handler uses the same backend identifier and envelope layout.
-4. Execute the tamper regression to ensure mutated proofs fail verification.
-5. Hash and gossip the `bundle.attestation.json` output (Blake2b-256) so reviewers can log the canonical manifest alongside their attestations.
+1. 檢查 `VoteBoolCommitMerkle::<8>` 的約束完整性和常數選擇。
+2. 重新運行 `cargo xtask zk-vote-tally-bundle --verify --print-hashes` 以重現 VK/proof 並確認記錄的哈希值。
+3. 確認 Torii 的計數處理程序使用相同的後端標識符和信封佈局。
+4. 執行篡改回歸以確保變異證明無法通過驗證。
+5. 對 `bundle.attestation.json` 輸出 (Blake2b-256) 進行散列和八卦，以便審閱者可以在其證明旁邊記錄規范清單。

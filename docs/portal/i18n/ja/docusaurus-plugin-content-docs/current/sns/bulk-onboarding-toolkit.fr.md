@@ -4,51 +4,53 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Source canonique
-Cette page reflete `docs/source/sns/bulk_onboarding_toolkit.md` afin que les
-operateurs externes voient la meme guidance SN-3b sans cloner le depot.
+:::note ソースカノニク
+ページを参照して `docs/source/sns/bulk_onboarding_toolkit.md` ファイルを参照してください
+SN-3b は保管場所を持たずに、外部からのミーム ガイダンスを操作します。
 :::
 
-# Toolkit d'onboarding massif SNS (SN-3b)
+# 山塊 SNS を搭載したツールキット (SN-3b)
 
-**Reference roadmap:** SN-3b "Bulk onboarding tooling"  
-**Artefacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**参考ロードマップ:** SN-3b「バルク オンボーディング ツール」  
+**アーティファクト:** `scripts/sns_bulk_onboard.py`、`scripts/tests/test_sns_bulk_onboard.py`、
 `docs/portal/scripts/sns_bulk_release.sh`
 
-Les grands registrars preparent souvent des centaines de registrations `.sora` ou
-`.nexus` avec les memes approbations de gouvernance et rails de settlement.
-Fabriquer des payloads JSON a la main ou relancer la CLI ne scale pas, donc SN-3b
-livre un builder deterministe CSV vers Norito qui prepare des structures
-`RegisterNameRequestV1` pour Torii ou la CLI. L'helper valide chaque ligne en
-amont, emet a la fois un manifeste agrege et du JSON delimite par nouvelles
-lignes optionnel, et peut soumettre les payloads automatiquement tout en
-enregistrant des recus structures pour les audits.
+登録官が登録を準備するための準備 `.sora` ou
+`.nexus` 政府と和解の承認に関するミーム。
+メインのペイロード JSON と CLI のリランサーの作成、SN-3b のスケールパス
+ビルダーが CSV と Norito を決定して構造を準備します
+CLI から `RegisterNameRequestV1` Torii を注ぎます。 L'helper valide Chaque ligne en
+マニフェストの合意と新しい JSON の区切りを表示します
+オプション、およびペイロードの自動処理を実行します。
+登録者による構造の監査。
 
-## 1. Schema CSV
+## 1. スキーマ CSV
 
-Le parseur exige la ligne d'en-tete suivante (l'ordre est flexible):
+Le parseur exige la ligne d'en-tete suivante (柔軟な選択):
 
-| Colonne | Requis | Description |
-|---------|--------|-------------|
-| `label` | Oui | Libelle demande (casse mixte acceptee; l'outil normalise selon Norm v1 et UTS-46). |
-| `suffix_id` | Oui | Identifiant numerique de suffixe (decimal ou `0x` hex). |
-| `owner` | Oui | Chaine AccountId (IH58 literal; optional @domain hint) pour le proprietaire de l'enregistrement. |
-| `term_years` | Oui | Entier `1..=255`. |
-| `payment_asset_id` | Oui | Actif de settlement (par exemple `xor#sora`). |
-| `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites natives de l'actif. |
-| `settlement_tx` | Oui | Valeur JSON ou chaine litterale decrivant la transaction de paiement ou hash. |
-| `payment_payer` | Oui | AccountId qui a autorise le paiement. |
-| `payment_signature` | Oui | JSON ou chaine litterale contenant la preuve de signature du steward ou de la tresorerie. |
-| `controllers` | Optionnel | Liste separee par point-virgule ou virgule des adresses de compte controller. Par defaut `[owner]` si omis. |
-| `metadata` | Optionnel | JSON inline ou `@path/to/file.json` fournissant des hints de resolver, des enregistrements TXT, etc. Par defaut `{}`. |
-| `governance` | Optionnel | JSON inline ou `@path` pointant vers un `GovernanceHookV1`. `--require-governance` impose cette colonne. |
+|コロンヌ |必須 |説明 |
+|----------|----------|---------------|
+| `label` |おうい |リベル要求 (casse mixte acceptee; l'outil 正規化 selon Norm v1 et UTS-46)。 |
+| `suffix_id` |おうい |接尾辞の識別子 (10 進数または `0x` 16 進数)。 |
+| `owner` |おうい | Chaine AccountId (IH58 リテラル; オプションの @domain ヒント) は登録の所有権を表します。 |
+| `term_years` |おうい |エンティア `1..=255`。 |
+| `payment_asset_id` |おうい |和解行為 (`xor#sora` など)。 |
+| `payment_gross` / `payment_net` |おうい | Entiers nonsignes 代表者 des 団結ネイティブ de l'actif。 |
+| `settlement_tx` |おうい | Valeur JSON は、トランザクションの支払いとハッシュのチェーンリッターの決定を行います。 |
+| `payment_payer` |おうい | AccountId は支払いの自動化に使用されます。 |
+| `payment_signature` |おうい | JSON は、管理者と管理者の署名を含む、一連のコンテンツです。 |
+| `controllers` |オプション |ポイント仮想とコンピューティング コントローラのアドレスを個別にリストします。デフォルトの `[owner]` は省略されています。 |
+| `metadata` |オプション | JSON インライン ou `@path/to/file.json` リゾルバーのヒント、TXT 登録など。デフォルトの `{}`。 |
+| `governance` |オプション | JSON インライン ou `@path` ポイントと `GovernanceHookV1` 。 `--require-governance` セッテコロンを課します。 |
 
-Toute colonne peut referencer un fichier externe en prefixant la valeur de cellule
-par `@`. Les chemins sont resolus relativement au fichier CSV.
+Toute Colonne peut Referencer un fichier externe en prefixant la valeur de cellule
+パー `@`。相対的な CSV を表示します。
 
-## 2. Executer l'helper
+## 2. ヘルパーの死刑執行人
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -56,16 +58,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-Options cles:
+オプションの設定:
 
-- `--require-governance` rejette les lignes sans hook de gouvernance (utile pour
-  les encheres premium ou les affectations reservees).
-- `--default-controllers {owner,none}` decide si les cellules controllers vides
-  retombent sur le compte owner.
-- `--controllers-column`, `--metadata-column`, et `--governance-column` permettent
-  de renommer les colonnes optionnelles lors d'exports amont.
+- `--require-governance` フック・ド・ガバナンスなしのリジェット・レ・リーニュ（使用料の支払い）
+  レ サンシェール プレミアム アウト レ アフェクション リザーブ)。
+- `--default-controllers {owner,none}` セル コントローラーのビデオを決定します
+  retombent sur le compte オーナー。
+- `--controllers-column`、`--metadata-column`、および `--governance-column` 永続
+  de renommer les Colonnes optionnelles lors d'exports amont。
 
-En cas de succes le script ecrit un manifeste agrege:
+成功した場合のマニフェスト合意のスクリプト:
 
 ```json
 {
@@ -103,8 +105,8 @@ En cas de succes le script ecrit un manifeste agrege:
 ```
 
 Si `--ndjson` est fourni, chaque `RegisterNameRequestV1` est aussi ecrit comme un
-document JSON sur une ligne afin que les automatisations puissent streamer les
-requetes directement vers Torii:
+自動化されたストリーマー ファイルに関するドキュメント JSON
+Torii に対する指示を要求します:
 
 ```bash
 jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
@@ -116,12 +118,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. Soumissions automatisees
+## 3. 送金の自動化
 
-### 3.1 Mode Torii REST
+### 3.1 モード Torii REST
 
-Specifiez `--submit-torii-url` plus `--submit-token` ou `--submit-token-file` pour
-pousser chaque entree du manifeste directement vers Torii:
+`--submit-torii-url` と `--submit-token` または `--submit-token-file` を指定します。
+Pousser チャック メイン デュ マニフェスト ディレクション 対 Torii:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -132,19 +134,19 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- L'helper emet un `POST /v1/sns/registrations` par requete et s'arrete au premier
-  erreur HTTP. Les reponses sont ajoutees au log comme enregistrements NDJSON.
-- `--poll-status` re-interroge `/v1/sns/registrations/{selector}` apres chaque
-  soumission (jusqu'a `--poll-attempts`, defaut 5) pour confirmer que
-  l'enregistrement est visible. Fournissez `--suffix-map` (JSON de `suffix_id`
-  vers des valeurs "suffix") pour que l'outil derive les litteraux
-  `{label}.{suffix}` pour le polling.
-- Ajustables: `--submit-timeout`, `--poll-attempts`, et `--poll-interval`.
+- `POST /v1/sns/registrations` のリクエストとプレミアのサポートを提供します
+  HTTP でエラーが発生しました。 NDJSON を登録するための応答を返します。
+- `--poll-status` 再質問 `/v1/sns/registrations/{selector}` チャク前
+  soumission (jusqu'a `--poll-attempts`、デフォルト 5) 確認者キューを注ぐ
+  登録が表示されます。フルニセ `--suffix-map` (`suffix_id` の JSON)
+  vers des valeurs "接尾語") pour que l'outilderive les litteraux
+  `{label}.{suffix}` ポーリングを実行します。
+- 調整可能: `--submit-timeout`、`--poll-attempts`、および `--poll-interval`。
 
-### 3.2 Mode iroha CLI
+### 3.2 モード iroha CLI
 
-Pour faire passer chaque entree du manifeste par la CLI, fournissez le chemin du
-binaire:
+フェール パサー チャク メイン デュ マニフェスト パー ラ CLI、フォーニセ ル シュミン デュを注ぐ
+ビネール:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -154,20 +156,18 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Les controllers doivent etre des entrees `Account` (`controller_type.kind = "Account"`)
-  car la CLI expose uniquement des controllers bases sur des comptes.
-- Les blobs metadata et governance sont ecrits dans des fichiers temporaires par
-  requete et transmis a `iroha sns register --metadata-json ... --governance-json ...`.
-- Le stdout et stderr de la CLI ainsi que les codes de sortie sont journalises;
-  les codes non zero interrompent l'execution.
+- メインのコントローラー `Account` (`controller_type.kind = "Account"`)
+  車の CLI は、コンピューティング上のコントローラー ベースの一意性を公開します。
+- ブロックのメタデータとガバナンスに関するセキュリティ ダン デフィシエ テンポレアの説明
+  `iroha sns register --metadata-json ... --governance-json ...` を要求して送信します。
+- CLI の標準出力と標準エラーを記録し、出撃時のコードを記録します。
+  ファイルはゼロ以外の一時的な実行をコードします。Les deux modes de soumission peuvent fonctionner ensemble (Torii et CLI) を注ぐ
+レジストラによるデプロイメントとフォールバックのレピーター。
 
-Les deux modes de soumission peuvent fonctionner ensemble (Torii et CLI) pour
-croiser les deployments du registrar ou repeter des fallbacks.
+### 3.3 任務の遂行
 
-### 3.3 Recus de soumission
-
-Quand `--submission-log <path>` est fourni, le script ajoute des entrees NDJSON
-capturant:
+Quand `--submission-log <path>` 4 つ目、メインのスクリプト NDJSON
+捕虜:
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -175,18 +175,18 @@ capturant:
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-Les reponses Torii reussies incluent des champs structures extraits de
-`NameRecordV1` ou `RegisterNameResponseV1` (par exemple `record_status`,
-`record_pricing_class`, `record_owner`, `record_expires_at_ms`,
-`registry_event_version`, `suffix_id`, `label`) afin que les dashboards et les
-reports de gouvernance puissent parser le log sans inspecter du texte libre.
-Joignez ce log aux tickets registrar avec le manifeste pour une evidence
-reproductible.
+Les reponses Torii reussies incluent des Champs 構造の特典
+`NameRecordV1` または `RegisterNameResponseV1` (例 `record_status`、
+`record_pricing_class`、`record_owner`、`record_expires_at_ms`、
+`registry_event_version`、`suffix_id`、`label`) ダッシュボードなどについて
+テキストリブレの検査官なしで、ログを管理するパーサーのレポートを作成します。
+ジョイネス CE ログ補助チケット登録者は、証拠を提出するマニフェストを記録します
+再現可能。
 
-## 4. Automatisation de release du portail
+## 4. ポータルのリリースの自動化
 
-Les jobs CI et portail appellent `docs/portal/scripts/sns_bulk_release.sh`, qui
-encapsule l'helper et stocke les artefacts sous
+職務CIおよびポータルの控訴人`docs/portal/scripts/sns_bulk_release.sh`、qui
+ヘルパーとストックのアーティファクトをカプセル化します
 `artifacts/sns/releases/<timestamp>/`:
 
 ```bash
@@ -200,27 +200,27 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-Le script:
+スクリプト:
 
-1. Construit `registrations.manifest.json`, `registrations.ndjson`, et copie le
-   CSV original dans le repertoire de release.
-2. Soumet le manifeste via Torii et/ou la CLI (quand configure), en ecrivant
-   `submissions.log` avec les recus structures ci-dessus.
-3. Emet `summary.json` decrivant la release (chemins, URL Torii, chemin CLI,
-   timestamp) afin que l'automatisation du portail puisse uploader le bundle vers
-   le stockage d'artefacts.
-4. Produit `metrics.prom` (override via `--metrics`) contenant des compteurs
-   au format Prometheus pour le total de requetes, la distribution des suffixes,
-   les totaux d'asset et les resultats de soumission. Le JSON resume pointe vers
-   ce fichier.
+1. `registrations.manifest.json`、`registrations.ndjson` などを作成し、ファイルをコピーします
+   CSV オリジナルのレパートリーをリリース。
+2. Torii et/ou la CLI (quand configure)、暗号化経由のファイルマニフェスト
+   `submissions.log` avec les recus 構造 ci-dessus。
+3. Emet `summary.json` derivant la release (chemins、URL Torii、chemin CLI、
+   タイムスタンプ) アップローダーのバンドル版の自動化をサポートします
+   芸術品の在庫。
+4. 製品 `metrics.prom` (`--metrics` 経由で上書き) コンテナント
+   au 形式 Prometheus リクエストの合計数、サフィックスの分布、
+   資産と使命の結果。 JSON 再開ポワントバージョン
+   CEフィシエ。
 
-Les workflows archivent simplement le repertoire de release comme un seul artefact,
-qui contient desormais tout ce dont la gouvernance a besoin pour l'audit.
+ワークフローは、アーティファクトをリリースするレパートリーを単純化してアーカイブし、
+監査を行う必要はなく、管理を強化する必要があります。
 
-## 5. Telemetrie et dashboards
+## 5. テレメトリとダッシュボード
 
-Le fichier de metriques genere par `sns_bulk_release.sh` expose les series
-suivantes:
+`sns_bulk_release.sh` による指標のジャンルの公開シリーズ
+スイバンテス:
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -231,41 +231,41 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-Injectez `metrics.prom` dans votre sidecar Prometheus (par exemple via Promtail ou
-un import batch) pour aligner registrars, stewards et pairs de gouvernance sur
-l'avancement en masse. Le tableau Grafana
-`dashboards/grafana/sns_bulk_release.json` visualise les memes donnees avec des
-panneaux pour les comptes par suffixe, le volume de paiement et les ratios de
-reussite/echec des soumissions. Le tableau filtre par `release` pour que les
-auditeurs puissent se concentrer sur une seule execution CSV.
+Injectez `metrics.prom` および votre サイドカー Prometheus (Promtail ou による例)
+インポートバッチ）アライナレジストラ、スチュワード、および政府当局のペアを注ぐ
+一斉に前進。ル タブロー Grafana
+`dashboards/grafana/sns_bulk_release.json` ミームの平均値を視覚化する
+接尾語のコンプ、量と比率のパノラマを注ぎます
+reussite/echec des somissions。 `release` によるフィルター フィルター
+Auditeurs puissent se concentrer sur une seule execution CSV。
 
-## 6. Validation et modes d'echec
+## 6. 検証と実装方法
 
-- **Normalisation des labels:** les entrees sont normalisees avec Python IDNA plus
-  lowercase et filtres de caracteres Norm v1. Les labels invalides echouent vite
-  avant tout appel reseau.
-- **Garde-fous numeriques:** suffix ids, term years, et pricing hints doivent
-  rester dans les bornes `u16` et `u8`. Les champs de paiement acceptent des
-  entiers decimaux ou hex jusqu'a `i64::MAX`.
-- **Parsing metadata ou governance:** le JSON inline est parse directement; les
-  references a des fichiers sont resolues relativement a l'emplacement du CSV.
-  Les metadata non-objet produisent une erreur de validation.
-- **Controllers:** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (par exemple `ih58...;ih58...`) quand vous deleguez a des
-  acteurs non owner.
+- **ラベルの正規化:** Python IDNA plus の主成分を正規化する
+  小文字と文字フィルターの標準 v1。ラベルはエコーエントバイトを無効にします
+  アヴァン・タウト・アペル・レゾー。
+- **派手な数字:** サフィックス ID、期間年数、価格設定のヒントなど
+  レスター・ダン・レ・ボーン `u16` と `u8`。 Les champs de paiement acceptent des
+  10 進数または 16 進数 `i64::MAX`。
+- **メタデータの解析とガバナンス:** ファイルの JSON インライン est 解析ディレクション。レ
+  CSV の配置に関連する解決策の決定を参照します。
+  オブジェクトではないメタデータが検証に失敗する可能性があります。
+- **コントローラー:** セルセルは、関連する `--default-controllers` を参照します。フルニセズ
+  明示的なリスト (`ih58...;ih58...` など) は、完全に削除されたものです。
+  俳優は所有者ではありません。
 
-Les echecs sont signales avec des numeros de ligne contextuels (par exemple
-`error: row 12 term_years must be between 1 and 255`). Le script sort avec le
-code `1` sur erreurs de validation et `2` lorsque le chemin CSV manque.
+Les echecs Sont signales avec des numeros de ligne contextuels (par example)
+`error: row 12 term_years must be between 1 and 255`)。スクリプトソートアベックファイル
+コード `1` 検証エラーと `2` lorsque le chemin CSV manque。
 
-## 7. Tests et provenance
+## 7. テストと来歴
 
-- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` couvre le parsing CSV,
-  l'emission NDJSON, l'enforcement governance, et les chemins de soumission CLI ou Torii.
-- L'helper est du Python pur (aucune dependance additionnelle) et tourne partout
-  ou `python3` est disponible. L'historique des commits est suivi aux cotes de la
-  CLI dans le depot principal pour la reproductibilite.
+- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` クーブル ファイルの CSV 解析、
+  NDJSON の排出、ガバナンスの執行、および管理 CLI または Torii。
+- Python のヘルパー (聴覚依存性追加) とツールの一部
+  ou `python3` est 責任があります。歴史的な歴史
+  CLI はデポのプリンシパルであり、再生産を行っています。
 
-Pour les runs de production, joignez le manifeste genere et le bundle NDJSON au
-ticket du registrar afin que les stewards puissent rejouer les payloads exacts
-soumis a Torii.
+プロダクションの実行、マニフェストジェネレーションおよびバンドル NDJSON au の実行を開始します。
+レジストラのチケット、スチュワードのペイロードの正確な内容
+そうみは Torii です。

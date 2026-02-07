@@ -7,71 +7,79 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c7ab0877a6f43402d6ec13a44c4a7c2b68e4a49e6103bb50d7469d9e71aaa953
 source_last_modified: "2025-12-29T18:16:35.984945+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# MOCHI Packaging Guide
+# MOCHI ཐུམ་སྒྲིལ་ལམ་སྟོན།
 
-This guide explains how to build the MOCHI desktop supervisor bundle, inspect
-the generated artefacts, and tune the runtime overrides that ship with the
-bundle. It complements the quickstart by focusing on reproducible packaging
-and CI usage.
+ལམ་སྟོན་འདི་གིས་ MOCHI ཌེཀསི་ཊོཔ་ལྟ་རྟོག་པ་ བཱན་ཌལ་ ག་དེ་སྦེ་བཟོ་ནི་ཨིན་ན་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ ཞིབ་དཔྱད་འབདཝ་ཨིན།
+བཟོ་ཡོད་པའི་དངོས་པོ་དང་ དེ་ལས་ རན་ཊའིམ་འདི་ བསྒྱིར་ཏེ་ གྲུ་དང་གཅིག་ཁར་ སྐྱེལ་འདྲེན་འབདཝ་ཨིན།
+བམ་ཆག། འདི་གིས་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ ཐུམ་སྒྲིལ་ལུ་གཙོ་བོར་བསྟེན་ཏེ་ མགྱོགས་དྲགས་འགོ་བཙུགས་ནི་ལུ་ ལྷན་ཐབས་འབདཝ་ཨིན།
+དང་ CI ལག་ལེན།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Rust toolchain (edition 2024 / Rust 1.82+) with workspace dependencies
-  already built.
-- `irohad`, `iroha_cli`, and `kagami` compiled for the desired target. The
-  bundler reuses binaries from `target/<profile>/`.
-- Sufficient disk space for the bundle output under `target/` or a custom
-  destination.
+- ལཱ་གི་ས་སྒོ་ལུ་བརྟེན་པའི་ རསཊི་ལག་ཆས་རྒྱུན་ (པར་གཞི་ ༢༠༢༤ / རཱསིཊི་ ༡.༨༢+)
+  བཞེངས་ཚར་ཡི།
+- `irohad`, དང་ `iroha_cli`, དང་ `kagami` གིས་ དགོ་འདོད་ཡོད་པའི་དམིགས་གཏད་ཀྱི་དོན་ལུ་ བསྡུ་སྒྲིག་འབད་ཡོདཔ་ཨིན། ཚིག༌ཕྲད
+  བཱན་ཌི་ལར་གྱིས་ `target/<profile>/` ལས་ གཉིས་ལྡན་ཚུ་ ལོག་ལག་ལེན་འཐབ་ཨིན།
+- `target/` ཡང་ན་ སྲོལ་སྒྲིག་ཅིག་གི་འོག་ལུ་ བཱན་ཌལ་ཨའུཊི་པུཊི་གི་དོན་ལུ་ ཌིཀསི་བར་སྟོང་ལངམ་སྦེ་ཡོདཔ་ཨིན།
+  འགྱོ་ས།
 
-Build the dependencies once before running the bundler:
+བཱན་ཌི་ལར་གཡོག་མ་བཀོལ་བའི་ཧེ་མ་ བརྟེན་པ་ཚུ་ཚར་གཅིག་བཟོ་བསྐྲུན་འབད།
 
 ```bash
 cargo build -p irohad -p iroha_cli -p iroha_kagami
 ```
 
-## Building the bundle
+## བརྩེགས་བསྐྲུན།
 
-Invoke the dedicated `xtask` command from the repository root:
+མཛོད་ཁང་རྩ་བའི་ནང་ལས་ `xtask` བརྡ་བཀོད་འདི་ འབོད་བརྡ་འབད།
 
 ```bash
 cargo xtask mochi-bundle
 ```
 
-By default this produces a release bundle under `target/mochi-bundle/` with a
-filename derived from the host OS and architecture (for example,
-`mochi-macos-aarch64-release.tar.gz`). Use the following flags to customise
-the build:
+སྔོན་སྒྲིག་གིས་ འདི་གིས་ `target/mochi-bundle/` གི་འོག་ལུ་ གསར་བཏོན་འབད་ཡོད་པའི་བང་རིམ་ཅིག་ ཅིག་དང་གཅིག་ཁར་ བཟོཝ་ཨིན།
+ཧོསིཊི་ཨོ་ཨེསི་དང་བཟོ་བཀོད་ (དཔེར་ན་ ,
+`mochi-macos-aarch64-release.tar.gz`). འོག་གི་དར་ཆ་ཚུ་ སྲོལ་སྒྲིག་འབད་ནི་ལུ་ལག་ལེན་འཐབ།
+བཟོ་བཀོད།
 
-- `--profile <name>` – choose a Cargo profile (`release`, `debug`, or a
-  custom profile).
-- `--no-archive` – keep the expanded directory without creating a `.tar.gz`
-  archive (useful for local testing).
-- `--out <path>` – write bundles to a custom directory instead of
+- `--profile <name>` – ཀར་གོ་གསལ་སྡུད་ (`release`, `debug`, ཡང་ན་ a གདམ་ཁ་རྐྱབས།
+  སྲོལ་སྒྲིག་རང་ལུགས་གསལ་སྡུད་)།
+- `--no-archive` – `.tar.gz` གསར་བསྐྲུན་མ་འབད་བར་ རྒྱ་བསྐྱེད་འབད་ཡོད་པའི་སྣོད་ཐོ་འདི་བཞག་དགོ།
+  གཏན་མཛོད་ (ས་གནས་ཀྱི་བརྟག་དཔྱད་ལུ་ཕན་ཐོགས་ཡོདཔ་)།
+- `--out <path>` – དེ་གི་ཚབ་ལུ་ སྲོལ་སྒྲིག་སྣོད་ཐོ་ཅིག་ལུ་ བཱན་ཌི་ཚུ་བྲིས།
   `target/mochi-bundle/`.
-- `--kagami <path>` – supply a prebuilt `kagami` executable to include in the
-  archive. When omitted, the bundler reuses (or builds) the binary from the
-  selected profile.
-- `--matrix <path>` – append bundle metadata to a JSON matrix file (created if
-  missing) so CI pipelines can record every host/profile artefact produced in a
-  run. Entries include the bundle directory, manifest path and SHA-256, optional
-  archive location, and the latest smoke-test result.
-- `--smoke` – execute the packaged `mochi --help` as a lightweight smoke gate
-  after bundling; failures surface missing dependencies before publishing an
-  artefact.
-- `--stage <path>` – copy the finished bundle (and archive when produced) into
-  a staging directory so multi-platform builds can deposit artefacts in one
-  location without extra scripting.
+- `--kagami <path>` – སྔོན་བཟོའི་ `kagami` ལག་ལེན་འཐབ་བཏུབ་སྦེ་ བཀོལ་སྤྱོད་འབད་ཚུགསཔ་བཟོ་ནི།
+  གཏན་མཛོད། བཀོ་བཞག་པའི་སྐབས་ བཱན་ཌི་ལར་གྱིས་ (ཡང་ན་བཟོ་བསྐྲུན་) གཉིས་ལས་གཉིས་ལྡན་འདི་ ལོག་ལག་ལེན་འཐབ་ཨིན།
+  སེལ་འཐུ་འབད་ཡོད་པའི་གསལ་སྡུད།
+- `--matrix <path>` – JSON མེ་ཊིགསི་ཡིག་སྣོད་ (གསར་བསྐྲུན་འབད་བ་ཅིན་ གསར་བསྐྲུན་འབད་ཡོདཔ་ཨིན།
+  བརླག་སོང་།
+  རྒྱུག༌ནི། ཐོ་བཀོད་ཚུ་ནང་ བཱན་ཌལ་སྣོད་ཐོ་དང་ གསལ་སྟོན་འགྲུལ་ལམ་ དེ་ལས་ SHA-256 གདམ་ཁ་ཅན་ཚུ་ཚུདཔ་ཨིན།
+  གཏན་མཛོད་ཀྱི་ས་གནས་དང་ ཐ་མག་བརྟག་དཔྱད་ཀྱི་གྲུབ་འབྲས།
+- ```
+bin/mochi
+bin/kagami
+config/sample.toml
+docs/README.md
+manifest.json
+LICENSE
+``` – ཐུམ་སྒྲིལ་ཅན་གྱི་ `mochi --help` འདི་ ལྗིད་ཚད་ཆུང་བའི་ དུ་པའི་སྒོ་ཅིག་སྦེ་ ལག་ལེན་འཐབ་ཨིན།
+  བསྡམས་པའི་ཤུལ་ལས་; ཕྱིར་འཐེན་འཐུས་ཤོར་ ཁ་ཐོག་མེད་པའི་བརྟེན་པ་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་
+  ཅ་རྙིང་།
+- `--stage <path>` – མཇུག་བསྡུ་ཡོད་པའི་བཱུན་ཌལ་ (དང་ གཏན་མཛོད་ཐོན་སྐྱེད་) ལུ་འདྲ་བཤུས་རྐྱབས།
+  འཁྲབ་སྟོན་གྱི་སྣོད་ཐོ།
+  ས་གནས་ཁ་སྐོང་ཡིག་གཟུགས་མེད་པར་།
 
-The command copies `mochi-ui-egui`, `kagami`, `LICENSE`, the sample
-configuration, and `mochi/BUNDLE_README.md` into the bundle. A deterministic
-`manifest.json` is generated alongside the binaries so CI jobs can track file
-hashes and sizes.
+བརྡ་བཀོད་འདྲ་བཤུས་ཚུ་ `mochi-ui-egui`, `kagami`, `LICENSE`, དཔེ་ཚད་འདི།
+རིམ་སྒྲིག་, དང་ `mochi/BUNDLE_README.md` བཱན་ཌལ་ནང་། A ཐག་གཅོད།
+`manifest.json` འདི་ གཉིས་ལྡན་གྱི་མཉམ་དུ་བཟོ་བཏོན་འབད་ཡོདཔ་ལས་ CI ལཱ་ཚུ་གིས་ ཡིག་སྣོད་འདི་ བརྟག་ཞིབ་འབད་ཚུགས།
+༡ ཧའི་ཤེད་དང་ཚད་གཞི།
 
-## Bundle layout and verification
+## བུནཌལ་སྒྲིག་བཀོད་དང་བདེན་དཔྱད།
 
-An expanded bundle follows the layout documented in `BUNDLE_README.md`:
+རྒྱ་བསྐྱེད་འབད་ཡོད་པའི་བཱན་ཌལ་འདི་ `BUNDLE_README.md` ནང་ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་སྒྲིག་བཀོད་འདི་གི་ཤུལ་ལས་ཨིན།
 
 ```
 bin/mochi
@@ -82,56 +90,54 @@ manifest.json
 LICENSE
 ```
 
-The `manifest.json` file lists every artefact with its SHA-256 hash. Verify
-the bundle after copying it to another system:
+`manifest.json` ཡིག་སྣོད་འདི་གིས་ དེ་གི་ SHA-256 ཧེཤ་དང་གཅིག་ཁར་ ཅ་ཆས་ག་ར་ཐོ་བཀོད་འབདཝ་ཨིན། བདེན༌དཔྱད༌འབད༌ནི
+རིམ་ལུགས་གཞན་ཅིག་ལུ་འདྲ་བཤུས་རྐྱབ་པའི་ཤུལ་ལས་ བཱན་ཌལ་འདི་:
 
 ```bash
 jq -r '.files[] | "\(.sha256)  \(.path)"' manifest.json | sha256sum --check
 ```
 
-CI pipelines can cache the expanded directory, sign the archive, or publish
-the manifest alongside release notes. The manifest includes the generator
-profile, target triple, and creation timestamp to aid provenance tracking.
+སི་ཨའི་ པའིཔ་ལའིན་ཚུ་གིས་ རྒྱ་བསྐྱེད་འབད་ཡོད་པའི་སྣོད་ཐོ་འདི་ འདྲ་མཛོད་འབད་བཏུབ་ ཡིག་མཛོད་ལུ་མིང་རྟགས་བཀོད་ནི་ཡང་ན་ དཔར་བསྐྲུན་འབད་ཚུགས།
+གསལ་སྟོན་དང་མཉམ་པའི་གསར་བཏོན་དྲན་ཐོ། གསལ་སྟོན་འདི་ནང་ གློག་ཤུགས་འཕྲུལ་ཆས་ཚུ་ཚུདཔ་ཨིན།
+གསལ་སྡུད་དང་ དམིགས་གཏད་གསུམ་དང་ གསར་བསྐྲུན་དུས་ཚོད་མཚོན་རྟགས་ འབྱུང་ཁུངས་རྗེས་འདེད་འབད་ནི་ལུ་ཕན་ཐོགས།
 
-## Runtime overrides
+## གཡོག་བཀོལ།
 
-MOCHI discovers helper binaries and runtime locations through CLI flags or
-environment variables:
-
-- `--data-root` / `MOCHI_DATA_ROOT` – override the workspace used for peer
-  configs, storage, and logs.
-- `--profile` – switch between topology presets (`single-peer`,
+MOCHI གིས་ CLI དར་ཆ་ ཡང་ན་ བརྒྱུད་དེ་ གྲོགས་རམ་གཉིས་ལྡན་དང་ རན་ཊའིམ་ས་གནས་ཚུ་ འཚོལ་ཞིབ་འབདཝ་ཨིན།
+མཐའ་འཁོར་འགྱུར་བ།- `--data-root` / `MOCHI_DATA_ROOT` – མཉམ་རོགས་ཀྱི་དོན་ལུ་ལག་ལེན་འཐབ་མི་ལཱ་གི་ས་སྒོ་འདི་བཀག་བཞག།
+  རིམ་སྒྲིག་དང་ གསོག་འཇོག་ དེ་ལས་ དྲན་ཐོ་ཚུ།
+- `--profile` – ཊོ་པོ་ལོ་ཇི་སྔོན་སྒྲིག་ཚུ་གི་བར་ན་ སོར་བསྒྱུར་ (`single-peer`,
   `four-peer-bft`).
-- `--torii-start`, `--p2p-start` – change the base ports used when allocating
-  services.
-- `--irohad` / `MOCHI_IROHAD` – point at a specific `irohad` binary.
-- `--kagami` / `MOCHI_KAGAMI` – override the bundled `kagami`.
-- `--iroha-cli` / `MOCHI_IROHA_CLI` – override the optional CLI helper.
-- `--restart-mode <never|on-failure>` – disable automatic restarts or force the
-  exponential backoff policy.
-- `--restart-max <attempts>` – override the number of restart attempts when
-  running in `on-failure` mode.
-- `--restart-backoff-ms <millis>` – set the base backoff for automatic restarts.
-- `MOCHI_CONFIG` – provide a custom `config/local.toml` path.
+- `--torii-start`, `--p2p-start` – བགོ་བཀྲམ་འབད་བའི་སྐབས་ལག་ལེན་འཐབ་ཡོད་པའི་གཞི་རྟེན་འདྲེན་ལམ་ཚུ་བསྒྱུར་བཅོས་འབད།
+  ཞབས་ཏོག།
+- `--irohad` / `MOCHI_IROHAD` – དམིགས་བསལ་གྱི་`irohad` གཉིས་ལྡན་ལུ་སྟོན་དགོ།
+- `--kagami` / `MOCHI_KAGAMI` – བཱན་ཌི་ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༤༤ཨེགསི་འདི་ བཀག་ཆ་འབད་ཡོདཔ།
+- `--iroha-cli` / `MOCHI_IROHA_CLI` – གདམ་ཁའི་སི་ཨེལ་ཨའི་གྲོགས་རམ་འདི་བཀག་ཆ་འབད།
+- `--restart-mode <never|on-failure>` – རང་བཞིན་གྱིས་ལོག་འགོ་བཙུགས་ནི་ལྕོགས་མིན་བཟོ་ནི་ཡང་ན་ 1 ལུ་ཤུགས་བཏོན།
+  exontonacent རྒྱབ་ཐག་སྲིད་བྱུས།
+- `--restart-max <attempts>` – ནམ་དུས་ལུ་ ལོག་འགོ་བཙུགས་ནི་གི་དཔའ་བཅམ་མི་གི་གྱངས་ཁ་འདི་བཀག་བཞག།
+  `irohad` ཐབས་ལམ་ནང་གཡོག་བཀོལ།
+- `--restart-backoff-ms <millis>` – རང་བཞིན་གྱིས་ལོག་འགོ་བཙུགས་ནིའི་དོན་ལུ་ གཞི་རྟེན་རྒྱབ་གཞི་འདི་གཞི་སྒྲིག་འབད།
+- `MOCHI_CONFIG` – སྲོལ་སྒྲིག་ `config/local.toml` འགྲུལ་ལམ་ཅིག་བྱིནམ་ཨིན།
 
-The CLI help (`mochi --help`) prints the full flag list. Environment overrides
-take effect on launch and can be combined with the Settings dialog inside the
+CLI གྲོགས་རམ་ (`mochi --help`) གིས་ དར་ཆ་ཐོ་ཡིག་ཆ་ཚང་དཔར་བསྐྲུན་འབདཝ་ཨིན། ཁོར་ཡུག ཁོར་ཡུག
+འགོ་འབྱེད་ལུ་ནུས་པ་དང་ དེ་ལས་ ནང་ན་སྒྲིག་སྟངས་ཌའི་ལོག་དང་གཅིག་ཁར་བསྡོམས་ཚུགས།
 UI.
 
-## CI usage hints
+## CI ལག་ལེན་གྱི་བརྡ་སྟོན།
 
-- Run `cargo xtask mochi-bundle --no-archive` to generate a directory that can
-  be zipped with platform-specific tooling (ZIP for Windows, tarballs for
-  Unix).
-- Capture bundle metadata with `cargo xtask mochi-bundle --matrix dist/matrix.json`
-  so release jobs can publish a single JSON index listing every host/profile
-  artefact produced in the pipeline.
-- Use `cargo xtask mochi-bundle --stage /mnt/staging/mochi` (or similar) on each
-  build agent to upload the bundle and archive into a shared directory that the
-  publishing job can consume.
-- Publish both the archive and `manifest.json` so operators can verify bundle
-  integrity.
-- Store the generated directory as a build artefact to seed smoke tests that
-  exercise the supervisor with deterministically packaged binaries.
-- Record bundle hashes in release notes or in the `status.md` log for future
-  provenance checks.
+- སྣོད་ཐོ་ཅིག་བཟོ་བཏོན་འབད་ནིའི་དོན་ལུ་ `cargo xtask mochi-bundle --no-archive` གཡོག་བཀོལ།
+  འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༠ རིག་པ།(༡) འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ཀྱིས་ འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་
+  ཡུ་ནིགསི་).
+- `cargo xtask mochi-bundle --matrix dist/matrix.json` དང་གཅིག་ཁར་ བཱན་ཌལ་མེ་ཊ་ཌེ་ཊ་ བཟུང་ནི།
+  དེ་འབདཝ་ལས་ ལཱ་ཚུ་བཏོན་གཏང་མི་འདི་གིས་ ཧོསིཊི་/གསལ་སྡུད་རེ་རེ་བཞིན་ཐོ་བཀོད་འབད་མི་ ཇེ་ཨེསི་ཨོ་ཨེན་ཟུར་ཐོ་གཅིག་དཔར་བསྐྲུན་འབད་ཚུགས།
+  མདོང་ལམ་ནང་ལུ་ཐོན་པའི་ ཅ་རྙིང་།
+- རེ་རེ་ལུ་ `kagami` (ཡང་ན་དེ་དང་འདྲ་) ལག་ལེན་འཐབ།
+  བཟོ་བསྐྲུན་ལས་སྡེ་འདི་ བཱན་ཌལ་དང་ཡིག་མཛོད་འདི་ རུབ་སྤྱོད་འབད་ཡོད་པའི་སྣོད་ཐོ་ནང་ལུ་ སྐྱེལ་བཙུགས་འབད་ནི་ལུ་ མཉམ་རུབ་འབད་ཡོད་པའི་སྣོད་ཐོ་ནང་ལུ་ཨིན།
+  དཔར་བསྐྲུན་འབད་མི་འདི་གིས་ ཟ་སྤྱོད་འབད་ཚུགས།
+- ཡིག་མཛོད་གཉིས་ཆ་རང་དཔར་བསྐྲུན་འབད་ཡོདཔ་དང་ `manifest.json` གིས་ བཱན་ཌལ་བདེན་དཔྱད་འབད་ཚུགས།
+  དྲང་བདེན།
+- བཟོ་བཏོན་འབད་ཡོད་པའི་སྣོད་ཐོ་འདི་ ས་བོན་དུ་བའི་བརྟག་དཔྱད་ལུ་ བཟོ་བསྐྲུན་གྱི་ཅ་ཆས་ཅིག་སྦེ་ གསོག་འཇོག་འབད།
+  ལྟ་རྟོག་པ་འདི་ གཏན་འཁེལ་སྦེ་ ཐུམ་སྒྲིལ་འབད་དེ་ཡོད་པའི་ གཉིས་ལྡན་ཚུ་ ལག་ལེན་འཐབ།
+- གསར་བཏོན་འབད་མི་ དྲན་ཐོ་ཚུ་ནང་ བཱན་ཌལ་ཧེ་ཤེ་ཚུ་ ཡང་ན་ མ་འོངས་པའི་དོན་ལུ་ `status.md` དྲན་ཐོ་ནང་ ཐོ་བཀོད་འབད།
+  འབྱུང་ཁུངས་ཞིབ་དཔྱད་ཚུ།

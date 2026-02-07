@@ -7,46 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf489427d0eba2beebfdefc44092730c3963cbd77e83669853f4e9681ac9fd2d
 source_last_modified: "2025-12-29T18:16:35.092552+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Operator Verification Report (Phase T0)
+## အော်ပရေတာအတည်ပြုချက်အစီရင်ခံစာ (အဆင့် T0)
 
-- Operator name: ______________________
-- Relay descriptor ID: ______________________
-- Submission date (UTC): ___________________
-- Contact email / matrix: ___________________
+- အော်ပရေတာအမည်- ______________________
+- Relay ဖော်ပြချက် ID- ______________________
+- တင်သွင်းသည့်ရက်စွဲ (UTC): ___________________
+- ဆက်သွယ်ရန်အီးမေးလ် / matrix: ___________________
 
-### Checklist Summary
+### စာရင်းအကျဉ်းချုပ်
 
-| Item | Completed (Y/N) | Notes |
-|------|-----------------|-------|
-| Hardware & network validated | | |
-| Compliance block applied | | |
-| Admission envelope verified | | |
-| Guard rotation smoke test | | |
-| Telemetry scraped & dashboards live | | |
-| Brownout drill executed | | |
-| PoW ticket success within target | | |
+| အမျိုးအမည် | ပြီးပါပြီ (Y/N) | မှတ်စုများ |
+|------|-----------------|------|
+| ဟာ့ဒ်ဝဲနှင့် ကွန်ရက်ကို အတည်ပြုထားသည် | | |
+| လိုက်နာမှုပိတ်ဆို့ခြင်း | | |
+| ဝင်ခွင့်စာအိတ် စိစစ်ပြီး | | |
+| အစောင့်အလှည့်မီးခိုးစမ်းသပ် | | |
+| Telemetry ခြစ်ပြီး ဒက်ရှ်ဘုတ်များ တိုက်ရိုက်ထုတ်လွှင့်သည် | | |
+| အမဲစက် ကွပ်မျက်ခြင်း | | |
+| PoW လက်မှတ်အောင်မြင်မှု | | |
 
-### Metrics Snapshot
+### မက်ထရစ်များ လျှပ်တစ်ပြက်
 
-- PQ ratio (`sorafs_orchestrator_pq_ratio`): ________
-- Downgrade count last 24h: ________
-- Average circuit RTT (p95): ________ ms
-- PoW median solve time: ________ ms
+- PQ အချိုး (`sorafs_orchestrator_pq_ratio`): ________
+- ပြီးခဲ့သော 24 နာရီအတွင်း အဆင့်နှိမ့်ချမှုရေတွက်- ________
+- ပျမ်းမျှပတ်လမ်း RTT (p95): ________ ms
+- PoW ပျမ်းမျှဖြေရှင်းချိန်- ________ ms
 
-### Attachments
+### တွယ်တာမှု
 
-Please attach:
+ပူးတွဲပါ-
 
-1. Relay support bundle hash (`sha256`): __________________________
-2. Dashboard screenshots (PQ ratio, circuit success, PoW histogram).
-3. Signed drill bundle (`drills-signed.json` + signer public key hex and attachments).
-4. SNNet-10 metrics report (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
+1. Relay ပံ့ပိုးမှုအစုအဝေး hash (`sha256`): __________________________
+2. Dashboard ဖန်သားပြင်ဓာတ်ပုံများ (PQ အချိုး၊ ဆားကစ်အောင်မြင်မှု၊ PoW histogram)။
+3. လက်မှတ်ရေးထိုးထားသော drill အတွဲ (`drills-signed.json` + လက်မှတ်ထိုးသူ အများသူငှာသော့ hex နှင့် ပူးတွဲပါဖိုင်များ)။
+4. SNNet-10 မက်ထရစ်အစီရင်ခံစာ (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`)။
 
-### Operator Signature
+### အော်ပရေတာလက်မှတ်
 
-I certify the above information is accurate and all required steps have been
-completed.
+အထက်ဖော်ပြပါ အချက်အလက်များသည် တိကျမှန်ကန်ပြီး လိုအပ်သော အဆင့်များအားလုံးကို ပြီးမြောက်ကြောင်း ကျွန်ုပ် အသိအမှတ်ပြုပါသည်။
+ပြီးပါပြီ။
 
-Signature: _________________________  Date: ___________________
+လက်မှတ်- _________________________ ရက်စွဲ- ___________________

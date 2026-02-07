@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 168513edcb6624ab76275b01aaaf6ab9dee310b9d6f5a2960504a9545801c511
 source_last_modified: "2026-01-28T13:08:23.284550+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Kotodama Examples Overview
+# Kotodama 示例概述
 
-This page shows concise Kotodama examples and how they map to IVM syscalls and pointer‑ABI arguments. See also:
-- `examples/` for runnable sources
-- `docs/source/ivm_syscalls.md` for the canonical syscall ABI
-- `kotodama_grammar.md` for the full language specification
+本页显示了简洁的 Kotodama 示例以及它们如何映射到 IVM 系统调用和指针 ABI 参数。另请参阅：
+- `examples/` 用于可运行源
+- `docs/source/ivm_syscalls.md` 用于规范系统调用 ABI
+- `kotodama_grammar.md` 完整的语言规范
 
-## Hello + Account Detail
+## 您好 + 帐户详细信息
 
-Source: `examples/hello/hello.ko`
+来源：`examples/hello/hello.ko`
 
 ```
 seiyaku Hello {
@@ -34,13 +35,13 @@ seiyaku Hello {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
-- `set_account_detail(a, k, v)` → move `r10=&AccountId`, `r11=&Name`, `r12=&Json`, then `SCALL 0x1A`
+映射（指针-ABI）：
+- `authority()` → `SCALL 0xA4`（主机将 `&AccountId` 写入 `r10`）
+- `set_account_detail(a, k, v)` → 移动 `r10=&AccountId`、`r11=&Name`、`r12=&Json`，然后移动 `SCALL 0x1A`
 
-## Asset Transfer
+## 资产转移
 
-Source: `examples/transfer/transfer.ko`
+来源：`examples/transfer/transfer.ko`
 
 ```
 seiyaku TransferDemo {
@@ -55,12 +56,12 @@ seiyaku TransferDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
+映射（指针-ABI）：
+- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`、`r11=&AccountId(to)`、`r12=&AssetDefinitionId(def)`、`r13=amount`，然后是 `SCALL 0x24`
 
-## NFT Create + Transfer
+## NFT创建+转移
 
-Source: `examples/nft/nft.ko`
+来源：`examples/nft/nft.ko`
 
 ```
 seiyaku NftDemo {
@@ -79,16 +80,16 @@ seiyaku NftDemo {
 }
 ```
 
-Mapping (pointer‑ABI):
-- `nft_mint_asset(id, owner)` → `r10=&NftId`, `r11=&AccountId(owner)`, `SCALL 0x25`
-- `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`, `r11=&NftId`, `r12=&AccountId(to)`, `SCALL 0x26`
+映射（指针-ABI）：
+- `nft_mint_asset(id, owner)` → `r10=&NftId`、`r11=&AccountId(owner)`、`SCALL 0x25`
+- `nft_transfer_asset(from, id, to)` → `r10=&AccountId(from)`、`r11=&NftId`、`r12=&AccountId(to)`、`SCALL 0x26`
 
-## Pointer Norito Helpers
+## 指针 Norito 帮助程序
 
-Pointer-valued durable state requires converting typed TLVs to and from the
-`NoritoBytes` envelope that hosts persist. Kotodama now wires these helpers
-directly through the compiler so builders can use pointer defaults and map
-lookups without manual FFI glue:
+指针值持久状态需要在类型化 TLV 与
+`NoritoBytes` 主机持续存在的信封。 Kotodama 现在连接这些助手
+直接通过编译器，因此构建者可以使用指针默认值和映射
+无需手动 FFI 粘合的查找：
 
 ```
 seiyaku PointerDemo {
@@ -107,21 +108,21 @@ seiyaku PointerDemo {
 }
 ```
 
-Lowering:
+降低：
 
-- Pointer defaults emit `POINTER_TO_NORITO` after publishing the typed TLV, so
-  the host receives a canonical `NoritoBytes` payload for storage.
-- Reads perform the reverse operation with `POINTER_FROM_NORITO`, supplying the
-  expected pointer type id in `r11`.
-- Both paths automatically publish literal TLVs into the INPUT region, allowing
-  contracts to mix string literals and runtime pointers transparently.
+- 发布类型化 TLV 后，指针默认发出 `POINTER_TO_NORITO`，因此
+  主机接收规范的 `NoritoBytes` 有效负载进行存储。
+- 读取使用 `POINTER_FROM_NORITO` 执行相反操作，提供
+  `r11` 中预期的指针类型 ID。
+- 两条路径都会自动将文字 TLV 发布到 INPUT 区域，从而允许
+  透明地混合字符串文字和运行时指针的契约。
 
-See `crates/ivm/tests/kotodama_pointer_args.rs` for a runtime regression that
-exercises the round-trip against the `MockWorldStateView`.
+有关运行时回归，请参阅 `crates/ivm/tests/kotodama_pointer_args.rs`
+针对 `MockWorldStateView` 进行往返练习。
 
-## Deterministic Map Iteration (design)
+## 确定性映射迭代（设计）
 
-Deterministic map for‑each requires a bound. Multi-entry iteration requires a state map; the compiler accepts `.take(n)` or a declared maximum length.
+每个的确定性映射都需要一个界限。多入口迭代需要状态图；编译器接受 `.take(n)` 或声明的最大长度。
 
 ```
 // design example (iteration requires bounds and state storage)
@@ -136,21 +137,21 @@ fn sum_first_two() -> int {
 }
 ```
 
-Semantics:
-- Iteration set is a snapshot at loop entry; order is lexicographic by Norito bytes of the key.
-- Structural mutations to `M` in the loop trap with `E_ITER_MUTATION`.
-- Without a bound the compiler emits `E_UNBOUNDED_ITERATION`.
+语义：
+- 迭代集是循环入口处的快照；顺序按密钥的 Norito 字节字典顺序排列。
+- `E_ITER_MUTATION` 循环陷阱中 `M` 的结构突变。
+- 如果没有限制，编译器会发出 `E_UNBOUNDED_ITERATION`。
 
-## Compiler/host internals (Rust, not Kotodama source)
+## 编译器/主机内部（Rust，不是 Kotodama 源）
 
-The snippets below live on the Rust side of the toolchain. They illustrate compiler helpers and VM lowering mechanics and are **not** valid Kotodama `.ko` source.
+下面的代码片段位于工具链的 Rust 端。它们说明了编译器帮助程序和 VM 降低机制，并且**不是**有效的 Kotodama `.ko` 源。
 
-## Wide Opcode Chunked Frame Updates
+## 宽操作码分块帧更新
 
-Kotodama’s wide opcode helpers target the 8-bit operand layout used by the IVM
-wide encoding. Loads and stores that move 128-bit values reuse the third operand
-slot for the high register, so the base register must already hold the final
-address. Adjust the base with an `ADDI` before issuing the load/store:
+Kotodama 的宽操作码帮助程序针对 IVM 使用的 8 位操作数布局
+宽编码。移动 128 位值的加载和存储重用第三个操作数
+高位寄存器的插槽，因此基址寄存器必须已经保存了最终的
+地址。在发出加载/存储之前，使用 `ADDI` 调整底座：
 
 ```
 use ivm::kotodama::wide::{encode_addi_checked, encode_load128, encode_store128};
@@ -160,40 +161,38 @@ fn emit_store_pair(base: u8, lo: u8, hi: u8) -> [u32; 2] {
     let store = encode_store128(base, lo, hi);
     [adjust, store]
 }
-```
+```分块帧更新以 16 字节为步长推进基数，确保寄存器
+由 `STORE128` 提交的对落在所需的对齐边界上。一样的
+模式适用于 `LOAD128`；之前发出具有所需步幅的 `ADDI`
+每次加载都将高目标寄存器绑定到第三个操作数槽。
+未对齐的地址陷阱为 `VMError::MisalignedAccess`，与 VM 匹配
+在 `crates/ivm/tests/wide_memory128.rs` 中执行的行为。
 
-Chunked frame updates advance the base in 16-byte steps, ensuring the register
-pair committed by `STORE128` lands on the required alignment boundary. The same
-pattern applies to `LOAD128`; issuing an `ADDI` with the desired stride before
-each load keeps the high destination register bound to the third operand slot.
-Misaligned addresses trap with `VMError::MisalignedAccess`, matching the VM
-behaviour exercised in `crates/ivm/tests/wide_memory128.rs`.
+发出这些 128 位帮助器的程序必须通告向量功能。
+Kotodama 编译器在任何时候都会自动启用 `VECTOR` 模式位
+`LOAD128`/`STORE128` 出现； VM 陷阱
+`VMError::VectorExtensionDisabled` 如果程序尝试执行它们
+没有设置该位。
 
-Programs that emit these 128-bit helpers must advertise vector capability.
-The Kotodama compiler enables the `VECTOR` mode bit automatically whenever
-`LOAD128`/`STORE128` appear; the VM traps with
-`VMError::VectorExtensionDisabled` if a program attempts to execute them
-without that bit set.
+## 宽条件分支降低
 
-## Wide Conditional Branch Lowering
+当 Kotodama 将 `if`/`else` 或三元分支降低为宽字节码时，它会发出
+修复了 `BNE cond, zero, +2` 序列，后跟一对 `JAL` 指令：
 
-When Kotodama lowers an `if`/`else` or ternary branch to wide bytecode it emits a
-fixed `BNE cond, zero, +2` sequence followed by a pair of `JAL` instructions:
+1. 短 `BNE` 将条件分支保持在 8 位立即通道内
+   通过跳过失败 `JAL`。
+2. 第一个 `JAL` 的目标是 `else` 块（当条件满足时执行
+   假）。
+3. 第二个 `JAL` 跳转到 `then` 块（当条件为
+   正确）。
 
-1. The short `BNE` keeps the conditional branch within the 8-bit immediate lane
-   by jumping over the fallthrough `JAL`.
-2. The first `JAL` targets the `else` block (executed when the condition is
-   false).
-3. The second `JAL` jumps to the `then` block (taken when the condition is
-   true).
+这种模式保证条件检查永远不需要编码更大的偏移量
+超过 ±127 个字，同时仍支持 `then` 的任意大主体
+和 `else` 通过宽 `JAL` 帮助器进行块。参见
+`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` 为
+锁定序列的回归测试。
 
-This pattern guarantees the condition check never needs to encode offsets larger
-than ±127 words while still supporting arbitrarily large bodies for the `then`
-and `else` blocks via the wide `JAL` helper. See
-`crates/ivm/tests/kotodama.rs::branch_lowering_uses_short_bne_and_dual_jal` for
-the regression test that locks in the sequence.
-
-### Example Lowering
+### 降低示例
 
 ```
 fn branch(b: bool) -> int {
@@ -201,8 +200,8 @@ fn branch(b: bool) -> int {
 }
 ```
 
-Compiles to the following wide instruction skeleton (register numbers and
-absolute offsets depend on the enclosing function):
+编译为以下宽指令框架（寄存器号和
+绝对偏移量取决于封闭函数）：
 
 ```
 BNE cond_reg, x0, +2    # skip the fallthrough jump when the condition is true
@@ -210,6 +209,6 @@ JAL x0, else_offset     # execute when the condition is false
 JAL x0, then_offset     # execute when the condition is true
 ```
 
-Subsequent instructions materialise the constants and write the return value.
-Because the `BNE` jumps over the first `JAL`, the conditional offset is always
-`+2` words, keeping the branch within range even when the block bodies expand.
+后续指令具体化常量并写入返回值。
+因为 `BNE` 跳过第一个 `JAL`，所以条件偏移量始终为
+`+2`字，即使块体扩展时也将分支保持在范围内。

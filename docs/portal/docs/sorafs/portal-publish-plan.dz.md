@@ -11,21 +11,22 @@ id: portal-publish-plan
 title: Docs Portal → SoraFS Publish Plan
 sidebar_label: Portal Publish Plan
 description: Step-by-step checklist for shipping the docs portal, OpenAPI, and SBOM bundles via SoraFS.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/portal_publish_plan.md`. Update both copies when the workflow changes.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+མེ་ལོང་ `docs/source/sorafs/portal_publish_plan.md`. ལཱ་གི་རྒྱུན་རིམ་བསྒྱུར་བཅོས་འགྱོཝ་ད་ འདྲ་བཤུས་གཉིས་ཆ་རང་དུས་མཐུན་བཟོ་དགོ།
 :::
 
-Roadmap item DOCS-7 requires every docs artefact (portal build, OpenAPI spec,
-SBOMs) to flow through the SoraFS manifest pipeline and serve via `docs.sora`
-with `Sora-Proof` headers. This checklist stitches the existing helpers together
-so Docs/DevRel, Storage, and Ops can run the release without hunting through
-multiple runbooks.
+རོ་ཌི་མེཔ་ཅ་ཆས་ DOCS-7 ལུ་ ཡིག་ཆ་རེ་རེ་དགོཔ་ཨིན།
+SBOMs) SoraFS བརྒྱུད་དེ་ བཞུར་ནིའི་དོན་ལུ་ གསལ་སྟོན་འབད་དེ་ I18NI0000013X བརྒྱུད་དེ་ ཕྱག་ཞུ་དོ་ཡོདཔ་ཨིན།
+I18NI000000014X མགོ་ཡིག་དང་མཉམ་དུ། ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་གིས་ ད་ལྟོ་ཡོད་པའི་གྲོགས་རམ་པ་ཚུ་གཅིག་ཁར་བཙུགསཔ་ཨིན།
+དེ་འབདཝ་ལས་ Docs/DevRel, Storage, དང་ Ops ཚུ་གིས་ འཚོལ་ཞིབ་མ་འབད་བར་ བཏོན་གཏང་ཚུགས།
+རན་དེབ་མང་པོ།
 
-## 1. Build & Package Payloads
+## 1. བཟོ་བསྐྲུན་དང་ཐུམ་སྒྲིལ་གྱི་གླ་ཆ་ཚུ།
 
-Run the packaging helper (skip options are available for dry-runs):
+ཐུམ་སྒྲིལ་གྱི་གྲོགས་རམ་པ་ (སྐརམ་གྱི་གདམ་ཁ་ཚུ་ སྐམ་རན་ཚུ་གི་དོན་ལུ་འཐོབ་ཚུགས།):
 
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
@@ -36,12 +37,12 @@ Run the packaging helper (skip options are available for dry-runs):
   --proof
 ```
 
-- `--skip-build` reuses `docs/portal/build` if CI already produced it.
-- Add `--skip-sbom` when `syft` is unavailable (e.g., air-gapped rehearsal).
-- The script runs the portal tests, emits CAR + manifest pairs for `portal`,
-  `openapi`, `portal-sbom`, and `openapi-sbom`, verifies each CAR when
-  `--proof` is set, and drops Sigstore bundles when `--sign` is set.
-- Output structure:
+- `--skip-build` གིས་ I18NI000000016X གིས་ སི་ཨའི་གིས་ ཧེ་མ་ལས་ བཟོ་བསྐྲུན་འབད་བ་ཅིན་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཨིན།
+- `--skip-sbom` འདི་ I18NI000000018X མེད་པའི་སྐབས་ ཁ་སྐོང་རྐྱབས་ (དཔེར་ན་ རླུང་གིས་ གུག་གུགཔ་འབད་མི་ བསྐྱར་གསོ་)
+- ཡིག་ཚུགས་འདི་གིས་ དྲྭ་ཐོག་བརྟག་དཔྱད་ཚུ་གཡོག་བཀོལ་དོ་ཡོདཔ་ད་ འདི་གིས་ CAR + གསལ་སྟོན་ཆ་གཅིག་འདི་ `portal` གི་དོན་ལུ་ བཏོནམ་ཨིན།
+  I18NI000000020X, `portal-sbom`, དང་ I18NI000000022X, གིས་ CAR རེ་རེ་བཞིན་ ག་དུས་བདེན་དཔང་འབདཝ་ཨིན།
+  I18NI00000000023X གཞི་སྒྲིག་འབད་ཡོདཔ་དང་ I18NI000000024X གཞི་སྒྲིག་འབད་བའི་སྐབས་ Sigstore བང་རིམ་ཚུ་བཏོནམ་ཨིན།
+- ཐོན་འབྲས་གཞི་བཀོད་:
 
 ```json
 {
@@ -63,67 +64,37 @@ Run the packaging helper (skip options are available for dry-runs):
 }
 ```
 
-Keep the entire folder (or symlink via `artifacts/devportal/sorafs/latest`) so
-governance reviewers can trace build artifacts.
+སྣོད་འཛིན་ཆ་མཉམ་ (ཡང་ན་ `artifacts/devportal/sorafs/latest` བརྒྱུད་དེ་) དེ་འབདཝ་ལས་ དེ་སྦེ་བཞག་དགོ།
+གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཅ་ཆས་བཟོ་ཚུགས།
 
-## 2. Pin Manifests + Aliases
+## 2. པིན་མན་ངག་ + མི།
 
-Use `sorafs_cli manifest submit` to push manifests into Torii and bind aliases.
-Set `${SUBMITTED_EPOCH}` to the latest consensus epoch (from
-`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` or your dashboard).
+I18NI000000026X ལག་ལེན་འཐབ། མངོན་གསལ་ཚུ་ Torii ནང་ལུ་ བསྐུལ་མ་འབད་དེ་ མིང་ཚིག་ཚུ་ བསྡམ་དགོ།
+`${SUBMITTED_EPOCH}` འཕྲལ་གྱི་མོས་མཐུན་གྱི་དུས་སྐབས་ལུ་གཞི་སྒྲིག་འབད།
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` ཡང་ན་ ཁྱོད་ཀྱི་ཌེཤ་བོརཌ་)།
 
-```bash
-OUT="artifacts/devportal/sorafs/20260219T130012Z"
-TORII_URL="https://torii.stg.sora.net/"
-AUTHORITY="ih58..."
-KEY_FILE="secrets/docs-admin.key"
-ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
+I18NF0000008X
 
-cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-  manifest submit \
-  --manifest="${OUT}/portal.manifest.to" \
-  --chunk-plan="${OUT}/portal.plan.json" \
-  --torii-url="${TORII_URL}" \
-  --submitted-epoch="${SUBMITTED_EPOCH}" \
-  --authority="${AUTHORITY}" \
-  --private-key-file "${KEY_FILE}" \
-  --alias-namespace docs \
-  --alias-name portal \
-  --alias-proof "${ALIAS_PROOF}" \
-  --summary-out "${OUT}/portal.manifest.submit.json" \
-  --response-out "${OUT}/portal.manifest.response.json"
-```
-
-- Repeat for `openapi.manifest.to` and the SBOM manifests (omit alias flags for
-  SBOM bundles unless governance assigns a namespace).
-- Alternative: `iroha app sorafs pin register` works with the digest from the submit
-  summary if the binary is already installed.
-- Verify registry state with
+- I18NI000000029X གི་དོན་ལུ་བསྐྱར་ལོག་དང་ SBOM གིས་ གསལ་སྟོན་འབདཝ་ཨིན་ (མིང་གཞན་དར་ཆ་ཚུ་ for for for to the for the for the to the for the for the for the for the for the for the for the 20
+  གཞུང་སྐྱོང་གིས་ མིང་ས་སྒོ་ཅིག་འགན་སྤྲོད་མ་འབད་ཚུན་ ཨེསི་བི་ཨོ་ཨེམ་བཱན་ཌལ་ཚུ་)།
+- གདམ་ཁ་: I18NI000000030X ཕུལ་མི་ལས་ ཟས་བཅུད་དང་གཅིག་ཁར་ལཱ་འབདཝ་ཨིན།
+  གཉིས་ལྡན་འདི་ཧེ་མ་ལས་རང་གཞི་བཙུགས་འབད་དེ་ཡོད་པ་ཅིན་བཅུད་བསྡུས།
+- དང་བཅས་ ཐོ་བཀོད་གནས་སྟངས་བདེན་དཔྱད་འབད།
   `iroha app sorafs pin list --alias docs:portal --format json | jq`.
-- Dashboards to watch: `sorafs_pin_registry.json` (`torii_sorafs_replication_*`
+- ཌེཤ་བོརཌ་བལྟ་ནི་: `sorafs_pin_registry.json` (I18NI000000033X)
   metrics).
 
-## 3. Gateway Headers & Proofs
+## 3. གྷེཊ་ཝེ་ མགོ་ཡིག་དང་བདེན་དཔང་།
 
-Generate the HTTP header block + binding metadata:
+ཨེཆ་ཊི་ཊི་པི་མགོ་ཡིག་སྡེབ་ཚན་ + བཱའིན་ཌིང་མེ་ཊ་ཌེ་ཊ་: བཏོན་གཏང་།
 
-```bash
-iroha app sorafs gateway route-plan \
-  --manifest-json "${OUT}/portal.manifest.json" \
-  --hostname docs.sora \
-  --alias docs:portal \
-  --route-label docs-portal-20260219 \
-  --proof-status ok \
-  --headers-out "${OUT}/portal.gateway.headers.txt" \
-  --out "${OUT}/portal.gateway.plan.json"
-```
+I18NF0000009X
 
-- The template includes `Sora-Name`, `Sora-CID`, `Sora-Proof`, and
-  `Sora-Proof-Status` headers plus the default CSP/HSTS/Permissions-Policy.
-- Use `--rollback-manifest-json` to render a paired rollback header set.
+- ཊེམ་པེལེཊ་ནང་ `Sora-Name`, I18NI000000035X, I18NI000000036X, དང་།
+  `Sora-Proof-Status` མགོ་ཡིག་ཚུ་དང་ སྔོན་སྒྲིག་སི་ཨེསི་པི་/ཨེཆ་ཨེསི་ཊི་ཨེསི་/པེར་མརསི་-སྲིད་བྱུས།
+- ཆ་སྒྲིག་འབད་ཡོད་པའི་བཤུད་མགོ་ཆ་ཚན་ཅིག་བཟོ་ནི་ལུ་ `--rollback-manifest-json` ལག་ལེན་འཐབ།
 
-Before exposing traffic, run:
+འགྲུལ་སྐྱོད་ཕྱིར་བཏོན་མ་འབད་བའི་ཧེ་མ་ གཡོག་བཀོལ།
 
 ```bash
 ./ci/check_sorafs_gateway_probe.sh -- \
@@ -136,14 +107,14 @@ scripts/sorafs_gateway_self_cert.sh \
   --output artifacts/sorafs_gateway_self_cert/docs
 ```
 
-- The probe enforces GAR signature freshness, alias policy, and TLS cert
-  fingerprints.
-- The self-cert harness downloads the manifest with `sorafs_fetch` and stores
-  CAR replay logs; keep the outputs for audit evidence.
+- འཚོལ་ཞིབ་འདི་གིས་ གཱར་མིང་རྟགས་གསརཔ་དང་ མིང་གཞན་སྲིད་བྱུས་ དེ་ལས་ ཊི་ཨེལ་ཨེསི་ལག་ཁྱེར་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  མཛུབ་མོའི་པར་རིས།
+- རང་གིས་རང་གི་ལག་ཁྱེར་གྱི་ དམ་སྦྱིས་འདི་གིས་ `sorafs_fetch` དང་ཚོང་ཁང་ཚུ་གི་ཐོག་ལས་ གསལ་སྟོན་འདི་ཕབ་ལེན་འབདཝ་ཨིན།
+  CAR བསྐྱར་རྩེད་དྲན་ཐོ་ཚུ་; རྩིས་ཞིབ་སྒྲུབ་བྱེད་ཀྱི་ཐོན་འབྲས་ཚུ་བཞག་དགོ།
 
 ## 4. DNS & Telemetry Guardrails
 
-1. Refresh the DNS skeleton so governance can prove the binding:
+༡ ཌི་ཨེན་ཨེསི་ཀེང་རུས་གསརཔ་འདི་གིས་ གཞུང་སྐྱོང་འདི་གིས་ བཱའིན་ཌིང་འདི་ བདེན་ཁུངས་བཀལ་ཚུགས།
 
    ```bash
    scripts/sns_zonefile_skeleton.py \
@@ -151,32 +122,32 @@ scripts/sorafs_gateway_self_cert.sh \
      --out artifacts/sorafs/portal.dns-cutover.json
    ```
 
-2. Monitor during rollout:
+2. འགོ་བཙུགས་སྐབས་བལྟ་རྟོག་པ།
 
    - `torii_sorafs_alias_cache_refresh_total`
-   - `torii_sorafs_gateway_refusals_total{profile="docs"}`
-   - `torii_sorafs_fetch_duration_ms` / `_failures_total`
+   - I18NI0000041X
+   - I18NI0000042X / `_failures_total`
 
-   Dashboards: `sorafs_gateway_observability.json`,
-   `sorafs_fetch_observability.json`, and the pin registry board.
+   ཌེཤ་བོརཌ་: `sorafs_gateway_observability.json`,
+   `sorafs_fetch_observability.json`, དང་ པིན་ཐོ་བཀོད་བང་ཡིག།
 
-3. Smoke the alert rules (`scripts/telemetry/test_sorafs_fetch_alerts.sh`) and
-   capture logs/screenshots for the release archive.
+3. ཉེན་བརྡའི་སྒྲིག་གཞི་ (I18NI0000046X) དང་།
+   བཟུང་བའི་དྲན་ཐོ་/གསར་བཏོན་ཡིག་མཛོད་ཀྱི་དོན་ལུ་ གསལ་གཞི་ཚུ།
 
-## 5. Evidence Bundle
+## 5. སྒྲུབ་བྱེད་ཀྱི་བསྡམས།
 
-Include the following in the release ticket or governance package:
+གསར་བཏོན་གྱི་ ཤོག་འཛིན་ཡང་ན་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ནང་ གཤམ་གསལ་ཚུ་ བཙུགས་ནི།
 
-- `artifacts/devportal/sorafs/<stamp>/` (CARs, manifests, SBOMs, proofs,
-  Sigstore bundles, submit summaries).
-- Gateway probe + self-cert outputs
+- I18NI00000047 (CARs, གསལ་སྟོན་, SBOMs, བདེན་དཔང་།
+  Sigstore བཱན་ཌལ་ཚུ་, བཅུད་བསྡུས་བཙུགས།)
+- སྒོ་ཁའི་འཚོལ་ཞིབ་ + རང་དོན་ལག་ཁྱེར་ཐོན་འབྲས་ཚུ།
   (`artifacts/sorafs_gateway_probe/<stamp>/`,
-  `artifacts/sorafs_gateway_self_cert/<stamp>/`).
-- DNS skeleton + header templates (`portal.gateway.headers.txt`,
-  `portal.gateway.plan.json`, `portal.dns-cutover.json`).
-- Dashboard screenshots + alert acknowledgements.
-- `status.md` update referencing the manifest digest and alias binding time.
+  I18NI000004X).
+- DNS skeleton + མགོ་ཡིག་ཊེམ་པེལེཊི་ (I18NI000000050X,
+  `portal.gateway.plan.json`, I18NI0000052X).
+- ཌེཤ་བོརཌི་གསལ་གཞི་ཚུ་ + ཉེན་བརྡ་ཚུ་ཉེན་བརྡ་འབདཝ་ཨིན།
+- `status.md` གིས་ གསལ་སྟོན་དང་ མིང་གཞན་ བཱའིན་ཌིང་དུས་ཚོད་ལུ་ གཞི་བསྟུན་འབད་ནི་ དུས་མཐུན་བཟོ་ཡོདཔ།
 
-Following this checklist delivers DOCS-7: the portal/OpenAPI/SBOM payloads are
-packaged deterministically, pinned with aliases, guarded by `Sora-Proof`
-headers, and monitored end-to-end through the existing observability stack.
+འདི་གི་ཤུལ་ལས་ བརྟག་ཞིབ་ཐོ་ཡིག་འདི་ DOCS-7: དྲྭ་ཚིགས་/OpenAPI/SBOM པེ་ལོཌི་ཚུ་ ༡.
+ཐུམ་སྒྲིལ་ཅན་གྱི་གཏན་འབེབས་ལྟར་ན། མིང་གཞན་དང་མཉམ་དུ་བསྡམས་ཡོད། I18NI000000054X གིས་སྲུང་ཡོད།
+མགོ་ཡིག་ཚུ་དང་ ད་ལྟོ་ཡོད་པའི་ བལྟ་བརྟོག་འབད་ཚུགས་པའི་ བང་རིམ་བརྒྱུད་དེ་ མཇུག་ལས་མཇུག་ཚུན་ཚོད་ ལྟ་རྟོག་འབད་ཡོདཔ་ཨིན།

@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
 source_last_modified: "2025-12-29T18:16:35.978367+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Impact Assessment Tooling (MINFO‑4b)
+# 影响评估工具 (MINFO-4b)
 
-Roadmap reference: **MINFO‑4b — Impact assessment tooling.**  
-Owner: Governance Council / Analytics
+路线图参考：**MINFO-4b — 影响评估工具。**  
+所有者：治理委员会/Analytics
 
-This note documents the `cargo xtask ministry-agenda impact` command that now
-produces the automated hash-family diff required for referendum packets. The
-tool consumes validated Agenda Council proposals, the duplicate registry, and
-an optional denylist/policy snapshot so reviewers can see exactly which
-fingerprints are new, which collide with existing policy, and how many entries
-each hash family contributes.
+本注释记录了现在的 `cargo xtask ministry-agenda impact` 命令
+生成公投数据包所需的自动哈希族差异。的
+工具使用经过验证的议程理事会提案、重复注册表以及
+可选的拒绝名单/策略快照，以便审核者可以准确地看到哪些
+指纹是新的，与现有策略相冲突，以及有多少条目
+每个哈希家族都有贡献。
 
-## Inputs
+## 输入
 
-1. **Agenda proposals.** One or more files that follow
-   [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md).
-   Pass them explicitly with `--proposal <path>` or point the command at a
-   directory via `--proposal-dir <dir>` and every `*.json` file under that path
-   is included.
-2. **Duplicate registry (optional).** A JSON file matching
-   `docs/examples/ministry/agenda_duplicate_registry.json`. Conflicts are
-   reported under `source = "duplicate_registry"`.
-3. **Policy snapshot (optional).** A lightweight manifest that lists every
-   fingerprint already enforced by GAR/Ministry policy. The loader expects the
-   schema shown below (see
+1. **议程提案。** 随后的一个或多个文件
+   [`docs/source/ministry/agenda_council_proposal.md`](agenda_council_proposal.md)。
+   使用 `--proposal <path>` 显式传递它们或将命令指向
+   通过 `--proposal-dir <dir>` 的目录以及该路径下的每个 `*.json` 文件
+   包括在内。
+2. **重复注册表（可选）。** 匹配的 JSON 文件
+   `docs/examples/ministry/agenda_duplicate_registry.json`。冲突是
+   报告为 `source = "duplicate_registry"`。
+3. **策略快照（可选）。** 列出每个策略的轻量级清单
+   GAR/部委政策已强制实施指纹。装载机期望
+   架构如下所示（参见
    [`docs/examples/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
-   for a complete sample):
+   完整的样本）：
 
 ```json
 {
@@ -56,10 +57,10 @@ each hash family contributes.
 }
 ```
 
-Any entry whose `hash_family:hash_hex` fingerprint matches a proposal target is
-reported under `source = "policy_snapshot"` with the referenced `policy_id`.
+任何 `hash_family:hash_hex` 指纹与提议目标匹配的条目都是
+在 `source = "policy_snapshot"` 下报告，并引用 `policy_id`。
 
-## Usage
+## 用法
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -69,8 +70,8 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/AC-2026-001.json
 ```
 
-Additional proposals can be appended via repeated `--proposal` flags or by
-supplying a directory that contains an entire referendum batch:
+可以通过重复的 `--proposal` 标志或通过
+提供包含整个公投批次的目录：
 
 ```bash
 cargo xtask ministry-agenda impact \
@@ -79,12 +80,12 @@ cargo xtask ministry-agenda impact \
   --out artifacts/ministry/impact/2026-03-31.json
 ```
 
-The command prints the generated JSON to stdout when `--out` is omitted.
+当省略 `--out` 时，该命令将生成的 JSON 打印到标准输出。
 
-## Output
+## 输出
 
-The report is a signed-off artefact (record it under the referendum packet’s
-`artifacts/ministry/impact/` directory) with the following structure:
+该报告是一份已签署的人工制品（将其记录在公投数据包的下方）
+`artifacts/ministry/impact/`目录），结构如下：
 
 ```json
 {
@@ -125,13 +126,13 @@ The report is a signed-off artefact (record it under the referendum packet’s
 }
 ```
 
-Attach this JSON to every referendum dossier alongside the neutral summary so
-panelists, jurors, and governance observers can see the exact blast radius of
-each proposal. The output is deterministic (sorted by hash family) and safe to
-include in CI/runbooks; if the duplicate registry or policy snapshot changes,
-rerun the command and attach the refreshed artefact before the vote opens.
+将此 JSON 与中立摘要一起附加到每个公投档案中，以便
+小组成员、陪审员和治理观察员可以看到确切的爆炸半径
+每个提案。输出是确定性的（按哈希族排序）并且可以安全地
+包含在 CI/运行手册中；如果重复的注册表或策略快照发生更改，
+在投票开始之前重新运行命令并附加刷新的工件。
 
-> **Next step:** feed the generated impact report into
-> [`cargo xtask ministry-panel packet`](referendum_packet.md) so the
-> `ReferendumPacketV1` dossier contains both the hash-family breakdown and the
-> detailed conflict list for the proposal under review.
+> **下一步：** 将生成的影响报告输入
+> [`cargo xtask ministry-panel packet`](referendum_packet.md) 所以
+> `ReferendumPacketV1` 档案包含哈希家族细分和
+> 正在审查的提案的详细冲突列表。

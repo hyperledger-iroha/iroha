@@ -4,11 +4,13 @@ direction: rtl
 source: docs/portal/docs/sdks/nexus-quickstarts.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Полный quickstart находится в `docs/source/nexus_sdk_quickstarts.md`. Этот обзор портала подчеркивает общие предпосылки и команды для каждого SDK, чтобы разработчики могли быстро проверить настройку.
+تأتي البداية السريعة الكاملة إلى `docs/source/nexus_sdk_quickstarts.md`. توفر بوابة البحث هذه جميع الاقتراحات والأوامر الخاصة بـ SDK التي يمكن للمصممين التحقق من صحتها.
 
-## Общая настройка
+## التركيب الجيد
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Скачайте конфигурационный пакет Nexus, установите зависимости каждого SDK и убедитесь, что TLS-сертификаты соответствуют профилю релиза (см. `docs/source/sora_nexus_operator_onboarding.md`).
+قم بتنزيل حزمة التكوين Nexus، وحافظ على دقة SDK وانضم إلى شهادة TLS نسخة الملف الشخصي (سم. `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## الصدأ
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,25 +30,25 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-См.: `docs/source/sdk/rust.md`
+سم .: `docs/source/sdk/rust.md`
 
-## JavaScript / TypeScript
+## جافا سكريبت / تايب سكريبت
 
 ```bash
 npm run demo:nexus
 ```
 
-Скрипт инициализирует `ToriiClient` с переменными окружения выше и печатает последний блок.
+يتم تهيئة البرنامج النصي `ToriiClient` مع الحفظ الإضافي وحذف الكتلة التالية.
 
-## Swift
+## سويفت
 
 ```bash
 make swift-nexus-demo
 ```
 
-Использует `Torii.Client` из `IrohaSwift`, чтобы получить `FindNetworkStatus`.
+استخدم `Torii.Client` من `IrohaSwift` لتحصل على `FindNetworkStatus`.
 
-## Android
+## أندرويد
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -54,9 +56,9 @@ make swift-nexus-demo
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-Запускает тест управляемого устройства, обращающийся к staging-эндпоинту Nexus.
+قم بإجراء اختبار التحكم في الجهاز، والذي يتم ربطه بنقطة التدريج Nexus.
 
-## CLI
+## كلي
 
 ```bash
 iroha_cli app nexus quickstart \
@@ -67,8 +69,8 @@ iroha_cli app nexus quickstart \
 
 ## Устранение неполадок
 
-- Сбои TLS -> проверьте CA bundle из tarball релиза Nexus.
-- `ERR_UNKNOWN_LANE` -> передайте `--lane-id`/`--dataspace-id`, когда будет включена маршрутизация multi-lane.
-- `ERR_SETTLEMENT_PAUSED` -> смотрите [Nexus operations](../nexus/nexus-operations) для процесса инцидента; возможно, governance приостановила lane.
+- استخدم TLS -> تحقق من حزمة CA من إصدار tarball Nexus.
+- `ERR_UNKNOWN_LANE` -> انتقل إلى `--lane-id`/`--dataspace-id`، عندما يتضمن التخطيط متعدد المسارات.
+- `ERR_SETTLEMENT_PAUSED` -> امسح [عمليات Nexus](../nexus/nexus-operations) لحادثة العملية؛ من الممكن أن يؤدي الحكم إلى حارة.
 
-Для более глубокого контекста и пояснений по SDK см. `docs/source/nexus_sdk_quickstarts.md`.
+لمزيد من المحتوى والتفاعل مع SDK sm. `docs/source/nexus_sdk_quickstarts.md`.

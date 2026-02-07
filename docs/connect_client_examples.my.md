@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2ecdf23dc61024ae4c509806700773d9b34ddd36076c1182cbeccd3654b29144
 source_last_modified: "2026-01-05T18:22:23.392202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Client Examples (TypeScript and Kotlin)
+## Iroha Client နမူနာများကို ချိတ်ဆက်ပါ (TypeScript နှင့် Kotlin)
 
-This document shows minimal client-side snippets implementing v0 rules:
-- AEAD AAD binds outer header (version, sid, dir, seq, kind=Ciphertext).
-- Nonce derived from `seq` (12-byte IETF nonce: 0x00000000 || seq_le).
-- Post‑Approve control frames (Close/Reject) sent encrypted.
+ဤစာရွက်စာတမ်းသည် v0 စည်းမျဉ်းများကို အကောင်အထည်ဖော်ရာတွင် အနည်းငယ်သာသော client-side အတိုအထွာများကို ပြသသည်-
+- AEAD AAD သည် ပြင်ပခေါင်းစီးအား ချိတ်ဆက်ထားသည် (ဗားရှင်း၊ sid၊ dir၊ seq၊ kind=Ciphertext)။
+- Nonce သည် `seq` (12-byte IETF nonce: 0x00000000 || seq_le) မှဆင်းသက်လာသည်။
+- Post-Approve ထိန်းချုပ်မှုဘောင်များ (ပိတ်/ငြင်းဆို) ကုဒ်ဖြင့် ပေးပို့ထားသည်။
 
-These are illustrative; hardening/production checks omitted.
+၎င်းတို့သည် သရုပ်ဖော်ပုံများဖြစ်သည်။ မာကျောခြင်း/ထုတ်လုပ်မှုစစ်ဆေးမှုများကို ချန်လှပ်ထားသည်။
 
 ### TypeScript (libsodium + WebCrypto)
 
-Dependencies: `libsodium-wrappers` (X25519, BLAKE2b, ChaCha20‑Poly1305), WebCrypto (HKDF‑SHA‑256).
+မှီခိုမှု- `libsodium-wrappers` (X25519၊ BLAKE2b၊ ChaCha20-Poly1305)၊ WebCrypto (HKDF-SHA-256)။
 
 ```ts
 import sodium from 'libsodium-wrappers';
@@ -101,7 +102,7 @@ async function openEnvelope(k: Uint8Array, sid: Uint8Array, dir: 'A2W'|'W2A', se
 
 ### Kotlin (JDK 11 + BouncyCastle)
 
-Dependencies:
+မှီခိုမှု-
 
 ```kotlin
 dependencies { implementation("org.bouncycastle:bcprov-jdk15on:1.78.1") }
@@ -199,7 +200,7 @@ fun main() {
 }
 ```
 
-Notes:
-- Client computes `sid` (32 bytes; base64url/hex) and POSTs it to `/v1/connect/session` to obtain one‑time tokens; server echoes `sid`. Join WS with `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>`.
-- After keys exist (Approve), send Close/Reject in encrypted payloads.
-- Dedupe keys and `seq` must be monotonic per direction for app/wallet frames; `Envelope.seq == frame.seq`. Server events use a separate server-side sequence and are excluded from AEAD/dedupe.
+မှတ်စုများ-
+- Client သည် `sid` (32 bytes; base64url/hex) ကိုတွက်ချက်ပြီး `/v1/connect/session` သို့ တစ်ကြိမ်တည်းတိုကင်များရရှိရန်၊ ဆာဗာသည် `sid` ကို ပဲ့တင်ထပ်သည်။ `Authorization: Bearer <token>` သို့မဟုတ် `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>` ဖြင့် WS ချိတ်ဆက်ပါ။
+- သော့များရှိနေပြီးနောက် (Approve)၊ ကုဒ်ဝှက်ထားသော payloads တွင် Close/Reject ကို ပေးပို့ပါ။
+- Dedupe သော့များနှင့် `seq` သည် အက်ပ်/ပိုက်ဆံအိတ်ဘောင်များအတွက် ဦးတည်ချက်အလိုက် မိုနိုတိုနီဖြစ်ရပါမည်။ `Envelope.seq == frame.seq`။ ဆာဗာဖြစ်ရပ်များသည် သီးခြား server-side sequence ကိုအသုံးပြုပြီး AEAD/dedupe မှ ဖယ်ထုတ်ထားသည်။

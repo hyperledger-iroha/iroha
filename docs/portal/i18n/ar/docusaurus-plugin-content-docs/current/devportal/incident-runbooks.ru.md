@@ -4,65 +4,67 @@ direction: rtl
 source: docs/portal/docs/devportal/incident-runbooks.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Ранбуки инцидентов и тренировки rollback
+# التراجع عن أحداث وتدريبات رانبوك
 
-## Назначение
+## روعة
 
-Пункт дорожной карты **DOCS-9** требует прикладных playbook'ов и плана репетиций, чтобы
-операторы портала могли восстанавливаться после сбоев доставки без догадок. Эта заметка
-охватывает три высокосигнальных инцидента - неудачные деплои, деградацию репликации и
-сбои аналитики - и документирует квартальные тренировки, доказывающие, что rollback alias
-и синтетическая валидация продолжают работать end to end.
+البطاقات الصغيرة **DOCS-9** تحتاج إلى قواعد اللعبة المتقنة والخطة التكرارية، لذلك
+يمكن إعادة تشغيل بوابة المشغلين بعد التسليم دون تأخير. هذه هي الحقيقة
+قم بإلقاء الضوء على ثلاث حوادث شديدة الأهمية - عمليات غير مرغوب فيها وتدهور التكرار و
+تحليلاتها - وتوثيق التدريبات الرباعية، الموثقة للاسم المستعار للتراجع
+والتحقق من صحة الاصطناعية يستمر في العمل من النهاية إلى النهاية.
 
-### Связанные материалы
+### مواد صناعية
 
-- [`devportal/deploy-guide`](./deploy-guide) — workflow упаковки, подписи и promotion alias.
-- [`devportal/observability`](./observability) — release tags, analytics и probes, упомянутые ниже.
-- `docs/source/sorafs_node_client_protocol.md`
-  и [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
-  — телеметрия реестра и пороги эскалации.
-- `docs/portal/scripts/sorafs-pin-release.sh` и helpers `npm run probe:*`
-  упомянуты в чеклистах.
+- [`devportal/deploy-guide`](./deploy-guide) — التعبئة والتغليف والنشر والاسم المستعار للترويج لسير العمل.
+- [`devportal/observability`](./observability) — علامات الإصدار والتحليلات والمسابير والتفاصيل الإضافية.
+-`docs/source/sorafs_node_client_protocol.md`
+  و [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
+  — مقياس القياس عن بعد وتصعيد الخطوات.
+- `docs/portal/scripts/sorafs-pin-release.sh` والمساعدين `npm run probe:*`
+  تلميحات في الاختيارات.
 
-### Общая телеметрия и инструменты
+### أجهزة القياس عن بعد والأدوات الشاملة
 
-| Сигнал / Инструмент | Назначение |
+| إشارة / أداة | الاسم |
 | ------------- | ------- |
-| `torii_sorafs_replication_sla_total` (met/missed/pending) | Выявляет остановки репликации и нарушения SLA. |
-| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Измеряет глубину backlog и задержку завершения для triage. |
-| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Показывает сбои со стороны gateway, часто следующие за плохим deploy. |
-| `npm run probe:portal` / `npm run probe:tryit-proxy` | Синтетические probes, которые gate релизы и проверяют rollbacks. |
-| `npm run check:links` | Gate битых ссылок; используется после каждой mitigation. |
-| `sorafs_cli manifest submit ... --alias-*` (через `scripts/sorafs-pin-release.sh`) | Механизм promotion/revert alias. |
-| `Docs Portal Publishing` Grafana board (`dashboards/grafana/docs_portal.json`) | Агрегирует refusals/alias/TLS/replication телеметрию. Алерты PagerDuty ссылаются на эти панели как на доказательства. |
+| `torii_sorafs_replication_sla_total` (تم اللقاء/الفائت/معلق) | نفذ النسخ المتماثلة واتفاقيات مستوى الخدمة (SLA). |
+| `torii_sorafs_replication_backlog_total`، `torii_sorafs_replication_completion_latency_epochs` | قم بتقليص حجم الأعمال المتراكمة وإنهاء إجراءات الفرز. |
+| `torii_sorafs_gateway_refusals_total`، `torii_sorafs_manifest_submit_total{status="error"}` | قم بعرض كل شيء باستخدام البوابة الأساسية، وهو ما يتبع كثيرًا للنشر الشامل. |
+| `npm run probe:portal` / `npm run probe:tryit-proxy` | المجسات الاصطناعية التي تقوم بإصدار البوابة والتحقق من التراجع. |
+| `npm run check:links` | بوابة بيتي ссылок; يتم الاستفادة من كل التخفيف. |
+| `sorafs_cli manifest submit ... --alias-*` (من خلال `scripts/sorafs-pin-release.sh`) | آلية الترويج/العودة إلى الاسم المستعار. |
+| لوحة `Docs Portal Publishing` Grafana (`dashboards/grafana/docs_portal.json`) | الموافقة على الرفض/الاسم المستعار/TLS/النسخ المتماثل عن بعد. يتم ضبط تنبيهات PagerDuty على هذه اللوحة كوسيلة للتسليم. |
 
-## Ранбук - Неудачный деплой или плохой артефакт
+## رانبوك - قطعة أثرية جديدة أو قطعة أثرية مسطحة
 
-### Условия срабатывания
+### سهولة التصنيع
 
-- Пробы preview/production падают (`npm run probe:portal -- --expect-release=...`).
-- Grafana alerts на `torii_sorafs_gateway_refusals_total` или
-  `torii_sorafs_manifest_submit_total{status="error"}` после rollout.
-- QA вручную замечает сломанные маршруты или сбои proxy Try it сразу после
-  promotion alias.
+- اختبار المعاينة/الإنتاج (`npm run probe:portal -- --expect-release=...`).
+- تنبيهات Grafana إلى `torii_sorafs_gateway_refusals_total` أو
+  `torii_sorafs_manifest_submit_total{status="error"}` بعد الطرح.
+- ضمان الجودة يضمن بقاء الجداول الزمنية أو الوكيل الخاص بك جربه بسرعة بعد ذلك
+  الاسم المستعار للترويج.
 
-### Немедленное сдерживание
+### التوصيل غير المحدود
 
-1. **Заморозить деплой:** отметить CI pipeline `DEPLOY_FREEZE=1` (input GitHub workflow)
-   или приостановить Jenkins job, чтобы новые артефакты не выходили.
-2. **Зафиксировать артефакты:** скачать `build/checksums.sha256`,
-   `portal.manifest*.{json,to,bundle,sig}`, и вывод probes из failing build,
-   чтобы rollback ссылался на точные digests.
-3. **Уведомить стейкхолдеров:** storage SRE, lead Docs/DevRel и governance duty officer
-   (особенно если затронут `docs.sora`).
+1. **تفعيل النشر:** حذف خط أنابيب CI `DEPLOY_FREEZE=1` (سير عمل GitHub المُدخل)
+   أو قم باستعادة وظيفة Jenkins من أجل عدم إزالة القطع الأثرية الجديدة.
+2. **تثبيت العناصر:** تنزيل `build/checksums.sha256`,
+   `portal.manifest*.{json,to,bundle,sig}`، وإخراج المسابير من البناء الفاشل،
+   чтобы التراجع сылался точные هضم.
+3. **التعرف على المستودع:** تخزين SRE، Docs/DevRel الرئيسي، والمسؤول المناوب للحوكمة
+   (خاصة إذا كان العميل `docs.sora`).
 
-### Процедура rollback
+### إجراء التراجع
 
-1. Определить last-known-good (LKG) manifest. Production workflow хранит их в
+1. قم بتقديم بيان آخر سلعة معروفة (LKG). سير عمل الإنتاج gratnit их в
    `artifacts/devportal/<release>/sorafs/portal.manifest.to`.
-2. Перепривязать alias к этому manifest с помощью shipping helper:
+2. تحويل الاسم المستعار إلى هذا البيان باستخدام مساعد الشحن:
 
 ```bash
 cd docs/portal
@@ -99,118 +101,118 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --summary-out artifacts/.../sorafs/rollback.submit.json
 ```
 
-3. Записать summary rollback в incident ticket вместе с digest LKG и неудачного manifest.
+3. قم بتدوين ملخص التراجع في تذكرة الحادث مع ملخص LKG والبيان غير الضروري.
 
-### Валидация
+### التحقق من الصحة
 
-1. `npm run probe:portal -- --expect-release=${LKG_TAG}`.
-2. `npm run check:links`.
-3. `sorafs_cli manifest verify-signature ...` и `sorafs_cli proof verify ...`
-   (см. deploy guide), чтобы убедиться, что repromoted manifest совпадает с архивным CAR.
-4. `npm run probe:tryit-proxy` чтобы убедиться, что Try-It staging proxy вернулся.
+1.`npm run probe:portal -- --expect-release=${LKG_TAG}`.
+2.`npm run check:links`.
+3.`sorafs_cli manifest verify-signature ...` و`sorafs_cli proof verify ...`
+   (دليل النشر)، لتتمكن من قراءة البيان المعاد ترقيته المصاحب لأرشيف CAR.
+4.`npm run probe:tryit-proxy` للتأكيد على تفعيل وكيل التدريج Try-It.
 
-### После инцидента
+### النتيجة النهائية
 
-1. Включить pipeline деплоя только после понимания root cause.
-2. Дополнить раздел "Lessons learned" в [`devportal/deploy-guide`](./deploy-guide)
-   новыми выводами, если есть.
-3. Завести defects для провалившихся тестов (probe, link checker, и т.д.).
+1. قم بإغلاق نشر خط الأنابيب بعد معالجة السبب الجذري فقط.
+2. قم بإضافة "الدروس المستفادة" إلى [`devportal/deploy-guide`](./deploy-guide)
+   novыми выводами، إذا كان الأمر كذلك.
+3. عيوب اختبارات التحقق (المسبار، مدقق الارتباط، وما إلى ذلك).
 
-## Ранбук - Деградация репликации
+## رانبوك - تدهور النسخ المتماثلة
 
-### Условия срабатывания
+### سهولة التصنيع
 
-- Алерт: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
-  clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) <
-  0.95` в течение 10 минут.
-- `torii_sorafs_replication_backlog_total > 10` в течение 10 минут (см.
+- تنبيه: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
+  المشبك_مين(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) <
+  0.95` في التقنية 10 دقائق.
+- `torii_sorafs_replication_backlog_total > 10` في التقنية 10 دقائق (سم.
   `pin-registry-ops.md`).
-- Governance сообщает о медленной доступности alias после release.
+- تم إنشاء الحوكمة من الاسم المستعار المتكامل بعد الإصدار.
 
-### Triage
+### الفرز
 
-1. Проверить dashboards [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops), чтобы
-   понять, локализован ли backlog в storage class или в fleet провайдеров.
-2. Перепроверить логи Torii на `sorafs_registry::submit_manifest`, чтобы определить,
-   не падают ли submissions.
-3. Выборочно проверить здоровье реплик через `sorafs_cli manifest status --manifest ...`
-   (показывает исходы репликации по провайдерам).
+1. التحقق من لوحات المعلومات [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)، لذلك
+   تأكد من ترجمة الأعمال المتراكمة إلى فئة التخزين أو إلى مفوضي الأسطول.
+2. قم بإعادة التحقق من السجل Torii إلى `sorafs_registry::submit_manifest` للإصلاح،
+   لا تدعم التقديمات.
+3. التحقق جيدًا من النسخة المتماثلة من خلال `sorafs_cli manifest status --manifest ...`
+   (عرض النسخ المتماثلة للفحص).
 
-### Mitigation
+### التخفيف
 
-1. Перевыпустить manifest с более высоким числом реплик (`--pin-min-replicas 7`) через
-   `scripts/sorafs-pin-release.sh`, чтобы scheduler распределил нагрузку на больший набор
-   провайдеров. Зафиксировать новый digest в incident log.
-2. Если backlog привязан к одному провайдеру, временно отключить его через replication scheduler
-   (описано в `pin-registry-ops.md`) и отправить новый manifest, принуждающий остальных
-   провайдеров обновить alias.
-3. Когда свежесть alias важнее parity репликации, rebind alias на warm manifest уже в staging
-   (`docs-preview`), затем опубликовать follow-up manifest после очистки backlog SRE.
+1. قم بإعادة إرسال البيان باستخدام النسخة المتماثلة الأعلى (`--pin-min-replicas 7`) من خلال
+   `scripts/sorafs-pin-release.sh`، لجدولة المزيد من المهام
+   مقدم. قم بتزويد الملخص الجديد بسجل الحوادث.
+2. إذا تمت إحالة الأعمال المتراكمة إلى موفر واحد، فقم دائمًا بإلغاء قفلها من خلال جدولة النسخ المتماثل
+   (موضح في `pin-registry-ops.md`) وكشف البيان الجديد، الأصلي الأصلي
+   محقق الحصول على الاسم المستعار.
+3. عندما يتم نشر الاسم المستعار لنسخ التكافؤ المهمة، يتم إعادة ربط الاسم المستعار للبيان الدافئ في التدريج
+   (`docs-preview`)، ثم قم بنشر بيان المتابعة بعد التراكم SRE.
 
-### Recovery & closure
+### الاسترداد والإغلاق
 
-1. Мониторить `torii_sorafs_replication_sla_total{outcome="missed"}` и убедиться, что
-   счетчик стабилизировался.
-2. Сохранить вывод `sorafs_cli manifest status` как evidence, что каждая реплика снова в норме.
-3. Создать или обновить replication backlog post-mortem с дальнейшими шагами
-   (масштабирование провайдеров, tuning chunker, и т.д.).
+1. قم بمراقبة `torii_sorafs_replication_sla_total{outcome="missed"}` واكتشف ما هو
+   استقرت سكيتشيك.
+2. قم بحفظ البيانات `sorafs_cli manifest status` كدليل على أن كل نسخة طبق الأصل جديدة في العادة.
+3. قم بالبدء أو اكتشاف تراكم النسخ المتماثل بعد الوفاة باستخدام الخطوات التالية
+   (مزودو الأجهزة، ومقطع الضبط، وما إلى ذلك).
 
-## Ранбук - Отключение аналитики или телеметрии
+## رانبوك - إلغاء التحليلات أو أجهزة القياس عن بعد
 
-### Условия срабатывания
+### سهولة التصنيع
 
-- `npm run probe:portal` проходит, но dashboards перестают принимать события
-  `AnalyticsTracker` более чем на 15 минут.
-- Privacy review фиксирует неожиданный рост dropped events.
-- `npm run probe:tryit-proxy` падает на путях `/probe/analytics`.
+- `npm run probe:portal` يأتي، ولكن لوحات المعلومات لا تسمح ببدء الاشتراك
+  `AnalyticsTracker` أكثر من 15 دقيقة.
+- مراجعة الخصوصية fixiruet неозиданный рост أسقطت الأحداث.
+- `npm run probe:tryit-proxy` يكمل الرحلات `/probe/analytics`.
 
-### Response
+### الرد
 
-1. Проверить build-time inputs: `DOCS_ANALYTICS_ENDPOINT` и
-   `DOCS_ANALYTICS_SAMPLE_RATE` в release artifact (`build/release.json`).
-2. Перезапустить `npm run probe:portal` с `DOCS_ANALYTICS_ENDPOINT`, направленным
-   на staging collector, чтобы подтвердить, что tracker продолжает слать payloads.
-3. Если collectors недоступны, установить `DOCS_ANALYTICS_ENDPOINT=""` и rebuild,
-   чтобы tracker short-circuit; зафиксировать окно outage в incident timeline.
-4. Проверить, что `scripts/check-links.mjs` продолжает fingerprint `checksums.sha256`
-   (аналитические сбои *не* должны блокировать проверку sitemap).
-5. После восстановления collector запустить `npm run test:widgets`, чтобы прогнать
-   unit tests analytics helper перед republish.
+1. التحقق من مدخلات وقت البناء: `DOCS_ANALYTICS_ENDPOINT` و
+   `DOCS_ANALYTICS_SAMPLE_RATE` в إصدار قطعة أثرية (`build/release.json`).
+2. قم بالتحويل من `npm run probe:portal` إلى `DOCS_ANALYTICS_ENDPOINT`، بشكل صحيح
+   في مجمع التدريج، للتأكد من أن المتعقب يزود قائمة الحمولات.
+3. إذا لم يكن المجمعون قادرين على التثبيت، قم بتثبيت `DOCS_ANALYTICS_ENDPOINT=""` وإعادة البناء،
+   чтобы تعقب ماس كهربائى. قم بتأكيد الانقطاع التام في الجدول الزمني للحادث.
+4. تحقق من أن `scripts/check-links.mjs` يستمر في بصمة الإصبع `checksums.sha256`
+   (التحليلات التحليلية *لا* تحتاج إلى حظر التحقق من خريطة الموقع).
+5. بعد إعادة تركيب المجمع، قم بإغلاق `npm run test:widgets` للتخطيط
+   مساعد تحليلات اختبارات الوحدة قبل إعادة النشر.
 
-### После инцидента
+### النتيجة النهائية
 
-1. Обновить [`devportal/observability`](./observability) с новыми ограничениями
-   collector или требованиями sampling.
-2. Выпустить governance notice, если данные analytics были потеряны или отредактированы
-   вне политики.
+1. قم بتحديث [`devportal/observability`](./observability) بالإضافات الجديدة
+   جامع أو أخذ العينات.
+2. استخدام إشعار الحوكمة، في حالة تعرض هذه التحليلات للانتهاك أو الإلغاء
+   ليست سياسة.
 
-## Квартальные учения по устойчивости
+## تعليم رائع للجودة
 
-Запускайте оба drill в **первый вторник каждого квартала** (Jan/Apr/Jul/Oct)
-или сразу после любого крупного изменения инфраструктуры. Храните артефакты в
+ابدأ التدريب في **الحديقة الأولى في الحجرة** (يناير/أبريل/يوليو/أكتوبر)
+أو بعد فترة وجيزة من البنية التحتية اللازمة لتنمية الموارد البشرية. القطع الأثرية الجرانيتية في
 `artifacts/devportal/drills/<YYYYMMDD>/`.
 
-| Учение | Шаги | Доказательства |
+| تعليم | شاجي | التصريح |
 | ----- | ----- | -------- |
-| Репетиция alias rollback | 1. Повторить rollback "Failed deployment" с самым свежим production manifest.<br/>2. Re-bind на production после успешных probes.<br/>3. Сохранить `portal.manifest.submit.summary.json` и логи probes в папке drill. | `rollback.submit.json`, вывод probes и release tag репетиции. |
-| Аудит синтетической валидации | 1. Запустить `npm run probe:portal` и `npm run probe:tryit-proxy` против production и staging.<br/>2. Запустить `npm run check:links` и архивировать `build/link-report.json`.<br/>3. Приложить screenshots/exports панелей Grafana, подтверждающих успех probes. | Логи probes + `link-report.json` со ссылкой на fingerprint manifest. |
+| تكرار الاسم المستعار التراجع | 1. العودة إلى الحالة السابقة "فشل النشر" مع بيان الإنتاج المصاحب.<br/>2. إعادة ربط الإنتاج بعد تحقيقات ناجحة.<br/>3. حفظ `portal.manifest.submit.summary.json` وتسجيل المجسات في حزمة الحفر. | `rollback.submit.json`، تحقيقات الإدخال وتكرار علامة الإصدار. |
+| تدقيق الحسابات والتحقق من الصحة | 1. قم بتثبيت `npm run probe:portal` و`npm run probe:tryit-proxy` للإنتاج والتدريج.<br/>2. Запустить `npm run check:links` و арkhивировать `build/link-report.json`.<br/>3. Прилозить لقطات/الصادرات панелей Grafana, подтверодающий успех تحقيقات. | مجسات الشعار + `link-report.json` مع بيان بصمات الأصابع. |
 
-Эскалируйте пропущенные drills менеджеру Docs/DevRel и на review governance SRE,
-так как roadmap требует детерминированных квартальных доказательств, что alias rollback
-и portal probes остаются здоровыми.
+قم بترقية التدريبات المقترحة من خلال Docs/DevRel ومراجعة الحوكمة SRE،
+كما تحتاج خارطة الطريق إلى تحديد هوية التراجع عن الاسم المستعار
+وتختفي تحقيقات البوابة.
 
-## PagerDuty и on-call координация
+## PagerDuty والتنسيق عند الطلب
 
-- Сервис PagerDuty **Docs Portal Publishing** владеет алертами из
-  `dashboards/grafana/docs_portal.json`. Правила `DocsPortal/GatewayRefusals`,
-  `DocsPortal/AliasCache` и `DocsPortal/TLSExpiry` пейджат primary Docs/DevRel
-  с Storage SRE как secondary.
-- При пейджинге укажите `DOCS_RELEASE_TAG`, приложите screenshots затронутых
-  панелей Grafana и добавьте вывод probe/link-check в заметки инцидента до
-  начала mitigation.
-- После mitigation (rollback или redeploy) повторно запустите `npm run probe:portal`,
-  `npm run check:links` и сохраните свежие Grafana snapshots, показывающие возврат метрик
-  в пороги. Приложите все evidence к инциденту PagerDuty до закрытия.
-- Если два алерта срабатывают одновременно (например TLS expiry и backlog), сначала
-  triage refusals (остановить publishing), выполнить rollback, затем закрыть TLS/backlog
-  с Storage SRE на bridge.
+- خدمة PagerDuty **Docs Portal Publishing** إرسال التنبيهات من هناك
+  `dashboards/grafana/docs_portal.json`. الصحيح `DocsPortal/GatewayRefusals`,
+  يقوم `DocsPortal/AliasCache` و`DocsPortal/TLSExpiry` بتحميل المستندات الأساسية/DevRel
+  مع تخزين SRE كثانوي.
+- الرجاء الضغط على `DOCS_RELEASE_TAG`، قم بتنزيل لقطات الشاشة
+  لوحة Grafana وقم بإدخال المسبار/التحقق من الارتباط في حدث متزامن
+  بداية التخفيف.
+- التخفيف التالي (التراجع أو إعادة النشر) إعادة الإغلاق `npm run probe:portal`,
+  `npm run check:links` واللقطات المضمنة Grafana، تظهر مقياس النبض
+  في سبيل ذلك. استخدم جميع الأدلة المتعلقة بحادثة PagerDuty للحماية.
+- إذا تم إجراء تنبيهين بشكل فردي (على سبيل المثال انتهاء صلاحية TLS والتراكم)، ابدأ
+  رفض الفرز (إيقاف النشر)، التراجع عن الحالة السابقة، إغلاق TLS/backlog
+  مع تخزين SRE على الجسر.

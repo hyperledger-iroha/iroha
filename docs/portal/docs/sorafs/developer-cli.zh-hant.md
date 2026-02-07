@@ -11,20 +11,21 @@ id: developer-cli
 title: SoraFS CLI Cookbook
 sidebar_label: CLI Cookbook
 description: Task-focused walkthrough of the consolidated `sorafs_cli` surface.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意規範來源
 :::
 
-The consolidated `sorafs_cli` surface (provided by the `sorafs_car` crate with
-the `cli` feature enabled) exposes every step required to prepare SoraFS
-artifacts. Use this cookbook to jump directly to common workflows; pair it with
-the manifest pipeline and orchestrator runbooks for operational context.
+合併的 `sorafs_cli` 表面（由 `sorafs_car` 板條箱提供，
+啟用 `cli` 功能）公開準備 SoraFS 所需的每個步驟
+文物。使用這本食譜可以直接跳轉到常見的工作流程；將其與
+用於操作上下文的清單管道和編排器運行手冊。
 
-## Package payloads
+## 包有效負載
 
-Use `car pack` to produce deterministic CAR archives and chunk plans. The
-command automatically selects the SF-1 chunker unless a handle is provided.
+使用 `car pack` 生成確定性 CAR 檔案和塊計劃。的
+除非提供句柄，否則命令會自動選擇 SF-1 分塊器。
 
 ```bash
 sorafs_cli car pack \
@@ -34,13 +35,13 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs are walked in lexicographic order so checksums stay stable
-  across platforms.
-- The JSON summary includes payload digests, per-chunk metadata, and the root
-  CID recognised by the registry and orchestrator.
+- 默認分塊器句柄：`sorafs.sf1@1.0.0`。
+- 目錄輸入按字典順序排列，因此校驗和保持穩定
+  跨平台。
+- JSON 摘要包括有效負載摘要、每個塊元數據和根
+  由註冊表和協調器識別的 CID。
 
-## Construct manifests
+## 構建清單
 
 ```bash
 sorafs_cli manifest build \
@@ -52,15 +53,15 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- `--pin-*` options map directly to `PinPolicy` fields in
-  `sorafs_manifest::ManifestBuilder`.
-- Provide `--chunk-plan` when you want the CLI to recompute the SHA3 chunk
-  digest before submission; otherwise it reuses the digest embedded in the
-  summary.
-- The JSON output mirrors the Norito payload for straightforward diffs during
-  reviews.
+- `--pin-*` 選項直接映射到 `PinPolicy` 字段
+  `sorafs_manifest::ManifestBuilder`。
+- 當您希望 CLI 重新計算 SHA3 塊時提供 `--chunk-plan`
+  提交前先進行消化；否則它會重用嵌入的摘要
+  總結。
+- JSON 輸出鏡像 Norito 有效負載，以便在
+  評論。
 
-## Sign manifests without long-lived keys
+## 在沒有長期密鑰的情況下簽署清單
 
 ```bash
 sorafs_cli manifest sign \
@@ -70,13 +71,13 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Accepts inline tokens, environment variables, or file-based sources.
-- Adds provenance metadata (`token_source`, `token_hash_hex`, chunk digest)
-  without persisting the raw JWT unless `--include-token=true`.
-- Works well in CI: combine with GitHub Actions OIDC by setting
-  `--identity-token-provider=github-actions`.
+- 接受內聯標記、環境變量或基於文件的源。
+- 添加出處元數據（`token_source`、`token_hash_hex`、塊摘要）
+  除非 `--include-token=true`，否則不會保留原始 JWT。
+- 在 CI 中運行良好：通過設置與 GitHub Actions OIDC 結合
+  `--identity-token-provider=github-actions`。
 
-## Submit manifests to Torii
+## 提交清單至 Torii
 
 ```bash
 sorafs_cli manifest submit \
@@ -91,13 +92,13 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Performs Norito decoding for alias proofs and verifies they match the
-  manifest digest before POSTing to Torii.
-- Recomputes the chunk SHA3 digest from the plan to prevent mismatch attacks.
-- Response summaries capture HTTP status, headers, and registry payloads for
-  later auditing.
+- 對別名證明執行 Norito 解碼並驗證它們是否匹配
+  在發佈到 Torii 之前清單摘要。
+- 根據計劃重新計算塊 SHA3 摘要以防止不匹配攻擊。
+- 響應摘要捕獲 HTTP 狀態、標頭和註冊表有效負載
+  後期審核。
 
-## Verify CAR contents and proofs
+## 驗證CAR內容和證明
 
 ```bash
 sorafs_cli proof verify \
@@ -106,11 +107,11 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Rebuilds the PoR tree and compares payload digests with the manifest summary.
-- Captures counts and identifiers required when submitting replication proofs
-  to governance.
+- 重建 PoR 樹並將有效負載摘要與清單摘要進行比較。
+- 捕獲提交複製證明時所需的計數和標識符
+  到治理。
 
-## Stream proof telemetry
+## 流證明遙測
 
 ```bash
 sorafs_cli proof stream \
@@ -123,24 +124,24 @@ sorafs_cli proof stream \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
 ```
 
-- Emits NDJSON items for each streamed proof (disable replay with
-  `--emit-events=false`).
-- Aggregates success/failure counts, latency histograms, and sampled failures in
-  the summary JSON so dashboards can plot outcomes without scraping logs.
-- Exits non-zero when the gateway reports failures or local PoR verification
-  (via `--por-root-hex`) rejects proofs. Adjust the thresholds with
-  `--max-failures` and `--max-verification-failures` for rehearsal runs.
-- Supports PoR today; PDP and PoTR reuse the same envelope once SF-13/SF-14
-  land.
-- `--governance-evidence-dir` writes the rendered summary, metadata (timestamp,
-  CLI version, gateway URL, manifest digest), and a copy of the manifest into
-  the supplied directory so governance packets can archive the proof-stream
-  evidence without replaying the run.
+- 為每個流式證明發出 NDJSON 項目（禁用重播）
+  `--emit-events=false`）。
+- 聚合成功/失敗計數、延遲直方圖和採樣失敗
+  摘要 JSON，以便儀表板可以繪製結果而無需抓取日誌。
+- 當網關報告故障或本地 PoR 驗證時退出非零
+  （通過 `--por-root-hex`）拒絕證明。調整閾值
+  `--max-failures` 和 `--max-verification-failures` 用於排練。
+- 今天支持PoR； PDP 和 PoTR 在 SF-13/SF-14 後重複使用相同的信封
+  土地。
+- `--governance-evidence-dir` 寫入渲染的摘要、元數據（時間戳、
+  CLI 版本、網關 URL、清單摘要）以及清單的副本
+  提供的目錄，以便治理數據包可以存檔證明流
+  無需重播運行即可獲得證據。
 
-## Additional references
+## 其他參考資料
 
-- `docs/source/sorafs_cli.md` — exhaustive flag documentation.
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema and Grafana
-  dashboard template.
-- `docs/source/sorafs/manifest_pipeline.md` — deep dive on chunking, manifest
-  composition, and CAR handling.
+- `docs/source/sorafs_cli.md` — 詳盡的標誌文檔。
+- `docs/source/sorafs_proof_streaming.md` — 證明遙測模式和 Grafana
+  儀表板模板。
+- `docs/source/sorafs/manifest_pipeline.md` — 深入探討分塊、清單
+  組成和 CAR 處理。

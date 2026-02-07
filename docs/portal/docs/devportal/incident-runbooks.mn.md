@@ -11,65 +11,66 @@ id: incident-runbooks
 title: Incident Runbooks & Rollback Drills
 sidebar_label: Incident Runbooks
 description: Response guides for failed portal deployments, SoraFS replication degradation, analytics outages, and the quarterly rehearsal cadence required by DOCS-9.
+translator: machine-google-reviewed
 ---
 
-## Purpose
+## Зорилго
 
-Roadmap item **DOCS-9** calls for actionable playbooks plus a rehearsal plan so
-portal operators can recover from shipping failures without guessing. This note
-covers three high-signal incidents—failed deployments, replication
-degradation, and analytics outages—and documents the quarterly drills that
-prove alias rollback and synthetic validation still work end to end.
+Замын зургийн **DOCS-9** зүйлд хэрэгжүүлэх боломжтой тоглоомын номууд болон давталтын төлөвлөгөөг шаарддаг.
+Порталын операторууд тээвэрлэлтийн доголдлыг тааварлалгүйгээр сэргээх боломжтой. Энэ тэмдэглэл
+Дохио ихтэй гурван тохиолдлыг хамарна - бүтэлгүйтсэн байршуулалт, хуулбар
+доройтол, аналитикийн тасалдал зэрэг нь улирал тутам хийдэг сургуулилтуудыг баримтжуулдаг
+хуурамч нэр буцаах болон синтетик баталгаажуулалт нь төгсгөл хүртэл ажилладаг хэвээр байна.
 
-### Related material
+### Холбогдох материал
 
-- [`devportal/deploy-guide`](./deploy-guide) — packaging, signing, and alias
-  promotion workflow.
-- [`devportal/observability`](./observability) — release tags, analytics, and
-  probes referenced below.
+- [`devportal/deploy-guide`](./deploy-guide) — савлагаа, гарын үсэг, нэр
+  сурталчилгааны ажлын урсгал.
+- [`devportal/observability`](./observability) — шошго, аналитик болон
+  шалгалтуудыг доор дурдсан болно.
 - `docs/source/sorafs_node_client_protocol.md`
-  and [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
-  — registry telemetry and escalation thresholds.
-- `docs/portal/scripts/sorafs-pin-release.sh` and `npm run probe:*` helpers
-  referenced throughout the checklists.
+  болон [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
+  — бүртгэлийн телеметр ба өсөлтийн босго.
+- `docs/portal/scripts/sorafs-pin-release.sh` болон `npm run probe:*` туслахууд
+  шалгах хуудасны бүх хэсэгт иш татсан.
 
-### Shared telemetry & tooling
+### Хуваалцсан телеметр ба багаж хэрэгсэл
 
-| Signal / Tool | Purpose |
+| Дохио / Хэрэгсэл | Зорилго |
 | ------------- | ------- |
-| `torii_sorafs_replication_sla_total` (met/missed/pending) | Detects replication stalls and SLA breaches. |
-| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Quantifies backlog depth and completion latency for triage. |
-| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Shows gateway-side failures that often follow a bad deploy. |
-| `npm run probe:portal` / `npm run probe:tryit-proxy` | Synthetic probes that gate releases and validate runbacks. |
-| `npm run check:links` | Broken-link gate; used after every mitigation. |
-| `sorafs_cli manifest submit … --alias-*` (wrapped by `scripts/sorafs-pin-release.sh`) | Alias promotion/reversion mechanism. |
-| `Docs Portal Publishing` Grafana board (`dashboards/grafana/docs_portal.json`) | Aggregates refusal/alias/TLS/replication telemetry. PagerDuty alerts reference these panels for evidence. |
+| `torii_sorafs_replication_sla_total` (хансан/алгасан/хүлээгдэж байгаа) | Хуулбарлах лангуу болон SLA зөрчлийг илрүүлдэг. |
+| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Гурав дахь удаашралын гүн болон дуусгах хоцрогдлын хэмжээг тодорхойлдог. |
+| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Муу суулгалтыг дагадаг гарцын талын алдааг харуулдаг. |
+| `npm run probe:portal` / `npm run probe:tryit-proxy` | Синтетик датчик нь хаалгыг суллаж, гүйлгээг баталгаажуулдаг. |
+| `npm run check:links` | Хагарсан холбоосын хаалга; бууруулах болгоны дараа хэрэглэнэ. |
+| `sorafs_cli manifest submit … --alias-*` (`scripts/sorafs-pin-release.sh` ороосон) | Алсыг дэмжих/хувиргах механизм. |
+| `Docs Portal Publishing` Grafana самбар (`dashboards/grafana/docs_portal.json`) | Татгалзах/алиас/TLS/хуулбарлах телеметрийг нэгтгэдэг. PagerDuty дохиолол нь эдгээр самбарыг нотлох баримт болгон ашигладаг. |
 
-## Runbook — Failed deployment or bad artefact
+## Runbook — Амжилтгүй байршуулалт эсвэл муу олдвор
 
-### Trigger conditions
+### Өдөөгч нөхцөл
 
-- Preview/production probes fail (`npm run probe:portal -- --expect-release=…`).
-- Grafana alerts on `torii_sorafs_gateway_refusals_total` or
-  `torii_sorafs_manifest_submit_total{status="error"}` after a rollout.
-- Manual QA notices broken routes or Try-It proxy failures immediately after
-  alias promotion.
+- Урьдчилан харах/үйлдвэрлэлийн датчик амжилтгүй болсон (`npm run probe:portal -- --expect-release=…`).
+- Grafana дохио `torii_sorafs_gateway_refusals_total` эсвэл
+  Гаргасны дараа `torii_sorafs_manifest_submit_total{status="error"}`.
+- Гарын авлагын QA нь эвдэрсэн маршрут эсвэл Try-It прокси алдааг шууд мэдэгддэг
+  нэрийн сурталчилгаа.
 
-### Immediate containment
+### Яаралтай саатуулах
 
-1. **Freeze deployments:** mark the CI pipeline with `DEPLOY_FREEZE=1` (GitHub
-   workflow input) or pause the Jenkins job so no additional artefacts go out.
-2. **Capture artefacts:** download the failing build’s `build/checksums.sha256`,
-   `portal.manifest*.{json,to,bundle,sig}`, and probe output so the rollback can
-   reference exact digests.
-3. **Notify stakeholders:** storage SRE, Docs/DevRel lead, and the governance
-   duty officer for awareness (especially when `docs.sora` is impacted).
+1. **Байрлуулалтыг царцаах:** CI дамжуулах хоолойг `DEPLOY_FREEZE=1` (GitHub) ашиглан тэмдэглэнэ үү.
+   ажлын урсгалын оролт) эсвэл Женкинсийн ажлыг түр зогсоосноор нэмэлт олдвор гарахгүй.
+2. **Артефактуудыг барих:** бүтэлгүйтсэн бүтээцийн `build/checksums.sha256`-г татаж авах,
+   `portal.manifest*.{json,to,bundle,sig}`, мөн датчик гаралтыг хийснээр буцах боломжтой
+   нарийн задаргаа лавлагаа.
+3. **Оролцогч талуудад мэдэгдэх:** хадгалах сангийн SRE, Docs/DevRel удирдагч болон засаглал
+   жижүүр (ялангуяа `docs.sora` нөлөөлсөн үед).
 
-### Rollback procedure
+### Буцах журам
 
-1. Identify the last-known-good (LKG) manifest. The production workflow stores
-   them under `artifacts/devportal/<release>/sorafs/portal.manifest.to`.
-2. Rebind the alias to that manifest with the shipping helper:
+1. Хамгийн сүүлд мэдэгдэж байгаа сайн (LCG) манифестийг тодорхойлох. Үйлдвэрлэлийн ажлын урсгалыг хадгалдаг
+   тэдгээрийг `artifacts/devportal/<release>/sorafs/portal.manifest.to` дор.
+2. Тээвэрлэлтийн туслагчийн тусламжтайгаар тухайн манифестийн нэрийг дахин холбоно уу:
 
 ```bash
 cd docs/portal
@@ -106,123 +107,123 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --summary-out artifacts/.../sorafs/rollback.submit.json
 ```
 
-3. Record the rollback summary in the incident ticket together with the LKG and
-   failed manifest digests.
+3. Буцах хураангуйг ослын тасалбарт LKG болон хамт тэмдэглэнэ
+   амжилтгүй манифест задаргаа.
 
-### Validation
+### Баталгаажуулалт
 
 1. `npm run probe:portal -- --expect-release=${LKG_TAG}`.
 2. `npm run check:links`.
-3. `sorafs_cli manifest verify-signature …` and `sorafs_cli proof verify …`
-   (see the deployment guide) to confirm the re-promoted manifest still matches
-   the archived CAR.
-4. `npm run probe:tryit-proxy` to ensure the Try-It staging proxy came back.
+3. `sorafs_cli manifest verify-signature …` ба `sorafs_cli proof verify …`
+   (байршуулах гарын авлагыг үзнэ үү) дахин сурталчилсан манифест таарч байгааг баталгаажуулна уу
+   архивлагдсан CAR.
+4. `npm run probe:tryit-proxy` Try-It staging прокси буцаж ирснийг баталгаажуулна уу.
 
-### Post-incident
+### Үйл явдлын дараах
 
-1. Re-enable the deployment pipeline only after the root cause is understood.
-2. Backfill [`devportal/deploy-guide`](./deploy-guide) “Lessons learned”
-   entries with new gotchas, if any.
-3. File defects for the failing test suite (probe, link checker, etc.).
+1. Зөвхөн үндсэн шалтгааныг ойлгосны дараа байршуулах дамжуулах хоолойг дахин идэвхжүүлнэ.
+2. Буцаан дүүргэх [`devportal/deploy-guide`](./deploy-guide) “Сурах сургамж”
+   хэрэв байгаа бол шинэ готчатай оруулгууд.
+3. Амжилтгүй болсон туршилтын багцын файлын согог (шинж, холбоос шалгагч гэх мэт).
 
-## Runbook — Replication degradation
+## Runbook — Хуулбарлах доройтол
 
-### Trigger conditions
+### Өдөөгч нөхцөл
 
-- Alert: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
-  clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) <
-  0.95` for 10 minutes.
-- `torii_sorafs_replication_backlog_total > 10` for 10 minutes (see
+- Анхааруулга: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
+  clamp_min(нийлбэр(torii_sorafs_replication_sla_total{үр дүн=~"сансан|алдсан"}), 1) <
+  10 минутын турш 0.95`.
+- `torii_sorafs_replication_backlog_total > 10` 10 минутын турш (харна уу
   `pin-registry-ops.md`).
-- Governance reports slow alias availability after a release.
+- Засаглал гаргасны дараа нэрийн хүртээмж удаашралтай байгааг мэдээлдэг.
 
-### Triage
+### Гурвалж
 
-1. Inspect [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops) dashboards to confirm
-   whether the backlog is localized to a storage class or a provider fleet.
-2. Cross-check Torii logs for `sorafs_registry::submit_manifest` warnings to
-   determine whether submissions themselves are failing.
-3. Sample replica health via `sorafs_cli manifest status --manifest …` (lists
-   per-provider replication outcomes).
+1. Баталгаажуулахын тулд [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops) хяналтын самбарыг шалгана уу.
+   хоцрогдол нь хадгалах анги эсвэл үйлчилгээ үзүүлэгчийн флот руу локалчлагдсан эсэх.
+2. Torii бүртгэлээс `sorafs_registry::submit_manifest` анхааруулга байгаа эсэхийг шалгана уу.
+   мэдүүлэг өөрөө бүтэлгүйтсэн эсэхийг тодорхойлох.
+3. `sorafs_cli manifest status --manifest …` (жагсаалт
+   үйлчилгээ үзүүлэгч бүрийн хуулбарын үр дүн).
 
-### Mitigation
+### Хөнгөвчлөх
 
-1. Reissue the manifest with higher replica count (`--pin-min-replicas 7`) using
-   `scripts/sorafs-pin-release.sh` so the scheduler spreads load across a larger
-   provider set. Record the new manifest digest in the incident log.
-2. If backlog is tied to a single provider, temporarily disable it via the
-   replication scheduler (documented in `pin-registry-ops.md`) and submit a new
-   manifest forcing the other providers to refresh the alias.
-3. When alias freshness is more critical than replication parity, rebind the
-   alias to a warm manifest already staged (`docs-preview`), then publish a
-   follow-up manifest once SRE clears the backlog.
+1. Манифестыг дахин хуулбарлах тоо (`--pin-min-replicas 7`) ашиглан дахин гаргах
+   `scripts/sorafs-pin-release.sh`, ингэснээр хуваарь гаргагч ачааллыг томоор тараадаг
+   үйлчилгээ үзүүлэгчийн багц. Шинэ манифестийг тохиолдлын бүртгэлд тэмдэглэ.
+2. Хэрэв хоцрогдол нь нэг үйлчилгээ үзүүлэгчтэй холбоотой бол үүнийг дамжуулан түр идэвхгүй болго
+   хуулбарлах хуваарь гаргагч (`pin-registry-ops.md`-д баримтжуулсан) болон шинээр илгээх
+   манифест нь бусад үйлчилгээ үзүүлэгчдийг хуурамч нэрийг сэргээхийг албаддаг.
+3. Хуурай нэрийн шинэлэг байдал нь репликацын паритетаас илүү чухал бол дахин холбоно уу
+   аль хэдийн үе шаттай (`docs-preview`) халуун манифестын нэрээр нэрлэж, дараа нь нийтлэх
+   SRE хоцрогдол арилгасны дараа дараагийн манифест.
 
-### Recovery & closure
+### Сэргээх & хаах
 
-1. Monitor `torii_sorafs_replication_sla_total{outcome="missed"}` to ensure the
-   count plateaus.
-2. Capture `sorafs_cli manifest status` output as evidence that every replica is
-   back in compliance.
-3. File or update the replication backlog post-mortem with next steps
-   (provider scaling, chunker tuning, etc.).
+1. баталгаажуулахын тулд `torii_sorafs_replication_sla_total{outcome="missed"}` хяналт тавина
+   тэгш өндөрлөгүүдийг тоол.
+2. Хуулбар болгон байгаагийн нотолгоо болгон `sorafs_cli manifest status` гаралтыг ав
+   дагаж мөрдөх.
+3. Үхлийн дараах хуулбарыг дараагийн алхмуудаар файл эсвэл шинэчилнэ үү
+   (үйлүүлэгчийн масштаб, chunker тааруулах гэх мэт).
 
-## Runbook — Analytics or telemetry outage
+## Runbook — Аналитик эсвэл телеметрийн тасалдал
 
-### Trigger conditions
+### Өдөөгч нөхцөл
 
-- `npm run probe:portal` succeeds but dashboards stop ingesting
-  `AnalyticsTracker` events for >15 minutes.
-- Privacy review flags an unexpected increase in dropped events.
-- `npm run probe:tryit-proxy` fails on `/probe/analytics` paths.
+- `npm run probe:portal` амжилттай болсон ч хяналтын самбарууд залгихаа больсон
+  >15 минутын турш `AnalyticsTracker` үйл явдлууд.
+- Нууцлалын хяналт нь орхигдсон үйл явдлуудын гэнэтийн өсөлтийг тэмдэглэдэг.
+- `npm run probe:tryit-proxy` `/probe/analytics` зам дээр амжилтгүй болсон.
 
-### Response
+### Хариулт
 
-1. Verify build-time inputs: `DOCS_ANALYTICS_ENDPOINT` and
-   `DOCS_ANALYTICS_SAMPLE_RATE` in the failing release artifact (`build/release.json`).
-2. Re-run `npm run probe:portal` with `DOCS_ANALYTICS_ENDPOINT` pointing at the
-   staging collector to confirm the tracker still emits payloads.
-3. If collectors are down, set `DOCS_ANALYTICS_ENDPOINT=""` and rebuild so the
-   tracker short-circuits; record the outage window in the incident timeline.
-4. Validate `scripts/check-links.mjs` still fingerprints `checksums.sha256`
-   (analytics outages must *not* block sitemap validation).
-5. Once the collector recovers, run `npm run test:widgets` to exercise the
-   analytics helper unit tests before republishing.
+1. Бүтээх хугацааны оролтыг шалгах: `DOCS_ANALYTICS_ENDPOINT` болон
+   Амжилтгүй хувилбар дахь `DOCS_ANALYTICS_SAMPLE_RATE` (`build/release.json`).
+2. `DOCS_ANALYTICS_ENDPOINT`-г зааж `npm run probe:portal`-г дахин ажиллуулна уу.
+   taging коллектор нь трекер нь даацыг ялгаруулж байгааг баталгаажуулах.
+3. Хэрэв коллекторууд ажиллахаа больсон бол `DOCS_ANALYTICS_ENDPOINT=""`-г тохируулаад дахин бүтээгээрэй.
+   трекерийн богино холболт; ослын цагийн хуваарьт тасалдсан цонхыг тэмдэглэ.
+4. `scripts/check-links.mjs` хурууны хээг баталгаажуулна уу `checksums.sha256`
+   (шинжилгээний тасалдал нь сайтын газрын зургийн баталгаажуулалтыг * блоклох ёсгүй).
+5. Коллектор сэргэсний дараа `npm run test:widgets`-г ажиллуулж дасгал хийнэ
+   аналитик туслах нэгжийг дахин нийтлэхээс өмнө туршиж үздэг.
 
-### Post-incident
+### Үйл явдлын дараах
 
-1. Update [`devportal/observability`](./observability) with any new collector
-   limitations or sampling requirements.
-2. File governance notice if any analytics data was dropped or redacted outside
-   policy.
+1. Шинэ цуглуулагчтай [`devportal/observability`](./observability) шинэчилнэ үү
+   хязгаарлалт эсвэл дээж авах шаардлага.
+2. Ямар нэгэн аналитик өгөгдөл гадуур хасагдсан эсвэл засварлагдсан тохиолдолд файлын засаглалын мэдэгдэл
+   бодлого.
 
-## Quarterly resilience drills
+## Улирал тутмын уян хатан байдлын дасгалууд
 
-Run both drills during the **first Tuesday of each quarter** (Jan/Apr/Jul/Oct)
-or immediately after any major infrastructure change. Store artifacts under
+**Улирал бүрийн эхний Мягмар гарагт** (1/4/7/10) дасгалуудыг хоёуланг нь явуулна.
+эсвэл дэд бүтцийн томоохон өөрчлөлтийн дараа шууд. Олдворуудыг доор хадгална
 `artifacts/devportal/drills/<YYYYMMDD>/`.
 
-| Drill | Steps | Evidence |
+| Өрөмдлөг | Алхам | Нотлох баримт |
 | ----- | ----- | -------- |
-| Alias rollback rehearsal | 1. Replay the “Failed deployment” rollback using the most recent production manifest.<br/>2. Re-bind to production once probes pass.<br/>3. Record `portal.manifest.submit.summary.json` and probe logs in the drill folder. | `rollback.submit.json`, probe output, and release tag of the rehearsal. |
-| Synthetic validation audit | 1. Run `npm run probe:portal` and `npm run probe:tryit-proxy` against production and staging.<br/>2. Run `npm run check:links` and archive `build/link-report.json`.<br/>3. Attach screenshots/exports of Grafana panels confirming probe success. | Probe logs + `link-report.json` referencing the manifest fingerprint. |
+| Alias ​​буцаах бэлтгэл | 1. "Бүтэлгүйтсэн байршуулалт"-ыг хамгийн сүүлийн үеийн үйлдвэрлэлийн манифест ашиглан дахин тоглуул.<br/>2. Шинжилгээг дамжуулсны дараа үйлдвэрлэлд дахин холбоно.<br/>3. `portal.manifest.submit.summary.json`-г тэмдэглэж, шалгалтын бүртгэлийг өрмийн хавтсанд хийнэ. | `rollback.submit.json`, датчик гаралт, сургуулилтын шошгыг гаргах. |
+| Синтетик баталгаажуулалтын аудит | 1. `npm run probe:portal` болон `npm run probe:tryit-proxy`-ийг үйлдвэрлэл, үе шаттай харьцуулан ажиллуул.<br/>2. `npm run check:links` ажиллуулж, `build/link-report.json` архивлана.<br/>3. Шинжилгээний амжилтыг баталгаажуулсан Grafana хавтангийн дэлгэцийн агшин/экспортыг хавсаргана уу. | Шинжилгээний бүртгэл + `link-report.json` ил тод хурууны хээг иш татдаг. |
 
-Escalate missed drills to the Docs/DevRel manager and SRE governance review,
-since the roadmap requires deterministic, quarterly evidence that both alias
-rollback and portal probes remain healthy.
+Алдагдсан дасгалуудыг Docs/DevRel менежер болон SRE-ийн засаглалын тойм руу шилжүүлж,
+Учир нь замын зураг нь аль алиных нь аль алиных нь аль алиныг нь тодорхойлох, улирал тутам нотлох баримт шаарддаг
+буцаах болон портал пробууд эрүүл хэвээр байна.
 
-## PagerDuty & on-call coordination
+## Пэйжер Үүргийн болон дуудлагын зохицуулалт
 
-- PagerDuty service **Docs Portal Publishing** owns the alerts generated from
-  `dashboards/grafana/docs_portal.json`. The rules `DocsPortal/GatewayRefusals`,
-  `DocsPortal/AliasCache`, and `DocsPortal/TLSExpiry` page the Docs/DevRel
-  primary with Storage SRE as secondary.
-- When paged, include the `DOCS_RELEASE_TAG`, attach screenshots of the affected
-  Grafana panels, and link probe/link-check output in the incident notes before
-  mitigation starts.
-- After mitigation (rollback or redeploy), re-run `npm run probe:portal`,
-  `npm run check:links`, and capture fresh Grafana snapshots showing the metrics
-  back within thresholds. Attach all evidence to the PagerDuty incident prior to
-  resolving it.
-- If two alerts fire simultaneously (for example TLS expiry plus backlog), triage
-  refuses first (stop publishing), execute the rollback procedure, then clear
-  TLS/backlog items with Storage SRE on the bridge.
+- PagerDuty үйлчилгээ **Docs Portal Publishing** нь дараахаас үүсгэсэн сэрэмжлүүлгийг эзэмшдэг.
+  `dashboards/grafana/docs_portal.json`. Дүрэм `DocsPortal/GatewayRefusals`,
+  `DocsPortal/AliasCache` болон `DocsPortal/TLSExpiry` Докс/ДевРел-д хуудаснаа
+  хоёрдогчоор Хадгалах SRE-тэй анхдагч.
+- Хуудсаны дараа `DOCS_RELEASE_TAG`-г оруулж, нөлөөлөлд өртсөн хүмүүсийн дэлгэцийн агшинг хавсаргана уу.
+  Grafana самбар, мөн өмнө тохиолдлын тэмдэглэлд шалгах/холбоос шалгах гаралтыг холбох
+  бууруулах ажил эхэлдэг.
+- Хялбаршуулсаны дараа (буцах эсвэл дахин байршуулах) `npm run probe:portal`-г дахин ажиллуул,
+  `npm run check:links`, хэмжигдэхүүнийг харуулсан шинэ Grafana агшин зуурын агшинг авах
+  босгон дотор буцах. Өмнө нь PagerDuty-ийн үйл явдалтай холбоотой бүх нотлох баримтыг хавсаргана уу
+  үүнийг шийдэж байна.
+- Хэрэв хоёр дохио нэгэн зэрэг асвал (жишээ нь TLS дуусах хугацаа болон хоцрогдол), триаж хийх
+  эхлээд татгалзсан (нийтлэхээ зогсоо), буцаах процедурыг гүйцэтгээд дараа нь арилгана
+  Гүүрэн дээрх SRE SRE бүхий TLS/хоцрогдсон зүйлс.

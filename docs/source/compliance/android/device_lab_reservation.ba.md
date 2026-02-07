@@ -7,103 +7,102 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 05dc578338882ddfcdf2410b0643774ceb8212f28739ba94ac83edf087b9b5dc
 source_last_modified: "2025-12-29T18:16:35.924530+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Reservation Procedure (AND6/AND7)
+# Android ҡоролма лабораторияһы резервацияһы процедураһы (AND6/AND7)
 
-This playbook describes how the Android team books, confirms, and audits device
-lab time for milestones **AND6** (CI & compliance hardening) and **AND7**
-(observability readiness). It complements the contingency log in
-`docs/source/compliance/android/device_lab_contingency.md` by ensuring capacity
-shortfalls are avoided in the first place.
+Был плейбук һүрәтләнә, нисек Android командаһы китаптар, раҫлау, һәм аудит ҡоролмаһы .
+лаборатория ваҡыты өсөн **AND6** (CI & үтәү ҡатыу) һәм **AND7**
+(күҙәтеүсәнлек әҙерлеге). Ул 1990 йылда ғәҙәттән тыш хәлдәр журналын тулыландыра.
+`docs/source/compliance/android/device_lab_contingency.md` ҡөҙрәтен тәьмин итеү юлы менән
+етешһеҙлектәр тәү сиратта ҡаса.
 
-## 1. Goals & Scope
+## 1. Маҡсаттар & Скоп
 
-- Keep the StrongBox + general device pools above the roadmap-mandated 80 %
-  capacity target throughout freeze windows.
-- Provide a deterministic calendar so CI, attestation sweeps, and chaos
-  rehearsals never compete for the same hardware.
-- Capture an auditable trail (requests, approvals, post-run notes) that feeds
-  the AND6 compliance checklist and the evidence log.
+- 80% юл картаһы мандатлы өҫтөндәге дөйөм ҡоролма бассейндарын һаҡларға кәрәк.
+  ҡөҙрәте маҡсатлы бөтә туңдырыу тәҙрәләр.
+- Детерминистик календарь бирегеҙ, шуға күрә CI, аттестация һыпыртыу, һәм хаос
+  репетициялар бер ҡасан да бер үк аппарат өсөн көрәшә.
+- Аудит эҙен (запростар, раҫлауҙар, эшләгәндән һуңғы ноталарҙы) тотоу, тип туҡлана
+  AND6 үтәү тикшерелгән исемлек һәм дәлилдәр журналы.
 
-This procedure covers the dedicated Pixel lanes, the shared fallback pool, and
-the external StrongBox lab retainer referenced in the roadmap. Ad‑hoc emulator
-usage is out of scope.
+Был процедура махсус Pixel һыҙаттарын, уртаҡ fallback бассейнын һәм
+тышҡы StrongBox лабораторияһы юл картаһында һылтанма яһалған. Реклама эмуляторы
+ҡулланыу даирәһенән ситтә.
 
-## 2. Reservation Windows
+## 2. Бронирование тәҙрәләр
 
-| Pool / Lane | Hardware | Default Slot Length | Booking Lead Time | Owner |
-|-------------|----------|---------------------|-------------------|-------|
-| `pixel8pro-strongbox-a` | Pixel 8 Pro (StrongBox) | 4 h | 3 business days | Hardware Lab Lead |
-| `pixel8a-ci-b` | Pixel 8a (CI general) | 2 h | 2 business days | Android Foundations TL |
-| `pixel7-fallback` | Pixel 7 shared pool | 2 h | 1 business day | Release Engineering |
-| `firebase-burst` | Firebase Test Lab smoke queue | 1 h | 1 business day | Android Foundations TL |
-| `strongbox-external` | External StrongBox lab retainer | 8 h | 7 calendar days | Program Lead |
+| Бассейн / Лейн | Аппарат | Ғәҙәттәгесә слот оҙонлоғо | Бронирование етәксе ваҡыт | Хужа |
+|----------- |-------------------------------------------------|------------|
+| `pixel8pro-strongbox-a` | Pixel8Pro (Стронгбокс) | 4h | 3 эш көнө | Аппарат лабораторияһы ҡурғаш |
+| `pixel8a-ci-b` | Pixel8a (CI генерал) | 2h | 2 эш көнө | Android нигеҙҙәре TL |
+| `pixel7-fallback` | Pixel7 уртаҡ бассейн | 2h | 1 эш көнө | Инженерлыҡ сығарыу |
+| `firebase-burst` | Файре база һынау лабораторияһы төтөн сираты | 1h | 1 эш көнө | Android нигеҙҙәре TL |
+| `strongbox-external` | Тышҡы Көслө Box лабораторияһы розеткаһы | 8h | 7 календарь көн | Программа етәксеһе |
 
-Slots are booked in UTC; overlapping reservations require explicit approval
-from the Hardware Lab Lead.
+Слоттар UTC-ла заказ бирелгән; ҡапланған бронирование асыҡ раҫлауҙы талап итә
+аппаратура лабораторияһында етәкселек итеүҙән.
 
-## 3. Request Workflow
+## 3. Эш ағымын үтенес
 
-1. **Prepare context**
-   - Update `docs/source/sdk/android/android_strongbox_device_matrix.md` with
-     the devices you plan to exercise and the readiness tag
+1. **Бер контекст әҙерләү**
+   - Яңыртыу `docs/source/sdk/android/android_strongbox_device_matrix.md` менән .
+     ҡоролмалары һеҙ планлаштырған күнекмәләр һәм әҙерлек тег
      (`attestation`, `ci`, `chaos`, `partner`).
-   - Collect the latest capacity snapshot from
+   - Һуңғы һыйҙырышлылыҡ снимоктарын йыйыу.
      `docs/source/sdk/android/android_strongbox_capture_status.md`.
-2. **Submit request**
-   - File a ticket in the `_android-device-lab` queue using the template in
-     `docs/examples/android_device_lab_request.md` (owner, dates, workloads,
-     fallback requirement).
-   - Attach any regulatory dependencies (e.g. AND6 attestation sweep, AND7
-     telemetry drill) and link to the relevant roadmap entry.
-3. **Approval**
-   - Hardware Lab Lead reviews within one business day, confirms slot in the
-     shared calendar (`Android Device Lab – Reservations`), and updates the
-     `device_lab_capacity_pct` column in
+2. **Апромға үтенес **
+   - `_android-device-lab` сиратында билет 2012 йылда шаблон ярҙамында файл бирегеҙ.
+     `docs/examples/android_device_lab_request.md` (хужа, дата, эш йөкләмәләре,
+     fallback талап).
+   - Теләһә ниндәй көйләүсе бәйлелектәрҙе беркетергә (мәҫәлән, AND6 аттестация һыпыртыу, AND7.
+     телеметрия бураһы) һәм тейешле юл картаһы инеүенә һылтанма.
+3. **Рәхәт**
+   - Аппарат лаборатория лидеры бер эш көнө эсендә тикшерелгән, слот раҫлай
+     бүлешкән календарь (`Android Device Lab – Reservations`), һәм яңыртыуҙар
+     `device_lab_capacity_pct` 1990 йылда 1820 йылда.
      `docs/source/compliance/android/evidence_log.csv`.
-4. **Execution**
-   - Run the scheduled jobs; record Buildkite run IDs or tooling logs.
-   - Note any deviations (hardware swaps, overruns).
-5. **Closure**
-   - Comment on the ticket with artefacts/links.
-   - If the run was compliance-related, update
-     `docs/source/compliance/android/and6_compliance_checklist.md` and add a row
-     to `evidence_log.csv`.
+4. **Эшләү**
+   - Планлаштырылған эштәрҙе эшләтеү; яҙма Bubykite йүгерә идентификаторҙары йәки инструменталь журналдар.
+   - Ниндәйҙер тайпылыштарға иғтибар итегеҙ (аппарат алмашыуҙары, өҫтөнән үтә).
+5. **Ябыу**
+   - Артефакттар/һылтанмалар менән билет тураһында комментарий.
+   - Әгәр ҙә йүгереүҙе үтәү менән бәйле булһа, яңыртыу
+     `docs/source/compliance/android/and6_compliance_checklist.md` X һәм рәт өҫтәй
+     тиклем `evidence_log.csv`.
 
-Requests that impact partner demos (AND8) must cc Partner Engineering.
+Һорауҙар, тип йоғонто яһай партнер демо (AND8) тейеш cc Партнер инженерияһы.
 
-## 4. Change & Cancellation
+## 4. Үҙгәреш & отмена- **Беренсе билетты яңынан асырға:** яңы слот тәҡдим итә һәм яңыртыу
+  календарь инеү. Әгәр яңы слот 24h эсендә, пинг Аппарат лабораторияһы ҡурғаш + SRE .
+  туранан-тура.
+- ** Ғәҙәттән тыш хәлдәрҙе юҡҡа сығарыу:** ғәҙәттән тыш хәлдәр планын үтәй
+  (`device_lab_contingency.md`) һәм триггер/ғәмәл/эҙләү рәттәрен теркәй.
+- **Overruns:** әгәр йүгерә уның слотынан артып китә >15мин, яңыртыуҙы урынлаштырыу һәм раҫлау .
+  сираттағы бронирование дауам итә аламы; юғиһә ҡул өҫтөндә fallback
+  бассейн йәки Firebase ярсыҡ һыҙат.
 
-- **Reschedule:** reopen the original ticket, propose a new slot, and update the
-  calendar entry. If the new slot is within 24 h, ping Hardware Lab Lead + SRE
-  directly.
-- **Emergency cancellation:** follow the contingency plan
-  (`device_lab_contingency.md`) and record the trigger/action/follow-up rows.
-- **Overruns:** if a run exceeds its slot by >15 min, post an update and confirm
-  whether the next reservation can proceed; otherwise hand off to the fallback
-  pool or Firebase burst lane.
+## 5. Дәлилдәр һәм аудит
 
-## 5. Evidence & Auditing
+| Артефакт | Урыны | Иҫкәрмәләр |
+|--------|-----------|-------|
+| Бронирование билеттары | `_android-device-lab` сираты (Jira) | Экспорт аҙна һайын резюме; һылтанма билет идентификаторҙары дәлилдәр журналында. |
+| Календарь экспорты | `artifacts/android/device_lab/<YYYY-WW>-calendar.{ics,json}` | Йүгереп `scripts/android_device_lab_export.py --ics-url <calendar_ics_feed>` һәр йома; ярҙамсы һаҡлай фильтрланған `.ics` файл плюс JSON резюме өсөн ISO аҙна шулай аудиттар беркетергә мөмкин ике артефакт ҡул скачать. |
+| Ҡыйыулыҡ снимоктар | `docs/source/compliance/android/evidence_log.csv` | Яңыртыуҙан һуң һәр бронирование/ябыу. |
+| Пост-йүгереп иҫкәрмәләр | `docs/source/compliance/android/device_lab_contingency.md` (әгәр ғәҙәттән тыш хәл) йәки билет комментарий | Аудит өсөн кәрәк. |
 
-| Artefact | Location | Notes |
-|----------|----------|-------|
-| Reservation tickets | `_android-device-lab` queue (Jira) | Export weekly summary; link ticket IDs in evidence log. |
-| Calendar export | `artifacts/android/device_lab/<YYYY-WW>-calendar.{ics,json}` | Run `scripts/android_device_lab_export.py --ics-url <calendar_ics_feed>` each Friday; the helper saves the filtered `.ics` file plus a JSON summary for the ISO week so audits can attach both artefacts without manual downloads. |
-| Capacity snapshots | `docs/source/compliance/android/evidence_log.csv` | Update after every booking/closure. |
-| Post-run notes | `docs/source/compliance/android/device_lab_contingency.md` (if contingency) or ticket comment | Required for audits. |
+Квартал һайын үтәлешен тикшергән ваҡытта, календарь экспортын беркетергә, билет резюмеһы,
+һәм дәлилдәр журналы өҙөк AND6 тикшерелгән исемлек тапшырыу.
 
-During quarterly compliance reviews, attach the calendar export, ticket summary,
-and evidence log excerpt to the AND6 checklist submission.
+### Календарь экспорт автоматлаштырыу
 
-### Calendar export automation
-
-1. Obtain the ICS feed URL (or download a `.ics` file) for “Android Device Lab – Reservations”.
-2. Execute
+1. ICS канал URL-адресын алыу (йәки скачать `.ics` файл) өсөн “Android ҡоролма лабораторияһы – бронирование”.
+2.
 
    ```bash
    python3 scripts/android_device_lab_export.py \
@@ -111,68 +110,70 @@ and evidence log excerpt to the AND6 checklist submission.
      --week <ISO week, defaults to current>
    ```
 
-   The script writes both `artifacts/android/device_lab/<YYYY-WW>-calendar.ics`
-   and `...-calendar.json`, capturing the selected ISO week.
-3. Upload the generated files with the weekly evidence packet and reference the
-   JSON summary in `docs/source/compliance/android/evidence_log.csv` when
-   logging device-lab capacity.
+   Сценарий яҙа һәм `artifacts/android/device_lab/<YYYY-WW>-calendar.ics` XX .
+   һәм ```bash
+   python3 scripts/android_device_lab_export.py \
+     --ics-url "https://calendar.example/ical/export" \
+     --week <ISO week, defaults to current>
+   ```, һайланған ISO аҙнаһын тотоп ала.
+3. Аҙналыҡ дәлилдәр пакеты менән генерацияланған файлдарҙы тейәп, һылтанма .
+   JSON йомғаҡлау `docs/source/compliance/android/evidence_log.csv` ҡасан .
+   логирование ҡоролма-лаборатория һыйҙырышлылығы.
 
-## 6. Escalation Ladder
+## 6. Эскалация баҫҡысы
 
-1. Hardware Lab Lead (primary)
-2. Android Foundations TL
-3. Program Lead / Release Engineering (for freeze windows)
-4. External StrongBox lab contact (when retainer is invoked)
+1. Аппарат лабораторияһы етәксеһе (беренсел)
+2. Андроид нигеҙҙәре Т.Л.
+3. Программа етәксеһе / инженерлыҡ сығарыу (туңдырыу өсөн тәҙрәләр)
+4. Тышҡы көслөбокс лабораторияһы контакт (ҡасан датчикҡа саҡырылған)
 
-Escalations must be logged in the ticket and mirrored in the weekly Android
-status mail.
+Эскалациялар билетта логин булырға һәм аҙналыҡ Android-та көҙгөләндерелергә тейеш.
+статус почтаһы.
 
-## 7. Related Documents
+## 7. Бәйләнешле документтар
 
-- `docs/source/compliance/android/device_lab_contingency.md` — incident log for
-  capacity shortfalls.
-- `docs/source/compliance/android/and6_compliance_checklist.md` — master
-  deliverables checklist.
-- `docs/source/sdk/android/android_strongbox_device_matrix.md` — hardware
-  coverage tracker.
+- `docs/source/compliance/android/device_lab_contingency.md` — 2019 йыл өсөн инциденттар журналы.
+  ҡөҙрәттәре етешмәй.
+- `docs/source/compliance/android/and6_compliance_checklist.md` — мастер
+  тапшырыуҙар тикшерелгән исемлек.
+- `docs/source/sdk/android/android_strongbox_device_matrix.md` — аппарат
+  ҡаплау трекеры.
 - `docs/source/sdk/android/android_strongbox_attestation_run_log.md` —
-  StrongBox attestation evidence referenced by AND6/AND7.
+  КөслөБокс аттестация дәлилдәре һылтанма AND6/AND7.
 
-Maintaining this reservation procedure satisfies the roadmap action item “define
-device-lab reservation procedure” and keeps partner-facing compliance artefacts
-in sync with the rest of the Android readiness plan.
+Был резервация процедураһын һаҡлау юл картаһы ғәмәл элементын ҡәнәғәтләндерә “билдәләү .
+ҡоролма-лаборатория резервацияһы процедураһы» һәм партнер-йөҙөндә үтәү артефакттарын һаҡлай
+ҡалған Android әҙерлек планы менән синхронизация.
 
-## 8. Failover Drill Procedure & Contacts
+## 8. Уңышһыҙ быраулау процедураһы & Контакттар
 
-Roadmap item AND6 also requires a quarterly failover rehearsal. The full,
-step-by-step instructions live in
-`docs/source/compliance/android/device_lab_failover_runbook.md`, but the high
-level workflow is summarised below so requestors can plan drills alongside
-routine reservations.
+Юл картаһы әйбер AND6 шулай уҡ квартал һайын авария репетицияһы талап итә. Тулыһынса,
+аҙым-аҙым күрһәтмәләр 2012 йылда йәшәй.
+`docs/source/compliance/android/device_lab_failover_runbook.md`, әммә юғары
+кимәлдәге эш ағымы түбәндә дөйөмләштерелә, шуға күрә заявкалар менән бергә күнекмәләр планлаштыра ала
+ғәҙәти бронирование.1. **Бреглауҙы планлаштырыу:** Ҡазаланған һыҙаттарҙы блоклау (`pixel8pro-strongbox-a`,
+   fallback бассейн, `firebase-burst`, тышҡы StrongBox retainer) дөйөм
+   календарь һәм `_android-device-lab` сираты кәмендә 7 көн алда бура.
+2. **Тик өҙөклөктө моделләштереү:** Беренсел һыҙатты ташлағыҙ, PagerDuty-ҙы эшләгеҙ
+   (`AND6-device-lab`) ваҡиға, һәм аннотациялау бәйле эш урындары менән 2012 йылда .
+   бурау идентификаторы йүнселлектә билдәләне.
+3. **Беренсе өҙөү:** Pixel7 fallback һыҙатын пропагандалау, Firebase ярсыҡтарын башлап ебәрегеҙ
+   люкс, һәм тышҡы StrongBox партнер йәлеп итеү эсендә 6 сәғәт. Баҫып алырға
+   Buildkite URL-адрестарҙы, Firebase экспортын һәм ритейнерҙы таныуҙарҙы эшләтә.
+4. **Правищать һәм тергеҙергә:** Тикшерергә аттестация + CI эшләү ваҡыты, тергеҙелә
+   оригиналь һыҙаттар, һәм яңыртыу `device_lab_contingency.md` плюс дәлилдәр журналы
+   өйөм юл менән + тикшерелгән суммалар.
 
-1. **Schedule the drill:** Block the affected lanes (`pixel8pro-strongbox-a`,
-   fallback pool, `firebase-burst`, external StrongBox retainer) in the shared
-   calendar and `_android-device-lab` queue at least 7 days ahead of the drill.
-2. **Simulate outage:** Depool the primary lane, trigger the PagerDuty
-   (`AND6-device-lab`) incident, and annotate the dependent Buildkite jobs with
-   the drill ID noted in the runbook.
-3. **Fail over:** Promote the Pixel 7 fallback lane, initiate the Firebase burst
-   suite, and engage the external StrongBox partner within 6 hours. Capture
-   Buildkite run URLs, Firebase exports, and retainer acknowledgements.
-4. **Validate and restore:** Verify attestation + CI runtimes, reinstate the
-   original lanes, and update `device_lab_contingency.md` plus the evidence log
-   with the bundle path + checksums.
+### Контакт & Эскалация һылтанмаһы
 
-### Contact & Escalation Reference
+| Роль | Беренсел бәйләнеш | Канал(ы) | Эскалация бойороғо |
+|-----|-----------------|------------|-------------------| |
+| Аппарат лабораторияһы ҡурғаш | Прия Раманафан | `@android-lab` Слэк · +81-3-550-1234 | 1 |
+| Ҡоролма лабораторияһы Ops | Матео Круз | `_android-device-lab` сираты | 2 |
+| Android нигеҙҙәре TL | Елена Воробева | `@android-foundations` Слэк | 3 |
+| Инженерлыҡ сығарыу | Алексей Морозов | `release-eng@iroha.org` | 4 |
+| Тышҡы Көслөбокс лабораторияһы | Сакура приборҙары НОК | `noc@sakura.example` · +81-3-550-9876 | 5 |
 
-| Role | Primary Contact | Channel(s) | Escalation Order |
-|------|-----------------|------------|------------------|
-| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | 1 |
-| Device Lab Ops | Mateo Cruz | `_android-device-lab` queue | 2 |
-| Android Foundations TL | Elena Vorobeva | `@android-foundations` Slack | 3 |
-| Release Engineering | Alexei Morozov | `release-eng@iroha.org` | 4 |
-| External StrongBox Lab | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | 5 |
-
-Escalate sequentially if the drill uncovers blocking issues or if any fallback
-lane cannot be brought online within 30 minutes. Always record the escalation
-notes in the `_android-device-lab` ticket and mirror them in the contingency log.
+Эскалировать эҙмә-эҙлекле, әгәр быраулау блокировка мәсьәләләрен асып йәки әгәр ниндәй ҙә булһа fallback .
+һыҙат 30минут эсендә онлайн алып барып булмай. Һәр ваҡыт эскалацияны теркәгеҙ
+`_android-device-lab` билетында иҫкәрмәләр һәм уларҙы ғәҙәттән тыш хәлдәр журналында көҙгөләй.

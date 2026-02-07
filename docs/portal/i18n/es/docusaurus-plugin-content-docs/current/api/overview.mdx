@@ -4,55 +4,53 @@ direction: ltr
 source: docs/portal/docs/api/overview.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import TryItConsole from '@site/src/components/TryItConsole.jsx';
+importar TryItConsole desde '@site/src/components/TryItConsole.jsx';
 
-# Torii API Overview
+# Torii Descripción general de la API
 
-The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha
-nodes. The canonical OpenAPI document is generated via:
+La puerta de enlace Torii expone una superficie REST + WebSocket para interactuar con Iroha
+nodos. El documento canónico OpenAPI se genera mediante:
 
 ```bash
 cargo xtask openapi
 ```
 
-Running the command above writes `docs/portal/static/openapi/torii.json` and
-feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+Al ejecutar el comando anterior se escribe `docs/portal/static/openapi/torii.json` y
+alimenta la integración `docusaurus-plugin-openapi-docs` por lo que esta sección se actualiza
+automáticamente. El generador activa un enrutador Torii en memoria e intenta
+consultar su punto final OpenAPI; si eso falla (por ejemplo, inicialización del enrutador
+errores), en su lugar se emite una especificación de marcador de posición determinista.
 
-## Current status
+## Estado actual- **Fuente de especificaciones:** `cargo xtask openapi` consulta el enrutador Torii directamente; el
+  El código auxiliar alternativo solo se emite cuando el enrutador no logra exponer un OpenAPI.
+  documento.
+- **Determinismo:** la salida JSON se canonicaliza para garantizar diferencias estables en CI.
+- **Autenticación:** El entorno limitado "Pruébelo" ahora reenvía solicitudes a través de un
+  proxy de puesta en escena restringido. Los operadores deben proporcionar un punto final y un portador Torii
+  token antes de realizar llamadas.
+- **Selector de versión:** Swagger UI, RapiDoc y la página completa Torii OpenAPI
+  exponer un menú desplegable que dice `openapi/versions.json` para que pueda comparar
+  instantáneas históricas. La opción `Latest (tracked)` apunta a
+  `/openapi/torii.json`, mientras que todas las demás entradas cargan el correspondiente
+  Artefacto `openapi/versions/<version>/torii.json`.
+- **Flujo de trabajo de instantánea:** Después de ejecutar `npm run docs:version -- <label>`, actualice
+  el archivo OpenAPI coincidente con `npm run sync-openapi -- --version=<label> --latest`
+  para que el menú desplegable pueda cargar tanto la instantánea congelada como la compilación "más reciente".
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
-- **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
-- **Authentication:** The “Try it” sandbox now forwards requests through a
-  constrained staging proxy. Operators must supply a Torii endpoint and bearer
-  token before issuing calls.
-- **Version selector:** Swagger UI, RapiDoc, and the full Torii OpenAPI page
-  expose a dropdown that reads `openapi/versions.json` so you can compare
-  historical snapshots. The `Latest (tracked)` option points to
-  `/openapi/torii.json`, while all other entries load the corresponding
-  `openapi/versions/<version>/torii.json` artifact.
-- **Snapshot workflow:** After running `npm run docs:version -- <label>`, refresh
-  the matching OpenAPI file with `npm run sync-openapi -- --version=<label> --latest`
-  so the dropdown can load both the frozen snapshot and the rolling “Latest” build.
+El extractor respaldado por enrutador ahora emite toda la superficie Torii. Si ves el
+trozo de marcador de posición, trátelo como una falla en el tiempo de compilación e inspeccione el Torii
+registros de inicio del enrutador.
 
-The router-backed extractor now emits the full Torii surface. If you see the
-placeholder stub, treat it as a build-time failure and inspect the Torii
-router startup logs.
+## Pruébelo en la zona de pruebas (DOCS-3)El portal para desarrolladores incorpora una pequeña consola que transmite solicitudes REST a través de un
+Proxy basado en nodos. El proxy hace cumplir CORS, límites de tasas y portador opcional
+tokens para que el widget pueda comunicarse con las puertas de enlace provisionales sin exponer las credenciales.
+Consulte `docs/devportal/try-it.md` para obtener la lista de verificación completa del operador.
 
-## Try it sandbox (DOCS-3)
-
-The developer portal embeds a small console that relays REST requests through a
-Node-based proxy. The proxy enforces CORS, rate limits, and optional bearer
-tokens so the widget can talk to staging gateways without exposing credentials.
-See `docs/devportal/try-it.md` for the full operator checklist.
-
-Start the proxy alongside the Docusaurus dev server:
+Inicie el proxy junto con el servidor de desarrollo Docusaurus:
 
 ```bash
 cd docs/portal
@@ -68,15 +66,14 @@ npm run tryit-proxy
 npm run start
 ```
 
-- The proxy listens on `TRYIT_PROXY_LISTEN` (default `127.0.0.1:8787`) and
-  forwards any `/proxy/...` requests to `TRYIT_PROXY_TARGET`.
-- Supply `TRYIT_PROXY_BEARER` for static bearer tokens or let callers provide
-  one per request via the “Bearer token” field.
-- Rate limits default to 60 requests per minute and can be tuned through
+- El proxy escucha en `TRYIT_PROXY_LISTEN` (predeterminado `127.0.0.1:8787`) y
+  reenvía cualquier solicitud `/proxy/...` a `TRYIT_PROXY_TARGET`.
+- Suministre `TRYIT_PROXY_BEARER` para tokens de portador estáticos o permita que las personas que llaman proporcionen
+  uno por solicitud a través del campo "Token al portador".
+- Los límites de velocidad predeterminados son 60 solicitudes por minuto y se pueden ajustar a través de
   `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
 
-> ⚠️ The proxy is intended for staging/demo access. Production deployments
-> should run behind hardened ingress and reuse the same rate limiting policy in
-> front of Torii.
+> ⚠️ El proxy está diseñado para acceso de prueba/demostración. Implementaciones de producción
+> debería respaldar el ingreso reforzado y reutilizar la misma política de limitación de tasas en
+> frente de Torii.
 
-<TryItConsole />

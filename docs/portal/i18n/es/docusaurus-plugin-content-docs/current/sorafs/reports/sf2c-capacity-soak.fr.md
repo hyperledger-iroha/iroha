@@ -4,55 +4,55 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Rapport de soak d'accumulation de capacité SF-2c
+# Informe de remojo de acumulación de capacidad SF-2c
 
-Date: 2026-03-21
+Fecha: 2026-03-21
 
 ## Portée
 
-Ce rapport consigne les tests déterministes de soak d'accumulation et de paiement de capacité SoraFS demandés
+Este informe consigna las pruebas determinantes de remojo de acumulación y pago de capacidad SoraFS demandadas.
 dans la feuille de route SF-2c.
 
-- **Soak multi-provider sur 30 jours:** Exécuté par
-  `capacity_fee_ledger_30_day_soak_deterministic` dans
+- **Remojar multiproveedor cada 30 días:** Ejecutado por
+  `capacity_fee_ledger_30_day_soak_deterministic` en
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  Le harness instancie cinq providers, couvre 30 fenêtres de settlement et
-  valide que les totaux du ledger correspondent à une projection de référence
-  calculée indépendamment. Le test émet un digest Blake3 (`capacity_soak_digest=...`)
-  afin que CI puisse capturer et comparer le snapshot canonique.
-- **Pénalités de sous-livraison:** Appliquées par
+  El arnés instala cinco proveedores, cubre 30 ventanas de asentamiento y
+  valide que les totaux du ledger corresponden a una proyección de referencia
+  calculado indépendamment. La prueba hizo un resumen de Blake3 (`capacity_soak_digest=...`)
+  Afin que CI puede capturar y comparar la instantánea canónica.
+- **Pénalités de sous-livraison:** Aplicaciones por
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (même fichier). Le test confirme que les seuils de strikes, cooldowns,
-  slashes de collateral et compteurs du ledger restent déterministes.
+  (même archivo). La prueba confirma las siguientes etapas de ataques, tiempos de reutilización,
+  barras diagonales de garantía y contadores del libro mayor restent déterministes.
 
-## Exécution
+## Ejecución
 
-Relancez les validations de soak localement avec:
+Relance las validaciones de ubicación de remojo con:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Les tests se terminent en moins d'une seconde sur un laptop standard et ne
-nécessitent aucun fixture externe.
+Las pruebas se determinan en menos de un segundo en una computadora portátil estándar y no
+nécessitent aucun accesorio externo.
 
-## Observabilité
+## Observabilidad
 
-Torii expose maintenant des snapshots de crédit providers aux côtés des fee ledgers afin que les dashboards
-puissent gate sur les faibles soldes et penalty strikes:
-
-- REST: `GET /v1/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
-  reflètent les champs du ledger vérifiés dans le test de soak. Voir
+Torii expone el mantenimiento de instantáneas de proveedores de crédito en los libros de contabilidad de tarifas junto con los paneles de control
+puissent gate sur les faibles soldes et penales strikes:- RESTO: `GET /v1/sorafs/capacity/state` reenvío de platos principales `credit_ledger[*]` aquí
+  refleja los campos del libro mayor verificados en la prueba de remojo. Ver
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Import Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` trace les
-  compteurs de strikes exportés, les totaux de pénalités et le collateral engagé afin que
-  l'équipe on-call puisse comparer les baselines de soak avec les environnements live.
+- Importar archivos de seguimiento Grafana: `dashboards/grafana/sorafs_capacity_penalties.json`
+  compteurs de strikes exportés, les totaux de pénalités et le colateral engagé afin que
+  El equipo de guardia puede comparar las líneas base de remojo con los entornos en vivo.
 
 ## Suivi
 
-- Planifier des exécutions hebdomadaires de gate en CI pour rejouer le test de soak (smoke-tier).
-- Étendre le tableau Grafana avec les cibles de scrape Torii une fois que les exports de telemetry de production
+- Planificador de ejecuciones de hebdomadaires de gate en CI para reactivar la prueba de remojo (nivel de humo).
+- Étendre le tableau Grafana con les cibles de scrape Torii una vez que les exports de telemetry de production
   seront en ligne.

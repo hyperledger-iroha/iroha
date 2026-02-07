@@ -7,60 +7,61 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6b920e21b96436755f7d37f7b5577465cb3e30016d36340c50f7c6f3a9a46919
 source_last_modified: "2025-12-29T18:16:35.116499+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Try It sandbox
+# ማጠሪያውን ይሞክሩት።
 
-The developer portal ships an optional “Try it” console so you can call Torii
-endpoints without leaving the documentation. The console relays requests
-through the bundled proxy so browsers can bypass CORS limits while still
-enforcing rate limits and authentication.
+Torii መደወል እንዲችሉ የገንቢው ፖርታል አማራጭ የሆነውን “ሞክሩት” ኮንሶል ይልካል።
+ሰነዶቹን ሳይለቁ የመጨረሻ ነጥቦች. ኮንሶሉ ጥያቄዎችን ያስተላልፋል
+አሳሾች አሁንም የCORS ገደቦችን ማለፍ እንዲችሉ በተጠቀጠቀ ፕሮክሲ በኩል
+የዋጋ ገደቦችን እና ማረጋገጫን ማስፈጸም።
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-- Node.js 18.18 or newer (matches the portal build requirements)
-- Network access to a Torii staging environment
-- A bearer token that can call the Torii routes you plan to exercise
+- Node.js 18.18 ወይም ከዚያ በላይ (ከፖርታል ግንባታ መስፈርቶች ጋር ይዛመዳል)
+- የአውታረ መረብ መዳረሻ ወደ I18NT0000012X ዝግጅት አካባቢ
+- የአካል ብቃት እንቅስቃሴ ለማድረግ ያቀዱትን Torii መስመሮችን መደወል የሚችል ተሸካሚ ቶከን
 
-All proxy configuration is done through environment variables. The table below
-lists the most important knobs:
+ሁሉም የተኪ ውቅር የሚከናወነው በአካባቢ ተለዋዋጮች ነው። ከታች ያለው ሰንጠረዥ
+በጣም አስፈላጊ የሆኑትን እንክብሎች ይዘረዝራል-
 
-| Variable | Purpose | Default |
+| ተለዋዋጭ | ዓላማ | ነባሪ |
 | --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | Base Torii URL that the proxy forwards requests to | **Required** |
-| `TRYIT_PROXY_LISTEN` | Listen address for local development (format `host:port` or `[ipv6]:port`) | `127.0.0.1:8787` |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins that may call the proxy | `http://localhost:3000` |
-| `TRYIT_PROXY_CLIENT_ID` | Identifier placed in `X-TryIt-Client` for every upstream request | `docs-portal` |
-| `TRYIT_PROXY_BEARER` | Default bearer token forwarded to Torii | _empty_ |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Allow end users to supply their own token via `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request body size (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout in milliseconds | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | Requests allowed per rate window per client IP | `60` |
-| `TRYIT_PROXY_RATE_WINDOW_MS` | Sliding window for rate limiting (ms) | `60000` |
-| `TRYIT_PROXY_METRICS_LISTEN` | Optional listen address for the Prometheus-style metrics endpoint (`host:port` or `[ipv6]:port`) | _empty (disabled)_ |
-| `TRYIT_PROXY_METRICS_PATH` | HTTP path served by the metrics endpoint | `/metrics` |
+| `TRYIT_PROXY_TARGET` | ተኪው የሚያስተላልፈው Base Torii URL ወደ | ** ያስፈልጋል *** |
+| `TRYIT_PROXY_LISTEN` | ለአካባቢ ልማት አድራሻ ያዳምጡ (ቅርጸት I18NI0000042X ወይም `[ipv6]:port`) | `127.0.0.1:8787` |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | ተኪ ሊጠሩ የሚችሉ በነጠላ ሰረዝ የተለዩ የመነሻ ዝርዝር | `http://localhost:3000` |
+| `TRYIT_PROXY_CLIENT_ID` | ለእያንዳንዱ የወራጅ ጥያቄ በI18NI0000048X የተቀመጠው መለያ | `docs-portal` |
+| `TRYIT_PROXY_BEARER` | ነባሪ ተሸካሚ ማስመሰያ ወደ Torii ተላልፏል ባዶ_ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | የመጨረሻ ተጠቃሚዎች የራሳቸውን ማስመሰያ በ`X-TryIt-Auth` በኩል እንዲያቀርቡ ይፍቀዱላቸው | `0` |
+| `TRYIT_PROXY_MAX_BODY` | ከፍተኛው የጥያቄ የሰውነት መጠን (ባይት) | `1048576` |
+| `TRYIT_PROXY_TIMEOUT_MS` | ወደላይ የሚያልፍበት ጊዜ በሚሊሰከንዶች | `10000` |
+| `TRYIT_PROXY_RATE_LIMIT` | የተፈቀደላቸው ጥያቄዎች በእያንዳንዱ የዋጋ መስኮት በደንበኛ IP | `60` |
+| `TRYIT_PROXY_RATE_WINDOW_MS` | ለተመን ገደብ (ሚሴ) ተንሸራታች መስኮት | `60000` |
+| `TRYIT_PROXY_METRICS_LISTEN` | ለPrometheus አይነት ሜትሪክስ የመጨረሻ ነጥብ (`host:port` ወይም `[ipv6]:port`) አማራጭ የማዳመጥ አድራሻ | ባዶ (የተሰናከለ) _ |
+| `TRYIT_PROXY_METRICS_PATH` | የኤችቲቲፒ ዱካ በሜትሪክስ መጨረሻ ነጥብ | `/metrics` |
 
-The proxy also exposes `GET /healthz`, returns structured JSON errors, and
-redacts bearer tokens from log output.
+ፕሮክሲው I18NI0000067Xን ያጋልጣል፣ የተዋቀሩ የJSON ስህተቶችን ይመልሳል እና
+ተሸካሚ ምልክቶችን ከሎግ ውፅዓት ያድሳል።
 
-Enable `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` when exposing the proxy to docs users so the Swagger and
-RapiDoc panels can forward user-supplied bearer tokens. The proxy still enforces rate limits,
-redacts credentials, and records whether a request used the default token or a per-request override.
-Set `TRYIT_PROXY_CLIENT_ID` to the label you want sent as `X-TryIt-Client`
-(defaults to `docs-portal`). The proxy trims and validates caller-supplied
-`X-TryIt-Client` values, falling back to this default so staging gateways can
-audit provenance without correlating browser metadata.
+ተኪውን ለሰነዶች ተጠቃሚዎች ሲያጋልጥ `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`ን ያንቁ Swagger እና
+RapiDoc ፓነሎች በተጠቃሚ የሚቀርቡ ተሸካሚ ቶከኖችን ማስተላለፍ ይችላሉ። ተኪው አሁንም የዋጋ ገደቦችን ያስፈጽማል፣
+ምስክርነቶችን ያድሳል፣ እና ጥያቄው ነባሪውን ማስመሰያ ወይም የጥያቄ መሻር መጠቀሙን ይመዘግባል።
+`TRYIT_PROXY_CLIENT_ID` እንደ `X-TryIt-Client` ለመላክ ወደሚፈልጉት መለያ ያቀናብሩ
+(የI18NI0000071X ነባሪዎች)። ተኪው በጠዋይ የቀረበን ያስተካክላል እና ያረጋግጣል
+የ`X-TryIt-Client` እሴቶች፣ ወደዚህ ነባሪ በመመለስ መግቢያ መንገዶችን ማዘጋጀት ይችላሉ።
+የአሳሽ ዲበ ውሂብን ሳያካትት የኦዲት ማረጋገጫ።
 
-## Start the proxy locally
+## ፕሮክሲውን በአገር ውስጥ ይጀምሩ
 
-Install dependencies the first time you set up the portal:
+ፖርታሉን ለመጀመሪያ ጊዜ ሲያዘጋጁ ጥገኞችን ይጫኑ፡-
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-Run the proxy and point it at your Torii instance:
+ፕሮክሲውን ያሂዱ እና በእርስዎ Torii ምሳሌ ላይ ያመልክቱ፡
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -70,20 +71,20 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-The script logs the bound address and forwards requests from `/proxy/*` to the
-configured Torii origin.
+ስክሪፕቱ የታሰረውን አድራሻ ይመዘግባል እና ጥያቄዎችን ከ `/proxy/*` ወደ
+የተዋቀረው I18NT0000017X መነሻ።
 
-Before binding the socket the script validates that
-`static/openapi/torii.json` matches the digest recorded in
-`static/openapi/manifest.json`. If the files drift, the command exits with an
-error and instructs you to run `npm run sync-openapi -- --latest`. Export
-`TRYIT_PROXY_ALLOW_STALE_SPEC=1` only for emergency overrides; the proxy will
-log a warning and continue so you can recover during maintenance windows.
+ሶኬቱን ከማሰርዎ በፊት ስክሪፕቱ ያንን ያረጋግጣል
+`static/openapi/torii.json` ከተመዘገበው የምግብ መፈጨት ጋር ይዛመዳል
+`static/openapi/manifest.json`. ፋይሎቹ ከተንሸራተቱ ትዕዛዙ በኤ
+ስህተት እና `npm run sync-openapi -- --latest` እንዲያሄዱ ያዝዝዎታል። ወደ ውጪ ላክ
+`TRYIT_PROXY_ALLOW_STALE_SPEC=1` ለአደጋ ጊዜ መሻር ብቻ; ተኪው ያደርጋል
+በጥገና መስኮቶች ወቅት ማገገም እንዲችሉ ማስጠንቀቂያ ይመዝገቡ እና ይቀጥሉ።
 
-## Wire the portal widgets
+## የፖርታል መግብሮችን ሽቦ ያድርጉ
 
-When you build or serve the developer portal, set the URL that the widgets
-should use for the proxy:
+የገንቢ ፖርታልን ሲገነቡ ወይም ሲያገለግሉ መግብሮቹ የሚያዘጋጁትን ዩአርኤል ያዘጋጁ
+ለፕሮክሲው መጠቀም ያለበት፡-
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -91,48 +92,48 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-The following components read these values from `docusaurus.config.js`:
+የሚከተሉት ክፍሎች እነዚህን እሴቶች ከ`docusaurus.config.js` ያንብቡ፡
 
-- **Swagger UI** — rendered at `/reference/torii-swagger`; pre-authorises the
-  bearer scheme when a token is present, tags requests with `X-TryIt-Client`,
-  injects `X-TryIt-Auth`, and rewrites calls through the proxy when
-  `TRYIT_PROXY_PUBLIC_URL` is set.
-- **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field,
-  reuses the same headers as the Swagger panel, and targets the proxy
-  automatically when the URL is configured.
-- **Try it console** — embedded on the API overview page; lets you send custom
-  requests, view headers, and inspect response bodies.
+- ** Swagger UI *** - በ `/reference/torii-swagger` ላይ የቀረበ; ቅድመ-ይፈቅዳል
+  ተሸካሚ እቅድ ማስመሰያ ሲኖር፣ ጥያቄዎችን በ`X-TryIt-Client` መለያ ይሰጣል፣
+  `X-TryIt-Auth` ያስገባል እና ጥሪዎችን በፕሮክሲው በኩል በድጋሚ ይጽፋል
+  `TRYIT_PROXY_PUBLIC_URL` ተቀናብሯል።
+- ** RapiDoc *** - በ `/reference/torii-rapidoc` ላይ የቀረበ; የማስመሰያ መስክን ያንፀባርቃል ፣
+  ከስዋገር ፓኔል ጋር ተመሳሳይ ራስጌዎችን በድጋሚ ይጠቀማል፣ እና ተኪውን ያነጣጥራል።
+  ዩአርኤል ሲዋቀር በራስ ሰር።
+- ** ኮንሶል ይሞክሩት *** - በኤፒአይ አጠቃላይ እይታ ገጽ ላይ የተካተተ; ብጁ እንድትልክ ያስችልሃል
+  ጥያቄዎችን፣ ራስጌዎችን ይመልከቱ፣ እና የምላሽ አካላትን ይፈትሹ።
 
-Both panels surface a **snapshot selector** that reads
-`docs/portal/static/openapi/versions.json`. Populate that index with
-`npm run sync-openapi -- --version=<label> --mirror=current --latest` so
-reviewers can jump between historical specs, see the recorded SHA-256 digest,
-and confirm whether a release snapshot carries a signed manifest before using
-the interactive widgets.
+ሁለቱም ፓነሎች የሚያነበው ** ቅጽበተ-ፎቶ መራጭ** ላይ
+`docs/portal/static/openapi/versions.json`. ያንን መረጃ ጠቋሚ በሕዝብ ይሙሉት።
+`npm run sync-openapi -- --version=<label> --mirror=current --latest` እንዲሁ
+ገምጋሚዎች በታሪካዊ ዝርዝሮች መካከል መዝለል ይችላሉ ፣ የተቀዳውን SHA-256 ይመልከቱ ፣
+እና የመልቀቂያ ቅጽበታዊ ገጽ እይታ ከመጠቀምዎ በፊት የተፈረመ ሰነድ መያዙን ያረጋግጡ
+በይነተገናኝ መግብሮች.
 
-Changing the token in any widget only affects the current browser session; the
-proxy never persists or logs the supplied token.
+በማንኛውም መግብር ውስጥ ማስመሰያ መቀየር የአሁኑን የአሳሽ ክፍለ ጊዜ ብቻ ነው የሚነካው; የ
+ፕሮክሲ በፍፁም አይቆይም ወይም የቀረበውን ማስመሰያ አይመዘግብም።
 
-## Short-lived OAuth tokens
+## የአጭር ጊዜ የ OAuth ቶከኖች
 
-To avoid distributing long-lived Torii tokens to reviewers, wire the Try it
-console to your OAuth server. When the environment variables below are present
-the portal renders a device-code login widget, mints short-lived bearer tokens,
-and automatically injects them into the console form.
+ለረጅም ጊዜ የቆዩ የTorii ቶከኖችን ለገምጋሚዎች ከማሰራጨት ለመዳን ይሞክሩት።
+ኮንሶል ወደ የእርስዎ OAuth አገልጋይ። ከታች ያሉት የአካባቢ ተለዋዋጮች ሲገኙ
+ፖርታሉ የመሣሪያ-ኮድ መግቢያ ምግብርን፣ አጭር ጊዜ የሚቆይ ተሸካሚ ማስመሰያዎችን ያቀርባል፣
+እና በራስ-ሰር ወደ ኮንሶል ቅፅ ውስጥ ያስገባቸዋል.
 
-| Variable | Purpose | Default |
+| ተለዋዋጭ | ዓላማ | ነባሪ |
 | --- | --- | --- |
-| `DOCS_OAUTH_DEVICE_CODE_URL` | OAuth Device Authorization endpoint (`/oauth/device/code`) | _empty (disabled)_ |
-| `DOCS_OAUTH_TOKEN_URL` | Token endpoint that accepts `grant_type=urn:ietf:params:oauth:grant-type:device_code` | _empty_ |
-| `DOCS_OAUTH_CLIENT_ID` | OAuth client identifier registered for the docs preview | _empty_ |
-| `DOCS_OAUTH_SCOPE` | Space-delimited scopes requested during sign-in | `openid profile offline_access` |
-| `DOCS_OAUTH_AUDIENCE` | Optional API audience to bind the token to | _empty_ |
-| `DOCS_OAUTH_POLL_INTERVAL_MS` | Minimum poll interval when waiting for approval (ms) | `5000` (values < 5000 ms are rejected) |
-| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` | Fallback device-code expiration window (seconds) | `600` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_TOKEN_TTL_SECONDS` | Fallback access-token lifetime (seconds) | `900` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_ALLOW_INSECURE` | Set to `1` for local previews that intentionally skip OAuth enforcement | _unset_ |
+| `DOCS_OAUTH_DEVICE_CODE_URL` | የOAuth መሣሪያ ፈቃድ የመጨረሻ ነጥብ (`/oauth/device/code`) | ባዶ (የተሰናከለ) _ |
+| `DOCS_OAUTH_TOKEN_URL` | `grant_type=urn:ietf:params:oauth:grant-type:device_code` የሚቀበል ማስመሰያ የመጨረሻ ነጥብ | ባዶ_ |
+| `DOCS_OAUTH_CLIENT_ID` | ለሰነዶች ቅድመ እይታ የተመዘገበ የOAuth ደንበኛ ለዪ | ባዶ_ |
+| `DOCS_OAUTH_SCOPE` | በመግቢያ ጊዜ የተጠየቁ በክፍተት የተገደቡ ወሰኖች | `openid profile offline_access` |
+| `DOCS_OAUTH_AUDIENCE` | ማስመሰያውን ከ | ጋር ለማያያዝ አማራጭ የኤፒአይ ታዳሚዎች ባዶ_ |
+| `DOCS_OAUTH_POLL_INTERVAL_MS` | መጽደቅን ሲጠብቅ ዝቅተኛው የድምጽ ክፍተት | `5000` (እሴቶች <5000ms ውድቅ ናቸው) |
+| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` | የመመለሻ መሳሪያ-የኮድ ማብቂያ መስኮት (ሰከንዶች) | `600` (በ 300 ዎቹ እና 900 ዎቹ መካከል መቆየት አለበት) |
+| `DOCS_OAUTH_TOKEN_TTL_SECONDS` | የመውደቅ መዳረሻ-ቶከን የህይወት ዘመን (ሰከንዶች) | `900` (በ 300 ዎቹ እና 900 ዎቹ መካከል መቆየት አለበት) |
+| `DOCS_OAUTH_ALLOW_INSECURE` | OAuth ማስፈጸሚያን ሆን ብለው ለዘለሉ የአገር ውስጥ ቅድመ ዕይታዎች ወደ `1` ያቀናብሩ | _ያልተዘጋጀ_ |
 
-Example configuration:
+የምሳሌ ውቅር፡
 
 ```bash
 export DOCS_OAUTH_DEVICE_CODE_URL="https://auth.dev.sora.example/oauth/device/code"
@@ -144,60 +145,60 @@ export DOCS_OAUTH_AUDIENCE="https://torii.devnet.sora.example"
 export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ```
 
-When you run `npm run start` or `npm run build`, the portal embeds these values
-in `docusaurus.config.js`. During local preview the Try it card shows a
-“Sign in with device code” button. Users enter the displayed code on your OAuth
-verification page; once the device flow succeeds the widget:
+`npm run start` ወይም `npm run build` ን ሲያሄዱ ፖርታሉ እነዚህን እሴቶች ያካትታል
+በ `docusaurus.config.js`. በአካባቢያዊ ቅድመ እይታ ጊዜ ይሞክሩት ካርዱ ሀ
+"በመሳሪያ ኮድ ይግቡ" ቁልፍ። ተጠቃሚዎች የሚታየውን ኮድ በእርስዎ OAuth ላይ ያስገባሉ።
+የማረጋገጫ ገጽ; አንዴ የመሳሪያው ፍሰት መግብርን ከተሳካ በኋላ፡-
 
-- injects the issued bearer token into the Try it console field,
-- tags requests with the existing `X-TryIt-Client` and `X-TryIt-Auth` headers,
-- displays the remaining lifetime, and
-- automatically clears the token when it expires.
+- የተሰጠውን ተሸካሚ ማስመሰያ ወደ ሞክሩት ኮንሶል መስክ ውስጥ ያስገባል ፣
+- ጥያቄዎችን አሁን ባሉት `X-TryIt-Client` እና `X-TryIt-Auth` ራስጌዎች መለያ ይሰጣል፣
+- የቀረውን የህይወት ዘመን ያሳያል, እና
+- ጊዜው ሲያልቅ ማስመሰያውን በራስ-ሰር ያጸዳል።
 
-The manual Bearer input remains available—omit the OAuth variables whenever you
-want to force reviewers to paste a temporary token themselves, or export
-`DOCS_OAUTH_ALLOW_INSECURE=1` for isolated local previews where anonymous access
-is acceptable. Builds without OAuth configured now fail fast to satisfy the
-DOCS-1b roadmap gate.
+የእጅ ተሸካሚው ግቤት እንዳለ ይቆያል—በማንኛውም ጊዜ የOAuth ተለዋዋጮችን ያስወግዱ
+ገምጋሚዎች ጊዜያዊ ማስመሰያ ራሳቸው እንዲለጥፉ ወይም ወደ ውጭ እንዲልኩ ማስገደድ ይፈልጋሉ
+`DOCS_OAUTH_ALLOW_INSECURE=1` ለገለልተኛ የአካባቢ ቅድመ እይታዎች የማይታወቅ መዳረሻ
+ተቀባይነት አለው። ግንባታዎች ያለ OAuth መዋቀር አሁን በፍጥነት ወድቀዋል
+DOCS-1b የመንገድ ካርታ በር።
 
-📌 Review the [Security hardening & pen-test checklist](./security-hardening.md)
-before exposing the portal outside the lab; it documents the threat model,
-CSP/Trusted Types profile, and the penetration-test steps that now gate DOCS-1b.
+📌 [የደህንነት ማጠንከሪያ እና የብዕር-ሙከራ ዝርዝር](./security-hardening.md) ይገምግሙ
+ከላቦራቶሪ ውጭ ያለውን ፖርታል ከማጋለጥዎ በፊት; የአደጋውን ሞዴል ያዘጋጃል ፣
+የCSP/የታመኑ አይነቶች መገለጫ፣ እና አሁን DOCS-1bን የሚያስገቡት የፔኔትሽን-ሙከራ ደረጃዎች።
 
-## Norito-RPC samples
+## Norito-RPC ናሙናዎች
 
-Norito-RPC requests share the same proxy and OAuth plumbing as the JSON routes,
-they simply set `Content-Type: application/x-norito` and send the
-pre-encoded Norito payload described in the NRPC specification
-(`docs/source/torii/nrpc_spec.md`).
-The repository ships canonical payloads under `fixtures/norito_rpc/` so portal
-authors, SDK owners, and reviewers can replay the exact bytes that CI uses.
+የNorito-RPC ጥያቄዎች ከJSON መንገዶች ጋር አንድ አይነት ፕሮክሲ እና የOAuth የቧንቧ መስመር ይጋራሉ።
+በቀላሉ `Content-Type: application/x-norito` አዘጋጅተው ይልካሉ
+በNRPC ዝርዝር ውስጥ የተገለፀው ቀድሞ የተቀመጠ I18NT0000007X ክፍያ
+(`docs/source/torii/nrpc_spec.md`)።
+ማከማቻው በ `fixtures/norito_rpc/` so portal ስር ቀኖናዊ ጭነትን ይልካል።
+ደራሲዎች፣ የኤስዲኬ ባለቤቶች እና ገምጋሚዎች CI የሚጠቀመውን ትክክለኛ ባይት እንደገና ማጫወት ይችላሉ።
 
-### Send a Norito payload from the Try It console
+### የNorito ክፍያ ጭነት ከ Try It console ላክ
 
-1. Pick a fixture such as `fixtures/norito_rpc/transfer_asset.norito`. These
-   files are raw Norito envelopes; do **not** base64-encode them.
-2. In Swagger or RapiDoc, locate the NRPC endpoint (for example
-   `POST /v1/pipeline/submit`) and switch the **Content-Type** selector to
+1. እንደ `fixtures/norito_rpc/transfer_asset.norito` አይነት መሳሪያ ይምረጡ። እነዚህ
+   ፋይሎች ጥሬ Norito ፖስታዎች ናቸው; አታድርግ ** base64-encode እነሱን.
+2. በSwagger ወይም RapiDoc ውስጥ የNRPC የመጨረሻ ነጥብ ያግኙ (ለምሳሌ፡
+   `POST /v1/pipeline/submit`) እና **የይዘት አይነት** መራጩን ወደ
    `application/x-norito`.
-3. Toggle the request body editor to **binary** (Swagger's "File" mode or
-   RapiDoc's "Binary/File" selector) and upload the `.norito` file. The widget
-   streams the bytes through the proxy without alteration.
-4. Submit the request. If Torii returns `X-Iroha-Error-Code: schema_mismatch`,
-   verify that you are calling an endpoint that accepts binary payloads and
-   confirm that the schema hash recorded in `fixtures/norito_rpc/schema_hashes.json`
-   matches the Torii build you are hitting.
+3. የጥያቄ አካል አርታዒውን ወደ ** ሁለትዮሽ ** (የSwagger "ፋይል" ሁነታ ወይም) ቀይር
+   የRapiDoc "ሁለትዮሽ/ፋይል" መራጭ) እና የ`.norito` ፋይልን ይስቀሉ። መግብር
+   ባይት ያለ ለውጥ በፕሮክሲው በኩል ያሰራጫል።
+4. ጥያቄውን ያቅርቡ. Torii `X-Iroha-Error-Code: schema_mismatch` ከመለሰ፣
+   ሁለትዮሽ ጭነቶችን የሚቀበል የመጨረሻ ነጥብ እየጠሩ መሆንዎን ያረጋግጡ እና
+   የሼማ ሃሽ በ`fixtures/norito_rpc/schema_hashes.json` ውስጥ መመዝገቡን ያረጋግጡ
+   እየመታህ ካለው Torii ግንባታ ጋር ይዛመዳል።
 
-The console keeps the most recent file in memory so you can resubmit the same
-payload while exercising different authorisation tokens or Torii hosts. Adding
-`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` to your workflow produces
-the evidence bundle referenced in the NRPC-4 adoption plan (log + JSON summary),
-which pairs nicely with screenshotting the Try It response during reviews.
+መሥሪያው በጣም የቅርብ ጊዜውን ፋይል በማህደረ ትውስታ ውስጥ ያቆያል ስለዚህ ተመሳሳዩን እንደገና ማስገባት ይችላሉ።
+የተለያዩ የፍቃድ ቶከኖች ወይም Torii አስተናጋጆችን በሚጠቀሙበት ወቅት የሚጫኑት። በማከል ላይ
+`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` ወደ የእርስዎ የስራ ፍሰት ምርቶች
+በNRPC-4 የጉዲፈቻ ዕቅድ (ሎግ + JSON ማጠቃለያ) ውስጥ የተጠቀሰው የማስረጃ ጥቅል
+በግምገማዎች ጊዜ ምላሹን ይሞክሩት ከቅጽበታዊ ገጽ እይታ ጋር በጥሩ ሁኔታ የተጣመረ።
 
-### CLI example (curl)
+### CLI ምሳሌ (ከርል)
 
-The same fixtures can be replayed outside the portal via `curl`, which is useful
-when validating the proxy or debugging gateway responses:
+ተመሳሳይ መጫዎቻዎች ከፖርታሉ ውጭ በ `curl` በኩል ሊጫወቱ ይችላሉ ፣ ይህ ጠቃሚ ነው
+ተኪውን ሲያረጋግጡ ወይም የጌትዌይ ምላሾችን ሲያርሙ፡-
 
 ```bash
 TORII="https://torii.devnet.sora.example"
@@ -209,23 +210,21 @@ curl \
   "${TORII}/v1/pipeline/submit"
 ```
 
-Swap the fixture for any entry listed in `transaction_fixtures.manifest.json`
-or encode your own payload with `cargo xtask norito-rpc-fixtures`. When Torii
-is in canary mode you can point `curl` at the try-it proxy
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) to exercise the same
-infrastructure that the portal widgets use.
+በ`transaction_fixtures.manifest.json` ውስጥ ለተዘረዘረው ማንኛውም ግቤት እቃውን ይቀይሩት።
+ወይም የእራስዎን የክፍያ ጭነት በ `cargo xtask norito-rpc-fixtures`. መቼ Torii
+በካናሪ ሁነታ ላይ ነው `curl` በሙከራ ፕሮክሲው ላይ ማመልከት ይችላሉ
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) ተመሳሳይ ልምምድ ለማድረግ
+የፖርታል መግብሮች የሚጠቀሙባቸው መሠረተ ልማት.
 
-## Observability & operations
+## ታዛቢነት እና ተግባራትእያንዳንዱ ጥያቄ አንድ ጊዜ በዘዴ፣ በዱካ፣ በመነሻ፣ በከፍታ ሁኔታ እና በ
+የማረጋገጫ ምንጭ (`override`፣ `default`፣ ወይም `client`)። ማስመሰያዎች በጭራሽ አይደሉም
+ተከማችተዋል - ሁለቱም የተሸካሚ ራስጌዎች እና `X-TryIt-Auth` እሴቶች ከዚህ በፊት ተስተካክለዋል
+ሎግ (ሎግ)—ስለዚህ ሳይጨነቁ stdoutን ወደ ማዕከላዊ ሰብሳቢ ማስተላለፍ ይችላሉ።
+ሚስጥሮች የሚያፈሱ.
 
-Every request is logged once with method, path, origin, upstream status, and the
-authentication source (`override`, `default`, or `client`). Tokens are never
-stored—both bearer headers and `X-TryIt-Auth` values are redacted before
-logging—so you can forward stdout to a central collector without worrying about
-secrets leaking.
+### የጤና ምርመራ እና ማስጠንቀቂያ
 
-### Health probes & alerting
-
-Run the bundled probe during deployments or on a schedule:
+በማሰማራት ጊዜ ወይም በጊዜ መርሐግብር የታሸገውን ምርመራ ያሂዱ፡-
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
@@ -234,19 +233,19 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+የአካባቢ ቁልፎች;
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — optional Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
-- `TRYIT_PROXY_PROBE_METRICS_URL` — optional metrics endpoint URL (for example, `http://localhost:9798/metrics`) that must respond successfully when `TRYIT_PROXY_METRICS_LISTEN` is enabled.
+- `TRYIT_PROXY_SAMPLE_PATH` — አማራጭ Torii መንገድ (ያለ `/proxy`) የአካል ብቃት እንቅስቃሴ።
+- `TRYIT_PROXY_SAMPLE_METHOD` - ለ `GET` ነባሪዎች; ለመጻፍ መንገዶች ወደ `POST` ተዘጋጅቷል።
+- `TRYIT_PROXY_PROBE_TOKEN` - ለናሙና ጥሪ ጊዜያዊ ተሸካሚ ማስመሰያ ያስገባል።
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` - ነባሪውን የ 5s ጊዜ ማብቂያ ይሽራል።
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — አማራጭ Prometheus የጽሑፍ ፋይል መድረሻ ለI18NI0000135X/`probe_duration_seconds`።
+- `TRYIT_PROXY_PROBE_LABELS` — በነባሪ ሰረዝ የተለዩ `key=value` ጥንዶች በመለኪያዎቹ ላይ ተያይዘዋል (የ`job=tryit-proxy` እና `instance=<proxy URL>` ነባሪዎች)።
+- `TRYIT_PROXY_PROBE_METRICS_URL` — `TRYIT_PROXY_METRICS_LISTEN` ሲነቃ በተሳካ ሁኔታ ምላሽ መስጠት ያለበት የአማራጭ መለኪያዎች የመጨረሻ ነጥብ ዩአርኤል (ለምሳሌ `http://localhost:9798/metrics`)።
 
-Feed the results into a textfile collector by pointing the probe at a writable
-path (for example, `/var/lib/node_exporter/textfile_collector/tryit.prom`) and
-adding any custom labels:
+መፈተሻውን በተፃፈ ጽሑፍ ላይ በመጠቆም ውጤቱን ወደ ጽሑፍ ፋይል ሰብሳቢ ይመግቡ
+መንገድ (ለምሳሌ `/var/lib/node_exporter/textfile_collector/tryit.prom`) እና
+ማንኛውንም ብጁ መለያዎች ማከል
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -255,17 +254,17 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" \
 npm run probe:tryit-proxy
 ```
 
-The script rewrites the metrics file atomically so your collector always reads a
-complete payload.
+ስክሪፕቱ የመለኪያ ፋይሉን በአቶሚክ በድጋሚ ይጽፋል ስለዚህ ሰብሳቢዎ ሁል ጊዜ ሀ
+ሙሉ ክፍያ.
 
-When `TRYIT_PROXY_METRICS_LISTEN` is configured, set
-`TRYIT_PROXY_PROBE_METRICS_URL` to the metrics endpoint so the probe fails fast
-if the scrape surface disappears (for example, misconfigured ingress or missing
-firewall rules). A typical production setting is
+`TRYIT_PROXY_METRICS_LISTEN` ሲዋቀር, አዘጋጅ
+`TRYIT_PROXY_PROBE_METRICS_URL` ወደ ሜትሪክስ መጨረሻ ነጥብ ስለዚህ መፈተሻው በፍጥነት አይሳካም።
+የተቧጨረው ገጽ ከጠፋ (ለምሳሌ፣ የተሳሳተ ውቅር መግባት ወይም ጠፍቷል
+የፋየርዎል ደንቦች). የተለመደው የምርት ቅንብር ነው
 `TRYIT_PROXY_PROBE_METRICS_URL="http://127.0.0.1:9798/metrics"`.
 
-For lightweight alerting, wire the probe into your monitoring stack. A Prometheus
-example that pages after two consecutive failures:
+ለቀላል ክብደት ማንቂያ፣ ፍተሻውን በክትትል ቁልልዎ ላይ ሽቦ ያድርጉት። አንድ Prometheus
+ለምሳሌ ያ ገጾች ከሁለት ተከታታይ ውድቀቶች በኋላ
 
 ```yaml
 groups:
@@ -282,14 +281,14 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### Metrics endpoint & dashboards
+### መለኪያዎች የመጨረሻ ነጥብ እና ዳሽቦርዶች
 
-Set `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (or any host/port pair) before
-starting the proxy to expose a Prometheus-formatted metrics endpoint. The path
-defaults to `/metrics` but can be overridden via
-`TRYIT_PROXY_METRICS_PATH=/custom`. Each scrape returns counters for per-method
-request totals, rate-limit rejections, upstream errors/timeouts, proxy outcomes,
-and latency summaries:
+ከዚህ በፊት `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (ወይም ማንኛውንም አስተናጋጅ/ወደብ ጥንድ) አዘጋጅ
+የPrometheus የተቀረፀውን የሜትሪክስ የመጨረሻ ነጥብ ለማጋለጥ ፕሮክሲውን በመጀመር። መንገዱ
+የ `/metrics` ነባሪዎች ግን በ በኩል ሊሻሩ ይችላሉ።
+`TRYIT_PROXY_METRICS_PATH=/custom`. እያንዳንዱ መቧጨር ለእያንዳንዱ ዘዴ ቆጣሪዎችን ይመልሳል
+የጥያቄ ድምር፣ የዋጋ-ገደብ አለመቀበል፣ የተፋሰሱ ስህተቶች/ጊዜ ማብቂያዎች፣ የተኪ ውጤቶች፣
+እና የዘገየ ማጠቃለያዎች፡-
 
 ```bash
 export TRYIT_PROXY_METRICS_LISTEN="127.0.0.1:9798"
@@ -300,16 +299,16 @@ tryit_proxy_requests_total{method="GET"} 12
 tryit_proxy_rate_limited_total 1
 ```
 
-Point your Prometheus/OTLP collectors at the metrics endpoint and reuse the
-existing `dashboards/grafana/docs_portal.json` panels so SRE can observe tail
-latencies and rejection spikes without parsing logs. The proxy automatically
-publishes `tryit_proxy_start_timestamp_ms` to help operators detect restarts.
+የእርስዎን Prometheus/OTLP ሰብሳቢዎች በሜትሪክስ መጨረሻ ነጥብ ላይ ያመልክቱ እና እንደገና ይጠቀሙ
+SRE ጅራትን ማየት እንዲችል ነባር `dashboards/grafana/docs_portal.json` ፓነሎች
+የምዝግብ ማስታወሻዎችን ሳይተነተን መዘግየት እና ውድቅ ማድረጉ። ፕሮክሲው በራስ-ሰር
+ኦፕሬተሮች ዳግም መጀመሩን እንዲያውቁ ለማገዝ `tryit_proxy_start_timestamp_ms` ያትማል።
 
-### Rollback automation
+### የጥቅልል አውቶማቲክ
 
-Use the management helper to update or restore the target Torii URL. The script
-stores the previous configuration in `.env.tryit-proxy.bak` so rollbacks are a
-single command.
+ዒላማውን Torii URL ለማዘመን ወይም ወደነበረበት ለመመለስ የአስተዳደር አጋዥን ይጠቀሙ። ስክሪፕቱ
+የቀደመውን ውቅር በI18NI0000153X ያከማቻል ስለዚህ መልሶ መመለሻዎች ሀ
+ነጠላ ትዕዛዝ.
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -319,5 +318,5 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-Override the env file path with `--env` or `TRYIT_PROXY_ENV` if your deployment
-stores configuration elsewhere.
+ከተሰማሩ የኢንቪ ፋይል ዱካውን በ`--env` ወይም `TRYIT_PROXY_ENV` ይሽሩት
+ውቅረትን በሌላ ቦታ ያከማቻል.

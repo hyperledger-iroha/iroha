@@ -6,67 +6,68 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2026-01-03T18:07:57.081283+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
-% 2026-01-30
+٪ SM2/SM3/SM4 آڈٹ کامیابی کے معیار
+٪ Iroha کریپٹو ورکنگ گروپ
+٪ 2026-01-30
 
-# Purpose
+# مقصد
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+یہ چیک لسٹ کامیاب کے ل required مطلوبہ ٹھوس معیار پر قبضہ کرتی ہے
+ایس ایم 2/ایس ایم 3/ایس ایم 4 بیرونی آڈٹ کی تکمیل۔ اس کے دوران اس کا جائزہ لیا جانا چاہئے
+کک آف ، ہر حیثیت کی چوکی پر دوبارہ نظر ثانی کی ، اور باہر نکلنے کی تصدیق کے لئے استعمال کیا جاتا ہے
+پیداوار کے جائزوں کے لئے ایس ایم پر دستخط کرنے سے پہلے شرائط۔
 
-# Pre-Engagement Readiness
+# پری مصروفیت کی تیاری
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [] معاہدہ پر دستخط ہوئے ، بشمول دائرہ کار ، فراہمی ، رازداری ، اور
+      تدارک کی حمایت کی زبان۔
+- [] آڈٹ ٹیم کو ذخیرہ آئینے تک رسائی ، سی آئی آرٹ فیکٹ بالٹی ، اور موصول ہوتی ہے
+      `docs/source/crypto/sm_audit_brief.md` میں درج دستاویزات کا بنڈل۔
+- [] رابطے کے نکات ہر کردار کے لئے بیک اپ کے ساتھ تصدیق شدہ ہیں
+      (کریپٹو ، IVM ، پلیٹ فارم آپس ، سیکیورٹی ، دستاویزات)۔
+- [] داخلی اسٹیک ہولڈر ہدف کی رہائی کی تاریخ اور ونڈوز کو منجمد کرنے پر سیدھ میں ہیں۔
+- [] ایس بی او ایم ایکسپورٹ (`cargo auditable` + cyclonedx) تیار اور مشترکہ۔
+- [] اوپن ایس ایل/ٹونگسو بلڈ پروویژن پیکیج تیار کیا گیا
+      (ماخذ ٹربال ہیش ، اسکرپٹ بنائیں ، تولیدی نوٹس)۔
+- [] تازہ ترین جانچ پڑتال کے نتائج پر قبضہ کیا گیا:
+      `scripts/sm_openssl_smoke.sh` ، `cargo test -p iroha_crypto sm` ، اور
+      Norito راؤنڈ ٹرپ فکسچر۔
+۔
 
-# Engagement Execution
+# منگنی پر عمل درآمد
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [] کک آف ورکشاپ اہداف کی مشترکہ تفہیم کے ساتھ مکمل ہوئی ،
+      ٹائم لائنز ، اور مواصلات کیڈینس۔
+- [] ہفتہ وار اسٹیٹس رپورٹس موصول اور سہ رخی ؛ رسک رجسٹر تازہ کاری۔
+- [] دریافت کے ایک کاروباری دن کے اندر اندر دریافت کی گئی جب شدت ہوتی ہے
+      اعلی یا اہم ہے۔
+- [] آڈٹ ٹیم c سی پی یو فن تعمیرات (x86_64 ، پر تعی .ن کے راستوں کی توثیق کرتی ہے۔
+      arch64) مماثل آؤٹ پٹ کے ساتھ.
+-[] سائیڈ چینل کے جائزے میں مستقل وقت کے ثبوت یا تجرباتی جانچ شامل ہے
+      مورچا اور ایف ایف آئی دونوں راستوں کے ثبوت۔
+- [] تعمیل اور دستاویزات کا جائزہ آپریٹر کی رہنمائی کے میچوں کی تصدیق کرتا ہے
+      ریگولیٹری ذمہ داریوں۔
+- [] حوالہ کے نفاذ کے خلاف امتیازی جانچ (Rustcrypto ،
+      اوپن ایس ایل/ٹونگسو) آڈیٹر کی نگرانی کے ساتھ پھانسی دی گئی۔
+- [] فوز ہارنس کا اندازہ ؛ نیا سیڈ کارپورا فراہم کردہ جہاں خلا موجود ہے۔
 
-# Remediation & Exit
+# علاج اور باہر نکلیں
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [] تمام نتائج کو شدت ، اثر ، استحصال ، اور کے ساتھ درجہ بندی کیا گیا ہے
+      تجویز کردہ تدارک کے اقدامات۔
+- [] اعلی/اہم مسائل آڈیٹر سے منظور شدہ کے ساتھ پیچ یا تخفیفات وصول کرتے ہیں
+      تصدیق ؛ بقایا خطرات دستاویزی۔
+- [] آڈیٹر سپلائی کرتا ہے کہ فکسڈ ایشوز (فرق ، ٹیسٹ)
+      رنز ، یا دستخط شدہ تصدیق)۔
+- [] حتمی رپورٹ فراہم کی گئی: ایگزیکٹو سمری ، تفصیلی نتائج ، طریقہ کار ،
+      تعی .ن کا فیصلہ ، تعمیل کا فیصلہ۔
+- [] داخلی سائن آف میٹنگ اگلے اقدامات ، رہائی میں ایڈجسٹمنٹ کا اختتام کرتی ہے ،
+      اور دستاویزات کی تازہ کاری۔
+- [] `status.md` آڈٹ کے نتائج اور بقایا علاج کے ساتھ تازہ کاری
+      فالو اپ
+- [] پوسٹ مارٹم `docs/source/crypto/sm_program.md` (اسباق میں پکڑا گیا
+      سیکھا ، مستقبل کے سخت کاموں)۔

@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/hajimari-entrypoint
-title: Hajimari انٹری پوائنٹ اسکیلیٹن
-description: ایک واحد عوامی انٹری پوائنٹ اور اسٹیٹ ہینڈل کے ساتھ کم سے کم Kotodama کنٹریکٹ ڈھانچہ۔
-source: crates/ivm/docs/examples/01_hajimari.ko
+سبيكة: /norito/examples/hajimari-entrypoint
+العنوان: هاجيماري إنتري پوينٹ سكيلیٹن
+الوصف: هناك واحدة من نقاط الجذب الرئيسية والموقع على الإنترنت مثل Kotodama.
+المصدر:crates/ivm/docs/examples/01_hajimari.ko
 ---
 
-ایک واحد عوامی انٹری پوائنٹ اور اسٹیٹ ہینڈل کے ساتھ کم سے کم Kotodama کنٹریکٹ ڈھانچہ۔
+هناك أيضًا نقطة واحدة ونقطة عبر الإنترنت متصلة بشبكة Kotodama.
 
-## لیجر واک تھرو
+## ليجر واک تھرو
 
-- کنٹریکٹ کو `koto_compile --abi 1` کے ساتھ کمپائل کریں جیسا کہ [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) میں دکھایا گیا ہے یا `cargo test -p ivm developer_portal_norito_snippets_compile` کے ذریعے۔
-- `ivm_run` / `developer_portal_norito_snippets_run` کے ساتھ لوکل طور پر بائٹ کوڈ کا smoke-test کریں تاکہ `info!` لاگ اور ابتدائی syscall کی تصدیق ہو سکے، نوڈ کو چھونے سے پہلے۔
-- `iroha_cli app contracts deploy` کے ذریعے آرٹیفیکٹ ڈیپلائے کریں اور [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli) کے مراحل سے مینی فیسٹ کی تصدیق کریں۔
+- الإنترنت الذي `koto_compile --abi 1` ينضم إلى مركز التجارة العالمي [Norito البدء](/norito/getting-started#1-compile-a-kotodama-contract) هذا هو السبب في ذلك `cargo test -p ivm developer_portal_norito_snippets_compile` ذریعے.
+- `ivm_run` / `developer_portal_norito_snippets_run` الذي يعمل على إيقاف تشغيل اختبار الدخان لفترة `info!` والتشغيل المستمر للتشغيل، جديد تمامًا چھونے سے پہلے.
+- `iroha_cli app contracts deploy` التي تم إطلاقها في البداية و[Norito البدء](/norito/getting-started#4-deploy-via-iroha_cli) هي مراحل التصنيع الخاصة بي.
 
-## متعلقہ SDK گائیڈز
+## مواضيع ذات صلة SDK
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [البدء السريع لـ Rust SDK](/sdks/rust)
+- [البدء السريع لـ Python SDK](/sdks/python)
+- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
 
-[Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/hajimari-entrypoint.ko)
+[Kotodama تنزيل التنزيل](/norito-snippets/hajimari-entrypoint.ko)
 
 ```text
 // Minimal initializer-style function inside a contract.

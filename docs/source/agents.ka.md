@@ -7,111 +7,110 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7f35a28d00188a3e1f3db76b56e6b29c708dbb75afa3dd009d416b7cd4314754
 source_last_modified: "2025-12-29T18:16:35.916241+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Automation Agent Execution Guide
+# ავტომატიზაციის აგენტის შესრულების სახელმძღვანელო
 
-This page summarizes the operational guardrails for any automation agent
-working inside the Hyperledger Iroha workspace. It mirrors the canonical
-`AGENTS.md` guidance and the roadmap references so build, documentation, and
-telemetry changes all look the same whether they were produced by a human or
-an automated contributor.
+ეს გვერდი აჯამებს ნებისმიერი ავტომატიზაციის აგენტის ოპერაციულ დამცავ სარდაფებს
+მუშაობს Hyperledger Iroha სამუშაო სივრცეში. ის ასახავს კანონიკურს
+`AGENTS.md` მითითებები და საგზაო რუქის მითითებები, რათა შეიქმნას, დოკუმენტაცია და
+ტელემეტრიული ცვლილებები ყველა ერთნაირად გამოიყურება, იქნება ეს ადამიანის მიერ წარმოებული თუ
+ავტომატური კონტრიბუტორი.
 
-Each task is expected to land deterministic code plus matching docs, tests,
-and operational evidence. Treat the sections below as a ready reference before
-touching `roadmap.md` items or replying to behaviour questions.
+მოსალოდნელია, რომ თითოეულმა ამოცანამ დაადგინოს დეტერმინისტული კოდი, პლუს შესაბამისი დოკუმენტები, ტესტები,
+და ოპერატიული მტკიცებულებები. განიხილეთ ქვემოთ მოცემული სექციები, როგორც მზა მითითება მანამდე
+`roadmap.md` ნივთების შეხება ან ქცევის კითხვებზე პასუხის გაცემა.
 
-## Quickstart Commands
+## სწრაფი დაწყების ბრძანებები
 
-| Action | Command |
+| მოქმედება | ბრძანება |
 |--------|---------|
-| Build the workspace | `cargo build --workspace` |
-| Run the full test suite | `cargo test --workspace` *(typically takes several hours)* |
-| Run clippy with deny-by-default warnings | `cargo clippy --workspace --all-targets -- -D warnings` |
-| Format Rust code | `cargo fmt --all` *(edition 2024)* |
-| Test a single crate | `cargo test -p <crate>` |
-| Run one test | `cargo test -p <crate> <test_name> -- --nocapture` |
-| Swift SDK tests | From `IrohaSwift/`, run `swift test` |
+| სამუშაო სივრცის აშენება | `cargo build --workspace` |
+| გაუშვით სრული ტესტი კომპლექტი | `cargo test --workspace` *(როგორც წესი, რამდენიმე საათი სჭირდება)* |
+| გაუშვით clippy უარყოფის ნაგულისხმევი გაფრთხილებებით | `cargo clippy --workspace --all-targets -- -D warnings` |
+| Rust კოდის ფორმატი | `cargo fmt --all` *(გამოცემა 2024)* |
+| გამოცადეთ ერთი ყუთი | `cargo test -p <crate>` |
+| გაუშვით ერთი ტესტი | `cargo test -p <crate> <test_name> -- --nocapture` |
+| Swift SDK ტესტები | `IrohaSwift/`-დან, გაუშვით `swift test` |
 
-## Workflow Fundamentals
+## სამუშაო პროცესის საფუძვლები
 
-- Read the relevant code paths before answering questions or changing logic.
-- Break large roadmap items into tractable commits; never reject work outright.
-- Stay inside the existing workspace membership, reuse internal crates, and do
-  **not** alter `Cargo.lock` unless explicitly instructed.
-- Use feature flags and capability toggles only where mandated by hardware
-  accelerators; keep deterministic fallbacks available on every platform.
-- Update documentation and Markdown references alongside any functional change
-  so docs always describe current behaviour.
-- Add at least one unit test for every new or modified function. Prefer inline
-  `#[cfg(test)]` modules or the crate’s `tests/` folder depending on scope.
-- After finishing work, update `status.md` with a short summary and reference
-  relevant files; keep `roadmap.md` focused on items that still need work.
+- წაიკითხეთ შესაბამისი კოდის ბილიკები კითხვებზე პასუხის გაცემამდე ან ლოგიკის შეცვლამდე.
+- დაყავით დიდი საგზაო რუქის ელემენტები ტრაქტატებად; არასოდეს თქვათ უარი სამუშაოზე პირდაპირ.
+- დარჩით არსებული სამუშაო სივრცის წევრობაში, ხელახლა გამოიყენეთ შიდა ყუთები და გააკეთეთ
+  **არ ** შეცვალოს `Cargo.lock`, თუ ცალსახად არ არის მითითებული.
+- გამოიყენეთ ფუნქციების დროშები და შესაძლებლობების გადამრთველები მხოლოდ მაშინ, როდესაც ეს არის საჭირო ტექნიკის მიერ
+  ამაჩქარებლები; შეინახეთ განმსაზღვრელი გამონაკლისები ხელმისაწვდომი ყველა პლატფორმაზე.
+- განაახლეთ დოკუმენტაცია და Markdown მითითებები ნებისმიერ ფუნქციურ ცვლილებასთან ერთად
+  ასე რომ, დოკუმენტები ყოველთვის აღწერს მიმდინარე ქცევას.
+- დაამატეთ მინიმუმ ერთი ერთეულის ტესტი ყოველი ახალი ან შეცვლილი ფუნქციისთვის. უპირატესობა მიანიჭეთ inline-ს
+  `#[cfg(test)]` მოდულები ან კრატის `tests/` საქაღალდე, მასშტაბის მიხედვით.
+- სამუშაოს დასრულების შემდეგ განაახლეთ `status.md` მოკლე შეჯამებით და მითითებით
+  შესაბამისი ფაილები; შეინახეთ `roadmap.md` ორიენტირებული ნივთებზე, რომლებსაც ჯერ კიდევ სჭირდებათ მუშაობა.
 
-## Implementation Guardrails
+## დანერგვის სამაგრები
 
-### Serialization & Data Models
-- Use the Norito codec everywhere (binary via `norito::{Encode, Decode}`,
-  JSON via `norito::json::*`). Do not add direct serde/`serde_json` usage.
-- Norito payloads must advertise their layout (version byte or header flags),
-  and new formats require corresponding documentation updates (e.g.,
+### სერიალიზაცია და მონაცემთა მოდელები
+- გამოიყენეთ Norito კოდეკი ყველგან (ორობითი `norito::{Encode, Decode}`-ის საშუალებით,
+  JSON `norito::json::*`-ის საშუალებით). არ დაამატოთ პირდაპირი serde/`serde_json` გამოყენება.
+- Norito ტვირთამწეობამ უნდა განათავსოს მათი განლაგება (ვერსიის ბაიტი ან სათაურის დროშები),
+  და ახალი ფორმატები საჭიროებენ შესაბამის დოკუმენტაციის განახლებებს (მაგ.
   `norito.md`, `docs/source/da/*.md`).
-- Genesis data, manifests, and networking payloads should remain deterministic
-  so two peers with the same inputs produce identical hashes.
+- Genesis მონაცემები, მანიფესტები და ქსელის დატვირთვა უნდა დარჩეს განმსაზღვრელი
+  ასე რომ, ორი თანატოლი ერთი და იგივე შეყვანით აწარმოებს იდენტურ ჰეშებს.
 
-### Configuration & Runtime Behaviour
-- Prefer knobs living in `crates/iroha_config` over new environment variables.
-  Thread values explicitly through constructors or dependency injection.
-- Never gate IVM syscalls or opcode behaviour—ABI v1 ships everywhere.
-- When new config options are added, update defaults, docs, and any related
-  templates (`peer.template.toml`, `docs/source/configuration*.md`, etc.).
+### კონფიგურაცია და გაშვების ქცევა
+- ამჯობინეთ `crates/iroha_config`-ში მცხოვრები სახელურები ახალი გარემოს ცვლადებთან შედარებით.
+  ძაფების მნიშვნელობები აშკარად კონსტრუქტორების ან დამოკიდებულების ინექციის საშუალებით.
+- არასოდეს გაატაროთ IVM სისტალური ან ოპკოდის ქცევა — ABI v1 ყველგან მიდის.
+- როდესაც ახალი კონფიგურაციის პარამეტრები დაემატება, განაახლეთ ნაგულისხმევი პარამეტრები, დოკუმენტები და სხვა დაკავშირებული
+  შაბლონები (`peer.template.toml`, `docs/source/configuration*.md` და ა.შ.).### ABI, Syscalls და Pointer Types
+- განიხილეთ ABI პოლიტიკა, როგორც უპირობო. syscals-ის ან მაჩვენებლის ტიპების დამატება/წაშლა
+  საჭიროებს განახლებას:
+  - `ivm::syscalls::abi_syscall_list` და `crates/ivm/tests/abi_syscall_list_golden.rs`
+  - `ivm::pointer_abi::PointerType` პლუს ოქროს ტესტები
+  - `crates/ivm/tests/abi_hash_versions.rs` როდესაც ABI ჰეში იცვლება
+- უცნობი syscals უნდა იყოს `VMError::UnknownSyscall` და მანიფესტები უნდა
+  შეინარჩუნეთ ხელმოწერილი `abi_hash` თანასწორობის შემოწმებები მისაღები ტესტებში.
 
-### ABI, Syscalls, and Pointer Types
-- Treat ABI policy as unconditional. Adding/removing syscalls or pointer types
-  requires updating:
-  - `ivm::syscalls::abi_syscall_list` and `crates/ivm/tests/abi_syscall_list_golden.rs`
-  - `ivm::pointer_abi::PointerType` plus the golden tests
-  - `crates/ivm/tests/abi_hash_versions.rs` whenever the ABI hash changes
-- Unknown syscalls must map to `VMError::UnknownSyscall`, and manifests must
-  retain signed `abi_hash` equality checks in admission tests.
+### აპარატურის აჩქარება და დეტერმინიზმი
+- ახალი კრიპტოგრაფიული პრიმიტივები ან მძიმე მათემატიკა უნდა გაიგზავნოს ტექნიკით დაჩქარებული
+  ბილიკები (METAL/NEON/SIMD/CUDA) დეტერმინისტული ჩანაცვლების შენარჩუნებით.
+- მოერიდეთ არადეტერმინისტულ პარალელურ შემცირებას; პრიორიტეტი არის იდენტური შედეგები
+  ყველა თანატოლი მაშინაც კი, როცა აპარატურა განსხვავდება.
+- შეინახეთ Norito და FASTPQ მოწყობილობები რეპროდუცირებადი, რათა SRE-მ შეძლოს აუდიტი ფლოტის მასშტაბით
+  ტელემეტრია.
 
-### Hardware Acceleration & Determinism
-- New cryptographic primitives or heavy math must ship hardware-accelerated
-  paths (METAL/NEON/SIMD/CUDA) while maintaining deterministic fallbacks.
-- Avoid non-deterministic parallel reductions; priority is identical outputs on
-  every peer even when hardware differs.
-- Keep the Norito and FASTPQ fixtures reproducible so SRE can audit fleet-wide
-  telemetry.
+### დოკუმენტაცია და მტკიცებულება
+- პორტალზე (`docs/portal/...`) ასახეთ ნებისმიერი საჯარო დოკუმენტის ცვლილება, როდესაც
+  გამოიყენება, რათა დოკუმენტების საიტი იყოს აქტუალური Markdown-ის წყაროებთან.
+- როდესაც დაინერგება ახალი სამუშაო ნაკადები, დაამატეთ runbooks, მმართველობის შენიშვნები ან
+  საკონტროლო სიები, რომლებიც განმარტავს, თუ როგორ უნდა გაიმეოროთ, დააბრუნოთ და მიიღოთ მტკიცებულებები.
+- კონტენტის აქადურ ენაზე თარგმნისას მიაწოდეთ დაწერილი სემანტიკური გადმოცემა
+  ლურსმული და არა ფონეტიკური ტრანსლიტერაციებით.
 
-### Documentation & Evidence
-- Mirror any public-facing doc change in the portal (`docs/portal/...`) when
-  applicable so the docs site stays current with the Markdown sources.
-- When new workflows are introduced, add runbooks, governance notes, or
-  checklists explaining how to rehearse, rollback, and capture evidence.
-- When translating content into Akkadian, provide semantic renderings written
-  in cuneiform rather than phonetic transliterations.
+### ტესტირება და ხელსაწყოების მოლოდინი
+- გაუშვით შესაბამისი ტესტის კომპლექტები ადგილობრივად (`cargo test`, `swift test`,
+  ინტეგრაციის აღკაზმულობა) და დააფიქსირეთ ბრძანებები PR ტესტირების განყოფილებაში.
+- შეინახეთ CI მცველი სკრიპტები (`ci/*.sh`) და დაფები სინქრონიზებული ახალ ტელემეტრიასთან.
+- პროკ-მაკროებისთვის, დააწყვილეთ ერთეულის ტესტები `trybuild` UI ტესტებთან დიაგნოსტიკის ჩაკეტვის მიზნით.
 
-### Testing & Tooling Expectations
-- Run the relevant test suites locally (`cargo test`, `swift test`,
-  integration harnesses) and document the commands in the PR testing section.
-- Keep CI guard scripts (`ci/*.sh`) and dashboards in sync with new telemetry.
-- For proc-macros, pair unit tests with `trybuild` UI tests to lock diagnostics.
+## გადაზიდვის მზა საკონტროლო სია
 
-## Ready-to-Ship Checklist
+1. კოდი შედგენილია და `cargo fmt` არ წარმოქმნის განსხვავებებს.
+2. განახლებული დოკუმენტები (სამუშაო სივრცის Markdown პლუს პორტალის სარკეები) აღწერს ახალს
+   ქცევა, ახალი CLI დროშები ან კონფიგურაციის ღილაკები.
+3. ტესტები მოიცავს ყველა ახალ კოდის გზას და რეგრესიის დროს განმსაზღვრელი ვერ ხერხდება
+   გამოჩნდება.
+4. ტელემეტრია, დაფები და სიგნალიზაციის განმარტებები მიუთითებს ნებისმიერ ახალ მეტრიკაზე ან
+   შეცდომის კოდები.
+5. `status.md` შეიცავს მოკლე შეჯამებას შესაბამის ფაილებზე მითითებით და
+   საგზაო რუკის განყოფილება.
 
-1. Code compiles and `cargo fmt` produced no diffs.
-2. Updated docs (workspace Markdown plus portal mirrors) describe the new
-   behaviour, new CLI flags, or config knobs.
-3. Tests cover every new code path and fail deterministically when regressions
-   appear.
-4. Telemetry, dashboards, and alert definitions reference any new metrics or
-   error codes.
-5. `status.md` includes a short summary referencing the relevant files and
-   roadmap section.
-
-Following this checklist keeps roadmap execution auditable and ensures every
-agent contributes evidence that other teams can trust.
+ამ საკონტროლო სიის დაცვით ინარჩუნებს საგზაო რუქის შესრულებას აუდიტორულად და უზრუნველყოფს ყველა
+აგენტი ხელს უწყობს მტკიცებულებას, რომ სხვა გუნდებს შეუძლიათ ენდონ.

@@ -7,111 +7,104 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T23:46:10.135119+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# Գլոբալ հատկանիշի մատրիցա
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+Ավանդություն.
 
-## Consensus & Networking
+## Համաձայնություն և ցանց
 
-| Feature | Status | Notes | Evidence |
+| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Որոշիչ կոլեկցիոների ընտրություն, ավելորդ օդափոխիչ, շղթայական K/r պարամետրեր և առաջին վավերական պարտավորությունների վկայականի ընդունում՝ առաքված թեստերով: | status.md:255; կարգավիճակ.md:314 |
+| Pacemaker backoff, RTT հատակ, deterministic jitter | ◉ | Կարգավորելի ժմչփեր՝ միաձուլվող ժապավենով, որը միացված է կոնֆիգուրացիայի, հեռաչափության և փաստաթղթերի միջոցով: | կարգավիճակ.md:251 |
+| NEW_VIEW դարպաս և ամենաբարձր QC հետագծում | ◉ | Վերահսկիչ հոսքը կրում է NEW_VIEW/Evidence, ամենաբարձր QC-ն ընդունում է միապաղաղ, ձեռքսեղմումը պահպանում է հաշվարկված մատնահետքը: | կարգավիճակ.md:210 |
+| առկայության ապացույցների հետևում (խորհրդատվական) | ◉ | Հասանելիության ապացույցներ, որոնք թողարկվել և հետևվել են; commit-ը չի փակում v1-ի հասանելիությունը: | status.md:վերջին |
+| Հուսալի հեռարձակում (DA payload transport) | ◉ | RBC հաղորդագրությունների հոսքը (Init/Chunk/Ready/Deliver) միացված է, երբ `da_enabled=true` որպես փոխադրման/վերականգնման ուղի; առկայության ապացույցները հետագծվում են (խորհրդատվական), մինչ պարտավորությունն իրականացվում է ինքնուրույն: | status.md:վերջին |
+| Կատարել QC պետական-արմատային պարտադիր | ◉ | Հանձնարարել QC-ները կրում են `parent_state_root`/`post_state_root`; չկա առանձին execution-QC gate: | status.md:վերջին |
+| Ապացույցների տարածում և աուդիտի վերջնակետեր | ◉ | ControlFlow::Evidence, Torii ապացույցների վերջնակետերը և բացասական թեստերը վայրէջք կատարեցին: | status.md:176; կարգավիճակ.md:760-761 |
+| RBC հեռաչափություն, պատրաստակամության/մատակարարման չափումներ | ◉ | `/v1/sumeragi/rbc*` վերջնակետերը և հեռաչափական հաշվիչները/հիստոգրամը հասանելի են օպերատորների համար: | status.md:283-284; կարգավիճակ.md:772 |
+| Համաձայնության պարամետրի գովազդի և տոպոլոգիայի ստուգում | ◉ | Հանգույցները հեռարձակում են `(collectors_k, redundant_send_r)` և հաստատում են հավասարությունը հասակակիցների միջև: | կարգավիճակ.md:255 |
+| Թույլատրված PRF-ի վրա հիմնված ռոտացիա | ◉ | Թույլատրված առաջնորդի/կոլեկցիոների ընտրությունը օգտագործում է PRF սերմ + բարձրություն/տեսք կանոնական ցուցակի վրա. prev-hash ռոտացիան մնում է ժառանգական օգնական: | status.md:վերջին |
 
-## Pipeline, Kura & State
-
-| Feature | Status | Notes | Evidence |
+## Խողովակաշար, Կուր և Պետություն| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+| Կարանտինային երթուղիների գլխարկներ և հեռաչափություն | ◉ | Կազմաձևման կոճակները, դետերմինիստական ​​հոսքի կառավարումը և հեռաչափության հաշվիչներն իրականացվել են: | կարգավիճակ.md:263 |
+| Խողովակաշարի աշխատող լողավազանի գլխիկ | ◉ | `[pipeline].workers` անցկացվել է վիճակի սկզբում env վերլուծության թեստերով: | կարգավիճակ.md:264 |
+| Պատկերի հարցման գիծ (պահված/հեռավոր կուրսորներ) | ◉ | Պահված կուրսորի ռեժիմը՝ Torii ինտեգրմամբ և աշխատողների լողավազանների արգելափակմամբ: | status.md:265; status.md:371; կարգավիճակ.md:501 |
+| Ստատիկ DAG մատնահետքի վերականգնման կողային կառքեր | ◉ | Կուրում պահվող կողային մեքենաներ, որոնք վավերացված են գործարկման ժամանակ, անհամապատասխանության դեպքում արձակված զգուշացումներ: | status.md:106; կարգավիճակ.md:349 |
+| Kura բլոկ խանութի հեշ վերծանման կարծրացում | ◉ | Հաշի ընթերցումները միացվել են 32 բայթ հումքի մշակման՝ Norito-անկախ շրջադարձային թեստերի միջոցով: | status.md:608; կարգավիճակ.md:668 |
+| Norito հարմարվողական հեռաչափություն կոդեկների համար | ◉ | Norito-ում ավելացվել են AoS-ն ընդդեմ NCB-ի ընտրության չափումները: | կարգավիճակ.md:156 |
+| Snapshot WSV հարցումներ Torii-ի միջոցով | ◉ | Torii ակնթարթային հարցման գոտին օգտագործում է աշխատողների լողավազանի արգելափակում, դետերմինիստական ​​իմաստաբանություն: | կարգավիճակ.md:501 |
+| Զանգահարել ըստ զանգի կատարման շղթայական | ◉ | Տվյալները գործարկում են շղթան՝ դետերմինիստական ​​կարգով, դետերմինիստական ​​հաջորդականությամբ կատարվող զանգից անմիջապես հետո: | կարգավիճակ.md:668 |
 
-## Norito Serialization & Tooling
+## Norito Սերիալիզացիա և գործիքավորում
 
-| Feature | Status | Notes | Evidence |
+| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
-| Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+| Norito JSON միգրացիա (աշխատանքային տարածք) | ◉ | Սերդեն հանվել է արտադրությունից; գույքագրումը + պահակակետերը պահպանում են աշխատանքային տարածքը միայն Norito: | status.md:112; կարգավիճակ.md:124 |
+| Serde deny-list & CI guardrails | ◉ | Պահակային աշխատանքային հոսքերը/սկրիպտները կանխում են Serde-ի նոր ուղղակի օգտագործումը աշխատանքային տարածքում: | կարգավիճակ.md:218 |
+| Norito կոդեկ ոսկեգույն & AoS/NCB թեստեր | ◉ | Ավելացվել են AoS/NCB ոսկեգույններ, կրճատման թեստեր և փաստաթղթերի համաժամացում: | կարգավիճակ.մդ:140-147; status.md:149-150; status.md:332; կարգավիճակ.md:666 |
+| Norito հատկանիշի մատրիցային գործիքավորում | ◉ | `scripts/run_norito_feature_matrix.sh`-ն աջակցում է ծխի ներքևի թեստերին. CI-ն ծածկում է packed-seq/struct combos: | status.md:146; կարգավիճակ.md:152 |
+| Norito լեզվական կապեր (Python/Java) | ◉ | Python և Java Norito կոդեկներ, որոնք պահպանվում են համաժամացման սցենարներով: | կարգավիճակ.md:74; կարգավիճակ.md:81 |
+| Norito Stage-1 SIMD կառուցվածքային դասակարգիչներ | ◉ | NEON/AVX2 փուլ-1 դասակարգիչներ՝ խաչաձեւ կամարային ոսկեգույն և պատահական կորպորացիաների թեստերով: | կարգավիճակ.md:241 |
 
-## Governance & Runtime Upgrades
-
-| Feature | Status | Notes | Evidence |
+## Կառավարման և աշխատաժամանակի բարելավումներ| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+| Runtime թարմացման ընդունում (ABI gating) | ◉ | Ակտիվ ABI հավաքածուն ուժի մեջ է մտել ընդունելության ժամանակ՝ կառուցվածքային սխալներով և թեստերով: | կարգավիճակ.md:196 |
+| Պաշտպանված անվանատարածք տեղակայում է gating | ▲ | Տեղադրել մետատվյալների պահանջները և մուտքի լարերը; քաղաքականություն/UX դեռ զարգանում է: | կարգավիճակ.md:171 |
+| Torii կառավարում կարդալ վերջնակետերը | ◉ | `/v1/gov/*`-ը կարդում է API-ները, որոնք ուղղորդված են երթուղիչի թեստերով: | կարգավիճակ.md:212 |
+| Ստուգման բանալիների ռեեստրի կյանքի ցիկլը և իրադարձությունները | ◉ | VK գրանցում/թարմացում/հեռացում, իրադարձություններ, CLI ֆիլտրեր և պահպանման իմաստաբանություն իրականացված: | status.md:236-239; status.md:595; կարգավիճակ.md:603 |
 
-## Zero-Knowledge Infrastructure
+## Զրոյական գիտելիքների ենթակառուցվածք
 
-| Feature | Status | Notes | Evidence |
+| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+| Հավելվածի պահպանման API-ներ | ◉ | `POST/GET/LIST/DELETE` հավելվածի վերջնակետեր՝ դետերմինիստական ​​նույնականացումներով և թեստերով: | կարգավիճակ.md:231 |
+| Նախապատմական պրովեր աշխատող և զեկուցել TTL | ▲ | Պրովերի կոճղը խաղարկային դրոշի հետևում; TTL GC և կազմաձևման կոճակները միացված են; ամբողջական խողովակաշարը սպասվում է: | status.md:212; կարգավիճակ.md:233 |
+| Ծրարի հեշի կապում CoreHost-ում | ◉ | Ստուգեք ծրարի հեշերը, որոնք կապված են CoreHost-ի միջոցով և ենթարկվում աուդիտի իմպուլսների միջոցով: | կարգավիճակ.md:250 |
+| Պաշտպանված արմատային պատմության դարպաս | ◉ | CoreHost-ի մեջ ներառված արմատային նկարներ՝ սահմանափակված պատմությամբ և դատարկ արմատային կազմաձևով: | կարգավիճակ.md:303 |
+| ZK քվեաթերթիկների կատարում և կառավարման կողպեքներ | ○ | Չեղարկիչի ածանցում, կողպեքի թարմացումներ, ստուգման անջատիչներ իրականացված; ամբողջական ապացույց կյանքի ցիկլը դեռ հասունանում է: | status.md:126-128; կարգավիճակ.մդ:194-195 |
+| Ապացույցային հավելվածի նախնական ստուգում և հեռացում | ◉ | Backend-tag-ի ողջախոհությունը, կրկնօրինակումը և ապացուցման գրառումները շարունակվում էին մինչկատարվել: | status.md:348; կարգավիճակ.md:602 |
+| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}`-ը բացահայտում է ապացույցների գրառումները (կարգավիճակ, բարձրություն, vk_ref/պարտավորություն): | կարգավիճակ.md:94 |
 
-## IVM & Kotodama Integration
-
-| Feature | Status | Notes | Evidence |
+## IVM & Kotodama Ինտեգրում| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+| CoreHost syscall→ISI կամուրջ | ○ | TLV ցուցիչի ապակոդավորում և syscall հերթագրում գործառնական; պլանավորված ծածկույթի բացեր/հավասարակշռության թեստեր: | status.md:299-307; կարգավիճակ.md:477-486 |
+| Ցուցիչների կոնստրուկտորներ և տիրույթի ներկառուցվածներ | ◉ | Kotodama ներկառուցվածները թողարկում են տպված Norito TLV-ներ և SCALL-ներ՝ IR/e2e թեստերով և փաստաթղթերով: | կարգավիճակ.md:299-301 |
+| Pointer-ABI խիստ վավերացում և փաստաթղթերի համաժամացում | ◉ | TLV քաղաքականությունը կիրառվում է հյուրընկալող/IVM-ի վրա՝ ոսկե թեստերով և ստեղծված փաստաթղթերով: | status.md:227; status.md:317; status.md:344; status.md:366; կարգավիճակ.md:527 |
+| ZK syscall gating CoreHost-ի միջոցով | ◉ | Per-op հերթերը ստուգում են ծրարները և պարտադրում հեշի համընկնումը մինչև ISI-ի կատարումը: | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
+| Kotodama ցուցիչ-ABI փաստաթղթեր և քերականություն | ◉ | Քերականություն/փաստաթղթերը համաժամացվում են կենդանի կոնստրուկտորների և SCALL քարտեզների հետ: | կարգավիճակ.md:299-301 |
+| ISO 20022 սխեմայի վրա հիմնված շարժիչ և Torii կամուրջ | ◉ | Կանոնական ISO 20022 սխեմաները ներկառուցված են, որոշիչ XML վերլուծություն և բացահայտված `/v1/iso20022/status/{MsgId}` API: | կարգավիճակ.մդ:65-70 |
 
-## Hardware Acceleration
+## Սարքավորումների արագացում
 
-| Feature | Status | Notes | Evidence |
+| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+| SIMD պոչի/անհավասարակշռության հավասարության թեստեր | ◉ | Պատահական հավասարության թեստերը ապահովում են, որ SIMD վեկտորային օպերացիաները համընկնում են սկալյար իմաստաբանության կամայական հավասարեցման համար: | կարգավիճակ.md:243 |
+| Metal/CUDA backback & self-tests | ◉ | GPU backend-ներն իրականացնում են ոսկե ինքնափորձարկումներ և անհամապատասխանության դեպքում վերադառնում են սկալարի/SIMD-ի: հավասարաչափ սյուիտները ծածկում են SHA-256/Keccak/AES: | կարգավիճակ.md:244-246 |
 
-## Network Time & Consensus Modes
+## Ցանցի ժամանակի և կոնսենսուսի ռեժիմներ
 
-| Feature | Status | Notes | Evidence |
+| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
+| Ցանցային ժամանակի ծառայություն (NTS) | ✖︎ | Դիզայնը գոյություն ունի `new_pipeline.md`-ում; իրականացումը դեռևս չի հետևվել կարգավիճակի թարմացումներում: | new_pipeline.md |
+| Առաջադրված PoS կոնսենսուսային ռեժիմ | ✖︎ | Nexus նախագծային փաստաթղթերի փակ փաթեթ և NPoS ռեժիմներ; հիմնական իրականացումը սպասվում է: | new_pipeline.md; nexus.md |
 
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
+## Nexus Լեջերի ճանապարհային քարտեզ| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
+| Space Directory պայմանագրի փայտամած | ✖︎ | Համաշխարհային ռեգիստրի պայմանագիր DS մանիֆեստների/կառավարման համար դեռ չի իրականացվել: | nexus.md |
+| Տվյալների տարածության մանիֆեստի ձևաչափ և կյանքի ցիկլ | ✖︎ | Norito մանիֆեստի սխեման, տարբերակների ձևավորումը և կառավարման հոսքը մնում են ճանապարհային քարտեզի վրա: | nexus.md |
+| DS կառավարում և վավերացնողի ռոտացիա | ✖︎ | DS անդամակցության/ռոտացիայի շղթայական ընթացակարգերը դեռ նախագծման փուլում են: | nexus.md |
+| Cross-DS խարսխման և Nexus բլոկի կազմը | ✖︎ | Կազմային շերտը և խարսխման պարտավորությունները ուրվագծված, բայց չկատարված: | nexus.md |
+| Kura/WSV ջնջման կոդավորված պահեստավորում | ✖︎ | Դեռևս չկառուցված հանրային/մասնավոր DS-ի համար ջնջման կոդավորված բլբ/պատկերի պահեստավորում: | nexus.md |
+| ZK/լավատեսական ապացույց քաղաքականություն ըստ DS | ✖︎ | Համաձայն DS-ի ապացույցների պահանջներն ու կիրարկումը չեն հետագծվում կոդով: | nexus.md |
+| Վճարի/քվոտայի մեկուսացում տվյալների տարածության համար | ✖︎ | DS-ի հատուկ քվոտաները և վճարների քաղաքականության մեխանիզմները մնում են ապագա աշխատանք: | nexus.md |
 
-## Chaos & Fault Injection
+## Քաոս և սխալ ներարկում
 
-| Feature | Status | Notes | Evidence |
+| Առանձնահատկություն | Կարգավիճակը | Ծանոթագրություններ | Ապացույցներ |
 |---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+| Izanami քաոսնետային նվագախումբ | ○ | Izanami-ի ծանրաբեռնվածությունն այժմ առաջացնում է ակտիվների սահմանման, մետատվյալների, NFT-ի և գործարկիչի կրկնության բաղադրատոմսեր՝ նոր ուղիների միավորի ծածկույթով: | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |

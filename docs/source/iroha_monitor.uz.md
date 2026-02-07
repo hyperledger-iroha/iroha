@@ -7,45 +7,46 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 05149d624d680d04433be41a4525538c97bd103ae7f80dda2613a6adb181a93d
 source_last_modified: "2025-12-29T18:16:35.968850+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Iroha Monitor
 
-The refactored Iroha monitor pairs a lightweight terminal UI with animated
-festival ASCII art and the traditional Etenraku theme.  It focuses on two
-simple workflows:
+Qayta tiklangan Iroha monitori engil terminal interfeysini animatsiya bilan birlashtiradi.
+festivali ASCII san'ati va an'anaviy Etenraku mavzusi.  U ikkitaga e'tibor beradi
+oddiy ish jarayonlari:
 
-- **Spawn-lite mode** – start ephemeral status/metrics stubs that mimic peers.
-- **Attach mode** – point the monitor at existing Torii HTTP endpoints.
+- **Spawn-lite rejimi** – tengdoshlarga taqlid qiluvchi vaqtinchalik holat/ko‘rsatkichlar stublarini ishga tushirish.
+- **Birikish rejimi** – monitorni mavjud Torii HTTP so‘nggi nuqtalariga yo‘naltiring.
 
-The UI renders three regions on every refresh:
+UI har bir yangilanishda uchta hududni ko'rsatadi:
 
-1. **Torii skyline header** – animated torii gate, Mt. Fuji, koi waves, and star
-   field that scroll in sync with the refresh cadence.
-2. **Summary strip** – aggregated blocks/transactions/gas plus refresh timing.
-3. **Peer table & festival whispers** – peer rows on the left, rotating event
-   log on the right that captures warnings (timeouts, oversized payloads, etc.).
-4. **Optional gas trend** – enable `--show-gas-trend` to append a sparkline
-   summarising total gas usage across all peers.
+1. **Torii osmon chizig‘i sarlavhasi** – animatsion torii darvozasi, Fudzi tog‘i, koi to‘lqinlari va yulduz
+   yangilash kadensi bilan sinxronlashadigan maydon.
+2. **Xulosa chizig‘i** – yig‘ilgan bloklar/tranzaksiyalar/gaz va yangilanish vaqti.
+3. **Tengdoshlar stoli va festival shivirlari** – chap tomondagi tengdoshlar qatorlari, aylanadigan tadbir
+   ogohlantirishlarni (vaqt tugashi, katta hajmdagi foydali yuklar va h.k.) ushlaydigan o'ngdagi tizimga kiring.
+4. **Ixtiyoriy gaz trendi** – uchqun chizig‘ini qo‘shish uchun `--show-gas-trend` ni yoqing
+   barcha tengdoshlar bo'yicha umumiy gazdan foydalanishni sarhisob qilish.
 
-New in this refactor:
+Ushbu refaktorda yangi:
 
-- Animated Japanese-style ASCII scene with koi, torii, and lanterns.
-- Simplified command surface (`--spawn-lite`, `--attach`, `--interval`).
-- Intro banner with optional audio playback of the gagaku theme (external MIDI
-  player or the built-in soft synth when the platform/audio stack supports it).
-- `--no-theme` / `--no-audio` flags for CI or fast smoke runs.
-- Per-peer “mood” column showing the latest warning, commit time, or uptime.
+- Koi, torii va chiroqlar bilan yapon uslubidagi animatsion ASCII sahnasi.
+- Soddalashtirilgan buyruq yuzasi (`--spawn-lite`, `--attach`, `--interval`).
+- Gagaku mavzusini ixtiyoriy audio tinglash bilan kirish banneri (tashqi MIDI
+  platforma/audio stek qo'llab-quvvatlasa, pleer yoki o'rnatilgan yumshoq sintez).
+- CI yoki tez tutun uchun `--no-theme` / `--no-audio` bayroqlari.
+- Eng so'nggi ogohlantirish, bajarilgan vaqt yoki ish vaqti ko'rsatilgan "kayfiyat" ustuni.
 
-## Quickstart
+## Tez boshlash
 
-Build the monitor and run it against the stubbed peers:
+Monitorni yarating va uni o'ralgan tengdoshlarga qarshi ishlating:
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --peers 3
 ```
 
-Attach to existing Torii endpoints:
+Mavjud Torii so'nggi nuqtalariga biriktiring:
 
 ```bash
 cargo run -p iroha_monitor -- \
@@ -53,13 +54,13 @@ cargo run -p iroha_monitor -- \
   --interval 500
 ```
 
-CI-friendly invocation (skip intro animation and audio):
+CI-do'st chaqiruv (kirish animatsiyasi va audioni o'tkazib yuborish):
 
 ```bash
 cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
 ```
 
-### CLI flags
+### CLI bayroqlari
 
 ```
 --spawn-lite         start local status/metrics stubs (default if no --attach)
@@ -77,56 +78,54 @@ cargo run -p iroha_monitor -- --spawn-lite --no-theme --no-audio
                      cap headless fallback to N frames (0 = unlimited)
 ```
 
-## Theme intro
+## Mavzuga kirish
 
-By default, startup plays a short ASCII animation while the Etenraku score
-begins.  Audio selection order:
+Odatiy bo'lib, ishga tushirish Etenraku ball olganda qisqa ASCII animatsiyasini o'ynaydi
+boshlanadi.  Audio tanlash tartibi:
 
-1. If `--midi-player` is provided, generate the demo MIDI (or use `--midi-file`)
-   and spawn the command.
-2. Otherwise, on macOS/Windows (or Linux with `--features iroha_monitor/linux-builtin-synth`)
-   render the score with the built-in gagaku soft synth (no external audio
-   assets required).
-3. If audio is disabled or initialization fails, the intro still prints the
-   animation and immediately enters the TUI.
+1. Agar `--midi-player` taqdim etilsa, demo MIDI ni yarating (yoki `--midi-file` dan foydalaning)
+   va buyruqni yarating.
+2. Aks holda, macOS/Windows da (yoki `--features iroha_monitor/linux-builtin-synth` bilan Linux)
+   O'rnatilgan gagaku yumshoq sintezi (tashqi audio yo'q) yordamida ballni yarating
+   zarur aktivlar).
+3. Agar audio o'chirilgan bo'lsa yoki ishga tushirish muvaffaqiyatsiz bo'lsa, kirish hali ham chop etadi
+   animatsiya va darhol TUIga kiradi.
 
-The CPAL-powered synth auto-enables on macOS and Windows. On Linux it is
-opt-in to avoid missing ALSA/Pulse headers during workspace builds; enable it
-with `--features iroha_monitor/linux-builtin-synth` if your system provides a
-working audio stack.
+CPAL bilan ishlaydigan sinxronlash macOS va Windows-da avtomatik ravishda yoqiladi. Linuxda shunday
+ish maydonini yaratishda ALSA/Pulse sarlavhalarini yo'qotmaslik uchun ro'yxatdan o'ting; uni yoqing
+tizimingiz ta'minlasa, `--features iroha_monitor/linux-builtin-synth` bilan
+ishlaydigan audio to'plami.
 
-Use `--no-theme` or `--no-audio` when running in CI or headless shells.
+CI yoki boshsiz qobiqlarda ishlayotganda `--no-theme` yoki `--no-audio` dan foydalaning.
 
-The soft synth now follows the arrangement captured in *MIDI synth design in
-Rust.pdf*: hichiriki and ryūteki share a heterophonic melody while the shō
-provides the aitake pads described in the document.  The timed note data lives
-in `etenraku.rs`; it powers both the CPAL callback and the generated demo MIDI.
-When audio output is unavailable the monitor skips playback but still renders
-the ASCII animation.
+Yumshoq sintez endi *MIDI synth dizaynida tasvirlangan tartibga amal qiladi
+Rust.pdf*: hichiriki va ryūteki shō paytida geterofonik ohangni baham ko'radi.
+hujjatda tasvirlangan aitake pedlarini taqdim etadi.  Vaqtli eslatma ma'lumotlari amal qiladi
+`etenraku.rs` da; u CPAL qayta qo'ng'iroqni va yaratilgan demo MIDIni quvvatlaydi.
+Ovoz chiqishi mavjud bo'lmaganda, monitor ijroni o'tkazib yuboradi, lekin baribir ko'rsatadi
+ASCII animatsiyasi.
 
-## UI overview
+## UI umumiy ko'rinishi- **Header art** – har bir freym `AsciiAnimator` tomonidan yaratilgan; koi, torii chiroqlari,
+  va to'lqinlar uzluksiz harakatni berish uchun siljiydi.
+- **Xulosa chizig'i** - onlayn tengdoshlar, hisobot qilingan tengdoshlar soni, bloklar jami,
+  bo'sh bo'lmagan bloklar yig'indisi, tx tasdiqlash/rad qilish, gazdan foydalanish va yangilanish tezligi.
+- **Tengdosh jadval** – taxallus/oxirgi nuqta, bloklar, tranzaktsiyalar, navbat hajmi uchun ustunlar,
+  gazdan foydalanish, kechikish va "kayfiyat" haqida maslahat (ogohlantirishlar, bajarilish vaqti, ish vaqti).
+- **Festival shivirlari** – ogohlantirishlar jurnali (ulanish xatolari, foydali yuk)
+  chegara buzilishi, sekin so'nggi nuqtalar).  Xabarlar teskari (oxirgi tepada).
 
-- **Header art** – generated each frame by `AsciiAnimator`; koi, torii lanterns,
-  and waves drift to give continuous motion.
-- **Summary strip** – shows online peers, reported peer count, block totals,
-  non-empty block totals, tx approvals/rejections, gas usage, and refresh rate.
-- **Peer table** – columns for alias/endpoint, blocks, transactions, queue size,
-  gas usage, latency, and a “mood” hint (warnings, commit time, uptime).
-- **Festival whispers** – rolling log of warnings (connection errors, payload
-  limit breaches, slow endpoints).  Messages are reversed (latest on top).
+Klaviatura yorliqlari:
 
-Keyboard shortcuts:
+- `n` / O'ngga / Pastga - diqqatni keyingi tengdoshga o'tkazing.
+- `p` / Chap / Yuqori - diqqatni oldingi tengdoshga o'tkazing.
+- `q` / Esc / Ctrl-C - terminaldan chiqish va tiklash.
 
-- `n` / Right / Down – move focus to the next peer.
-- `p` / Left / Up – move focus to the previous peer.
-- `q` / Esc / Ctrl-C – exit and restore the terminal.
+Monitor muqobil ekranli buferli krossterm + kalamushlardan foydalanadi; undan chiqishda
+kursorni tiklaydi va ekranni tozalaydi.
 
-The monitor uses crossterm + ratatui with an alternate-screen buffer; on exit it
-restores the cursor and clears the screen.
+## Tutun sinovlari
 
-## Smoke tests
-
-The crate ships integration tests that exercise both modes and the HTTP limits:
+Kassa ikkala rejim va HTTP cheklovlarini qo'llaydigan integratsiya testlarini yuboradi:
 
 - `spawn_lite_smoke_renders_frames`
 - `attach_mode_with_stubs_runs_cleanly`
@@ -134,46 +133,46 @@ The crate ships integration tests that exercise both modes and the HTTP limits:
 - `status_limit_warning_is_rendered`
 - `attach_mode_with_slow_peer_renders_multiple_frames`
 
-Run just the monitor tests:
+Faqat monitor sinovlarini bajaring:
 
 ```bash
 cargo test -p iroha_monitor -- --nocapture
 ```
 
-The workspace has heavier integration tests (`cargo test --workspace`). Running
-the monitor tests separately is still useful for quick validation when you do
-not need the full suite.
+Ish joyida og'irroq integratsiya testlari mavjud (`cargo test --workspace`). Yugurish
+monitor sinovlari alohida-alohida amalga oshirilganda ham tez tekshirish uchun foydalidir
+to'liq to'plam kerak emas.
 
-## Updating screenshots
+## Skrinshotlar yangilanmoqda
 
-The docs demo now focuses on the torii skyline and peer table.  To refresh the
-assets, run:
+Hujjatlar namoyishi endi torii silueti va tengdoshlar jadvaliga qaratilgan.  Yangilash uchun
+aktivlar, ishga tushirish:
 
 ```bash
 make monitor-screenshots
 ```
 
-This wraps `scripts/iroha_monitor_demo.sh` (spawn-lite mode, fixed seed/viewport,
-no intro/audio, dawn palette, art-speed 1, headless cap 24) and writes the
-SVG/ANSI frames plus `manifest.json` and `checksums.json` into
+Bu `scripts/iroha_monitor_demo.sh` ni o'radi (pawn-lite rejimi, sobit urug '/ko'rish oynasi,
+intro/audio, shafaq palitrasi, art-speed 1, boshsiz qalpoq 24) va yozadi
+SVG/ANSI ramkalari va `manifest.json` va `checksums.json`
 `docs/source/images/iroha_monitor_demo/`. `make check-iroha-monitor-docs`
-wraps both CI guards (`ci/check_iroha_monitor_assets.sh` and
-`ci/check_iroha_monitor_screenshots.sh`) so generator hashes, manifest fields,
-and checksums stay in sync; the screenshot check also ships as
-`python3 scripts/check_iroha_monitor_screenshots.py`. Pass `--no-fallback` to
-the demo script if you want the capture to fail instead of falling back to the
-baked frames when the monitor output is empty; when fallback is used the raw
-`.ans` files are rewritten with the baked frames so the manifest/checksums stay
-deterministic.
+ikkala CI himoyasini o'rab oladi (`ci/check_iroha_monitor_assets.sh` va
+`ci/check_iroha_monitor_screenshots.sh`) shuning uchun generator xeshlari, manifest maydonlari,
+va nazorat summalari sinxronlashtiriladi; skrinshot tekshiruvi ham sifatida yuboriladi
+`python3 scripts/check_iroha_monitor_screenshots.py`. `--no-fallback` manziliga o'ting
+demo skript, agar siz suratga olish o'rniga qaytish o'rniga muvaffaqiyatsiz bo'lishini istasangiz
+monitor chiqishi bo'sh bo'lganda pishirilgan ramkalar; zaxira xom ashyodan foydalanilganda
+`.ans` fayllari pishirilgan ramkalar bilan qayta yoziladi, shuning uchun manifest/nazorat summalari qoladi
+deterministik.
 
-## Deterministic screenshots
+## Deterministik skrinshotlar
 
-The shipped snapshots live in `docs/source/images/iroha_monitor_demo/`:
+Yuborilgan suratlar `docs/source/images/iroha_monitor_demo/` da jonli:
 
-![monitor overview](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
-![monitor pipeline](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
+![Monitorning umumiy koʻrinishi](images/iroha_monitor_demo/iroha_monitor_demo_overview.svg)
+![quvurni kuzatish](images/iroha_monitor_demo/iroha_monitor_demo_pipeline.svg)
 
-Reproduce them with a fixed viewport/seed:
+Ularni qattiq ko'rish maydoni/urug'i bilan takrorlang:
 
 ```bash
 scripts/iroha_monitor_demo.sh \
@@ -182,26 +181,24 @@ scripts/iroha_monitor_demo.sh \
   --seed iroha-monitor-demo
 ```
 
-The capture helper fixes `LANG`/`LC_ALL`/`TERM`, forwards
-`IROHA_MONITOR_DEMO_SEED`, mutes audio, and pins the art theme/speed so the
-frames render identically across platforms. It writes `manifest.json` (generator
-hashes + sizes) and `checksums.json` (SHA-256 digests) under
-`docs/source/images/iroha_monitor_demo/`; CI runs
-`ci/check_iroha_monitor_assets.sh` and `ci/check_iroha_monitor_screenshots.sh`
-to fail when the assets drift from the recorded manifests.
+Suratga olish yordamchisi `LANG`/`LC_ALL`/`TERM`, oldinga siljiydi.
+`IROHA_MONITOR_DEMO_SEED`, ovozni o'chiradi va badiiy mavzuni/tezlikni o'rnatadi, shuning uchun
+ramkalar platformalar bo'ylab bir xil ko'rsatiladi. U `manifest.json` (generator
+xeshlar + o'lchamlar) va `checksums.json` (SHA-256 dayjestlari) ostida
+`docs/source/images/iroha_monitor_demo/`; CI ishlaydi
+`ci/check_iroha_monitor_assets.sh` va `ci/check_iroha_monitor_screenshots.sh`
+aktivlar qayd etilgan manifestlardan chetga chiqqanda muvaffaqiyatsizlikka uchraydi.
 
-## Troubleshooting
+## Muammolarni bartaraf qilish; nosozliklarni TUZATISH- **Ovoz chiqishi yo‘q** – monitor o‘chirilgan ijroga qaytadi va davom etadi.
+- **Headless backback erta tugaydi** – monitor boshsiz yugurishni juftlikka yopadi
+  o'zgartira olmaganda o'nlab kadrlar (standart intervalda taxminan 12 soniya).
+  terminalni xom rejimga o'tkazish; ishlashini ta'minlash uchun `--headless-max-frames 0` dan o'ting
+  cheksiz muddatga.
+- **O'lchamdagi yuklamalar** – tengdoshlarning kayfiyat ustuni va festival jurnali
+  konfiguratsiya qilingan chegara (`128 KiB`) bilan `body exceeds …` ni ko'rsatish.
+- **Slow peers** – hodisalar jurnali kutish tugashi haqidagi ogohlantirishlarni qayd qiladi; o'sha tengdoshga e'tibor qarating
+  qatorni ajratib ko'rsatish.
 
-- **No audio output** – the monitor falls back to muted playback and continues.
-- **Headless fallback exits early** – the monitor caps headless runs to a couple
-  dozen frames (about 12 seconds at the default interval) when it cannot switch
-  the terminal into raw mode; pass `--headless-max-frames 0` to keep it running
-  indefinitely.
-- **Oversized status payloads** – the peer’s mood column and the festival log
-  show `body exceeds …` with the configured limit (`128 KiB`).
-- **Slow peers** – the event log records timeout warnings; focus that peer to
-  highlight the row.
-
-Enjoy the festival skyline!  Contributions for additional ASCII motifs or
-metrics panels are welcome—keep them deterministic so clusters render the same
-frame-by-frame regardless of terminal.
+Festival manzarasidan rohatlaning!  Qo'shimcha ASCII motivlari uchun hissalar yoki
+ko'rsatkichlar panellari qabul qilinadi - ularni deterministik saqlang, shunda klasterlar bir xil ko'rsatiladi
+terminaldan qat'i nazar, ramkaga.

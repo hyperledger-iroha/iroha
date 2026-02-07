@@ -7,45 +7,46 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8fa39bf0a08fb4c04d85c207bdffa287aabac979cc0496b54866b775154356e7
 source_last_modified: "2026-01-05T18:22:23.392756+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Torii Connect Configuration
+## I18NT000000001X тоташтырыу конфигурацияһы
 
-Iroha Torii exposes optional WalletConnect-style WebSocket endpoints and a minimal in-node relay
-when the `connect` Cargo feature is enabled (default). The runtime behavior is gated at config:
+I18NT000000000X I18NT000000002X фашлама WalletConnect стилендәге WebSocket ос нөктәләре һәм минималь төйөндәге эстафета
+ҡасан `connect` Йөк функцияһы өҫтөндә эшләй (дефолт). Йөрөү ваҡыты тәртибе конфигта ҡапҡалы:
 
-- Set `connect.enabled=false` to disable all Connect routes (`/v1/connect/*`).
-- Leave it `true` (default) to enable the WS session endpoints and `/v1/connect/status`.
+- `connect.enabled=false` комплекты бөтә тоташтырыу маршруттарын өҙөү өсөн (`/v1/connect/*`).
+- Ҡалдырырға I18NI000000006X (поручип) мөмкинлек бирә WS сеанс ос нөктәләре һәм I18NI000000007X.
 
-Environment overrides (user config → actual config):
+Тирә-яҡ мөхит өҫтөнлөк итә (ҡулланыусы конфиг → фактик конфиг):
 
-- `CONNECT_ENABLED` (bool; default: `true`)
-- `CONNECT_WS_MAX_SESSIONS` (usize; default: `10000`)
-- `CONNECT_WS_PER_IP_MAX_SESSIONS` (usize; default: `10`)
-- `CONNECT_WS_RATE_PER_IP_PER_MIN` (u32; default: `120`)
-- `CONNECT_FRAME_MAX_BYTES` (usize; default: `64000`)
-- `CONNECT_SESSION_BUFFER_MAX_BYTES` (usize; default: `262144`)
-- `CONNECT_PING_INTERVAL_MS` (duration; default: `30000`)
-- `CONNECT_PING_MISS_TOLERANCE` (u32; default: `3`)
-- `CONNECT_PING_MIN_INTERVAL_MS` (duration; default: `15000`)
-- `CONNECT_DEDUPE_CAP` (usize; default: `8192`)
-- `CONNECT_RELAY_ENABLED` (bool; default: `true`)
-- `CONNECT_RELAY_STRATEGY` (string; default: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; default: `0`)
+- I18NI000000008X (беле; ғәҙәттәгесә: I18NI0000009X X)
+- I18NI000000010X (законы; ғәҙәттәгесә: `10000`)
+- `CONNECT_WS_PER_IP_MAX_SESSIONS` (законы; ғәҙәттәгесә: `10`)
+- `CONNECT_WS_RATE_PER_IP_PER_MIN` (u32; ғәҙәттәгесә: `120`)
+- I18NI000000016X (законы; ғәҙәттәгесә: `64000`)
+- I18NI000000018X (законы; ғәҙәттәгесә: `262144` X)
+- I18NI000000020X (оҙайлылыҡ; ғәҙәттәгесә: `30000`)
+- I18NI000000022X (u32; ғәҙәттәгесә: `3`)
+- `CONNECT_PING_MIN_INTERVAL_MS` (оҙайлы; ғәҙәттәгесә: I18NI000000255Х)
+- `CONNECT_DEDUPE_CAP` (законы; ғәҙәттәгесә: `8192`)
+- I18NI000000028X (беле; ғәҙәттәгесә: `true` X)
+- I18NI000000030X (стринг; ғәҙәттәгесә: `"broadcast"`)
+- I18NI000000032X (u8; ғәҙәттәгесә: `0`)
 
-Notes:
+Иҫкәрмәләр:
 
-- `CONNECT_SESSION_TTL_MS` and `CONNECT_DEDUPE_TTL_MS` use duration literals in user config and
-  map to actual `session_ttl` and `dedupe_ttl` fields.
-- `CONNECT_WS_PER_IP_MAX_SESSIONS=0` disables the per-IP session cap.
-- `CONNECT_WS_RATE_PER_IP_PER_MIN=0` disables the per-IP handshake rate limiter.
-- Heartbeat enforcement clamps the configured interval to the browser-friendly minimum (`ping_min_interval_ms`);
-  the server tolerates `ping_miss_tolerance` consecutive missed pongs before closing the WebSocket and
-  increments the `connect.ping_miss_total` metric.
-- When disabled at runtime (`connect.enabled=false`), Connect WS and status routes are not
-  registered; requests to `/v1/connect/ws` and `/v1/connect/status` return 404.
-- The server requires a client‑provided `sid` for `/v1/connect/session` (base64url or hex, 32 bytes).
-  It no longer generates a fallback `sid`.
+- I18NI000000034X һәм I18NI0000000035X ҡулланыусы конфигында оҙайлылыҡ литералдарын ҡуллана һәм
+  картаһы ысын `session_ttl` һәм I18NI000000037X яландарына.
+- `CONNECT_WS_PER_IP_MAX_SESSIONS=0` XP сеанс ҡапҡасын өҙөп ебәрә.
+- `CONNECT_WS_RATE_PER_IP_PER_MIN=0` XP пер-IP-ҡул ҡыҫҡыс ставкаһын сикләүсе өҙөп.
+- Йөрәк тибеше һаҡлау браузер-дуҫ минимумға конфигурацияланған интервалды ҡыҫа (`ping_min_interval_ms`);
+  Сервер I18NI000000041X эҙмә-эҙлекле үткәрелмәгән понгтарҙы түҙә, WebSocket һәм
+  I18NI000000042X метрикаһын арттыра.
+- Ҡасан инвалидтар эшләү ваҡытында (I18NI000000043X), WS һәм статус маршруттары түгел
+  теркәлгән; 18NI0000044X һәм I18NI0000000045X 404-се ҡайтарыу тураһында үтенестәр.
+- Сервер клиент өсөн I18NI000000046X I18NI000000047X өсөн бирелгән (база64url йәки hex, 32 байт) талап итә.
+  Ул инде I18NI000000048X fallback генерациялай.
 
-See also: `crates/iroha_config/src/parameters/{user,actual}.rs` and defaults in
-`crates/iroha_config/src/parameters/defaults.rs` (module `connect`).
+Шулай уҡ ҡарағыҙ: I18NI000000049XX һәм 1990 йылда ғәҙәттәгесә.
+`crates/iroha_config/src/parameters/defaults.rs` (Модуль I18NI000000051X модуль).

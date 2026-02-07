@@ -7,61 +7,62 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c28a429f0ade5a5e93c063dc7eda4b95fd0c379a7598b72f19367ca13734e443
 source_last_modified: "2025-12-29T18:16:35.906407+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Overview
+# I18NT000000000X Обзор
 
-Norito is the binary serialization layer used across Iroha: it defines how data
-structures are encoded on the wire, persisted on disk, and exchanged between
-contracts and hosts. Every crate in the workspace relies on Norito instead of
-`serde` so peers on different hardware produce identical bytes.
+I18NT000000001X — Iroha буйынса ҡулланылған бинар сериализация ҡатламы: ул мәғлүмәттәрҙең нисек билдәләй.
+конструкциялар сымда кодлана, диск өҫтөндә һаҡлана һәм 1990 йылдарҙа 1000-гә тиклем алмаштырыла.
+контракттары һәм хужалары. Эш урынындағы һәр йәшник I18NT000000002X урынына таяна.
+`serde` шулай тиңдәштәре төрлө аппарат етештереү бер үк байт.
 
-This overview summarises the core pieces and links to the canonical references.
+Был дөйөм мәғлүмәт дөйөмләштерә төп киҫәктәр һәм һылтанмалар канон һылтанмалар.
 
-## Architecture at a glance
+## Архитектура бер ҡараштан
 
-- **Header + payload** – Each Norito message begins with a feature-negotiation
-  header (flags, checksum) followed by the bare payload. Packed layouts and
-  compression are negotiated via header bits.
-- **Deterministic encoding** – `norito::codec::{Encode, Decode}` implement the
-  bare encoding. The same layout is reused when wrapping payloads in headers so
-  hashing and signing remain deterministic.
-- **Schema + derives** – `norito_derive` generates `Encode`, `Decode`, and
-  `IntoSchema` implementations. Packed structs/sequences are enabled by default
-  and documented in `norito.md`.
-- **Multicodec registry** – Identifiers for hashes, key types, and payload
-  descriptors live in `norito::multicodec`. The authoritative table is
-  maintained in `multicodec.md`.
+- **Баш + файҙалы йөк** – Һәр I18NT0000000003X хәбәр функция-һөйләшеүҙәр менән башлана
+  баш (флагтар, чемпионат) унан һуң яланғас файҙалы йөк. Ҡапланған макеттар һәм
+  ҡыҫылыу баш биттары аша һөйләшеүҙәр алып барыла.
+- **Детерминистик кодлау** – I18NI000000012X тормошҡа ашырыу .
+  яланғас кодлау. Шул уҡ планировка ҡабаттан ҡулланыла, ҡасан уратып файҙалы йөкләмәләр башлыҡтарҙа шулай
+  хеширование һәм ҡул ҡуйыу детерминистик булып ҡала.
+- **Схема + сыға** – `norito_derive` генерациялай I18NI000000014X, `Decode`, һәм
+  `IntoSchema` тормошҡа ашырыу. Ҡапланған структуралар/эҙмә-эҙлеклелектәр ғәҙәттәгесә эшләй.
+  һәм документлаштырылған I18NI000000017X.
+- **Мултикодек реестры** – Хештар, төп типтары һәм файҙалы йөк өсөн идентификаторҙар
+  дескрипторҙар йәшәй I18NI000000018X. Авторитетлы таблица 1990 й.
+  I18NI000000019X-та хеҙмәтләндерелә.
 
-## Tooling
+## Ҡораллы .
 
-| Task | Command / API | Notes |
+| Эш | Команда / API | Иҫкәрмәләр |
 | --- | --- | --- |
-| Inspect header/sections | `ivm_tool inspect <file>.to` | Shows ABI version, flags, and entrypoints. |
-| Encode/decode in Rust | `norito::codec::{Encode, Decode}` | Implemented for all core data-model types. |
-| JSON interop | `norito::json::{to_json_pretty, from_json}` | Deterministic JSON backed by Norito values. |
-| Generate docs/specs | `norito.md`, `multicodec.md` | Source-of-truth documentation in the repo root. |
+| Башлыҡ/бүлектәрҙе тикшерергә | `ivm_tool inspect <file>.to` | ABI версияһы, флагтар һәм инеү нөктәләрен күрһәтә. |
+| Код/декод руст | `norito::codec::{Encode, Decode}` | Бөтә төп мәғлүмәт-модель типтары өсөн тормошҡа ашырыла. |
+| JSON interop | `norito::json::{to_json_pretty, from_json}` | Детерминистик JSON I18NT0000000004X ҡиммәттәре менән нығытылған. |
+| Генерация docs/спектар | `norito.md`, I18NI000000024X | Репо тамырында дөрөҫлөктөң сығанаҡ документацияһы. |
 
-## Development workflow
+## Үҫеш эш ағымы
 
-1. **Add derives** – Prefer `#[derive(Encode, Decode, IntoSchema)]` for new data
-   structures. Avoid hand-written serializers unless absolutely necessary.
-2. **Validate packed layouts** – Use `cargo test -p norito` (and the packed
-   feature matrix in `scripts/run_norito_feature_matrix.sh`) to ensure new
-   layouts remain stable.
-3. **Regenerate docs** – When the encoding changes, update `norito.md` and the
-   multicodec table, then refresh the portal pages (`/reference/norito-codec`
-   and this overview).
-4. **Keep tests Norito-first** – Integration tests should use the Norito JSON
-   helpers instead of `serde_json` so they exercise the same paths as production.
+1. **Өҫтәү ** – өҫтөнлөк I18NI0000000025X өсөн яңы мәғлүмәттәр
+   структуралары. Ҡулдан яҙылған сериализацияларҙан баш тартығыҙ, әгәр ҙә абсолют кәрәк булмаһа.
+2. **Валидат ҡапланған макеттар** – Ҡулланыу I18NI000000026X (һәм ҡапланған
+   матрицаһы I18NI0000000027X) яңы тәьмин итеү өсөн
+   макеттар тотороҡло ҡала.
+3. **Доктарҙы тергеҙеү** ​​– Ҡасан кодлау үҙгәрә, яңыртыу I18NI000000028X һәм
+   мультикодек таблицаһы, һуңынан портал биттәрен яңыртыу (I18NI000000029X
+   һәм был дөйөм ҡараш).
+4. **Бына һынауҙар I18NT00000000005X-беренсе** – Интеграция һынауҙары ҡулланырға тейеш I18NT0000000006X JSON
+   ярҙамсылары урынына I18NI0000000300Х шулай улар етештереү кеүек юлдарҙы башҡара.
 
-## Quick links
+## Тиҙ һылтанмалар
 
-- Specification: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Multicodec assignments: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Feature matrix script: `scripts/run_norito_feature_matrix.sh`
-- Packed-layout examples: `crates/norito/tests/`
+- Спецификация: [I18NI000000031X] (https://github.com/hyperledger-iroha/iroha/blob/master/norito.md X)
+- Күпидека заданиелары: [I18NI000000032X] (I18NU0000010X)
+- Функциональ матрица сценарийы: I18NI000000033X
+- Ҡапланған макет миҫалдары: I18NI000000034X
 
-Pair this overview with the quickstart guide (`/norito/getting-started`) for a
-hands-on walkthrough of compiling and running bytecode that uses Norito
-payloads.
+Пар был обзор менән тиҙ старт етәксеһе (I18NI000000035X) өсөн
+ҡулдан йөрөү өсөн компиляция һәм йүгерә байткод, тип ҡуллана I18NT0000000007X
+файҙалы йөктәр.

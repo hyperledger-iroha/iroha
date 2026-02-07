@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0397eec8373494a74060a7244a7f923714723e5feacc4a54374ee4461f0ddde1
 source_last_modified: "2025-12-29T18:16:35.078130+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Evaluation Template
+# SNS လေ့ကျင့်ရေး အကဲဖြတ်ခြင်း ပုံစံ
 
-Please distribute this survey immediately after each session. Responses can be
-captured via form tool or Markdown and archived under
-`artifacts/sns/training/<suffix>/<cycle>/feedback/`.
+စက်ရှင်တစ်ခုစီပြီးနောက် ဤစစ်တမ်းကို ချက်ချင်းဖြန့်ဝေပါ။ တုံ့ပြန်မှုတွေ ရှိနိုင်ပါတယ်။
+ဖောင်တူးလ် သို့မဟုတ် Markdown မှတဆင့် ဖမ်းယူပြီး အောက်တွင် သိမ်းဆည်းထားသည်။
+`artifacts/sns/training/<suffix>/<cycle>/feedback/`။
 
-## Session metadata
-- Suffix:
-- Cycle:
-- Language:
-- Date:
-- Facilitator(s):
+## ဆက်ရှင် မက်တာဒေတာ
+- နောက်ဆက်
+- သံသရာ-
+- ဘာသာစကား-
+- ရက်စွဲ-
+- ကူညီဆောင်ရွက်ပေးသူ(များ)-
 
-## Rating scale
-1 — Poor · 2 — Fair · 3 — Good · 4 — Very good · 5 — Excellent
+## အဆင့်သတ်မှတ်စကေး
+1 — ညံ့ · 2 — မျှတ · 3 — ကောင်း · 4 — အလွန်ကောင်း · 5 — အလွန်ကောင်း
 
-| Question | 1 | 2 | 3 | 4 | 5 |
+| မေးခွန်း | ၁ | 2 | 3 | 4 | 5 |
 |----------|---|---|---|---|---|
-| Clarity of KPI walkthrough | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Usefulness of labs | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Pace + time allocation | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Localization quality (slides + facilitation) | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Overall confidence entering suffix launch | ☐ | ☐ | ☐ | ☐ | ☐ |
+| KPI ဆိုင်ရာ ရှင်းလင်းချက် | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ဓာတ်ခွဲခန်းများ၏ အသုံးဝင်မှု | ☐ | ☐ | ☐ | ☐ | ☐ |
+| အရှိန် + အချိန်ခွဲဝေမှု | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Localization အရည်အသွေး (ဆလိုက် + ပံ့ပိုးကူညီမှု) | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ခြုံငုံယုံကြည်မှုထည့်သွင်းခြင်း suffix launch | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-## Open questions
-1. Which topic needs more depth?
-2. Were any tools/docs missing from the workbook?
-3. Did the localization meet your expectations? If not, why?
-4. Additional comments / blockers the program should track.
+##မေးခွန်းဖွင့်ပါ။
+1. ဘယ်အကြောင်းအရာက ပိုလေးနက်ဖို့လိုလဲ။
+2. အလုပ်စာအုပ်ထဲမှ ကိရိယာ/စာရွက်စာတမ်းများ ပျောက်ဆုံးနေပါသလား။
+3. Localization သည် သင့်မျှော်မှန်းချက်များနှင့် ကိုက်ညီပါသလား။ မဟုတ်ရင် ဘာကြောင့်လဲ။
+4. ပရိုဂရမ်ကို ခြေရာခံသင့်သော အပိုမှတ်ချက်များ/ပိတ်ဆို့သူများ။
 
-## Follow-up
-- `[]` Feedback logged in governance tracker (ticket: __________)
-- `[]` Annex export captured (path: ____________________)
-- `[]` Action items assigned (owner + due date)
+## နောက်ဆက်တွဲ
+- `[]` တုံ့ပြန်ချက်သည် အုပ်ချုပ်မှုခြေရာခံစနစ်တွင် ဝင်ရောက်ထားသည် (လက်မှတ်- __________)
+- `[]` နောက်ဆက်တွဲ တင်ပို့မှုကို ဖမ်းယူထားသည် (လမ်းကြောင်း- ____________________)
+- `[]` သတ်မှတ်ပေးထားသော လုပ်ဆောင်ချက်ပစ္စည်းများ (ပိုင်ရှင် + သတ်မှတ်ရက်စွဲ)

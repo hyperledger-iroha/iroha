@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d7eb66e5ba171d5c06aefa06ba9bd3e866596bc4efdbe16cb594990f46b5cb7
 source_last_modified: "2026-01-05T09:28:12.002687+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SBOM & Provenance Attestation — Android SDK
+# SBOM & Провенанс аттестация — Android SDK
 
-| Field | Value |
-|-------|-------|
-| Scope | Android SDK (`java/iroha_android`) + sample apps (`examples/android/*`) |
-| Workflow Owner | Release Engineering (Alexei Morozov) |
-| Last Verified | 2026-02-11 (Buildkite `android-sdk-release#4821`) |
+| Ялан | Ҡиммәте |
+|------|-------|
+| Скоп | Android SDK (`java/iroha_android`) + өлгө ҡушымталар (`examples/android/*`) |
+| Эш ағымы Милек | Релиз инженерияһы (Алексей Морозов) |
+| Һуңғы раҫланған | 2026-02-11 (Buildkite `android-sdk-release#4821`) |
 
-## 1. Generation Workflow
+## 1. Быуындар эш ағымы
 
-Run the helper script (added for AND6 automation):
+Ярҙамсы сценарийы (AND6 автоматлаштырыу өсөн өҫтәлгән):
 
 ```bash
 scripts/android_sbom_provenance.sh <sdk-version>
 ```
 
-The script performs the following:
+Сценарий түбәндәгеләрҙе башҡара:
 
-1. Executes `ci/run_android_tests.sh` and `scripts/check_android_samples.sh`.
-2. Invokes the Gradle wrapper under `examples/android/` to build CycloneDX SBOMs for
-   `:android-sdk`, `:operator-console`, and `:retail-wallet` with the supplied
+1. `ci/run_android_tests.sh` һәм `scripts/check_android_samples.sh` башҡара.
+.
+   `:android-sdk`, `:operator-console`, һәм `:retail-wallet` менән тәьмин ителгән
    `-PversionName`.
-3. Copies each SBOM into `artifacts/android/sbom/<sdk-version>/` with canonical names
-   (`iroha-android.cyclonedx.json`, etc.).
+3. Һәр SBOM күсермәләр `artifacts/android/sbom/<sdk-version>/` канон исемдәре менән
+   (`iroha-android.cyclonedx.json` һ.б.).
 
-## 2. Provenance & Signing
+## 2. Провенанс һәм ҡул ҡуйыу
 
-The same script signs every SBOM with `cosign sign-blob --bundle <file>.sigstore --yes`
-and emits `checksums.txt` (SHA-256) in the destination directory. Set the `COSIGN`
-environment variable if the binary lives outside `$PATH`. After the script finishes,
-record the bundle/checksum paths plus Buildkite run id in
+Шул уҡ сценарий һәр SBOM менән `cosign sign-blob --bundle <file>.sigstore --yes` менән билдәләре
+һәм `checksums.txt` (SHA-256) сығарылыш каталогында сыға. `COSIGN` й.
+мөхит үҙгәртеүсән, әгәр бинар йәшәй тыш `$PATH`. Сценарий тамамланғандан һуң,
+яҙып алыу өйөм/чексум юлдары плюс artionkite йүгерә id .
 `docs/source/compliance/android/evidence_log.csv`.
 
-## 3. Verification
+## 3. Тикшереү
 
-To verify a published SBOM:
+Баҫылған СБОМ-ды раҫлау өсөн:
 
 ```bash
 COSIGN_EXPERIMENTAL=1 cosign verify-blob \
@@ -56,20 +57,20 @@ COSIGN_EXPERIMENTAL=1 cosign verify-blob \
   --yes artifacts/android/sbom/${SDK_VERSION}/operator-console.cyclonedx.json
 ```
 
-Compare the output SHA to the value listed in `checksums.txt`. Reviewers also diff the SBOM against the previous release to ensure dependency deltas are intentional.
+SHA сығышын `checksums.txt`-та күрһәтелгән ҡиммәт менән сағыштырығыҙ. Рецензенттар шулай уҡ айыра SBOM ҡаршы алдағы релиз өсөн тәьмин итеү өсөн бәйлелек дельта ниәтле.
 
-## 4. Evidence Snapshot (2026-02-11)
+## 4. Дәлилдәр Снэпшот (2026-02-11)
 
-| Component | SBOM | SHA-256 | Sigstore Bundle |
-|-----------|------|---------|-----------------|
-| Android SDK (`java/iroha_android`) | `artifacts/android/sbom/0.9.0/iroha-android.cyclonedx.json` | `0fd522b78f9a43b5fd1d6c8ec8b2d980adff5d3c31e30c3c7e1f0f9d7f187a2d` | `.sigstore` bundle stored beside SBOM |
-| Operator console sample | `artifacts/android/sbom/0.9.0/operator-console.cyclonedx.json` | `e3e236350adcb5ee4c0a9a4a98c7166c308ebe1d2d5d9ec0a79251afd8c7e1e4` | `.sigstore` |
-| Retail wallet sample | `artifacts/android/sbom/0.9.0/retail-wallet.cyclonedx.json` | `4d81352eec6b0f33811f87ec219a3f88949770b8c820035446880b1a1aaed1cc` | `.sigstore` |
+| Компонент | СБОМ | SHA-256 | Sigstore Бандл |
+|---------|-------|-----------|-----------------|
+| Android SDK (`java/iroha_android`) | `artifacts/android/sbom/0.9.0/iroha-android.cyclonedx.json` | `0fd522b78f9a43b5fd1d6c8ec8b2d980adff5d3c31e30c3c7e1f0f9d7f187a2d` | `.sigstore` өйөмө SBOM эргәһендә һаҡланған |
+| Оператор консоль өлгөһө | `artifacts/android/sbom/0.9.0/operator-console.cyclonedx.json` | `e3e236350adcb5ee4c0a9a4a98c7166c308ebe1d2d5d9ec0a79251afd8c7e1e4` | `.sigstore` |
+| Ваҡлап һатыу янсыҡ өлгөһө | `artifacts/android/sbom/0.9.0/retail-wallet.cyclonedx.json` | `4d81352eec6b0f33811f87ec219a3f88949770b8c820035446880b1a1aaed1cc` | `.sigstore` |
 
-*(Hashes captured from Buildkite run `android-sdk-release#4821`; reproduce via the verification command above.)*
+*(Хаштар Buildkite йүгерә `android-sdk-release#4821` йүгерә; өҫтәге тикшерелгән команда аша үрсетергә.)*
 
-## 5. Outstanding Work
+## 5. Күренекле эш
 
-- Automate SBOM + cosign steps inside the release pipeline before GA.
-- Mirror SBOMs to the public artefact bucket once AND6 marks the checklist complete.
-- Coordinate with Docs to link SBOM download locations from partner-facing release notes.
+- Автоматлаштырыу SBOM + косигнация аҙымдары эсендә релиз торбаһы алдынан GA.
+- Көҙгө SBOMs йәмәғәт артефакт биҙрәгә бер тапҡыр AND6 тикшерелгән исемлекте тамамлай.
+- Docs менән координациялау өсөн һылтанма SBOM скачать урындары партнер-йөҙөндә релиз иҫкәрмәләр.

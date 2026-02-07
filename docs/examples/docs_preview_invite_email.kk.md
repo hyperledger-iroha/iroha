@@ -7,15 +7,16 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4e3856058310e40649d5394996b2bcbfde99effb9e706be87f284e1812d5bdbd
 source_last_modified: "2025-12-29T18:16:35.071633+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Invite (Sample Email)
+# Docs порталын алдын ала қарау шақыруы (электрондық пошта үлгісі)
 
-Use this sample when drafting the outbound message. It captures the exact copy
-sent to the W2 community reviewers (`preview-2025-06-15`) so future waves can
-mirror the tone, verification guidance, and evidence trail without reverse
-engineering old tickets. Update the artefact links, hashes, request IDs, and
-dates before sending a new invite.
+Бұл үлгіні шығыс хабарды жасау кезінде пайдаланыңыз. Ол нақты көшірмені түсіреді
+W2 қауымдастығының шолушыларына (`preview-2025-06-15`) жіберілді, осылайша болашақ толқындар
+тонды, тексеру нұсқауларын және дәлелдемелерді кері қайтарусыз айналаңыз
+инженерлік ескі билеттер. Артефакт сілтемелерін, хэштерді, сұрау идентификаторларын және
+жаңа шақыруды жібермес бұрын.
 
 ```text
 Subject: [DOCS-SORA] docs portal preview preview-2025-06-15 invite for Horizon Wallet

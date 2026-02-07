@@ -6,125 +6,121 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: bcf280df1e00065199d386e07b9fd67d8f94c4046d73cfa3b63d1eec18228cd8
 source_last_modified: "2026-01-22T16:01:14.866000+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IVM Syscall ABI
+# IVM Appel système ABI
 
-This document defines the IVM syscall numbers, pointer-ABI calling conventions, reserved number ranges, and the canonical table of contract-facing syscalls used by Kotodama lowering. It complements `ivm.md` (architecture) and `kotodama_grammar.md` (language).
+Ce document définit les numéros d'appel système IVM, les conventions d'appel pointeur-ABI, les plages de numéros réservées et le tableau canonique des appels système orientés contrat utilisés par l'abaissement Kotodama. Il complète `ivm.md` (architecture) et `kotodama_grammar.md` (langage).
 
-Versioning
-- The set of recognized syscalls depends on the bytecode header `abi_version` field. The first release accepts only `abi_version = 1`; other values are rejected at admission. Unknown numbers for the active `abi_version` deterministically trap with `E_SCALL_UNKNOWN`.
-- Runtime upgrades keep `abi_version = 1` and do not expand syscall or pointer‑ABI surfaces.
-- Syscall gas costs are part of the versioned gas schedule bound to the bytecode header version. See `ivm.md` (Gas policy).
+Gestion des versions
+- L'ensemble des appels système reconnus dépend du champ d'en-tête `abi_version` du bytecode. La première version accepte uniquement `abi_version = 1` ; les autres valeurs sont rejetées à l'admission. Numéros inconnus pour le piège déterministe `abi_version` actif avec `E_SCALL_UNKNOWN`.
+- Les mises à niveau d'exécution conservent `abi_version = 1` et n'étendent pas les surfaces d'appel système ou de pointeur-ABI.
+- Les coûts de gaz Syscall font partie du calendrier de gaz versionné lié à la version d'en-tête du bytecode. Voir `ivm.md` (Politique du gaz).
 
-Numbering ranges
-- `0x00..=0x1F`: VM core/utility (debug/exit helpers are available under `CoreHost`; remaining dev helpers are mock-host only).
-- `0x20..=0x5F`: Iroha core ISI bridge (stable in ABI v1).
-- `0x60..=0x7F`: extension ISIs gated by protocol features (still part of ABI v1 when enabled).
-- `0x80..=0xFF`: host/crypto helpers and reserved slots; only numbers present in the ABI v1 allowlist are accepted.
+Plages de numérotation
+- `0x00..=0x1F` : noyau/utilitaire de VM (les assistants de débogage/de sortie sont disponibles sous `CoreHost` ; les assistants de développement restants sont uniquement des hôtes fictifs).
+- `0x20..=0x5F` : pont ISI core Iroha (stable dans ABI v1).
+- `0x60..=0x7F` : extension ISI contrôlée par les fonctionnalités du protocole (fait toujours partie d'ABI v1 lorsqu'elle est activée).
+- `0x80..=0xFF` : assistants hôte/crypto et emplacements réservés ; seuls les numéros présents dans la liste blanche ABI v1 sont acceptés.
 
-Durable helpers (ABI v1)
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) are part of the V1 ABI and included in `abi_hash` computation.
-- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may persist locally but must preserve identical syscall semantics.
+Aides durables (ABI v1)
+- Les appels système d'assistance d'état durable (0x50–0x5A : STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) font partie de l'ABI V1 et sont inclus dans le calcul `abi_hash`.
+- CoreHost connecte STATE_{GET,SET,DEL} à l'état de contrat intelligent durable soutenu par WSV ; Les hôtes de développement/test peuvent persister localement mais doivent conserver une sémantique d’appel système identique.
 
-Pointer‑ABI calling convention (smart‑contract syscalls)
-- Arguments are placed in registers `r10+` as raw `u64` values or as pointers into the INPUT region to immutable Norito TLV envelopes (e.g., `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`).
-- Scalar return values are the `u64` returned from the host. Pointer results are written by the host into `r10`.
+Convention d'appel Pointer‑ABI (appels système de contrat intelligent)
+- Les arguments sont placés dans les registres `r10+` en tant que valeurs brutes `u64` ou en tant que pointeurs dans la région INPUT vers des enveloppes TLV Norito immuables (par exemple, `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`).
+- Les valeurs de retour scalaires sont les `u64` renvoyées par l'hôte. Les résultats du pointeur sont écrits par l'hôte dans `r10`.
 
-Canonical syscall table (subset)
+Table d'appels système canonique (sous-ensemble)| Hex | Nom | Arguments (dans `r10+`) | Retours | Gaz (base + variable) | Remarques |
+|------|----------------------------|------------------------------------------------------------------------------|-----------------------|------------------------------|-------|
+| 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`, `&Name`, `&Json` | `u64=0` | `G_set_detail + bytes(val)` | Écrit un détail pour le compte |
+| 0x22 | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_mint` | Monnaies `amount` d'actif à compte |
+| 0x23 | BURN_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | Brûle `amount` du compte |
+| 0x24 | TRANSFERT_ASSET | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Virements `amount` entre comptes |
+| 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | Commencer la portée du lot de transfert FASTPQ |
+| 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | Vider le lot de transfert FASTPQ accumulé |
+| 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Appliquer un lot codé Norito dans un seul appel système |
+| 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Enregistre un nouveau NFT |
+| 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | Transfère la propriété de NFT |
+| 0x27 | NFT_SET_METADATA | `&NftId`, `&Json` | `u64=0` | `G_nft_set_metadata` | Met à jour les métadonnées NFT |
+| 0x28 | NFT_BURN_ASSET | `&NftId` | `u64=0` | `G_nft_burn_asset` | Brûle (détruit) un NFT |
+| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)` | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Les requêtes itérables s'exécutent de manière éphémère ; `QueryRequest::Continue` rejeté |
+| 0xA2 | CREATE_NFTS_FOR_ALL_USERS | – | `u64=count` | `G_create_nfts_for_all` | Auxiliaire; limité aux fonctionnalités || 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64` | `u64=prev` | `G_set_depth` | Administrateur ; limité aux fonctionnalités |
+| 0xA4 | GET_AUTHORITÉ | – (l'hôte écrit le résultat) | `&AccountId`| `G_get_auth` | L'hôte écrit le pointeur vers l'autorité actuelle dans `r10` |
+| 0xF7 | GET_MERKLE_PATH | `addr:u64`, `out_ptr:u64`, en option `root_out:u64` | `u64=len` | `G_mpath + len` | Écrit le chemin (feuille → racine) et les octets racine facultatifs |
+| 0xFA | GET_MERKLE_COMPACT | `addr:u64`, `out_ptr:u64`, en option `depth_cap:u64`, en option `root_out:u64` | `u64=depth` | `G_mpath + depth` | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
+| 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`, `out_ptr:u64`, en option `depth_cap:u64`, en option `root_out:u64` | `u64=depth` | `G_mpath + depth` | Même présentation compacte pour l'engagement du registre |
 
-| Hex  | Name                       | Arguments (in `r10+`)                                                   | Returns     | Gas (base + variable)        | Notes |
-|------|----------------------------|-------------------------------------------------------------------------|-------------|------------------------------|-------|
-| 0x1A | SET_ACCOUNT_DETAIL         | `&AccountId`, `&Name`, `&Json`                                          | `u64=0`     | `G_set_detail + bytes(val)`  | Writes a detail for the account |
-| 0x22 | MINT_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_mint`                     | Mints `amount` of asset to account |
-| 0x23 | BURN_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_burn`                     | Burns `amount` from account |
-| 0x24 | TRANSFER_ASSET             | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0`     | `G_transfer`                 | Transfers `amount` between accounts |
-| 0x29 | TRANSFER_V1_BATCH_BEGIN    | –                                                                       | `u64=0`     | `G_transfer`                 | Begin FASTPQ transfer batch scope |
-| 0x2A | TRANSFER_V1_BATCH_END      | –                                                                       | `u64=0`     | `G_transfer`                 | Flush accumulated FASTPQ transfer batch |
-| 0x2B | TRANSFER_V1_BATCH_APPLY    | `r10=&NoritoBytes(TransferAssetBatch)`                                  | `u64=0`     | `G_transfer`                 | Apply a Norito-encoded batch in a single syscall |
-| 0x25 | NFT_MINT_ASSET             | `&NftId`, `&AccountId(owner)`                                           | `u64=0`     | `G_nft_mint_asset`           | Registers a new NFT |
-| 0x26 | NFT_TRANSFER_ASSET         | `&AccountId(from)`, `&NftId`, `&AccountId(to)`                          | `u64=0`     | `G_nft_transfer_asset`       | Transfers ownership of NFT |
-| 0x27 | NFT_SET_METADATA           | `&NftId`, `&Json`                                                       | `u64=0`     | `G_nft_set_metadata`         | Updates NFT metadata |
-| 0x28 | NFT_BURN_ASSET             | `&NftId`                                                                | `u64=0`     | `G_nft_burn_asset`           | Burns (destroys) an NFT |
-| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY| `r10=&NoritoBytes(QueryRequest)`                                        | `r10=ptr (&NoritoBytes(QueryResponse))` | `G_scq + per_item*items + per_byte*bytes(resp)` | Iterable queries run ephemerally; `QueryRequest::Continue` rejected |
-| 0xA2 | CREATE_NFTS_FOR_ALL_USERS  | –                                                                       | `u64=count` | `G_create_nfts_for_all`      | Helper; feature‑gated |
-| 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | `depth:u64`                                                         | `u64=prev`  | `G_set_depth`                | Admin; feature‑gated |
-| 0xA4 | GET_AUTHORITY              | – (host writes result)                                                  | `&AccountId`| `G_get_auth`                 | Host writes pointer to current authority into `r10` |
-| 0xF7 | GET_MERKLE_PATH            | `addr:u64`, `out_ptr:u64`, optional `root_out:u64`                      | `u64=len`   | `G_mpath + len`             | Writes path (leaf→root) and optional root bytes |
-| 0xFA | GET_MERKLE_COMPACT         | `addr:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
-| 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | Same compact layout for register commitment |
+Application du gaz
+- CoreHost facture du gaz supplémentaire pour les appels système ISI en utilisant le calendrier ISI natif ; Les transferts par lots FASTPQ sont facturés par entrée.
+- Les appels système ZK_VERIFY réutilisent le programme de gaz de vérification confidentiel (base + taille de preuve).
+- SMARTCONTRACT_EXECUTE_QUERY facture la base + par article + par octet ; le tri multiplie le coût par article et les compensations non triées ajoutent une pénalité par article.
 
-Gas enforcement
-- CoreHost charges extra gas for ISI syscalls using the native ISI schedule; FASTPQ batch transfers are charged per entry.
-- ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
-- SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost and unsorted offsets add a per-item penalty.
+Remarques
+- Tous les arguments du pointeur font référence aux enveloppes TLV Norito dans la région INPUT et sont validés au premier déréférencement (`E_NORITO_INVALID` en cas d'erreur).
+- Toutes les mutations sont appliquées via l'exécuteur standard de Iroha (via `CoreHost`), et non directement par la VM.
+- Les constantes exactes des gaz (`G_*`) sont définies par le programme de gaz actif ; voir `ivm.md`.
 
-Notes
-- All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
-- All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
-- Exact gas constants (`G_*`) are defined by the active gas schedule; see `ivm.md`.
+Erreurs
+- `E_SCALL_UNKNOWN` : numéro d'appel système non reconnu pour le `abi_version` actif.
+- Les erreurs de validation d'entrée se propagent sous forme d'interruptions de VM (par exemple, `E_NORITO_INVALID` pour les TLV mal formés).
 
-Errors
-- `E_SCALL_UNKNOWN`: syscall number not recognized for the active `abi_version`.
-- Input validation errors propagate as VM traps (e.g., `E_NORITO_INVALID` for malformed TLVs).
+Références croisées
+- Architecture et sémantique VM : `ivm.md`
+- Langue et mappage intégré : `docs/source/kotodama_grammar.md`
 
-Cross‑references
-- Architecture and VM semantics: `ivm.md`
-- Language and builtin mapping: `docs/source/kotodama_grammar.md`
+Note de génération
+- Une liste complète des constantes d'appel système peut être générée à partir des sources avec :
+  - `make docs-syscalls` → écrit `docs/source/ivm_syscalls_generated.md`
+  - `make check-docs` → vérifie que la table générée est à jour (utile en CI)
+- Le sous-ensemble ci-dessus reste une table organisée et stable pour les appels système liés aux contrats.
 
-Generation note
-- A complete list of syscall constants can be generated from source with:
-  - `make docs-syscalls` → writes `docs/source/ivm_syscalls_generated.md`
-  - `make check-docs` → verifies the generated table is up to date (useful in CI)
-- The subset above remains a curated, stable table for contract-facing syscalls.
+## Exemples de TLV d'administrateur/rôle (hôte simulé)
 
-## Admin/Role TLV Examples (Mock Host)
-
-This section documents the TLV shapes and minimal JSON payloads accepted by the mock WSV host for admin‑style syscalls used in tests. All pointer arguments follow the pointer‑ABI (Norito TLV envelopes placed in INPUT). Production hosts may use richer schemas; these examples aim to clarify types and basic shapes.
-
-- REGISTER_PEER / UNREGISTER_PEER
-  - Args: `r10=&Json`
-  - Example JSON: `{ "peer": "peer-id-or-info" }`
-  - CoreHost note: `REGISTER_PEER` expects a `RegisterPeerWithPop` JSON object with `peer` + `pop` bytes (optional `activation_at`, `expiry_at`, `hsm`); `UNREGISTER_PEER` accepts a peer-id string or `{ "peer": "..." }`.
+Cette section documente les formes TLV et les charges utiles JSON minimales acceptées par l'hôte WSV fictif pour les appels système de style administrateur utilisés dans les tests. Tous les arguments du pointeur suivent le pointeur‑ABI (enveloppes TLV Norito placées dans INPUT). Les hôtes de production peuvent utiliser des schémas plus riches ; ces exemples visent à clarifier les types et les formes de base.- REGISTER_PEER / UNREGISTER_PEER
+  - Args : `r10=&Json`
+  - Exemple JSON : `{ "peer": "peer-id-or-info" }`
+  - Remarque CoreHost : `REGISTER_PEER` attend un objet JSON `RegisterPeerWithPop` avec des octets `peer` + `pop` (`activation_at`, `expiry_at`, `hsm` en option) ; `UNREGISTER_PEER` accepte une chaîne d'identification d'homologue ou `{ "peer": "..." }`.
 
 - CREATE_TRIGGER / REMOVE_TRIGGER / SET_TRIGGER_ENABLED
-  - CREATE_TRIGGER:
-    - Args: `r10=&Json`
-    - Minimal JSON: `{ "name": "t1" }` (additional fields ignored by the mock)
-  - REMOVE_TRIGGER:
-    - Args: `r10=&Name` (trigger name)
-  - SET_TRIGGER_ENABLED:
-    - Args: `r10=&Name`, `r11=enabled:u64` (0 = disabled, non‑zero = enabled)
-  - CoreHost note: `CREATE_TRIGGER` expects a full trigger spec (base64 Norito `Trigger` string or
-    `{ "id": "<trigger_id>", "action": ... }` with `action` as a base64 Norito `Action` string or
-    a JSON object), and `SET_TRIGGER_ENABLED` toggles the trigger metadata key `__enabled` (missing
-    defaults to enabled).
+  -CRÉER_TRIGGER :
+    - Args : `r10=&Json`
+    - JSON minimal : `{ "name": "t1" }` (champs supplémentaires ignorés par le mock)
+  - REMOVE_TRIGGER :
+    - Args : `r10=&Name` (nom du déclencheur)
+  -SET_TRIGGER_ENABLED :
+    - Args : `r10=&Name`, `r11=enabled:u64` (0 = désactivé, différent de zéro = activé)
+  - Remarque CoreHost : `CREATE_TRIGGER` attend une spécification de déclenchement complète (chaîne base64 Norito `Trigger` ou
+    `{ "id": "<trigger_id>", "action": ... }` avec `action` comme chaîne base64 Norito `Action` ou
+    un objet JSON), et `SET_TRIGGER_ENABLED` bascule la clé de métadonnées du déclencheur `__enabled` (manquante
+    la valeur par défaut est activée).
 
-- Roles: CREATE_ROLE / DELETE_ROLE / GRANT_ROLE / REVOKE_ROLE
-  - CREATE_ROLE:
-    - Args: `r10=&Name` (role name), `r11=&Json` (permissions set)
-    - JSON accepts either key `"perms"` or `"permissions"`, each a string array of permission names.
-    - Examples:
-      - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
-    - Supported permission name prefixes in the mock:
-      - `register_domain`, `register_account`, `register_asset_definition`
-      - `read_assets:<account_id>`
-      - `mint_asset:<asset_definition_id>`
-      - `burn_asset:<asset_definition_id>`
-      - `transfer_asset:<asset_definition_id>`
-  - DELETE_ROLE:
-    - Args: `r10=&Name`
-    - Fails if any account is still assigned this role.
-  - GRANT_ROLE / REVOKE_ROLE:
-    - Args: `r10=&AccountId` (subject), `r11=&Name` (role name)
-  - CoreHost note: permission JSON may be a full `Permission` object (`{ "name": "...", "payload": ... }`) or a string (payload defaults to `null`); `GRANT_PERMISSION`/`REVOKE_PERMISSION` accept `&Name` or `&Json(Permission)`.
+- Rôles : CREATE_ROLE / DELETE_ROLE / GRANT_ROLE / REVOKE_ROLE
+  -CRÉER_ROLE :
+    - Args : `r10=&Name` (nom du rôle), `r11=&Json` (ensemble d'autorisations)
+    - JSON accepte la clé `"perms"` ou `"permissions"`, chacune étant un tableau de chaînes de noms d'autorisation.
+    - Exemples :
+      -`{ "perms": [ "mint_asset:rose#wonder" ] }`
+      -`{ "permissions": [ "read_assets:ih58...", "transfer_asset:rose#wonder" ] }`
+    - Préfixes de nom d'autorisation pris en charge dans la simulation :
+      -`register_domain`, `register_account`, `register_asset_definition`
+      -`read_assets:<account_id>`
+      -`mint_asset:<asset_definition_id>`
+      -`burn_asset:<asset_definition_id>`
+      -`transfer_asset:<asset_definition_id>`
+  - DELETE_ROLE :
+    - Args : `r10=&Name`
+    - Échoue si un compte se voit toujours attribuer ce rôle.
+  - GRANT_ROLE / REVOKE_ROLE :
+    - Args : `r10=&AccountId` (sujet), `r11=&Name` (nom du rôle)
+  - Remarque CoreHost : l'autorisation JSON peut être un objet `Permission` complet (`{ "name": "...", "payload": ... }`) ou une chaîne (la charge utile par défaut est `null`) ; `GRANT_PERMISSION`/`REVOKE_PERMISSION` accepte `&Name` ou `&Json(Permission)`.
 
-- Unregister ops (domain/account/asset): invariants (mock)
-  - UNREGISTER_DOMAIN (`r10=&DomainId`) fails if accounts or asset definitions exist in the domain.
-  - UNREGISTER_ACCOUNT (`r10=&AccountId`) fails if the account has non‑zero balances or owns NFTs.
-  - UNREGISTER_ASSET (`r10=&AssetDefinitionId`) fails if any balances exist for the asset.
+- Opérations de désenregistrement (domaine/compte/actif) : invariants (simulé)
+  - UNREGISTER_DOMAIN (`r10=&DomainId`) échoue si des comptes ou des définitions d'actifs existent dans le domaine.
+  - UNREGISTER_ACCOUNT (`r10=&AccountId`) échoue si le compte a des soldes non nuls ou possède des NFT.
+  - UNREGISTER_ASSET (`r10=&AssetDefinitionId`) échoue s'il existe des soldes pour l'actif.
 
-Notes
-- These examples reflect the mock WSV host used in tests; real node hosts may expose richer admin schemas or require additional validation. The pointer‑ABI rules still apply: TLVs must be in INPUT, version=1, type IDs must match, and payload hashes must validate.
+Remarques
+- Ces exemples reflètent l'hôte WSV fictif utilisé dans les tests ; les hôtes de nœuds réels peuvent exposer des schémas d'administration plus riches ou nécessiter une validation supplémentaire. Les règles du pointeur‑ABI s'appliquent toujours : les TLV doivent être dans INPUT, version=1, les ID de type doivent correspondre et les hachages de charge utile doivent être validés.

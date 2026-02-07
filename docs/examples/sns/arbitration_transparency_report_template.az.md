@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 305a3f3b253a013825d4dd798d2282e111913ec777fe0fbf5b02a92c7172b92a
 source_last_modified: "2025-12-29T18:16:35.076964+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
-# SNS Arbitration Transparency Report — <Month YYYY>
+# SNS Arbitraj Şəffaflıq Hesabatı — <Ay YYYY>
 
-- **Suffix:** `<.sora / .nexus / .dao>`
-- **Reporting window:** `<ISO start>` → `<ISO end>`
-- **Prepared by:** `<Council liaison>`
-- **Source artefacts:** `cases.ndjson` SHA256 `<hash>`, dashboard export `<filename>.json`
+- **Şəkilçi:** `<.sora / .nexus / .dao>`
+- **Hesabat pəncərəsi:** `<ISO start>` → `<ISO end>`
+- **Hazırlayan:** `<Council liaison>`
+- **Mənbə artefaktları:** `cases.ndjson` SHA256 `<hash>`, idarə paneli ixracı `<filename>.json`
 
-## 1. Executive Summary
+## 1. Xülasə
 
-- Total new cases: `<count>`
-- Cases closed this period: `<count>`
-- SLA compliance: `<ack %>` acknowledge / `<resolution %>` decision
-- Guardian overrides issued: `<count>`
-- Transfers/refunds executed: `<count>`
+- Ümumi yeni hallar: `<count>`
+- Bu müddət ərzində bağlanan işlər: `<count>`
+- SLA uyğunluğu: `<ack %>` təsdiq / `<resolution %>` qərarı
+- Qəyyumun ləğvi buraxıldı: `<count>`
+- Köçürmələr/geri qaytarılmalar yerinə yetirildi: `<count>`
 
 ## 2. Case Mix
 
-| Dispute type | New cases | Closed cases | Median resolution (days) |
-|--------------|-----------|--------------|--------------------------|
-| Ownership | 0 | 0 | 0 |
-| Policy violation | 0 | 0 | 0 |
-| Abuse | 0 | 0 | 0 |
-| Billing | 0 | 0 | 0 |
-| Other | 0 | 0 | 0 |
+| Mübahisə növü | Yeni hallar | Qapalı işlər | Median ayırdetmə (günlər) |
+|-------------|-----------|--------------|--------------------------|
+| Mülkiyyət | 0 | 0 | 0 |
+| Siyasət pozuntusu | 0 | 0 | 0 |
+| Sui-istifadə | 0 | 0 | 0 |
+| Faturalandırma | 0 | 0 | 0 |
+| Digər | 0 | 0 | 0 |
 
-## 3. SLA Performance
+## 3. SLA Performansı
 
-| Priority | Acknowledge SLA | Achieved | Resolution SLA | Achieved | Breaches |
+| Prioritet | SLA-nı qəbul edin | Əldə edildi | Qətnamə SLA | Əldə edildi | pozuntular |
 |----------|-----------------|----------|----------------|----------|----------|
-| Urgent | ≤ 2 h | 0% | ≤ 72 h | 0% | 0 |
-| High | ≤ 8 h | 0% | ≤ 10 d | 0% | 0 |
-| Standard | ≤ 24 h | 0% | ≤ 21 d | 0% | 0 |
-| Info | ≤ 3 d | 0% | ≤ 30 d | 0% | 0 |
+| Təcili | ≤ 2sa | 0% | ≤ 72 saat | 0% | 0 |
+| Yüksək | ≤ 8 saat | 0% | ≤ 10g | 0% | 0 |
+| Standart | ≤ 24 saat | 0% | ≤ 21g | 0% | 0 |
+| Məlumat | ≤ 3d | 0% | ≤ 30d | 0% | 0 |
 
-Describe root causes for any breaches and link to remediation tickets.
+İstənilən pozuntuların əsas səbəblərini təsvir edin və təmir biletlərinə keçid edin.
 
-## 4. Case Register
+## 4. İşin Qeydiyyatı
 
-| Case ID | Selector | Priority | Status | Outcome | Notes |
+| Case ID | Seçici | Prioritet | Status | Nəticə | Qeydlər |
 |---------|----------|----------|--------|---------|-------|
-| SNS-YYYY-NNNNN | `label.suffix` | Standard | Closed | Upheld | `<summary>` |
+| SNS-YYYY-NNNNN | `label.suffix` | Standart | Bağlıdır | Saxlanıldı | `<summary>` |
 
-Provide one-line notes referencing anonymised facts or public vote links. Seal
-where required and mention redactions applied.
+Anonim faktlara və ya ictimai səsvermə keçidlərinə istinad edən bir sətirlik qeydlər təqdim edin. Möhür
+tələb olunduqda və redaksiyanın tətbiq edildiyini qeyd edin.
 
-## 5. Actions & Remedies
+## 5. Fəaliyyətlər və Müalicələr
 
-- **Freezes / releases:** `<counts + case ids>`
-- **Transfers:** `<counts + assets moved>`
-- **Billing adjustments:** `<credits/debits>`
-- **Policy follow-ups:** `<tickets or RFCs opened>`
+- **Dondurur / buraxır:** `<counts + case ids>`
+- **Köçürmələr:** `<counts + assets moved>`
+- **Faktura düzəlişləri:** `<credits/debits>`
+- **Siyasət təqibləri:** `<tickets or RFCs opened>`
 
-## 6. Appeals & Guardian Overrides
+## 6. Müraciətlər və Qəyyumun ləğv edilməsi
 
-Summarise any appeals escalated to the guardian board, including timestamps and
-decisions (approve/deny). Link to `sns governance appeal` records or council
-votes.
+Qəyyumlar şurasına göndərilən müraciətləri, o cümlədən vaxt nişanları və
+qərarlar (təsdiq / rədd). `sns governance appeal` qeydlərinə və ya şurasına keçid
+səslər.
 
-## 7. Outstanding Items
+## 7. Görkəmli maddələr
 
-- `<Action item>` — Owner `<name>`, ETA `<date>`
-- `<Action item>` — Owner `<name>`, ETA `<date>`
+- `<Action item>` — Sahib `<name>`, ETA `<date>`
+- `<Action item>` — Sahib `<name>`, ETA `<date>`
 
-Attach NDJSON, Grafana exports, and CLI logs referenced in this report.
+Bu hesabatda istinad edilən NDJSON, Grafana ixracları və CLI jurnallarını əlavə edin.

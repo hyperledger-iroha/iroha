@@ -7,43 +7,44 @@ generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2025-12-29T18:16:35.945760+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+//! SM2/SM3/SM4 қосу үшін SM бағдарламасының тәуекел тізілімі.
 
-# SM Program Risk Register
+# SM бағдарламасының тәуекелдер тізілімі
 
-Last updated: 2025-03-12.
+Соңғы жаңартылған күні: 12.03.2025 ж.
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+Бұл тізілім `sm_program.md` ішіндегі жиынтықты кеңейтіп, әрбір тәуекелді
+иелік, бақылау триггерлері және ағымдағы жұмсарту күйі. Crypto WG
+және Core Platform жетекшілері апта сайынғы SM каденциясында осы тізілімді қарап шығады; өзгерістер
+мұнда да, жалпыға ортақ жол картасында да көрініс тапқан.
 
-## Risk Summary
+## Тәуекел туралы қорытынды
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
+| ID | Тәуекел | Санат | Ықтималдық | Әсері | Ауырлығы | Иесі | Жеңілдету | Күй | Триггерлер |
 |----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+| R1 | RustCrypto SM жәшіктеріне арналған сыртқы аудит валидатор GA | қол қойғанға дейін орындалмаған Жеткізу тізбегі | Орташа | Жоғары | Жоғары | Crypto WG | Contract Trail of Bits/NCC Group, есеп қабылданғанға дейін тек тексеру күйін сақтаңыз | Жеңілдету орындалуда | 2025-04-15 дейін SOW аудитіне қол қойылмаған немесе аудиторлық есеп 2025-06-01 кейінге қалдырылған |
+| R2 | SDK бойынша детерминистік емес регрессиялар | Іске асыру | Орташа | Жоғары | Жоғары | SDK бағдарламасының жетекшілері | Арматураларды SDK CI бойынша бөлісіңіз, канондық r∥s кодтауын енгізіңіз, SDK арасындағы бұрмалау сынақтарын қосыңыз | Мониторинг | SM арматурасы жоқ CI немесе SDK шығарылымында фикстурдың дрейфі анықталды |
+| R3 | Ішкі жүйелердегі ISA-арнайы қателер (NEON/SIMD) | Өнімділік | Төмен | Орташа | Орташа | Өнімділік WG | Мүмкіндік жалауларының артындағы қақпаның ішкі элементтері, ARM жүйесінде CI қамтуын талап етеді, скалярлық резервті сақтайды | Жеңілдету орындалуда | NEON орындықтары сәтсіз аяқталды немесе SM perf матрицасында ашылған аппараттық регрессия |
+| R4 | Сәйкестік түсініксіздігі SM қабылдауды кешіктіреді | Басқару | Орташа | Орташа | Орташа | Құжаттар және құқықтық байланыс | Сәйкестік туралы қысқаша ақпаратты, оператордың тексеру парағын, GA алдында заң кеңесшісімен байланысын жариялау | Жеңілдету орындалуда | 01.05.2025ж. кейін заңдық тексеру аяқталмаған немесе тексеру тізімінің жаңартулары жоқ |
+| R5 | Провайдер жаңартулары бар FFI серверлік дрейф | интеграция | Орташа | Орташа | Орташа | Platform Ops | Провайдер нұсқаларын бекітіңіз, паритеттік сынақтарды қосыңыз, OpenSSL/Tongsuo алдын ала қарауға қосылу мүмкіндігін сақтаңыз Мониторинг | Бума жаңартуы пилоттық аумақтан тыс қосылатын теңдіксіз немесе алдын ала қараусыз біріктірілді |
 
-## Review Cadence
+## Қарап шығу жылдамдығы
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
-  artefacts.
+- Апталық Crypto WG синхрондау (күн тәртібіндегі тұрақты мәселе).
+- Сәйкестік ұстанымын растау үшін Platform Ops және Docs-пен ай сайынғы бірлескен шолу.
+- Шығарылым алдындағы бақылау нүктесі: тәуекел тізілімін тоқтату және GA-мен жинақталған аттестаттау
+  артефактілер.
 
-## Sign-off
+## Шығу
 
-| Role | Representative | Date | Notes |
+| Рөл | Өкіл | Күні | Ескертпелер |
 |------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+| Crypto WG жетекші | (файлдағы қолтаңба) | 12.03.2025 | Жариялану үшін мақұлданды және WG артта қалуымен бөлісілді. |
+| Негізгі платформа жетекші | (файлдағы қолтаңба) | 12.03.2025 | Қабылданған жұмсарту және бақылау каденциясы. |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+Тарихи мақұлдаулар мен жиналыс хаттамаларын `docs/source/crypto/sm_program.md` қараңыз
+(`Communication Plan`) және Crypto WG арқылы байланыстырылған SM күн тәртібі мұрағаты
+жұмыс кеңістігі.

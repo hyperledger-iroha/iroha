@@ -4,24 +4,26 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-cli.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-cli
-title: كتيب وصفات CLI لـ SoraFS
-sidebar_label: وصفات CLI
+id: desenvolvedor-cli
+título: كتيب وصفات CLI para SoraFS
+sidebar_label: CLI
 description: شرح موجّه للمهام لسطح `sorafs_cli` الموحّد.
 ---
 
 :::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/developer/cli.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
+Verifique o valor `docs/source/sorafs/developer/cli.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
 :::
 
-سطح `sorafs_cli` الموحّد (الموفر من crate `sorafs_car` مع تمكين ميزة `cli`) يعرض كل خطوة مطلوبة لإعداد آرتيفاكتات SoraFS. استخدم هذا الكتيب للانتقال مباشرةً إلى مسارات العمل الشائعة؛ واقرنه بخط أنابيب المانيفست ودلائل تشغيل المُنسِّق للحصول على السياق التشغيلي.
+A caixa `sorafs_cli` (a caixa `sorafs_car` é a caixa `cli`) é uma caixa de papelão Verifique o SoraFS. Faça o download do seu cartão de crédito para obter mais informações واقرنه بخط أنابيب المانيفست ودلائل تشغيل المُنسِّق للحصول على السياق التشغيلي.
 
 ## تغليف الحمولات
 
-استخدم `car pack` لإنتاج أرشيفات CAR وخطط chunks حتمية. يختار الأمر تلقائيًا chunker SF-1 ما لم يتم توفير مقبض.
+Use `car pack` para quebrar o carro e pedaços de carro. Você pode usar o chunker SF-1 para obter mais informações.
 
 ```bash
 sorafs_cli car pack \
@@ -31,9 +33,9 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- مقبض chunker الافتراضي: `sorafs.sf1@1.0.0`.
+- Código do chunker: `sorafs.sf1@1.0.0`.
 - تُستعرض مُدخلات الدلائل بترتيب معجمي حتى تبقى checksums ثابتة عبر المنصات.
-- يتضمن ملخص JSON digests الحمولة وبيانات وصفية لكل chunk وCID الجذري المعترف به من السجل والمُنسِّق.
+- يتضمن ملخص JSON digests الحمولة وبيانات وصفية لكل chunk وCID الجذري المعترف به من السجل والمُنسِّق.
 
 ## بناء المانيفستات
 
@@ -47,9 +49,9 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- تربط خيارات `--pin-*` مباشرةً بحقوقول `PinPolicy` ضمن `sorafs_manifest::ManifestBuilder`.
-- وفّر `--chunk-plan` عندما تريد من CLI إعادة احتساب digest SHA3 للـ chunk قبل الإرسال؛ وإلا فإنه يعيد استخدام digest المضمّن في الملخص.
-- تعكس مخرجات JSON حمولة Norito لتسهيل عمل diffs خلال المراجعات.
+- Você pode usar o `--pin-*` para substituir o `PinPolicy` pelo `sorafs_manifest::ManifestBuilder`.
+- وفّر `--chunk-plan` عندما تريد من CLI إعادة احتساب digest SHA3 للـ chunk قبل الإرسال؛ Não há nenhum resumo do resumo do site.
+- O JSON do arquivo Norito é definido como diffs para os parâmetros.
 
 ## توقيع المانيفستات دون مفاتيح طويلة الأمد
 
@@ -61,9 +63,9 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- يقبل رموزًا مضمنة، ومتغيرات بيئة، أو مصادر قائمة على ملفات.
-- يضيف بيانات منشأ (`token_source`، `token_hash_hex`، digest الـ chunk) دون حفظ JWT الخام ما لم يكن `--include-token=true`.
-- يعمل جيدًا في CI: ادمجه مع OIDC في GitHub Actions عبر ضبط `--identity-token-provider=github-actions`.
+- يقبل رموزًا مضمنة, ومتغيرات بيئة, أو مصادر قائمة على ملفات.
+- O arquivo de resumo (`token_source`, `token_hash_hex`, resumo do pedaço) é o JWT que está no `--include-token=true`.
+- Use o CI: Use OIDC no GitHub Actions para usar `--identity-token-provider=github-actions`.
 
 ## إرسال المانيفستات إلى Torii
 
@@ -93,7 +95,7 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- يعيد بناء شجرة PoR ويقارن digests الحمولة بملخص المانيفست.
+- يعيد بناء شجرة PoR ويقارن digere الحمولة بملخص المانيفست.
 - يلتقط العدادات والمعرفات المطلوبة عند إرسال أدلة النسخ المتماثل إلى الحوكمة.
 
 ## بث تليمترية الأدلة
@@ -110,13 +112,11 @@ sorafs_cli proof stream \
 ```
 
 - يُصدر عناصر NDJSON لكل دليل يتم بثه (يمكن تعطيل الإعادة عبر `--emit-events=false`).
-- يجمّع عدادات النجاح/الفشل وهيستوغرامات الكمون والإخفاقات المأخوذة عينات ضمن ملخص JSON بحيث تستطيع لوحات المتابعة رسم النتائج دون تقشير السجلات.
-- ينهي بخروج غير صفري عندما تُبلغ البوابة عن إخفاقات أو عندما ترفض عملية التحقق المحلية من PoR (عبر `--por-root-hex`) الأدلة. اضبط العتبات عبر `--max-failures` و`--max-verification-failures` لتجارب التدريب.
-- يدعم PoR حاليًا؛ يعيد PDP وPoTR استخدام الغلاف نفسه عند وصول SF-13/SF-14.
-- يكتب `--governance-evidence-dir` الملخص المُنسّق والبيانات الوصفية (الطابع الزمني، إصدار CLI، عنوان URL للبوابة، digest المانيفست) ونسخة من المانيفست في الدليل المحدد بحيث يمكن لحزم الحوكمة أرشفة دليل تدفق الأدلة دون إعادة تشغيل التنفيذ.
+- يجمّع عدادات النجاح/الفشل وهيستوغرامات الكمون والإخفاقات المأخوذة عينات ضمن ملخص JSON بحيث Certifique-se de que o produto esteja funcionando corretamente.
+- ينهي بخروج غير صفري عندما تُبلغ البوابة, عن إخفاقات, أو عندما ترفض عملية التحقق المحلية Em PoR (عبر `--por-root-hex`). Verifique se `--max-failures` e `--max-verification-failures` são usados.
+- يدعم PoR حاليًا؛ O PDP e o PoTR são responsáveis ​​​​pelo teste de segurança e pelo SF-13/SF-14.
+- يكتب `--governance-evidence-dir` الملخص المُنسّق والبيانات الوصفية (الطابع الزمني, إصدار CLI, عنوان URL للبوابة, digest المانيفست). Eu não sei o que fazer.
 
-## مراجع إضافية
-
-- `docs/source/sorafs_cli.md` — توثيق شامل للأعلام.
+## مراجع إضافية- `docs/source/sorafs_cli.md` — É um erro de configuração.
 - `docs/source/sorafs_proof_streaming.md` — مخطط تليمترية الأدلة وقالب لوحة Grafana.
 - `docs/source/sorafs/manifest_pipeline.md` — تعمّق في chunking وتركيب المانيفست ومعالجة CAR.

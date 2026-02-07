@@ -7,69 +7,68 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7548d481edd33d7e325d22559a5f53f261fa302ffd8710a1626acc4a5705e428
 source_last_modified: "2025-12-29T18:16:35.915400+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha VM + Kotodama Docs Index
+# Iroha ཝི་ཨེམ་ + Kotodama ཡིག་ཆའི་ཟུར་ཐོ།
 
-This index links the main design and reference documents for IVM, Kotodama, and the IVM‑first pipeline. 日本語訳は [`README.ja.md`](./README.ja.md) を参照してください。
+ཟུར་ཐོ་འདི་གིས་ བཟོ་བཀོད་དང་ གཞི་བསྟུན་ཡིག་ཆ་ངོ་མ་ཚུ་ IVM, Kotodama, དང་ IVM གི་དོན་ལུ་ འབྲེལ་མཐུད་འབདཝ་ཨིན། 日本語訳は [`README.ja.md`](./README.ja.md)を参照でくだだだいい。
 
-- IVM architecture and language mapping: `../../ivm.md`
-- IVM syscall ABI: `ivm_syscalls.md`
-- Generated syscall constants: `ivm_syscalls_generated.md` (run `make docs-syscalls` to refresh)
-- IVM bytecode header: `ivm_header.md`
-- Kotodama grammar and semantics: `kotodama_grammar.md`
-- Kotodama examples and syscall mappings: `kotodama_examples.md`
-- Transaction pipeline (IVM‑first): `../../new_pipeline.md`
-- Torii Contracts API (manifests): `torii_contracts_api.md`
-- Universal account/UAID operations guide: `universal_accounts_guide.md`
-- JSON query envelope (CLI / tooling): `query_json.md`
-- Norito streaming module reference: `norito_streaming.md`
-- Runtime ABI samples: `samples/runtime_abi_active.md`, `samples/runtime_abi_hash.md`, `samples/find_active_abi_versions.md`
-- ZK App API (attachments, prover, vote tally): `zk_app_api.md`
-- Torii ZK attachments/prover runbook: `zk/prover_runbook.md`
-- Torii ZK App API operator guide (attachments/prover; crate doc): `../../crates/iroha_torii/docs/zk_app_api.md`
-- VK/proof lifecycle (registry, verification, telemetry): `zk/lifecycle.md`
-- Torii Operator Aids (endpoints for visibility): `references/operator_aids.md`
-- Nexus default-lane quickstart: `quickstart/default_lane.md`
-- MOCHI supervisor quickstart & architecture: `mochi/index.md`
-- JavaScript SDK guides (quickstart, configuration, publishing): `sdk/js/index.md`
-- Swift SDK parity/CI dashboards: `references/ios_metrics.md`
-- Governance: `../../gov.md`
-- Domain endorsements (committees, policies, validation): `domain_endorsements.md`
-- JDG attestations (offline validation tooling): `jdg_attestations.md`
-- Clarification coordination prompts: `coordination_llm_prompts.md`
-- Roadmap: `../../roadmap.md`
-- Docker builder image usage: `docker_build.md`
+- IVM བཟོ་བཀོད་དང་སྐད་ཡིག་སབ་ཁྲ་བཟོ་ནི།: `../../ivm.md`
+- IVM སིསི་ཀཱལ་ཨེ་བི་ཨའི་: `ivm_syscalls.md`
+- སིསི་ཀཱལ་རྟག་བརྟན་ཚུ་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+- IVM བཱའིཊི་ཀོཌི་མགོ་ཡིག་: `ivm_header.md`
+- Kotodama ཡིག་གཟུགས་དང་ཡིག་བརྡ་: `kotodama_grammar.md`
+- Kotodama དཔེ་དང་ སི་ཀཱལ་སབ་ཁྲ་ཚུ་: `kotodama_examples.md`
+- བརྒྱུད་འཕྲིན་གྱི་མདོང་ལམ་ (IVM‑དང་པ་): `../../new_pipeline.md`
+- Torii ཁག་འབགཔ་ཨེ་པི་ཨའི་ (མཉེན་ཚད།): `torii_contracts_api.md`
+- ཡོངས་ཁྱབ་རྩིས་ཁྲ་/ཡུ་ཨེ་ཨའི་ཌི་བཀོལ་སྤྱོད་ལམ་སྟོན་: `universal_accounts_guide.md`
+- JSON འདྲི་དཔྱད་ཡིག་ཤུབས་ (CLI / ལག་ཆས་): `query_json.md`
+- Norito རྒྱུན་སྤེལ་ཚད་གཞི་གཞི་བསྟུན་: `norito_streaming.md`
+- རན་དུས་ཨེ་བི་ཨའི་དཔེ་ཚད་: `samples/runtime_abi_active.md`, `samples/runtime_abi_hash.md`, `samples/find_active_abi_versions.md`
+- ZK App API (མཉམ་མཐུན། བདེན་པ། ཚོགས་རྒྱན་བཙུགས་ནི།): `zk_app_api.md`
+- Torii ZK མཉམ་སྦྲགས་/དཔེ་རིས་བང་རྒྱུག་དེབ་: `zk/prover_runbook.md`
+- Torii ZK App API བཀོལ་སྤྱོད་ལམ་སྟོན་ (མཉམ་སྦྲགས་/དཔེ་གཏམ་ ཀེརེ་ཊི་ཌོག): `../../crates/iroha_torii/docs/zk_app_api.md`
+- VK/proof ཚེ་སྲོག་འཁོར་རིམ་ (ཐོ་བཀོད་བདེན་དཔང་, བརྡ་ཆད་): `zk/lifecycle.md`
+- Torii བཀོལ་སྤྱོད་རོགས་སྐྱོར་ (མཐོང་གསལ་གྱི་དོན་ལུ་མཇུག་བསྡུ།): `references/operator_aids.md`
+- Nexus སྔོན་སྒྲིག་-ལམ་མགྱོགས་འགོ་བཙུགས་: `quickstart/default_lane.md`
+- MOCHI ལྟ་རྟོག་པ་མགྱོགས་མྱུར་དང་བཟོ་བཀོད།: `mochi/index.md`
+- ཇ་བ་ཨིསི་ཀིརིཔཊི་ཨེསི་ཌི་ཀེ་ལམ་སྟོན་ (མགྱོགས་དྲགས་སྦེ་ རིམ་སྒྲིག་, དཔར་བསྐྲུན་): `sdk/js/index.md`
+- སུའིཕཊ་ཨེསི་ཌི་ཀེ་ ཆ་སྙོམས་/སི་ཨའི་ བརྡ་བཀོད་ཚུ་: `references/ios_metrics.md`
+- གཞུང་སྐྱོང་།: `../../gov.md`
+- མངའ་ཁོངས་རྒྱབ་སྐྱོར་ (བཀག་དམ་དང་སྲིད་བྱུས་ བདེན་དཔྱད།): `domain_endorsements.md`
+- ཇེ་ཌི་ཇི་བདེན་དཔང་ (ཨོཕ་ལའིན་བདེན་དཔྱད་ལག་ཆས་བཟོ་ནི): `jdg_attestations.md`
+- གསལ་བཤད།: `coordination_llm_prompts.md`
+- ལམ།: `../../roadmap.md`
+- Docker བཟོ་བསྐྲུན་པ་གཟུགས་བརྙན་ལག་ལེན་: `docker_build.md`
 
-Usage tips
-- Build and run examples in `examples/` using external tools (`koto_compile`, `ivm_run`):
-  - `make examples-run` (and `make examples-inspect` if `ivm_tool` is available)
-- Optional integration tests (ignored by default) for examples and header checks live in `integration_tests/tests/`.
+ལག་ལེན་མཐའ།
+- ཕྱིའི་ལག་ཆས་ཚུ་ལག་ལེན་འཐབ་སྟེ་ Norito ནང་དཔེ་ཚུ་བཟོ་བསྐྲུན་དང་གཡོག་བཀོལ། (`koto_compile`, `ivm_run`):
+  - `make examples-run` (དང་ `make examples-inspect` གལ་ཏེ་ `ivm_tool` ཡོད་ན།
+- དཔེར་ན་ དང་ མགོ་ཡིག་ཞིབ་དཔྱད་ཚུ་ `integration_tests/tests/` ནང་ གདམ་ཁའི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་མཉམ་བསྡོམས་བརྟག་དཔྱད་ (སྔོན་སྒྲིག་གིས་སྣང་མེད་) ཨིན།པའིཔ་ལའིན་རིམ་སྒྲིག་།
+- རན་དུས་ཚོད་སྤྱོད་ལམ་ཆ་མཉམ་ `iroha_config` ཡིག་སྣོད་ཚུ་བརྒྱུད་དེ་རིམ་སྒྲིག་འབད་ཡོདཔ་ཨིན། མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་ བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་བཏུབ།
+- ཚོར་སྤྱོད་ཅན་གྱི་སྔོན་སྒྲིག་ཚུ་བྱིན་ཡོདཔ་ཨིན། བཀྲམ་སྤེལ་མང་ཤོས་ཅིག་ལུ་ བསྒྱུར་བཅོས་དགོཔ་མེདཔ་ཨིན།
+- `[pipeline]` གི་འོག་ལུ་འབྲེལ་བའི་ལྡེ་མིག་ཚུ།
+  - `dynamic_prepass`: ལྕོགས་ཅན་ IVM འཛུལ་སྤྱོད་ཆ་ཚན་ཚུ་ (སྔོན་སྒྲིག་: བདེན་པ) འབད་ནིའི་དོན་ལུ་ གྲ་སྒྲིག་རྐྱངམ་ཅིག་ལྷག་དགོ།
+  - `access_set_cache_enabled`: འདྲ་མཛོད་ལས་ཐོན་པའི་འཛུལ་སྤྱོད་ཆ་ཚན་ཚུ་ `(code_hash, entrypoint)` རེ་ལུ་; རྐྱེན་སེལ་གྱི་བརྡ་སྟོན་ཚུ་ལུ་ ལྕོགས་ཅན་བཟོ་ (སྔོན་སྒྲིག་: བདེན་པ)།
+  - `parallel_overlay`: མཉམ་དུ་བསྐྲུན་པའི་ བཀབ་བསྐྲུན་འབད་ནི། ཁས་བླངས་ལྷག་ལུས་ (སྔོན་སྒྲིག་: བདེན་པ)།
+  - `gpu_key_bucket`: གཏན་འཇགས་རེ་ཌིགསི་ཅིག་ལག་ལེན་འཐབ་སྟེ་ དུས་ཚོད་བཀོད་མི་གྲ་སྒྲིག་དོན་ལུ་ གདམ་ཁའི་ལྡེ་མིག་བཱ་ཀེཊི་འདི་ `(key, tx_idx, rw_flag)`; determistic སི་པི་ཡུ་ ཕོལཀ་བེག་ ཨ་རྟག་ར་ ཤུགས་ལྡན་ཨིན་ (སྔོན་སྒྲིག་: རྫུན་མ་)།
+  - `cache_size`: ཡོངས་ཁྱབ་ IVM སྔོན་འགྲོའི་ཌི་ཀོཌི་འདྲ་མཛོད་ (ཌི་ཀོཌི་འབད་ཡོད་པའི་རྒྱུན་ལམ་ཚུ་བཞག་ཡོདཔ་ཨིན།) སྔོན་སྒྲིག་: 128. ཡར་སེང་འབད་མི་འདི་གིས་ བསྐྱར་ལོག་འབད་མི་ཚུ་གི་དོན་ལུ་ ཌི་ཀོཌ་དུས་ཚོད་མར་ཕབ་འབད་ཚུགས།
 
-Pipeline configuration
-- All runtime behavior is configured via `iroha_config` files. Environment variables are not used for operators.
-- Sensible defaults are provided; most deployments won’t need changes.
-- Relevant keys under `[pipeline]`:
-  - `dynamic_prepass`: enable IVM read‑only prepass to derive access sets (default: true).
-  - `access_set_cache_enabled`: cache derived access sets per `(code_hash, entrypoint)`; disable to debug hints (default: true).
-  - `parallel_overlay`: build overlays in parallel; commit remains deterministic (default: true).
-  - `gpu_key_bucket`: optional key bucketing for the scheduler prepass using a stable radix on `(key, tx_idx, rw_flag)`; deterministic CPU fallback is always active (default: false).
-  - `cache_size`: capacity of the global IVM pre‑decode cache (decoded streams kept). Default: 128. Increasing can reduce decode time for repeated executions.
+ཡིག་ཆ་མཉམ་འབྱུང་ཞིབ་དཔྱད་ཚུ།
+- སི་ཀཱལ་རྟག་བརྟན་ཚུ་ (ཡིག་ཆ་/ཐོན་ཁུངས་/ཝི་ཨེམ་_སི་ཀཱལསི་_བཟོ་བཏོན.md)
+  - བསྐྱར་གསོ་: `make docs-syscalls`
+  - བརྟག་དཔྱད་རྐྱངམ་གཅིག་: `bash scripts/check_syscalls_doc.sh`
+- སི་ཀཱལ་ཨེ་བི་ཨའི་ཐིག་ཁྲམ་ (ཀེར་ཊི་/ཨཝ་ཨེམ་/ཌོཀསི/སི་ཀཱལ་.md)
+  - བརྟག་དཔྱད་རྐྱངམ་གཅིག་: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - བཟོ་བཏོན་འབད་ཡོད་པའི་དབྱེ་ཚན་ (དང་ཨང་རྟགས་ཡིག་ཆ་ཚུ་ཐིག་ཁྲམ་): `cargo run -p ivm --bin gen_syscalls_doc -- --write` དུས་མཐུན་བཟོ་ཡོདཔ།
+- དཔག་བྱེད་-ཨེ་བི་ཨའི་ཐིག་ཁྲམ་ཚུ་ (ཀེར་ཊི་/ཨཝ་ཨེམ་/ཌོཀ་/པོའིནཊར་_ཨེམ་ཌི་དང་ཨའི་ཝི་ཨེམ་ཌི་)
+  - བརྟག་དཔྱད་རྐྱངམ་གཅིག་: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`
+  - དུས་མཐུན་དབྱེ་ཚན་ཚུ་: `cargo run -p ivm --bin gen_pointer_types_doc -- --write`
+- Kotodama མགོ་ཡིག་སྲིད་བྱུས་དང་ ཨེ་བི་ཨའི་ ཧེསི་ (ཌོཀསི/འབྱུང་ཁུངས་/ཨམ་མ_མགོ་མགོ་.md)
+  - བརྟག་དཔྱད་རྐྱངམ་གཅིག་: `cargo run -p ivm --bin gen_header_doc -- --check` དང་ `cargo run -p ivm --bin gen_abi_hash_doc -- --check`
+  - དབྱེ་ཚན་དུས་མཐུན་བཟོ: `cargo run -p ivm --bin gen_header_doc -- --write` དང་ `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
 
-Docs sync checks
-- Syscall constants (docs/source/ivm_syscalls_generated.md)
-  - Regenerate: `make docs-syscalls`
-  - Check only: `bash scripts/check_syscalls_doc.sh`
-- Syscall ABI table (crates/ivm/docs/syscalls.md)
-  - Check only: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
-  - Update generated section (and code docs table): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
-- Pointer‑ABI tables (crates/ivm/docs/pointer_abi.md and ivm.md)
-  - Check only: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`
-  - Update sections: `cargo run -p ivm --bin gen_pointer_types_doc -- --write`
-- IVM header policy and ABI hashes (docs/source/ivm_header.md)
-  - Check only: `cargo run -p ivm --bin gen_header_doc -- --check` and `cargo run -p ivm --bin gen_abi_hash_doc -- --check`
-  - Update sections: `cargo run -p ivm --bin gen_header_doc -- --write` and `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
-
-CI
-- GitHub Actions workflow `.github/workflows/check-docs.yml` runs these checks on every push/PR and will fail if generated docs drift from the implementation.
-- [Governance Playbook](governance_playbook.md)
+ཨའི་
+- GitHub Actions ལཱ་གི་རྒྱུན་རིམ་ `.github/workflows/check-docs.yml` གིས་ བརྟག་ཞིབ་འདི་ཚུ་ འདྲུད/པི་རེ་ལུ་གཡོག་བཀོལཝ་ཨིནམ་དང་ ལག་ལེན་འཐབ་ས་ལས་ བཏོན་ཡོད་པའི་ ཌོཀ་ཚུ་ ཌིརཕཊི་ཡོད་པ་ཅིན་ འཐུས་ཤོར་འགྱོ་འོང་།
+- [གཞུང་སྐྱོང་གི་དཔེ་དེབ།](governance_playbook.md)

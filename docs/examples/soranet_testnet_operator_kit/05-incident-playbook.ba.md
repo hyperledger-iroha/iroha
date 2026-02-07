@@ -7,36 +7,37 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d2fbce156952c669e73d74c13284fca317013d706ee401359028c3638341d34b
 source_last_modified: "2025-12-29T18:16:35.091815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Brownout / Downgrade Response Playbook
+# Браунут / Даунград яуап плейбук
 
-1. **Detect**
-   - Alert `soranet_privacy_circuit_events_total{kind="downgrade"}` fires or
-     brownout webhook triggers from governance.
-   - Confirm via `kubectl logs soranet-relay` or systemd journal within 5 mins.
+1. **Аңлау**.
+   - Аллерт I18NI0000000000Х янғындар йәки
+     браунут webhook идара итеүҙән триггерҙар.
+   - 5 минут эсендә `kubectl logs soranet-relay` йәки системалы журнал аша раҫлағыҙ.
 
-2. **Stabilise**
-   - Freeze guard rotation (`relay guard-rotation disable --ttl 30m`).
-   - Enable direct-only override for affected clients
+2. **Стабилизация**
+   - Туңдырыу һаҡсыһы әйләнеше (`relay guard-rotation disable --ttl 30m`).
+   - Ҡаза күргән клиенттар өсөн туранан-тура ғына өҫтөнлөк бирергә
      (`sorafs fetch --transport-policy direct-only --write-mode read-only`).
-   - Capture current compliance config hash (`sha256sum compliance.toml`).
+   - Ағымдағы үтәү конфиг-хеш (`sha256sum compliance.toml`).
 
-3. **Diagnose**
-   - Collect latest directory snapshot and relay metrics bundle:
+3. **Диагноз**
+   - Һуңғы каталог снимок йыйыу һәм реле метрикаһы йыйылмаһы:
      `soranet-relay support-bundle --output /tmp/bundle.tgz`.
-   - Note PoW queue depth, throttle counters, and GAR category spikes.
-   - Identify whether PQ deficit, compliance override, or relay failure caused the event.
+   - Иҫкәрмә PoW сират тәрәнлеге, дроссель иҫәпләүселәр, һәм GAR категорияһы шпик.
+   - PQ дефициты, үтәлеш өҫтөнлөк итеүе йәки реле етешһеҙлеге ваҡиғаны сәбәпсе булыуын билдәләгеҙ.
 
-4. **Escalate**
-   - Notify the governance bridge (`#soranet-incident`) with summary and bundle hash.
-   - Open incident ticket linking to the alert, including timestamps and mitigation steps.
+4. **Эскал**
+   - Идара итеү күпере тураһында хәбәр итегеҙ (`#soranet-incident`) резюме һәм өйөм хеш менән.
+   - Асыҡ инцидент билеттары һылтанма менән иҫкәртмә, шул иҫәптән ваҡыт маркалары һәм йомшартыу аҙымдары.
 
-5. **Recover**
-   - Once root cause addressed, re-enable rotation
-     (`relay guard-rotation enable`) and revert direct-only overrides.
-   - Monitor KPIs for 30 minutes; ensure no new brownouts appear.
+5. **Ҡайта**
+   - Бер тапҡыр тамыр сәбәбе адресы буйынса, яңынан мөмкинлек бирә әйләнеш
+     (I18NI0000007X) һәм туранан-тура тик өҫтөнлөклө тип ҡайтарыу.
+   - 30 минут дауамында KPI-ларҙы күҙәтеү; яңы брауноттар күренмәүен тәьмин итеү.
 
-6. **Postmortem**
-   - Submit incident report within 48 hours using governance template.
-   - Update runbooks if new failure mode discovered.
+6. **Постмортема**
+   - 48 сәғәт эсендә идара итеү шаблонын ҡулланып инцидент тураһында отчет бирергә.
+   - Яңыртыу runbooks, әгәр яңы етешһеҙлектәр режимы асылды.

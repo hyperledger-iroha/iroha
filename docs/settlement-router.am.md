@@ -7,30 +7,31 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 782429c90ac5df034fd7c8ff2c3acf4f9f11348f14f15fcd321f343b22b154b8
 source_last_modified: "2025-12-29T18:16:35.914434+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Deterministic Settlement Router (NX-3)
+# ቆራጥ የሰፈራ ራውተር (NX-3)
 
-**Status:** Completed (NX-3)  
-**Owners:** Economics WG / Core Ledger WG / Treasury / SRE  
-**Scope:** Canonical XOR settlement path used by all lanes/dataspaces. Shipped router crate, lane-level receipts, buffer guard rails, telemetry, and operator evidence surfaces.
+** ሁኔታ፡** የተጠናቀቀ (NX-3)  
+** ባለቤቶች፡** ኢኮኖሚክስ WG/ኮር ሌጀር WG/ግምጃ ቤት/SRE  
+** ወሰን፡** ቀኖናዊ XOR የሰፈራ መንገድ በሁሉም መስመሮች/የመረጃ ቦታዎች ጥቅም ላይ ይውላል። የተላኩ የራውተር ሣጥን፣ የሌይን ደረጃ ደረሰኞች፣ የመጠባበቂያ ሐዲዶች፣ ቴሌሜትሪ እና የኦፕሬተር ማስረጃ ቦታዎች።
 
-## Goals
-- Unify XOR conversion and receipt generation across single-lane and Nexus builds.
-- Apply deterministic haircuts + volatility margins with guard-railed buffers so operators can pace settlement safely.
-- Expose receipts, telemetry, and dashboards that auditors can replay without bespoke tooling.
+# ግቦች
+- በነጠላ መስመር እና በNexus ግንባታዎች ላይ የXOR ልወጣን እና ደረሰኝ ማመንጨትን አንድ ማድረግ።
+- ኦፕሬተሮች እልባትን በአስተማማኝ ሁኔታ እንዲራመዱ ቆራጥ የሆኑ የፀጉር አስተካካዮችን + ተለዋዋጭ ህዳጎችን በጠባቂ-ሀዲድ ቋት ይተግብሩ።
+- ደረሰኞችን፣ ቴሌሜትሪ እና ዳሽቦርዶችን ኦዲተሮች ያለ ሹመት መሳሪያ እንደገና መጫወት ይችላሉ።
 
-## Architecture
-| Component | Location | Responsibility |
-|-----------|----------|----------------|
-| Router primitives | `crates/settlement_router/` | Shadow-price calculator, haircut tiers, buffer policy helpers, settlement receipt type.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】【crates/settlement_router/src/policy.rs:1】 |
-| Runtime façade | `crates/iroha_core/src/settlement/mod.rs:1` | Wraps router config into `SettlementEngine`, exposes `quote` + accumulator used during block execution. |
-| Block integration | `crates/iroha_core/src/block.rs:120` | Drains `PendingSettlement` records, aggregates `LaneSettlementCommitment` per lane/dataspace, parses lane buffer metadata, and emits telemetry. |
-| Telemetry & dashboards | `crates/iroha_telemetry/src/metrics.rs:4847`, `dashboards/grafana/settlement_router_overview.json:1` | Prometheus/OTLP metrics for buffers, variance, haircuts, conversion counts; Grafana board for SRE. |
-| Reference schema | `docs/source/nexus_fee_model.md:1` | Documents settlement receipt fields persisted in `LaneBlockCommitment`. |
+## አርክቴክቸር
+| አካል | አካባቢ | ኃላፊነት |
+|-------------|
+| ራውተር primitives | `crates/settlement_router/` | የጥላ ዋጋ ማስያ፣ የፀጉር መቁረጫ ደረጃዎች፣ የመጠባበቂያ ፖሊሲ ረዳቶች፣ የመቋቋሚያ ደረሰኝ አይነት።
+| የማስኬጃ ፊት ለፊት | `crates/iroha_core/src/settlement/mod.rs:1` | የራውተር አወቃቀሩን ወደ `SettlementEngine` ያጠቃልላል፣በብሎክ አፈጻጸም ወቅት ጥቅም ላይ የዋለውን `quote` + አከማቸን ያጋልጣል። |
+| ውህደትን አግድ | `crates/iroha_core/src/block.rs:120` | `PendingSettlement` መዝገቦችን ያወጣል፣ `LaneSettlementCommitment` በአንድ ሌይን/በመረጃ ቦታ ይሰበስባል፣የሌይን ቋት ሜታዳታን ይተነትናል እና ቴሌሜትሪ ያወጣል። |
+| ቴሌሜትሪ እና ዳሽቦርዶች | `crates/iroha_telemetry/src/metrics.rs:4847`, `dashboards/grafana/settlement_router_overview.json:1` | Prometheus/OTLP መለኪያዎች ለጠባቂዎች፣ ልዩነት፣ የፀጉር ማቆሚያዎች፣ የመቀየሪያ ቆጠራዎች; Grafana ሰሌዳ ለ SRE. |
+| የማጣቀሻ እቅድ | `docs/source/nexus_fee_model.md:1` | የሰነዶች መቋቋሚያ ደረሰኝ መስኮች በ`LaneBlockCommitment` ውስጥ ቀጥለዋል። |
 
-## Configuration
-Router knobs live under `[settlement.router]` (validated by `iroha_config`):
+## ማዋቀር
+የራውተር ቁልፎች በ`[settlement.router]` (በ`iroha_config` የተረጋገጠ) ይኖራሉ።
 
 ```toml
 [settlement.router]
@@ -43,42 +44,38 @@ buffer_halt_pct = 2           # Remaining-buffer % where settlement halts
 buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ```
 
-Lane metadata wires in the per-dataspace buffer account:
-- `settlement.buffer_account` — account that holds the reserve (e.g., `buffer::cbdc_treasury`).
-- `settlement.buffer_asset` — asset definition debited for headroom (typically `xor#sora`).
-- `settlement.buffer_capacity_micro` — configured capacity in micro-XOR (decimal string).
+በየውሂብ ቦታ ቋት መለያ ውስጥ የሌይን ዲበ ውሂብ ሽቦዎች፡-
+- `settlement.buffer_account` - መጠባበቂያውን የያዘ መለያ (ለምሳሌ `buffer::cbdc_treasury`)።
+- `settlement.buffer_asset` — ለዋና ክፍል (በተለምዶ `xor#sora`) የተከፈለ የንብረት ትርጉም።
+- `settlement.buffer_capacity_micro` - በማይክሮ-XOR (አስርዮሽ ሕብረቁምፊ) ውስጥ የተዋቀረ አቅም።
 
-Absent metadata disables buffer snapshotting for that lane (telemetry falls back to zeroed capacity/status).
+የሜታዳታ አለመኖር ለዚያ መስመር ቋት ፎቶ ማንሳትን ያሰናክላል (ቴሌሜትሪ ወደ ዜሮ አቅም/ሁኔታ ይመለሳል)።## የመቀየሪያ ቧንቧ
+1. **ጥቅስ፡** `SettlementEngine::quote` የተዋቀረውን የኤፒሲሎን + የመተጣጠፍ ህዳግ እና የፀጉር መቆንጠጫ ደረጃን ወደ TWAP ጥቅሶች ይተገብራል፣ `SettlementReceipt` በ `xor_due` እና `xor_after_haircut` እና በፕላስ ይደውሉ `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】
+2. ** ማጠራቀም: ** በብሎክ አፈፃፀም ወቅት አስፈፃሚው `PendingSettlement` ግቤቶችን ይመዘግባል (የአካባቢው መጠን ፣ TWAP ፣ epsilon ፣ volatility bucket ፣ liquidity profile ፣ oracle timestamp)። `LaneSettlementBuilder` ድምርን ያጠቃለለ እና እገዳውን ከማኅተሙ በፊት በ`(lane, dataspace)` ሜታዳታ ይቀያይራል።
+3. **የማቋቋሚያ ቅጽበታዊ ገጽ እይታ፡** የሌይን ሜታዳታ ቋት ካወጀ፣ ግንበኛ `SettlementBufferSnapshot` (የቀረውን ዋና ክፍል፣ አቅም፣ ሁኔታ) የ `BufferPolicy` ጣራዎችን ከውቅረት በመጠቀም ይይዛል።【crates/iroha_core/src/block.rs:20
+4. **Commit + Telemetry:** ደረሰኞች እና የተቀያየሩ ማስረጃዎች በ`LaneBlockCommitment` ውስጥ መሬት እና በሁኔታ ቅጽበተ-ፎቶዎች ይገለጣሉ። ቴሌሜትሪ ቋት መለኪያዎችን፣ ልዩነትን (`iroha_settlement_pnl_xor`)፣ የተተገበረ ህዳግ (`iroha_settlement_haircut_bp`)፣ አማራጭ ስዋፕላይን አጠቃቀምን እና በንብረት መቀየሪያ/የጸጉር መቁረጫ ቆጣሪዎችን ይመዘግባል ስለዚህም ዳሽቦርዶች እና ማንቂያዎች ከእገዳው ጋር እንደተመሳሰሉ ይቆያሉ። ይዘቶች።【crates/iroha_core/src/block.rs:298】【crates/iroha_core/src/telemetry.rs:844】
+5. **የማስረጃ ቦታዎች፡** `status::set_lane_settlement_commitments` ለሪሌይ/ዲኤ ሸማቾች ቃል ኪዳኖችን ያትማል፣ Grafana ዳሽቦርዶች የ Prometheus ሜትሪክስን ያነባሉ፣ እና ኦፕሬተሮች `ops/runbooks/settlement-buffers.md`ን ከ I10000000042X ጋር ከ I1000000042X ወደ ትራከክሮ ዝግጅቶች ይጠቀማሉ።
 
-## Conversion Pipeline
-1. **Quote:** `SettlementEngine::quote` applies the configured epsilon + volatility margin and haircut tier to TWAP quotes, returning a `SettlementReceipt` with `xor_due` and `xor_after_haircut` plus the timestamp and caller-supplied `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】
-2. **Accumulate:** During block execution the executor records `PendingSettlement` entries (local amount, TWAP, epsilon, volatility bucket, liquidity profile, oracle timestamp). `LaneSettlementBuilder` aggregates totals and swap metadata per `(lane, dataspace)` before sealing the block.【crates/iroha_core/src/settlement/mod.rs:34】【crates/iroha_core/src/block.rs:3460】
-3. **Buffer snapshot:** If lane metadata declares a buffer, the builder captures a `SettlementBufferSnapshot` (remaining headroom, capacity, status) using the `BufferPolicy` thresholds from config.【crates/iroha_core/src/block.rs:203】
-4. **Commit + telemetry:** Receipts and swap evidence land inside `LaneBlockCommitment` and are mirrored into status snapshots. Telemetry records buffer gauges, variance (`iroha_settlement_pnl_xor`), applied margin (`iroha_settlement_haircut_bp`), optional swapline utilisation, and per-asset conversion/haircut counters so dashboards and alerts stay in sync with the block contents.【crates/iroha_core/src/block.rs:298】【crates/iroha_core/src/telemetry.rs:844】
-5. **Evidence surfaces:** `status::set_lane_settlement_commitments` publishes commitments for relays/DA consumers, Grafana dashboards read the Prometheus metrics, and operators use `ops/runbooks/settlement-buffers.md` alongside `dashboards/grafana/settlement_router_overview.json` to track refill/throttle events.
+## ቴሌሜትሪ እና ማስረጃ
+- `iroha_settlement_buffer_xor`፣ `iroha_settlement_buffer_capacity_xor`፣ `iroha_settlement_buffer_status` — የቋት ቅጽበታዊ ሌይን/መረጃ ቦታ (ማይክሮ-XOR + ኮድ የተደረገበት ሁኔታ)።【crates/iroha_telemetry/src/metrics.rs:6212】
+- `iroha_settlement_pnl_xor` - በድህረ-ፀጉር መቆረጥ XOR መካከል ያለው ልዩነት ለብሎክ ባች።【crates/iroha_telemetry/src/metrics.rs:6236】
+- `iroha_settlement_haircut_bp` — ውጤታማ የኤፒሲሎን/የጸጉር መቆረጥ መነሻ ነጥቦች በቡድን ላይ ተተግብረዋል።【crates/iroha_telemetry/src/metrics.rs:6244】
+- `iroha_settlement_swapline_utilisation` - የመለዋወጫ ማስረጃ በሚኖርበት ጊዜ በፈሳሽ ፕሮፋይል የተቀመጠ አማራጭ አጠቃቀም።【crates/iroha_telemetry/src/metrics.rs:6252】
+- `settlement_router_conversion_total` / `settlement_router_haircut_total` — በሰፈራ ልወጣዎች እና ድምር የፀጉር አስተካካዮች (XOR units) በየመንገድ/ዳታ ቦታ ቆጣሪዎች።
+- Grafana ሰሌዳ፡ `dashboards/grafana/settlement_router_overview.json` (የመቋቋሚያ ራስ ክፍል፣ ልዩነት፣ የፀጉር መቆራረጥ) እና የ Alertmanager ደንቦች በNexus ሌይን ማንቂያ ጥቅል ውስጥ የተካተቱ።
+- ኦፕሬተር runbook: `ops/runbooks/settlement-buffers.md` (የመሙላት / የማንቂያ የስራ ፍሰት) እና በ `docs/source/nexus_settlement_faq.md` ውስጥ የሚጠየቁ ጥያቄዎች.## ገንቢ እና SRE ማረጋገጫ ዝርዝር
+- `[settlement.router]` ዋጋዎችን በ `config/config.json5` (ወይም TOML) ያቀናብሩ እና በ `irohad --version` ምዝግብ ማስታወሻዎች ያረጋግጡ; የመግቢያ ገደቦች `alert > throttle > xor_only > halt` ማሟላታቸውን ያረጋግጡ።
+- የሌይን ሜታዳታ ከቋት መለያ/ንብረት/አቅም ጋር ተሞልቷል ስለዚህ የቋት መለኪያዎች የቀጥታ ማከማቻዎችን ያንፀባርቃሉ። ማቋረጦችን መከታተል የሌለባቸው መስመሮችን መተው።
+- `settlement_router_*` እና `iroha_settlement_*` መለኪያዎችን በ `dashboards/grafana/settlement_router_overview.json` ይቆጣጠሩ; በስሮትል/XOR-ብቻ/በማቆም ግዛቶች ላይ ማንቂያ።
+- `cargo test -p settlement_router` ን ለዋጋ/የፖሊሲ ሽፋን እና በ `crates/iroha_core/src/block.rs` ውስጥ ያሉትን የብሎክ-ደረጃ ማጠቃለያ ሙከራዎችን ያሂዱ።
+- በ`docs/source/nexus_fee_model.md` ውስጥ ለውቅረት ለውጦች የአስተዳደር ማፅደቆችን ይመዝግቡ እና ደረጃዎች ወይም ቴሌሜትሪ ወለል ሲቀየሩ `status.md` እንደተዘመነ ያቆዩት።
 
-## Telemetry & Evidence
-- `iroha_settlement_buffer_xor`, `iroha_settlement_buffer_capacity_xor`, `iroha_settlement_buffer_status` — buffer snapshot per lane/dataspace (micro-XOR + encoded state).【crates/iroha_telemetry/src/metrics.rs:6212】
-- `iroha_settlement_pnl_xor` — realised variance between due vs post-haircut XOR for the block batch.【crates/iroha_telemetry/src/metrics.rs:6236】
-- `iroha_settlement_haircut_bp` — effective epsilon/haircut basis points applied to the batch.【crates/iroha_telemetry/src/metrics.rs:6244】
-- `iroha_settlement_swapline_utilisation` — optional utilisation bucketed by liquidity profile when swap evidence is present.【crates/iroha_telemetry/src/metrics.rs:6252】
-- `settlement_router_conversion_total` / `settlement_router_haircut_total` — per-lane/dataspace counters for settlement conversions and cumulative haircuts (XOR units).【crates/iroha_telemetry/src/metrics.rs:6260】【crates/iroha_core/src/block.rs:304】
-- Grafana board: `dashboards/grafana/settlement_router_overview.json` (buffer headroom, variance, haircuts) plus Alertmanager rules embedded in the Nexus lane alert pack.
-- Operator runbook: `ops/runbooks/settlement-buffers.md` (refill/alert workflow) and the FAQ in `docs/source/nexus_settlement_faq.md`.
+## የልቀት እቅድ ቅጽበታዊ እይታ
+- በእያንዳንዱ ግንባታ ውስጥ ራውተር + ቴሌሜትሪ መርከብ; ምንም ባህሪ በሮች. የሌይን ዲበ ውሂብ የቋት ቅጽበተ-ፎቶዎች ማተምን ይቆጣጠራል።
+- ነባሪ ውቅረት ከመንገድ ካርታው እሴቶች ጋር ይዛመዳል (60s TWAP፣ 25bp base epsilon፣ 72h buffer horizon); ለማመልከት በ config በኩል ያስተካክሉ እና `irohad` እንደገና ያስጀምሩ።
+- የማስረጃ ጥቅል = የሌይን ማቋቋሚያ ቃል ኪዳኖች + Prometheus ለ`settlement_router_*`/`iroha_settlement_*` ተከታታይ + Grafana ቅጽበታዊ ገጽ እይታ/JSON ለተጎዳው መስኮት ወደ ውጭ መላክ።
 
-## Developer & SRE Checklist
-- Set `[settlement.router]` values in `config/config.json5` (or TOML) and validate via `irohad --version` logs; ensure thresholds satisfy `alert > throttle > xor_only > halt`.
-- Populate lane metadata with the buffer account/asset/capacity so buffer gauges reflect live reserves; omit the fields for lanes that should not track buffers.
-- Monitor `settlement_router_*` and `iroha_settlement_*` metrics via `dashboards/grafana/settlement_router_overview.json`; alert on throttle/XOR-only/halt states.
-- Run `cargo test -p settlement_router` for pricing/policy coverage and the existing block-level aggregation tests in `crates/iroha_core/src/block.rs`.
-- Record governance approvals for config changes in `docs/source/nexus_fee_model.md` and keep `status.md` updated when thresholds or telemetry surfaces change.
-
-## Rollout Plan Snapshot
-- Router + telemetry ship in every build; no feature gates. Lane metadata controls whether buffer snapshots publish.
-- Default config matches the roadmap values (60 s TWAP, 25 bp base epsilon, 72 h buffer horizon); tune via config and restart `irohad` to apply.
-- Evidence bundle = lane settlement commitments + Prometheus scrape for the `settlement_router_*`/`iroha_settlement_*` series + Grafana screenshot/JSON export for the affected window.
-
-## Evidence & References
-- NX-3 settlement router acceptance notes: `status.md` (NX-3 section).
-- Operator surfaces: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- Receipt schema and API surfaces: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.
+## ማስረጃዎች እና ማጣቀሻዎች
+- NX-3 የሰፈራ ራውተር ተቀባይነት ማስታወሻዎች: `status.md` (NX-3 ክፍል).
+- ኦፕሬተር ወለሎች፡ `dashboards/grafana/settlement_router_overview.json`፣ `ops/runbooks/settlement-buffers.md`።
+- የመቀበያ ንድፍ እና የኤፒአይ ወለል፡ `docs/source/nexus_fee_model.md`፣ `/v1/sumeragi/status` -> `lane_settlement_commitments`።

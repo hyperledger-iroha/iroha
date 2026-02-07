@@ -7,85 +7,87 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus operations runbook
 description: Field-ready summary of the Nexus operator workflow, mirroring `docs/source/nexus_operations.md`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Use this page as the quick-reference sibling of
-`docs/source/nexus_operations.md`. It distils the operational checklist, change
-management hooks, and telemetry coverage requirements that Nexus operators must
-follow.
+ይህን ገጽ እንደ ፈጣን ማጣቀሻ ወንድም ወይም እህት ይጠቀሙበት
+`docs/source/nexus_operations.md`. የተግባር ማመሳከሪያ ዝርዝሩን ያስወግዳል, ይቀይሩ
+የአስተዳደር መንጠቆዎች እና የቴሌሜትሪ ሽፋን መስፈርቶች Nexus ኦፕሬተሮች አለባቸው
+ተከተል።
 
-## Lifecycle checklist
+## የህይወት ዑደት ማረጋገጫ ዝርዝር
 
-| Stage | Actions | Evidence |
-|-------|--------|----------|
-| Pre-flight | Verify release hashes/signatures, confirm `profile = "iroha3"`, and prepare config templates. | `scripts/select_release_profile.py` output, checksum log, signed manifest bundle. |
-| Catalog alignment | Update `[nexus]` catalog, routing policy, and DA thresholds per council-issued manifest, then capture `--trace-config`. | `irohad --sora --config … --trace-config` output stored with onboarding ticket. |
-| Smoke & cutover | Run `irohad --sora --config … --trace-config`, execute CLI smoke (`FindNetworkStatus`), validate telemetry exports, and request admission. | Smoke-test log + Alertmanager confirmation. |
-| Steady state | Monitor dashboards/alerts, rotate keys per governance cadence, and sync configs/runbooks whenever manifests change. | Quarterly review minutes, dashboard screenshots, rotation ticket IDs. |
+| መድረክ | ድርጊቶች | ማስረጃ |
+|-------|--------|------|
+| ቅድመ በረራ | የተለቀቀውን ሃሽ/ፊርማ ያረጋግጡ፣ `profile = "iroha3"` ያረጋግጡ እና የውቅር አብነቶችን ያዘጋጁ። | `scripts/select_release_profile.py` ውፅዓት፣ የቼክሰም መዝገብ፣ የተፈረመ የማሳያ ቅርቅብ። |
+| ካታሎግ አሰላለፍ | `[nexus]` ካታሎግ፣ የማዘዋወር ፖሊሲ እና የDA ገደቦችን በምክር ቤት የተሰጠ መግለጫ ያዘምኑ፣ ከዚያ `--trace-config`ን ይያዙ። | `irohad --sora --config … --trace-config` ውፅዓት ከመሳፈሪያ ትኬት ጋር ተከማችቷል። |
+| ጭስ እና መቁረጫ | `irohad --sora --config … --trace-config` ን ያሂዱ፣ የCLI ጭስ (`FindNetworkStatus`) ያስፈጽሙ፣ የቴሌሜትሪ ኤክስፖርትን ያረጋግጡ እና ለመግባት ይጠይቁ። | የጭስ-ሙከራ ምዝግብ ማስታወሻ + የማስጠንቀቂያ አስተዳዳሪ ማረጋገጫ። |
+| የተረጋጋ ሁኔታ | ዳሽቦርዶችን/ማንቂያዎችን ተቆጣጠር፣ በየአስተዳደሩ ቁልፎቹን አሽከርክር፣ እና ለውጦች በሚገለጡበት ጊዜ አወቃቀሮችን/አሂድ ቡክሮችን ያመሳስሉ። | የሩብ ጊዜ ግምገማ ደቂቃዎች፣ ዳሽቦርድ ቅጽበታዊ ገጽ እይታዎች፣ የማዞሪያ ትኬት መታወቂያዎች። |
 
-Detailed onboarding (key replacement, routing templates, release profile steps)
-remain in `docs/source/sora_nexus_operator_onboarding.md`.
+ዝርዝር የመሳፈሪያ (ቁልፍ ምትክ፣ የማዞሪያ አብነቶች፣ የመገለጫ ደረጃዎች)
+በ `docs/source/sora_nexus_operator_onboarding.md` ውስጥ ይቆዩ.
 
-## Change management
+## ለውጥ አስተዳደር
 
-1. **Release updates** – track announcements in `status.md`/`roadmap.md`; attach
-   the onboarding checklist to every release PR.
-2. **Lane manifest changes** – verify signed bundles from the Space Directory and
-   archive them under `docs/source/project_tracker/nexus_config_deltas/`.
-3. **Configuration deltas** – every `config/config.toml` change requires a ticket
-   referencing the lane/data-space. Store a redacted copy of the effective config
-   whenever nodes join or upgrade.
-4. **Rollback drills** – quarterly rehearse stop/restore/smoke procedures; log
-   outcomes under `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **Compliance approvals** – private/CBDC lanes must secure compliance sign-off
-   before modifying DA policy or telemetry redaction knobs (see
+1. ** ዝመናዎችን ይልቀቁ ** - ማስታወቂያዎችን በ `status.md`/`roadmap.md`; ማያያዝ
+   የቦርዲንግ ማረጋገጫ ዝርዝር ለእያንዳንዱ የተለቀቀው PR።
+2. **የሌይን አንጸባራቂ ለውጦች** - የተፈረሙ ጥቅሎችን ከጠፈር ማውጫው ያረጋግጡ እና
+   በ `docs/source/project_tracker/nexus_config_deltas/` ስር አስቀምጣቸው።
+3. **የማዋቀር ዴልታዎች** - እያንዳንዱ የ`config/config.toml` ለውጥ ትኬት ይፈልጋል።
+   ሌይን/መረጃ-ቦታን በመጥቀስ። ውጤታማ ውቅር የተቀየረ ቅጂ ያከማቹ
+   አንጓዎች ሲቀላቀሉ ወይም ሲያሻሽሉ.
+4. ** የድጋሚ ልምምዶች *** - በየሩብ ዓመቱ የማቆሚያ / ወደነበረበት መመለስ / የጭስ ሂደቶችን ይለማመዱ; መዝገብ
+   ውጤቶች በ `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
+5. **የማስፈጸሚያ ማጽደቂያዎች** - የግል/CBDC መስመሮች የታዛዥነት ማቋረጥን ማረጋገጥ አለባቸው
+   የDA ፖሊሲን ወይም የቴሌሜትሪ ማሻሻያ ቁልፎችን ከማሻሻል በፊት (ተመልከት
    `docs/source/cbdc_lane_playbook.md`).
 
-## Telemetry & SLOs
+## ቴሌሜትሪ እና SLOs
 
-- Dashboards: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, plus
-  SDK-specific views (e.g., `android_operator_console.json`).
-- Alerts: `dashboards/alerts/nexus_audit_rules.yml` and Torii/Norito transport
-  rules (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- Metrics to watch:
-  - `nexus_lane_height{lane_id}` – alert on zero progress for three slots.
-  - `nexus_da_backlog_chunks{lane_id}` – alert above lane-specific thresholds
-    (default 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` – alert when P99 exceeds 900 ms
-    (public) or 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` – alert if 5-minute error
-    ratio >2 %.
-  - `telemetry_redaction_override_total` – Sev 2 immediately; ensure overrides
-    have compliance tickets.
-- Run the telemetry remediation checklist in
-  [Nexus telemetry remediation plan](./nexus-telemetry-remediation) at least
-  quarterly and attach the filled form to operations review notes.
+- ዳሽቦርዶች፡ `dashboards/grafana/nexus_lanes.json`፣ `nexus_settlement.json`፣ በተጨማሪም
+  ኤስዲኬ-ተኮር እይታዎች (ለምሳሌ፣ `android_operator_console.json`)።
+- ማንቂያዎች፡ I18NI0000039X እና I18NT0000013X/Norito ትራንስፖርት
+  ደንቦች (`dashboards/alerts/torii_norito_rpc_rules.yml`).
+- ለመመልከት መለኪያዎች:
+  - `nexus_lane_height{lane_id}` - ለሶስት ቦታዎች በዜሮ ግስጋሴ ላይ ማንቂያ.
+  - `nexus_da_backlog_chunks{lane_id}` - ከሌይን-ተኮር ገደቦች በላይ ማንቂያ
+    (ነባሪ 64 ይፋዊ/8 የግል)።
+  - `nexus_settlement_latency_seconds{lane_id}` - P99 ከ900 ሚሴ በላይ ሲያልፍ ማንቂያ
+    (የህዝብ) ወይም 1200ms (የግል)።
+  - `torii_request_failures_total{scheme="norito_rpc"}` - የ 5 ደቂቃ ስህተት ከሆነ አስጠንቅቅ
+    ጥምርታ>2%
+  - `telemetry_redaction_override_total` - Sev2 ወዲያውኑ; መሻርን ያረጋግጡ
+    ተገዢነት ትኬቶች አላቸው.
+- የቴሌሜትሪ ማሻሻያ ማረጋገጫ ዝርዝሩን አስገባ
+  [Nexus ቴሌሜትሪ ማሻሻያ እቅድ](./nexus-telemetry-remediation) ቢያንስ
+  በየሩብ ዓመቱ እና የተሞላውን ቅጽ ከኦፕሬሽኖች ግምገማ ማስታወሻዎች ጋር ያያይዙ።
 
-## Incident matrix
+## የክስተት ማትሪክስ
 
-| Severity | Definition | Response |
-|----------|------------|----------|
-| Sev 1 | Data-space isolation breach, settlement halt >15 min, or governance vote corruption. | Page Nexus Primary + Release Engineering + Compliance, freeze admission, collect artefacts, publish comms ≤60 min, RCA ≤5 business days. |
-| Sev 2 | Lane backlog SLA breach, telemetry blind spot >30 min, failed manifest rollout. | Page Nexus Primary + SRE, mitigate ≤4 h, file follow-ups within 2 business days. |
-| Sev 3 | Non-blocking drift (docs, alerts). | Log in tracker, schedule fix inside the sprint. |
+| ከባድነት | ፍቺ | ምላሽ |
+|------------------|------|
+| ሴቭ1 | የውሂብ-ቦታ ማግለል ጥሰት፣ የሰፈራ ማቆም > 15 ደቂቃ፣ ወይም የአስተዳደር ድምጽ ሙስና። | Page Nexus የመጀመሪያ ደረጃ + መልቀቂያ ኢንጂነሪንግ + ማክበር፣ መግባትን ማቆም፣ ቅርሶችን መሰብሰብ፣ comms ≤60min ያትሙ፣ RCA ≤5 የስራ ቀናት። |
+| Sev2 | የሌይን የኋላ ሎግ SLA መጣስ፣ የቴሌሜትሪ ዓይነ ስውር ቦታ > 30 ደቂቃ፣ ያልተሳካ የማሳያ መልቀቅ። | ገጽ Nexus የመጀመሪያ ደረጃ + SRE፣ ≤4ሰአትን ይቀንሱ፣ በ2 የስራ ቀናት ውስጥ ክትትልን ያድርጉ። |
+| Sev3 | የማይታገድ ተንሸራታች (ሰነዶች፣ ማንቂያዎች)። | መከታተያ ውስጥ ይግቡ፣ በSprint ውስጥ ለማስተካከል የጊዜ ሰሌዳ ያውጡ። |
 
-Incident tickets must record affected lane/data-space IDs, manifest hashes,
-timeline, supporting metrics/logs, and follow-up tasks/owners.
+የክስተት ትኬቶች የተጎዱትን የሌይን/የመረጃ ቦታ መታወቂያዎችን፣ የሰነድ ማስረጃዎችን መመዝገብ አለባቸው፣
+የጊዜ መስመር፣ የድጋፍ መለኪያዎች/ምዝግብ ማስታወሻዎች፣ እና ተከታይ ተግባራት/ባለቤቶች።
 
-## Evidence archive
+## የማስረጃ መዝገብ
 
-- Store bundles/manifests/telemetry exports under `artifacts/nexus/<lane>/<date>/`.
-- Keep redacted configs + `--trace-config` output for each release.
-- Attach council minutes + signed decisions when config or manifest changes land.
-- Preserve weekly Prometheus snapshots relevant to Nexus metrics for 12 months.
-- Record runbook edits in `docs/source/project_tracker/nexus_config_deltas/README.md`
-  so auditors know when responsibilities changed.
+- በ `artifacts/nexus/<lane>/<date>/` ጥቅሎችን/ማሳያዎችን/የቴሌሜትሪ ኤክስፖርትን ያከማቹ።
+- ለእያንዳንዱ ልቀት የተቀናጁ ውቅሮችን + `--trace-config` ውፅዓት ያቆዩ።
+- ሲዋቀሩ ወይም መግለጫው መሬት ሲቀየር የምክር ቤት ደቂቃዎችን + የተፈረሙ ውሳኔዎችን ያያይዙ።
+- ከNexus ሜትሪክስ ጋር ተዛማጅነት ያላቸውን ሳምንታዊ የI18NT0000000X ቅጽበተ-ፎቶዎችን ለ12 ወራት ያቆዩ።
+- የ runbook አርትዖቶችን በ `docs/source/project_tracker/nexus_config_deltas/README.md` ይመዝግቡ
+  ስለዚህ ኦዲተሮች ኃላፊነቶች ሲቀየሩ ያውቃሉ።
 
-## Related material
+## ተዛማጅ ቁሳቁስ
 
-- Overview: [Nexus overview](./nexus-overview)
-- Specification: [Nexus spec](./nexus-spec)
-- Lane geometry: [Nexus lane model](./nexus-lane-model)
-- Transition & routing shims: [Nexus transition notes](./nexus-transition-notes)
-- Operator onboarding: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Telemetry remediation: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+አጠቃላይ እይታ፡ [I18NT0000007X አጠቃላይ እይታ](./nexus-overview)
+ዝርዝር፡ [Nexus ዝርዝር](./nexus-spec)
+- ሌይን ጂኦሜትሪ፡ [Nexus ሌይን ሞዴል](./nexus-lane-model)
+- የመሸጋገሪያ እና የማዞሪያ ሺምስ፡ [Nexus የሽግግር ማስታወሻዎች](./nexus-transition-notes)
+- ኦፕሬተር በመሳፈር ላይ፡ [Sora Nexus ኦፕሬተር ተሳፍሮ](./nexus-operator-onboarding)
+- ቴሌሜትሪ ማሻሻያ፡ [Nexus የቴሌሜትሪ ማስተካከያ እቅድ](./nexus-telemetry-remediation)

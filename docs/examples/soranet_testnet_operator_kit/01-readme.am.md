@@ -7,24 +7,25 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 74c5337171b90ea6fbac64da89c6208bf452895f69f75184db6aa3905d3bc99a
 source_last_modified: "2025-12-29T18:16:35.089470+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraNet Testnet Onboarding Kit (Phase T0)
+# የሶራኔት ቴስትኔት የቦርዲንግ ኪት (ደረጃ ቲ0)
 
-Welcome! You are receiving this kit as part of the closed SoraNet testnet
-(SNNet-10 phase T0). Complete every checklist item before connecting your
-relay. The Governance Council will validate your submission before whitelisting
-your descriptors.
+እንኳን ደህና መጣህ! እንደ የተዘጋው የ SoraNet testnet አካል ይህን ኪት እየተቀበልክ ነው።
+(SNNet-10 ደረጃ T0). የእርስዎን ከማገናኘትዎ በፊት እያንዳንዱን የማረጋገጫ ዝርዝር ይሙሉ
+ቅብብል. የአስተዳደር ካውንስል ፍቃድ ከመመዝገብዎ በፊት ያቀረቡትን ማረጋገጫ ያረጋግጣል
+ገላጭዎ.
 
-Artifacts in this directory:
+በዚህ ማውጫ ውስጥ ያሉ ቅርሶች፡-
 
-1. `01-readme.md` — this overview.
-2. `02-checklist.md` — operator pre-flight tasks.
-3. `03-config-example.toml` — baseline relay + orchestrator configuration.
-4. `04-telemetry.md` — required dashboards and alert wiring.
-5. `05-incident-playbook.md` — brownout/downgrade response workflow.
-6. `06-verification-report.md` — template to submit after smoke tests.
-7. `07-metrics-sample.json` — example input for the SNNet-10 metrics validator.
+1. I18NI0000000X - ይህ አጠቃላይ እይታ.
+2. `02-checklist.md` - ከዋኝ ቅድመ-በረራ ተግባራት.
+3. I18NI0000002X - የመነሻ ቅብብል + ኦርኬስትራ ውቅር።
+4. `04-telemetry.md` - የሚፈለጉ ዳሽቦርዶች እና የማንቂያ ሽቦዎች።
+5. `05-incident-playbook.md` - ብራውን ማውጣት/የምላሽ የስራ ፍሰት መቀነስ።
+6. `06-verification-report.md` - ከጭስ ሙከራዎች በኋላ ለማስገባት አብነት.
+7. `07-metrics-sample.json` - ምሳሌ ግቤት ለ SNNet-10 ሜትሪክስ አረጋጋጭ።
 
-Keep the kit private; a signed copy will be archived by governance once your
-relay is approved.
+ዕቃውን በግል ያስቀምጡ; አንዴ የተፈረመ ቅጂ በአስተዳደር በማህደር ይቀመጣል
+ቅብብሎሽ ጸድቋል።

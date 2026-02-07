@@ -4,18 +4,20 @@ direction: ltr
 source: docs/portal/docs/reference/README.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Indice de referencia
-slug: /reference
+título: Índice de referencia
+babosa: /referencia
 ---
 
-Esta secao agrega o material "leia como especificacao" para Iroha. Essas paginas permanecem estaveis mesmo quando guias e tutoriais evoluem.
+Esta seco agrega o material "leia como especificacao" para Iroha. Esas páginas permanecen en este lugar cuando las guías y los tutoriales evolucionan.
 
-## Disponivel hoje
+## Disponivel hoy
 
-- **Visao geral do codec Norito** - `reference/norito-codec.md` aponta diretamente para a especificacao autoritativa `norito.md` enquanto a tabela do portal esta sendo preenchida.
-- **Torii OpenAPI** - `/reference/torii-openapi` renderiza a especificacao REST mais recente de Torii usando Redoc. Regenere a spec com `npm run sync-openapi -- --version=current --latest` (adicione `--mirror=<label>` para copiar o snapshot para versoes historicas adicionais).
-- **Tabelas de configuracao** - O catalogo completo de parametros fica em `docs/source/references/configuration.md`. Ate o portal oferecer auto-import, consulte esse arquivo Markdown para defaults exatos e overrides de ambiente.
-- **Versionamento de docs** - O dropdown de versao na navbar expoe snapshots congelados criados com `npm run docs:version -- <label>`, facilitando comparar orientacoes entre releases.
+- **Visao general del codec Norito** - `reference/norito-codec.md` se conecta directamente a la especificacao autoritativa `norito.md` mientras a la tabla del portal esta sendo preenchida.
+- **Torii OpenAPI** - `/reference/torii-openapi` renderiza a especificacao REST más reciente de Torii usando Redoc. Regenere una especificación con `npm run sync-openapi -- --version=current --latest` (adicione `--mirror=<label>` para copiar o instantáneas para versiones históricas adicionales).
+- **Tablas de configuración** - El catálogo completo de parámetros fica en `docs/source/references/configuration.md`. En el portal que ofrece importación automática, consulte este archivo Markdown para valores predeterminados exactos y anulaciones de ambiente.
+- **Versión de documentos** - El menú desplegable de versao na navbar expoe instantáneas congeladas criados con `npm run docs:version -- <label>`, facilitando la comparación de orientaciones entre versiones.

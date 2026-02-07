@@ -4,56 +4,58 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Informe de soak de acumulación de capacidad SF-2c
+# SF-2c の容量の蓄積についての情報
 
-Fecha: 2026-03-21
+フェチャ: 2026-03-21
 
-## Alcance
+## アルカンス
 
-Este informe registra las pruebas determinísticas de soak de acumulación de capacidad SoraFS y pagos
-solicitadas bajo la hoja de ruta SF-2c.
+エステは、容量 SoraFS およびパゴスに蓄積されたプルエバスの登録を決定することを通知します。
+SF-2c を要求します。
 
-- **Soak multi-provider de 30 días:** Ejecutado por
-  `capacity_fee_ledger_30_day_soak_deterministic` en
-  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  El harness instancia cinco providers, abarca 30 ventanas de settlement y
-  valida que los totales del ledger coincidan con una proyección de referencia
-  calculada de forma independiente. La prueba emite un digest Blake3
-  (`capacity_soak_digest=...`) para que CI pueda capturar y comparar el snapshot
-  canónico.
-- **Penalizaciones por subentrega:** Impuestas por
+- **マルチプロバイダーを 30 日間浸します:** Ejecutado por
+  `capacity_fee_ledger_30_day_soak_deterministic` ja
+  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`。
+  エル ハーネス インスタンス シンコ プロバイダー、アバルカ 30 ベンタナ デ 和解 y
+  参照の合計と元帳の一致を検証します。
+  独立した計算方法。ラ・プルエバ・エミット・アン・ダイジェスト Blake3
+  (`capacity_soak_digest=...`) CI プエダのキャプチャと比較スナップショット
+  カノニコ。
+- **罰則:** 罰則:**
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (mismo archivo). La prueba confirma que los umbrales de strikes, cooldowns,
-  slashes de collateral y contadores del ledger permanecen determinísticos.
+  （ミスモアルキーボ）。ラ・プルエバは、ストライキ、クールダウン、
+  担保と帳簿の永久的な確定性をスラッシュします。
 
-## Ejecución
+## 排出
 
-Ejecuta las validaciones de soak localmente con:
+ローカル情報を浸すための有効性の確認:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Las pruebas completan en menos de un segundo en un portátil estándar y no requieren
-fixtures externas.
+必要な準備を必要とせずに、安全な管理を完了するための準備を完了します。
+備品の外部。
 
-## Observabilidad
+## 観察可能性
 
-Torii ahora expone snapshots de crédito de providers junto a fee ledgers para que los dashboards
-puedan gatear sobre saldos bajos y penalty strikes:
+Torii アホラは、ダッシュボードにある料金台帳とプロバイダーのクレジットのスナップショットを公開します
+プエダン ガタール ソブレ サルドス バホス y ペナルティ ストライク:
 
-- REST: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
-  reflejan los campos del ledger verificados en la prueba de soak. Ver
-  `crates/iroha_torii/src/sorafs/registry.rs`.
-- Importación de Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` grafica los
-  contadores de strikes exportados, totales de penalizaciones y collateral en garantía para que el
-  equipo on-call pueda comparar los baselines de soak con entornos en vivo.
+- REST: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` クエリ
+  リフレジャン・ロス・カンポス・デル・レジャー・ベリフィカドス・アン・ラ・プルエバ・デ・ソーク。バージョン
+  `crates/iroha_torii/src/sorafs/registry.rs`。
+- Grafana のインポート: `dashboards/grafana/sorafs_capacity_penalties.json` グラフィックス
+  輸出ストライキの管理、罰金および保証金の総額
+  オンコールプエダは、ベースラインを生体内で浸漬して比較します。
 
-## Seguimiento
+## セギミエント
 
-- Programar ejecuciones de gate semanales en CI para reejecutar la prueba de soak (smoke-tier).
-- Extender el tablero de Grafana con objetivos de scrape de Torii cuando las exportaciones de
-  telemetry de producción estén disponibles.
+- CI パラ Reejecutar la prueba de soak (smoke-tier) のプログラムの出力。
+- Grafana オブジェクトのスクレイピングを行うエクステンダー、Torii のエクスポート機能
+  生産管理の遠隔測定。

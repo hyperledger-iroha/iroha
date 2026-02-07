@@ -7,138 +7,133 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 73f5ca7a7484a26e901102dd6950b7110a18e7fa215a46540c7189c919e0958f
 source_last_modified: "2025-12-29T18:16:35.942266+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SM2/SM3/SM4 Compliance & Export Brief
+# SM2/SM3/SM4 Համապատասխանության և արտահանման համառոտ
 
-This brief supplements the architecture notes in `docs/source/crypto/sm_program.md`
-and provides actionable guidance for engineering, Ops, and legal teams as the
-GM/T algorithm family moves from verify-only preview to broader enablement.
+Այս համառոտագիրը լրացնում է `docs/source/crypto/sm_program.md` ճարտարապետական նշումները
+և տրամադրում է գործող ուղեցույց ինժեներական, օպերատիվ և իրավաբանական թիմերի համար, ինչպիսիք են
+GM/T ալգորիթմների ընտանիքը անցնում է միայն ստուգման նախադիտումից դեպի ավելի լայն միացում:
 
-## Summary
-- **Regulatory basis:** China’s *Cryptography Law* (2019), *Cybersecurity Law*, and
-  *Data Security Law* classify SM2/SM3/SM4 as “commercial cryptography” when deployed
-  onshore. Operators must file usage reports, and certain sectors require accredited
-  testing prior to production use.
-- **International controls:** Outside China the algorithms fall under US EAR Category
-  5 Part 2, EU 2021/821 Annex 1 (5D002), and similar national regimes. Open-source
-  publication typically qualifies for license exceptions (ENC/TSU), but binaries
-  shipped to embargoed regions remain controlled exports.
-- **Project policy:** SM features remain disabled by default. Signing functionality
-  will only be enabled after external audit closure, deterministic perf/telemetry
-  gating, and operator documentation (this brief) land.
+## Ամփոփում
+- **Կարգավորիչ հիմք՝ ** Չինաստանի *Գաղտնագրության մասին օրենքը* (2019), *Կիբերանվտանգության մասին օրենքը* և
+  *Տվյալների անվտանգության օրենքը* դասակարգում է SM2/SM3/SM4-ը որպես «առևտրային գաղտնագրություն», երբ տեղակայվում է
+  ափին. Օպերատորները պետք է ներկայացնեն օգտագործման հաշվետվություններ, և որոշ ոլորտներ պահանջում են հավատարմագրում
+  թեստավորում մինչև արտադրական օգտագործումը.
+- **Միջազգային վերահսկողություն.** Չինաստանից դուրս ալգորիթմները պատկանում են ԱՄՆ EAR կատեգորիային
+  5 Մաս 2, ԵՄ 2021/821 Հավելված 1 (5D002) և նմանատիպ ազգային ռեժիմներ: Բաց կոդով
+  հրապարակումը սովորաբար համապատասխանում է լիցենզիայի բացառություններին (ENC/TSU), բայց երկուական
+  Էմբարգոյի տակ գտնվող տարածաշրջաններ առաքվող արտահանումը մնում է վերահսկվող:
+- ** Ծրագրի քաղաքականություն. ** SM գործառույթները լռելյայն մնում են անջատված: Ստորագրման գործառույթ
+  կմիացվի միայն արտաքին աուդիտի փակումից հետո, որոշիչ պերֆ/հեռաչափություն
+  դարպաս և օպերատորի փաստաթղթեր (այս համառոտ) հողատարածք:
 
-## Required Actions by Function
-| Team | Responsibilities | Artifacts | Owners |
-|------|------------------|-----------|--------|
-| Crypto WG | Track GM/T spec updates, coordinate third-party audits, maintain deterministic policy (nonce derivation, canonical r∥s). | `sm_program.md`, audit reports, fixture bundles. | Crypto WG lead |
-| Release Engineering | Gate SM features behind explicit config, maintain verify-only default, manage feature rollout checklist. | `release_dual_track_runbook.md`, release manifests, rollout ticket. | Release TL |
-| Ops / SRE | Provide SM enablement checklist, telemetry dashboards (usage, error rates), incident response plan. | Runbooks, Grafana dashboards, onboarding tickets. | Ops/SRE |
-| Legal Liaison | File PRC development/usage reports when nodes run in mainland China; review export posture for each bundle. | Filing templates, export statements. | Legal contact |
-| SDK Program | Surface SM algorithm support consistently, enforce deterministic behaviour, propagate compliance notes to SDK docs. | SDK release notes, docs, CI gating. | SDK leads |
+## Պահանջվող գործողություններ ըստ գործառույթի
+| Թիմ | Պարտականություններ | Արտեֆակտներ | Սեփականատերեր |
+|------|------------------|----------|--------|
+| Crypto WG | Հետևեք GM/T սպեկտրի թարմացումներին, համակարգեք երրորդ կողմի աուդիտները, պահպանեք դետերմինիստական ​​քաղաքականությունը (ոչ ածանցյալ, կանոնական r∥s): | `sm_program.md`, աուդիտի հաշվետվություններ, հարմարանքների փաթեթներ: | Crypto WG կապար |
+| Release Engineering | Gate SM-ի առանձնահատկությունները բացահայտ կազմաձևման հետևում, պահպանել միայն հաստատման լռելյայն, կառավարել գործառույթների տեղադրման ստուգաթերթը: | `release_dual_track_runbook.md`, թողարկման մանիֆեստներ, թողարկման տոմս: | Ազատել TL |
+| Գործողություններ / SRE | Տրամադրել SM-ի միացման ստուգաթերթ, հեռաչափության վահանակներ (օգտագործում, սխալի տոկոսադրույքներ), միջադեպերի արձագանքման պլան: | Runbooks, Grafana վահանակներ, մուտքի տոմսեր: | Ops/SRE |
+| Իրավական կապ | Ներկայացրեք ՉԺՀ-ի զարգացման/օգտագործման հաշվետվությունները, երբ հանգույցներն աշխատում են մայրցամաքային Չինաստանում; վերանայել արտահանման կեցվածքը յուրաքանչյուր փաթեթի համար: | Ներկայացման ձևանմուշներ, արտահանման հայտարարություններ: | Իրավական կապ |
+| SDK ծրագիր | Surface SM ալգորիթմը հետևողականորեն աջակցում է, կիրառում է դետերմինիստական ​​վարքագիծ, տարածում է համապատասխանության նշումներ SDK փաստաթղթերին: | SDK թողարկման նշումներ, փաստաթղթեր, CI դարպաս: | SDK-ն տանում է |## Փաստաթղթեր և ներկայացման պահանջներ (Չինաստան)
+1. **Ապրանքի ներկայացում (开发备案):** Ցամաքային զարգացման համար ներկայացրեք ապրանքի նկարագրությունը,
+   աղբյուրի առկայության հայտարարություն, կախվածության ցանկ և դետերմինիստական կառուցման քայլեր
+   գավառական կրիպտոգրաֆիայի վարչակազմը մինչև թողարկումը:
+2. **Վաճառքի/օգտագործման գրանցում (销售/使用备案):** Օպերատորները, որոնք աշխատում են SM-ով միացված հանգույցներ, պետք է
+   գրանցել օգտագործման շրջանակը, բանալիների կառավարումը և հեռաչափության հավաքածուն նույնով
+   իշխանություն։ Տրամադրել կոնտակտային տվյալներ և միջադեպերի արձագանքման SLA-ներ:
+3. **Սերտիֆիկացում (检测/认证):** Կարևոր ենթակառուցվածքի օպերատորները կարող են պահանջել.
+   հավատարմագրված թեստավորում: Տրամադրել վերարտադրելի կառուցման սցենարներ, SBOM և թեստային հաշվետվություններ
+   այնպես որ հոսանքով ներքևող ինտեգրատորները կարող են ավարտել սերտիֆիկացումն առանց ծածկագիրը փոխելու:
+4. **Գրառումների պահպանում.** Արխիվային փաստաթղթերը և հաստատումները համապատասխանության հետագծում:
+   Թարմացրեք `status.md`-ը, երբ նոր տարածաշրջանները կամ օպերատորները ավարտեն գործընթացը:
 
-## Documentation & Filing Requirements (China)
-1. **Product filing (开发备案):** For onshore development, submit product description,
-   source availability statement, dependency list, and deterministic build steps to
-   the provincial cryptography administration before release.
-2. **Sales/Usage filing (销售/使用备案):** Operators running SM-enabled nodes must
-   register usage scope, key management, and telemetry collection with the same
-   authority. Provide contact info and incident response SLAs.
-3. **Certification (检测/认证):** Critical infrastructure operators may require
-   accredited testing. Provide reproducible build scripts, SBOM, and test reports
-   so downstream integrators can complete certification without altering code.
-4. **Record-keeping:** Archive filings and approvals in the compliance tracker.
-   Update `status.md` when new regions or operators complete the process.
+## Համապատասխանության ստուգաթերթ
 
-## Compliance Checklist
+### Նախքան SM գործառույթները միացնելը
+- [ ] Հաստատեք, որ իրավաբանը վերանայել է նպատակային տեղակայման շրջանները:
+- [ ] Ստացեք դետերմինիստական կառուցման հրահանգներ, կախվածության դրսևորումներ և SBOM
+      արտահանումներ՝ փաստաթղթերով ներառելու համար։
+- [ ] Հավասարեցնել `crypto.allowed_signing`, `crypto.default_hash` և ընդունելություն
+      քաղաքականությունը դրսևորվում է թողարկման տոմսով:
+- [ ] Արտադրել օպերատորի հաղորդակցություններ, որոնք նկարագրում են SM առանձնահատկությունների շրջանակը,
+      ակտիվացման նախադրյալներ և հաշմանդամության հետադարձ պլաններ:
+- [ ] Արտահանել հեռաչափության վահանակներ, որոնք ծածկում են SM ստուգման/ստորագրության հաշվիչները,
+      սխալների տոկոսադրույքներ և կատարողական չափումներ (`sm3`, `sm4`, syscall-ի ժամանակացույց):
+- [ ] Պատրաստեք միջադեպի արձագանքման կոնտակտներ և սրման ուղիներ ափամերձ տարածքի համար
+      օպերատորները և Crypto WG-ն:
 
-### Before enabling SM features
-- [ ] Confirm legal counsel reviewed the target deployment regions.
-- [ ] Capture deterministic build instructions, dependency manifests, and SBOM
-      exports for inclusion with filings.
-- [ ] Align `crypto.allowed_signing`, `crypto.default_hash`, and admission
-      policy manifests with the rollout ticket.
-- [ ] Produce operator communications describing SM feature scope,
-      enablement prerequisites, and fallback plans for disablement.
-- [ ] Export telemetry dashboards covering SM verification/signature counters,
-      error rates, and perf metrics (`sm3`, `sm4`, syscall timing).
-- [ ] Prepare incident response contacts and escalation paths for onshore
-      operators and the Crypto WG.
+### Ներկայացման և աուդիտի պատրաստակամություն
+- [ ] Ընտրեք համապատասխան ներկայացման ձևանմուշը (ապրանքն ընդդեմ վաճառքի/օգտագործման) և լրացրեք
+      թողարկման մետատվյալներում մինչև ներկայացումը:
+- [ ] Կցեք SBOM արխիվները, դետերմինիստական ​​թեստի տառադարձումները և դրսևորվող հեշերը:
+- [ ] Համոզվեք, որ արտահանման վերահսկման հայտարարությունը արտացոլում է ճշգրիտ արտեֆակտները
+      առաքվել և մեջբերում է արտոնագրային բացառությունները, որոնց վրա հիմնված են (ENC/TSU):
+- [ ] Ստուգեք, որ աուդիտորական հաշվետվությունները, վերականգնման հետագծումը և օպերատորի մատյանները
+      կապված են ֆայլի փաթեթից:
+- [ ] Պահպանեք ստորագրված փաստաթղթերը, հաստատումները և նամակագրությունը համապատասխանության մեջ
+      որոնիչ՝ տարբերակված հղումներով։
 
-### Filing & audit readiness
-- [ ] Select the appropriate filing template (product vs. sales/usage) and fill
-      in the release metadata before submission.
-- [ ] Attach SBOM archives, deterministic test transcripts, and manifest hashes.
-- [ ] Ensure the export-control statement reflects the exact artefacts being
-      delivered and cites license exceptions relied upon (ENC/TSU).
-- [ ] Verify that audit reports, remediation tracking, and operator runbooks
-      are linked from the filing packet.
-- [ ] Store signed filings, approvals, and correspondence in the compliance
-      tracker with versioned references.
+### Հետհաստատման գործողություններ
+- [ ] Թարմացրեք `status.md`-ը և թողարկման տոմսը, երբ ներկայացումն ընդունվի:
+- [ ] Վերագործարկեք հեռաչափության վավերացումը՝ դիտելիության ծածկույթի համընկնումները հաստատելու համար
+      ներկայացման մուտքերը:
+- [ ] Պլանավորեք փաստաթղթերի, աուդիտի հաշվետվությունների պարբերական վերանայում (առնվազն տարին մեկ),
+      և արտահանման հայտարարություններ՝ սպեցիֆիկ/կանոնակարգային թարմացումները գրավելու համար:
+- [ ] Գործարկեք լրացումներ ներկայացնելը, երբ կոնֆիգուրացիան, հատկանիշի շրջանակը կամ հոսթինգը
+      հետքը նյութապես փոխվում է.## Արտահանման և բաշխման ուղեցույց
+- Ներառեք արտահանման կարճ հայտարարությունը թողարկման նշումներում/դրսևորումներում, որոնք հղում են կատարում վստահությանը
+  ENC/TSU-ի վրա։ Օրինակ՝
+  > «Այս թողարկումը պարունակում է SM2/SM3/SM4 իրականացումներ: Բաշխումը հետևում է ENC-ին
+  > (15 CFR Մաս 742) / ԵՄ 2021/821 Հավելված 1 5D002: Օպերատորները պետք է ապահովեն համապատասխանությունը
+  > տեղական արտահանման/ներմուծման օրենքներով»:
+- Չինաստանի ներսում տեղակայված շինությունների համար համակարգեք Ops-ի հետ՝ արտեֆակտներ հրապարակելու համար
+  ցամաքային ենթակառուցվածք; խուսափել SM միացված երկուականների միջսահմանային փոխանցումից, եթե
+  առկա են համապատասխան լիցենզիաներ.
+- Փաթեթների պահոցներին արտացոլելիս գրանցեք, թե որ արտեֆակտներն են ներառում SM հատկանիշները
+  պարզեցնել համապատասխանության հաշվետվությունը:
 
-### Post-approval operations
-- [ ] Update `status.md` and the rollout ticket once the filing is accepted.
-- [ ] Re-run telemetry validation to confirm observability coverage matches
-      the filing inputs.
-- [ ] Schedule periodic review (at least annually) of filings, audit reports,
-      and export statements to capture spec/regulatory updates.
-- [ ] Trigger filing addendums whenever configuration, feature scope, or hosting
-      footprint changes materially.
+## Օպերատորի ստուգաթերթ
+- [ ] Հաստատեք թողարկման պրոֆիլը (`scripts/select_release_profile.py`) + SM հատկանիշի դրոշը:
+- [ ] Վերանայեք `sm_program.md` և այս համառոտագիրը; ապահովել օրինական փաստաթղթերի գրանցումը:
+- [ ] Միացնել SM գործառույթները՝ կազմելով `sm`-ով, թարմացնելով `crypto.allowed_signing`-ը՝ ներառելով `sm2`, և `crypto.default_hash`-ին անցնելով `sm3-256`-ին, միայն այն բանից հետո, երբ աուդիտը դետերմինիզմ է:
+- [ ] Թարմացրեք հեռաչափության վահանակները/զգուշացումները՝ ներառելու SM հաշվիչները (ստուգման ձախողումներ,
+      ստորագրման հարցումներ, կատարողական չափումներ):
+- [ ] Պահպանեք մանիֆեստները, հեշ/ստորագրության ապացույցները և ներկայացման հաստատումները կից
+      թողարկման տոմսը:
 
-## Export & Distribution Guidance
-- Include a short export statement in release notes/manifests referencing reliance
-  on ENC/TSU. Example:
-  > “This release contains SM2/SM3/SM4 implementations. Distribution follows ENC
-  > (15 CFR Part 742) / EU 2021/821 Annex 1 5D002. Operators must ensure compliance
-  > with local export/import laws.”
-- For builds hosted inside China, coordinate with Ops to publish artifacts from
-  onshore infrastructure; avoid cross-border transfer of SM-enabled binaries unless
-  the appropriate licenses are in place.
-- When mirroring to package repositories, record which artefacts include SM features
-  to simplify compliance reporting.
+## Նմուշների ներկայացման կաղապարներ
 
-## Operator Checklist
-- [ ] Confirm release profile (`scripts/select_release_profile.py`) + SM feature flag.
-- [ ] Review `sm_program.md` and this brief; ensure legal filings are recorded.
-- [ ] Enable SM features by compiling with `sm`, updating `crypto.allowed_signing` to include `sm2`, and switching `crypto.default_hash` to `sm3-256` only after determinism safeguards are in place and audit status is green.
-- [ ] Update telemetry dashboards/alerts to include SM counters (verification failures,
-      signing requests, perf metrics).
-- [ ] Keep manifests, hash/signature proofs, and filing confirmations attached to
-      the rollout ticket.
-
-## Sample Filing Templates
-
-Templates live under `docs/source/crypto/attachments/` for easy inclusion in
-filing packets. Copy the relevant Markdown template into the operator’s change
-log or export it to PDF as required by local authorities.
+Կաղապարները գործում են `docs/source/crypto/attachments/`-ի ներքո՝ հեշտ ընդգրկվելու համար
+փաթեթների ներկայացում: Պատճենեք համապատասխան Markdown ձևանմուշը օպերատորի փոփոխության մեջ
+մուտքագրեք կամ արտահանեք այն PDF, ինչպես պահանջվում է տեղական իշխանությունների կողմից:
 
 - [`sm_product_filing_template.md`](attachments/sm_product_filing_template.md) —
-  provincial product filing (开发备案) form capturing release metadata, algorithms,
-  SBOM references, and support contacts.
+  գավառական արտադրանքի ներկայացման (开发备案) ձևաթղթեր, որոնք հավաքում են թողարկման մետատվյալները, ալգորիթմները,
+  SBOM հղումներ և աջակցության կոնտակտներ:
 - [`sm_sales_usage_filing_template.md`](attachments/sm_sales_usage_filing_template.md) —
-  operator sales/usage filing (销售/使用备案) outlining deployment footprint,
-  key management, telemetry, and incident response procedures.
+  օպերատորի վաճառքի/օգտագործման գրանցում (销售/使用备案), որտեղ ուրվագծվում է տեղակայման հետքը,
+  հիմնական կառավարման, հեռաչափության և միջադեպերի արձագանքման ընթացակարգերը:
 - [`sm_export_statement_template.md`](attachments/sm_export_statement_template.md) —
-  export-control declaration suitable for release notes, manifests, or legal
-  correspondence relying on ENC/TSU license exceptions.
+  արտահանման վերահսկողության հայտարարագիր, որը հարմար է թողարկման նշումների, մանիֆեստների կամ օրինականության համար
+  նամակագրություն, որը հիմնված է ENC/TSU լիցենզիայի բացառությունների վրա:## Ստանդարտներ և մեջբերումներ
+- **GM/T 0002-2012 / GB/T 32907-2016** — SM4 բլոկի ծածկագիրը և AEAD պարամետրերը (ECB/GCM/CCM): Համապատասխանում է `docs/source/crypto/sm_vectors.md`-ում գրանցված վեկտորներին:
+- **GM/T 0003-2012 / GB/T 32918.x-2016** — SM2 հանրային բանալին գաղտնագրություն, կորի պարամետրեր, ստորագրություն/ստուգման գործընթաց և Հավելված D հայտնի պատասխանների թեստեր:
+- **GM/T 0004-2012 / GB/T 32905-2016** — SM3 հեշ ֆունկցիայի ճշգրտում և համապատասխանության վեկտորներ:
+- **RFC 8998** — SM2 բանալիների փոխանակում և ստորագրության օգտագործում TLS-ում; մեջբերել OpenSSL/Tongsuo-ի հետ փոխգործակցության փաստագրման ժամանակ:
+- **Չինաստանի Ժողովրդական Հանրապետության գաղտնագրության մասին օրենք (2019)**, **Կիբերանվտանգության մասին օրենք (2017)**, **Տվյալների անվտանգության մասին օրենք (2021)** — Վերևում նշված ներկայացման աշխատանքային հոսքի իրավական հիմքը:
+- **ԱՄՆ EAR կատեգորիա 5 Մաս 2** և **ԵՄ կանոնակարգ 2021/821 Հավելված 1 (5D002)** — Արտահանման վերահսկման ռեժիմներ, որոնք կարգավորում են SM միացված երկուականները:
+- **Iroha արտեֆակտներ.** `scripts/sm_interop_matrix.sh` և `scripts/sm_openssl_smoke.sh` տրամադրում են դետերմինիստական ​​փոխգործակցության վերծանումներ, որոնք աուդիտորները կարող են կրկնել նախքան համապատասխանության հաշվետվությունները ստորագրելը:
 
-## Standards & Citations
-- **GM/T 0002-2012 / GB/T 32907-2016** — SM4 block cipher and AEAD parameters (ECB/GCM/CCM). Matches the vectors captured in `docs/source/crypto/sm_vectors.md`.
-- **GM/T 0003-2012 / GB/T 32918.x-2016** — SM2 public-key cryptography, curve parameters, signature/verification process, and Annex D known-answer tests.
-- **GM/T 0004-2012 / GB/T 32905-2016** — SM3 hash function specification and conformance vectors.
-- **RFC 8998** — SM2 key exchange and signature use in TLS; cite when documenting interop with OpenSSL/Tongsuo.
-- **Cryptography Law of the People’s Republic of China (2019)**, **Cybersecurity Law (2017)**, **Data Security Law (2021)** — Legal basis for the filing workflow noted above.
-- **US EAR Category 5 Part 2** and **EU Regulation 2021/821 Annex 1 (5D002)** — Export-control regimes governing SM-enabled binaries.
-- **Iroha artefacts:** `scripts/sm_interop_matrix.sh` and `scripts/sm_openssl_smoke.sh` provide deterministic interop transcripts that auditors can replay before signing compliance reports.
+## Հղումներ
+- `docs/source/crypto/sm_program.md` — տեխնիկական ճարտարապետություն և քաղաքականություն:
+- `docs/source/release_dual_track_runbook.md` - բաց թողարկման և թողարկման գործընթաց:
+- `docs/source/sora_nexus_operator_onboarding.md` - օպերատորի նմուշի ներբեռնման հոսք:
+- GM/T 0002-2012, GM/T 0003-2012, GM/T 0004-2012, GB/T 32918 շարք, RFC 8998:
 
-## References
-- `docs/source/crypto/sm_program.md` — technical architecture and policy.
-- `docs/source/release_dual_track_runbook.md` — release gating and rollout process.
-- `docs/source/sora_nexus_operator_onboarding.md` — sample operator onboarding flow.
-- GM/T 0002-2012, GM/T 0003-2012, GM/T 0004-2012, GB/T 32918 series, RFC 8998.
-
-Questions? Contact the Crypto WG or Legal liaison via the SM rollout tracker.
+Հարցե՞ր: Կապվեք Crypto WG-ի կամ իրավական կապի հետ SM rollout tracker-ի միջոցով:

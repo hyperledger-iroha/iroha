@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 305a3f3b253a013825d4dd798d2282e111913ec777fe0fbf5b02a92c7172b92a
 source_last_modified: "2025-12-29T18:16:35.076964+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
-# SNS Arbitration Transparency Report — <Month YYYY>
+# SNS արբիտրաժային թափանցիկության հաշվետվություն — <Month YYYY>
 
-- **Suffix:** `<.sora / .nexus / .dao>`
-- **Reporting window:** `<ISO start>` → `<ISO end>`
-- **Prepared by:** `<Council liaison>`
-- **Source artefacts:** `cases.ndjson` SHA256 `<hash>`, dashboard export `<filename>.json`
+- **Վածածանց՝** `<.sora / .nexus / .dao>`
+- **Հաշվետվության պատուհան՝** `<ISO start>` → `<ISO end>`
+- **Պատրաստել է՝** `<Council liaison>`
+- **Աղբյուր արտեֆակտներ.** `cases.ndjson` SHA256 `<hash>`, վահանակի արտահանում `<filename>.json`
 
-## 1. Executive Summary
+## 1. Գործադիր ամփոփում
 
-- Total new cases: `<count>`
-- Cases closed this period: `<count>`
-- SLA compliance: `<ack %>` acknowledge / `<resolution %>` decision
-- Guardian overrides issued: `<count>`
-- Transfers/refunds executed: `<count>`
+- Ընդհանուր նոր դեպքեր՝ `<count>`
+- Գործերը փակվել են այս ժամանակահատվածում՝ `<count>`
+- SLA համապատասխանություն՝ `<ack %>` ճանաչում / `<resolution %>` որոշում
+- Խնամակալի վերափոխումները թողարկված են՝ `<count>`
+- Կատարված փոխանցումներ/վերադարձումներ՝ `<count>`
 
 ## 2. Case Mix
 
-| Dispute type | New cases | Closed cases | Median resolution (days) |
-|--------------|-----------|--------------|--------------------------|
-| Ownership | 0 | 0 | 0 |
-| Policy violation | 0 | 0 | 0 |
-| Abuse | 0 | 0 | 0 |
-| Billing | 0 | 0 | 0 |
-| Other | 0 | 0 | 0 |
+| Վեճի տեսակը | Նոր դեպքեր | Փակված գործեր | Միջին լուծաչափը (օր) |
+|--------------|--------------------------------------------------------|
+| Սեփականություն | 0 | 0 | 0 |
+| Քաղաքականության խախտում | 0 | 0 | 0 |
+| Չարաշահում | 0 | 0 | 0 |
+| Հաշվարկային | 0 | 0 | 0 |
+| Այլ | 0 | 0 | 0 |
 
 ## 3. SLA Performance
 
-| Priority | Acknowledge SLA | Achieved | Resolution SLA | Achieved | Breaches |
-|----------|-----------------|----------|----------------|----------|----------|
-| Urgent | ≤ 2 h | 0% | ≤ 72 h | 0% | 0 |
-| High | ≤ 8 h | 0% | ≤ 10 d | 0% | 0 |
-| Standard | ≤ 24 h | 0% | ≤ 21 d | 0% | 0 |
-| Info | ≤ 3 d | 0% | ≤ 30 d | 0% | 0 |
+| Առաջնահերթություն | Ճանաչել SLA | Ձեռք բերված | Բանաձեւ SLA | Ձեռք բերված | Խախտումներ |
+|----------|----------------|----------|---------------|----------|---------|
+| Շտապ | ≤ 2ժ | 0% | ≤ 72ժ | 0% | 0 |
+| Բարձր | ≤ 8ժ | 0% | ≤ 10դ | 0% | 0 |
+| Ստանդարտ | ≤ 24ժ | 0% | ≤ 21դ | 0% | 0 |
+| Տեղեկություն | ≤ 3d | 0% | ≤ 30դ | 0% | 0 |
 
-Describe root causes for any breaches and link to remediation tickets.
+Նկարագրեք ցանկացած խախտումների հիմնական պատճառները և հղում կատարեք վերականգնման տոմսերին:
 
-## 4. Case Register
+## 4. Գործի գրանցում
 
-| Case ID | Selector | Priority | Status | Outcome | Notes |
+| Գործի ID | Ընտրիչ | Առաջնահերթություն | Կարգավիճակը | Արդյունք | Ծանոթագրություններ |
 |---------|----------|----------|--------|---------|-------|
-| SNS-YYYY-NNNNN | `label.suffix` | Standard | Closed | Upheld | `<summary>` |
+| SNS-YYYY-NNNNNN | `label.suffix` | Ստանդարտ | Փակ | Պահպանվել է | `<summary>` |
 
-Provide one-line notes referencing anonymised facts or public vote links. Seal
-where required and mention redactions applied.
+Տրամադրեք մեկ տողով նշումներ՝ հղում անելով անանուն փաստերին կամ հանրային քվեարկության հղումներին: Կնիք
+անհրաժեշտության դեպքում և նշեք կիրառված փոփոխությունները:
 
-## 5. Actions & Remedies
+## 5. Գործողություններ և միջոցներ
 
-- **Freezes / releases:** `<counts + case ids>`
-- **Transfers:** `<counts + assets moved>`
-- **Billing adjustments:** `<credits/debits>`
-- **Policy follow-ups:** `<tickets or RFCs opened>`
+- **Սառեցնում է / թողարկում՝** `<counts + case ids>`
+- **Փոխանցումներ՝** `<counts + assets moved>`
+- **Վճարման ճշգրտումներ.** `<credits/debits>`
+- **Քաղաքականության հետևում.** `<tickets or RFCs opened>`
 
-## 6. Appeals & Guardian Overrides
+## 6. Բողոքարկումներ և խնամակալների վերացումներ
 
-Summarise any appeals escalated to the guardian board, including timestamps and
-decisions (approve/deny). Link to `sns governance appeal` records or council
-votes.
+Ամփոփեք բոլոր բողոքարկումները, որոնք ուղղված են խնամակալության խորհրդին, ներառյալ ժամանակային դրոշմանիշները և
+որոշումներ (հաստատել/մերժել): Հղում դեպի `sns governance appeal` գրառումները կամ խորհուրդը
+ձայներ։
 
-## 7. Outstanding Items
+## 7. Ակնառու իրեր
 
-- `<Action item>` — Owner `<name>`, ETA `<date>`
-- `<Action item>` — Owner `<name>`, ETA `<date>`
+- `<Action item>` — Սեփականատեր `<name>`, ETA `<date>`
+- `<Action item>` — Սեփականատեր `<name>`, ETA `<date>`
 
-Attach NDJSON, Grafana exports, and CLI logs referenced in this report.
+Կցեք NDJSON, Grafana արտահանումները և CLI տեղեկամատյանները, որոնց հղումը նշված է այս զեկույցում:

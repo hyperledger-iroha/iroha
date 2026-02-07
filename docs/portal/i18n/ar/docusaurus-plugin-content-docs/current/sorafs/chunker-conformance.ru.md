@@ -4,58 +4,58 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-conformance.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
-title: Руководство по соответствию chunker SoraFS
-sidebar_label: Соответствие chunker
-description: Требования и workflow для сохранения детерминированного профиля chunker SF1 в fixtures и SDKs.
+المعرف: توافق القطعة
+العنوان: Руководство по соответствию Chunker SoraFS
+Sidebar_label: Соответствие Chunker
+الوصف: البحث وسير العمل من أجل تحديد ملف تعريف Chunker SF1 في التركيبات ومجموعات SDK.
 ---
 
 :::note Канонический источник
 :::
 
-Этот документ фиксирует требования, которым должна следовать каждая реализация, чтобы
-оставаться совместимой с детерминированным профилем chunker SoraFS (SF1). Он также
-документирует workflow регенерации, политику подписей и шаги верификации, чтобы
-потребители fixtures в SDKs оставались синхронизированными.
+يجب أن يكون هذا المستند ضروريًا للتنفيذ بعد ذلك
+نلتزم بالمواصفات المحددة لملف التعريف الخاص بـchunker SoraFS (SF1). مرة أخرى
+توثيق تجديدات سير العمل والملاحظات السياسية والتحقق منها
+يقوم مشتري التركيبات في SDKs بمزامنة المزامنة.
 
-## Канонический профиль
+## الملف الشخصي الكنسي
 
-- Входной seed (hex): `0000000000dec0ded`
-- Целевой размер: 262144 bytes (256 KiB)
-- Минимальный размер: 65536 bytes (64 KiB)
-- Максимальный размер: 524288 bytes (512 KiB)
-- Rolling polynomial: `0x3DA3358B4DC173`
-- Seed таблицы gear: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- البذور Водной (ست عشرية): `0000000000dec0ded`
+- الحجم الخلوي: 262144 بايت (256 كيلو بايت)
+- الحجم الأدنى: 65536 بايت (64 كيلو بايت)
+- الحجم الأقصى: 524288 بايت (512 كيلو بايت)
+- كثير الحدود المتداول: `0x3DA3358B4DC173`
+- معدات أقراص البذور: `sorafs-v1-gear`
+- قناع الاستراحة: `0x0000FFFF`
 
-Эталонная реализация: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Любое SIMD-ускорение должно выдавать идентичные границы и digests.
+تحقيق إيطالي: `sorafs_chunker::chunk_bytes_with_digests_profile`.
+يجب على أي شخص يرغب في الحصول على SIMD التحقق من حبيبات وهضمات متطابقة.
 
-## Набор fixtures
+## تركيبات نابوري
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` регенерирует
-fixtures и выпускает следующие файлы в `fixtures/sorafs_chunker/`:
+تم تجديد `cargo run --locked -p sorafs_chunker --bin export_vectors`
+التركيبات وتعبئة الملفات التالية في `fixtures/sorafs_chunker/`:- `sf1_profile_v1.{json,rs,ts,go}` — الجرانيت الكنسي للعلبة
+  يمكنك شراء Rust وTypeScript وGo. يتم تسليم كل ملف إلى المقبض الأساسي كيف
+  `sorafs.sf1@1.0.0`، ثم `sorafs.sf1@1.0.0`). Порадок fixiruется
+  `ensure_charter_compliance` ولا يتم حذفها.
+- `manifest_blake3.json` — بيان BLAKE3 الذي تم التحقق منه، تركيبات الملف المثبت.
+- `manifest_signatures.json` — راجع الرسالة (Ed25519) في أعلى ملخص البيان.
+- `sf1_profile_v1_backpressure.json` والمجموعات الكبيرة في `fuzz/` —
+  يتم استخدام تحديد سيناريوهات البث في اختبار الضغط الخلفي.
 
-- `sf1_profile_v1.{json,rs,ts,go}` — канонические границы чанков для
-  потребителей Rust, TypeScript и Go. Каждый файл объявляет канонический handle как
-  `sorafs.sf1@1.0.0`, затем `sorafs.sf1@1.0.0`). Порядок фиксируется
-  `ensure_charter_compliance` и НЕ ДОЛЖЕН изменяться.
-- `manifest_blake3.json` — BLAKE3-верифицированный manifest, покрывающий каждый файл fixtures.
-- `manifest_signatures.json` — подписи совета (Ed25519) поверх digest манифеста.
-- `sf1_profile_v1_backpressure.json` и сырые corpora в `fuzz/` —
-  детерминированные streaming сценарии, используемые в тестах back-pressure chunker.
+### مقالة سياسية
 
-### Политика подписей
+تشتمل تركيبات التجديد **الجهد** على مكونات صالحة. مولد كهربائي
+قم بإيقاف تشغيل الاتصال غير المصرح به، إذا لم يسبق له مثيل `--allow-unsigned` (مسبق
+فقط للتجارب المحلية). تحويلات подписей إلحاق فقط و
+إلغاء التكرار من خلال التسليم.
 
-Регенерация fixtures **должна** включать валидную подпись совета. Генератор
-отклоняет неподписанный вывод, если явно не передан `--allow-unsigned` (предназначен
-только для локальных экспериментов). Конверты подписей append-only и
-дедуплицируются по подписанту.
-
-Чтобы добавить подпись совета:
+تريد إضافة هذه النصائح:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -63,33 +63,31 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Верификация
+## التحقق
 
-CI helper `ci/check_sorafs_fixtures.sh` повторно запускает генератор с
-`--locked`. Если fixtures расходятся или отсутствуют подписи, job падает. Используйте
-этот скрипт в nightly workflows и перед отправкой изменений fixtures.
+مساعد CI `ci/check_sorafs_fixtures.sh` مولد الغلق الخلفي مع
+`--locked`. إذا تم إرسال التركيبات أو تقديم طلب، فستكون الوظيفة مناسبة. استخدم
+هذا البرنامج النصي في سير العمل ليلاً ويسبق التركيبات المتغيرة.
 
-Шаги ручной проверки:
+بعض الأسئلة البسيطة:
 
-1. Запустите `cargo test -p sorafs_chunker`.
-2. Выполните `ci/check_sorafs_fixtures.sh` локально.
-3. Убедитесь, что `git status -- fixtures/sorafs_chunker` чист.
+1. أدخل `cargo test -p sorafs_chunker`.
+2. استخدم `ci/check_sorafs_fixtures.sh` محليًا.
+3. يرجى ملاحظة أن `git status -- fixtures/sorafs_chunker` موجود.
 
-## Плейбук обновления
+## اشتراك بلاي بوك
 
-При предложении нового профиля chunker или обновлении SF1:
+قبل الملف الشخصي المقترح الجديد Chunker أو SF1:سم. أيضا: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
+الحاجة إلى التحقق من صحة العناصر المقترحة والاختيارات.
 
-См. также: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) для
-требований к метаданным, шаблонов предложений и чеклистов валидации.
+1. قم بتوصيل `ChunkProfileUpgradeProposalV1` (باسم RFC SF-1) بالمعلمات الجديدة.
+2. قم بإعادة تجديد التركيبات من خلال `export_vectors` وقم بطباعة بيان الملخص الجديد.
+3. قم بإدراج البيان المطلوب بشأن رغبتك. كل ما تحتاج إليه هو تقديم
+   تم الإضافة إلى `manifest_signatures.json`.
+4. قم بشراء تركيبات SDK المجانية (Rust/Go/TS) وحافظ على التكافؤ بين وقت التشغيل.
+5. قم بإعادة تنظيم المجموعة الزغبية من خلال تغيير المعلمات.
+6. تعرف على هذا المقبض الجديد المتطور والبذور والهضم.
+7. قم بالتغيير على الفور باستخدام التوصيات وخريطة الطريق.
 
-1. Подготовьте `ChunkProfileUpgradeProposalV1` (см. RFC SF-1) с новыми параметрами.
-2. Регенерируйте fixtures через `export_vectors` и зафиксируйте новый digest манифеста.
-3. Подпишите манифест требуемым кворумом совета. Все подписи должны быть
-   добавлены в `manifest_signatures.json`.
-4. Обновите затронутые SDK fixtures (Rust/Go/TS) и обеспечьте паритет между runtime.
-5. Регенерируйте fuzz corpora при изменении параметров.
-6. Обновите это руководство новым handle профиля, seeds и digest.
-7. Отправьте изменения вместе с обновленными тестами и roadmap-обновлениями.
-
-Изменения, которые затрагивают границы чанков или digests без соблюдения этого процесса,
-недействительны и не должны быть смержены.
+التحسين الذي يغذي الحبوب أو الهضم دون الانضمام إلى هذه العملية,
+يتم دمج الأشياء غير الضرورية وغير المجهدة.

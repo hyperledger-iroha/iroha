@@ -7,92 +7,87 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d5d0657539dfcca1869a0ab4fc9adee8665f18708f71b4c116dc8900ae5eae75
 source_last_modified: "2026-01-05T09:28:12.004169+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM Compliance Brief — Chinese Cryptography Law Obligations
-% Iroha Compliance & Crypto Working Groups
-% 2026-02-12
+% SM མཐུན་སྒྲིག་མདོར་བསྡུས། — རྒྱ་ནག་གི་ ཀྲོབ་མདའ་རྩེད་མ།
+% Iroha མཐུན་སྒྲིག་དང་ ཀིརིཔ་ཊོ་ལཱ་འབད་མི་སྡེ་ཚན་ཚུ།
+% ༢༠༢༦-༠༢-༡༢
 
-# Prompt
+# འདི་འཕྲོ་ལས
 
-> You are LLM acting as a compliance analyst for the Hyperledger Iroha crypto and platform teams.  
-> Background:  
-> - Hyperledger Iroha is a Rust-based permissioned blockchain that now supports the Chinese GM/T SM2 (signatures), SM3 (hash), and SM4 (block cipher) primitives.  
-> - Operators in mainland China must comply with the PRC Cryptography Law (2019), the Multi-Level Protection Scheme (MLPS 2.0), State Cryptography Administration (SCA) filing rules, and import/export controls overseen by the Ministry of Commerce (MOFCOM) and the Customs Administration.  
-> - Iroha distributes open-source software internationally. Some operators will compile SM-enabled binaries domestically, while others may import pre-built artefacts.  
-> Requested analysis: Summarise the key legal obligations triggered by shipping SM2/SM3/SM4 support in open-source blockchain software, including: (a) classification under the commercial vs. core/common cryptography buckets; (b) filing/approval requirements for software that implements state commercial cryptography; (c) export controls for binaries and source; (d) operational obligations on network operators (key management, logging, incident response) under MLPS 2.0. Outline concrete action items for the Iroha project (documentation, manifests, compliance statements) and for operators deploying SM-enabled nodes inside China.
+> ཁྱོད་ LLM འདི་ Hyperledger Iroha ཀིརིཔ་ཊོ་དང་ སྟེགས་བུ་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ བསྟར་སྤྱོད་ཀྱི་དབྱེ་དཔྱད་པ་སྦེ་ ལཱ་འབད་དོ་ཡོདཔ་ཨིན།  
+> རྒྱབ་ལྗོངས།  
+> - Hyperledger Iroha འདི་ Rust གཞི་བཞག་པའི་གནང་བ་སྤྲོད་ཡོད་པའི་བཀག་ཆ་ཅིག་ཨིནམ་ད་ ད་ལྟོ་ རྒྱ་ནག་གི་ཇི་ཨེམ་/ཊི་ཨེསི་ཨེམ་༢ (མཚན་རྟགས་) དང་ ཨེསི་ཨེམ་༣ (ཧཤ་) དེ་ལས་ ཨེསི་ཨེམ་༣ (བཀག་ཆ་སི་ཕར་) གནའ་དུས་ཚུ་ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན།  
+> - རྒྱ་ནག་ལུ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ PRC Crypography Law (2019) དང་ གནས་རིམ་སྣ་ཚོགས་ཀྱི་ ཉེན་སྲུང་ལས་རིམ་ (MLPS 2.0) དང་ མངའ་སྡེའི་ ཀྲོབ་མདའ་བདག་སྐྱོང་ (ཨེསི་སི་ཨེ་) ཡིག་ཆ་བཙུགས་ནིའི་ལམ་ལུགས་ དེ་ལས་ ཚོང་འབྲེལ་ལྷན་ཁག་གིས་ ལྟ་རྟོག་འབད་མི་ ནང་འདྲེན་/ཕྱིར་འདྲེན་ཚད་འཛིན་ཚུ་ བསྟར་སྤྱོད་འབད་དགོ།  
+> - Iroha གིས་ རྒྱལ་སྤྱིའི་ནང་ ཐོན་ཁུངས་ཁ་ཕྱེ་མཉེན་ཆས་བཀྲམ་སྤེལ་འབདཝ་ཨིན། བཀོལ་སྤྱོད་པ་ལ་ལུ་ཅིག་གིས་ རྒྱལ་ཁབ་ནང་ལུ་ ཨེསི་ཨེམ་ལྕོགས་ཅན་གཉིས་ བསྡུ་སྒྲིག་འབད་ནི་ཨིནམ་ད་ ལ་ལུ་ཅིག་གིས་ སྔོན་སྒྲིག་འབད་ཡོད་པའི་ ཅ་ཆས་ཚུ་ ནང་འདྲེན་འབད་འོང་།  
+> ཞུ་བ་འབད་མི་དབྱེ་དཔྱད།: SM2/SM3/SM4 གིས་ ཁ་ཕྱེ་ཡོད་པའི་ blobkchain མཉེན་ཆས་ནང་ རྒྱབ་སྐྱོར་འབད་མི་ ཁྲིམས་དོན་འགན་ཁུར་གཙོ་བོ་ཚུ་ བཅུད་བསྡུ་དགོ། (ཁ) མངའ་སྡེའི་ཚོང་འབྲེལ་གྱི་གསང་ཡིག་ལག་ལེན་འཐབ་མི་ མཉེན་ཆས་ཚུ་གི་དོན་ལུ་ ཡིག་ཆ་/ཆ་འཇོག་དགོས་མཁོ། (ག) གཉིས་ལྡན་དང་འབྱུང་ཁུངས་ཀྱི་དོན་ལུ་ཕྱིར་ཚོང་ཚད་འཛིན་ཚུ། (ད) ཡོངས་འབྲེལ་བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ལག་ལེན་གྱི་འགན་ཁུར། (ལྡེ་མིག་འཛིན་སྐྱོང་དང་ ནང་བསྐྱོད་ བྱུང་རིམ་ལན་འདེབས་) ཨེམ་ཨེལ་པི་ཨེསི་༢.༠ གི་འོག་ལུ་ཨིན། Iroha ལས་འགུལ་གྱི་དོན་ལུ་ (ཡིག་ཆ་དང་ གསལ་སྟོན་ བསྟར་སྤྱོད་གསལ་བཤད་ཚུ་) དེ་ལས་ རྒྱ་ནག་ནང་འཁོད་ལུ་ ཨེསི་ཨེམ་ལྕོགས་ཅན་བཟོ་ཡོད་པའི་ མཐུད་མཚམས་ཚུ་ བཀྲམ་སྤེལ་འབད་མི་ཚུ་གི་དོན་ལུ་ བཀོད་སྒྲིག་འབད།
 
-# Executive Summary
+# བཀོལ་སྤྱོད་བཅུད་བསྡུས།
 
-- **Classification:** SM2/SM3/SM4 implementations fall under “state commercial cryptography” (商业密码) rather than “core” or “common” cryptography because they are published public algorithms sanctioned for civilian/commercial usage. Open-source distribution is permitted but subject to filing when used in commercial products or services offered in China.
-- **Project obligations:** Provide algorithm provenance, deterministic build instructions, and a compliance statement noting that binaries implement state commercial cryptography. Maintain Norito manifests that flag SM capability so downstream integrators can complete filings.
-- **Operator obligations:** Chinese operators must file products/services using SM algorithms with the provincial SCA bureau, complete MLPS 2.0 registration (likely Level 3 for financial networks), deploy approved key-management and logging controls, and ensure export/import declarations align with MOFCOM catalogue exemptions.
+- **དབྱེ་ཁག་བཟོ་ནི།:** SM2/SM3/SM4 ལག་ལེན་འཐབ་ཐངས་ཚུ་ “མངའ་སྡེ་ཚོང་འབྲེལ་གྱི་གསང་ཡིག་” (商业密码) འོག་ལུ་ཚུདཔ་ཨིན། ཁ་ཕྱེ་ཡོད་པའི་ཐོན་ཁུངས་བཀྲམ་སྤེལ་འདི་ རྒྱ་ནག་ལུ་ ཚོང་འབྲེལ་གྱི་ཐོན་སྐྱེད་དང་ ཡང་ན་ ཞབས་ཏོག་ཚུ་ནང་ ལག་ལེན་འཐབ་པའི་སྐབས་ བཙུགས་ཆོགཔ་ཨིན།
+- **ལས་འགུལ་གྱི་འགན་ཁུར་ཚུ་:** ཨེལ་གོ་རི་དམ་གྱི་ འབྱུང་ཁུངས་དང་ གཏན་འབེབས་བཟོ་ནིའི་བཀོད་རྒྱ་ དེ་ལས་ གཉིས་ལྡན་ཚུ་གིས་ མངའ་སྡེའི་ཚོང་འབྲེལ་གྱི་གསང་ཡིག་ཚུ་ ལག་ལེན་འཐབ་ཨིན་པའི་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ གསལ་བཤད་ཚུ་ བྱིན། Norito བདག་འཛིན་འཐབ་མི་འདི་གིས་ SM གི་ལྕོགས་གྲུབ་ལུ་ རྟགས་བཀལ་ཡོདཔ་ལས་ མར་གྱི་མཉམ་བསྡོམས་འབད་མི་ཚུ་གིས་ ཡིག་སྣོད་ཚུ་མཇུག་བསྡུ་ཚུགས་ཟེར་ མངོན་གསལ་འབདཝ་ཨིན།
+- **Operator འགན་འཁྲི་ཚུ་:* རྒྱ་ནག་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མངའ་སྡེ་ SCA ཡིག་ཚང་དང་གཅིག་ཁར་ SM algorithms ལག་ལེན་འཐབ་སྟེ་ ཐོན་སྐྱེད་/ཞབས་ཏོག་ཚུ་ ཡིག་ཆ་བཟོ་དགོཔ་དང་ MLPS 2.0 ཐོ་བཀོད་ཆ་ཚང་ (དངུལ་འབྲེལ་ཡོངས་འབྲེལ་གྱི་དོན་ལུ་ གནས་རིམ་༣ པ་) ཆ་འཇོག་གྲུབ་པའི་ལྡེ་མིག་དང་ དྲན་ཐོ་ཚད་འཛིན་ཚུ་ བཙུགས་ཏེ་ ཕྱིར་ཚོང་/ནང་འདྲེན་གསལ་བསྒྲགས་ཚུ་ MOFCOM ཐོ་ཡིག་བཀག་ཆ་ཚུ་ ངེས་གཏན་བཟོ།
 
-# Regulatory Landscape
+# སྔོན་སྒྲིག་ས་ཆའི་གནས་ཚུལ།| སྒྲིག་གཞི་ | ཁྱབ་ཁོངས། | Iroha SM རྒྱབ་སྐྱོར། |
+|------------------------------------------------------ |
+| **ཀིརིཔ་ཊོ་གཱ་རཱ་ཕི་གི་ཁྲིམས་ (༢༠༡༩)** | ཀོར་/སྤྱིར་བཏང་/ཚོང་འབྲེལ་གྱི་གསང་ཡིག་དང་ འཛིན་སྐྱོང་ལམ་ལུགས་ ཡིག་ཆ་བཙུགས་ནི་ དེ་ལས་ ལག་ཁྱེར་ཚུ་ ངེས་འཛིན་འབདཝ་ཨིན། | SM2/SM3/SM4 འདི་ “ཚོང་འབྲེལ་གྱི་གསང་ཡིག་” དང་ རྒྱ་ནག་ལུ་ ཐོན་སྐྱེད་/ཞབས་ཏོག་སྦེ་ བྱིན་པའི་སྐབས་ ཡིག་ཆ་/ལག་ཁྱེར་གྱི་ལམ་ལུགས་ཚུ་ བསྟར་སྤྱོད་འབད་དགོཔ་ཨིན། |
+| **SCA བདག་སྐྱོང་ཚད་འཇལ་གྱི་ཚོང་འབྲེལ།** | གཞུང་སྐྱོང་ཐོན་སྐྱེད་དང་ཚོང་འབྲེལ་ དེ་ལས་ཞབས་ཏོག་བྱིན་ནི། ཐོན་སྐྱེད་ཡིག་སྣོད་ཡང་ན་ ལག་ཁྱེར་དགོཔ་ཨིན། | ཨེསི་ཨེམ་ཨཱལ་གོ་རི་དམ་ལག་ལེན་འཐབ་མི་ ཁ་ཕྱེ་བའི་འབྱུང་ཁུངས་མཉེན་ཆས་ལུ་ ཚོང་འབྲེལ་གྱི་མཆོད་པ་ཚུ་ནང་ལག་ལེན་འཐབ་པའི་སྐབས་ བཀོལ་སྤྱོད་ཡིག་སྣོད་ཚུ་དགོཔ་ཨིན། གོང་འཕེལ་གཏང་མི་ཚུ་གིས་ ཡིག་ཆ་ཚུ་ལུ་ གྲོགས་རམ་འབད་ནིའི་དོན་ལུ་ ཡིག་ཆ་བྱིན་དགོ། |
+| **MLPS 2.0 (ཡོངས་འབྲེལ་ཉེན་སྲུང་གི་ཁྲིམས་ལུགས་ + MLPS གི་སྒྲིག་གཞི་)** | བརྡ་དོན་རིམ་ལུགས་ཚུ་དབྱེ་བ་ཕྱེ་ནི་དང་ ཉེན་སྲུང་ཚད་འཛིན་ཚུ་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ བཀོལ་སྤྱོད་པ་ཚུ་དགོཔ་ཨིན། གནས་རིམ་༣ པ་དང་དེ་ལས་ལྷག་པའི་ གསང་ཡིག་དང་འཁྲིལ་བའི་ སྒྲུབ་བྱེད་དགོཔ་ཨིན། | དངུལ་འབྲེལ་/ངོ་རྟགས་གནས་སྡུད་འཛིན་སྐྱོང་འཐབ་མི་ བཀག་ཆ་མཐུད་མཚམས་ཚུ་ སྤྱིར་བཏང་ལུ་ ཨེམ་ཨེལ་པི་ཨེསི་གནས་རིམ་༣ པའི་ནང་ ཐོ་བཀོད་འབདཝ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཨེསི་ཨེམ་ལག་ལེན་དང་ ལྡེ་མིག་འཛིན་སྐྱོང་ ནང་བསྐྱོད་འབད་ནི་ དེ་ལས་ བྱུང་རྐྱེན་འཛིན་སྐྱོང་ཚུ་ ཡིག་ཐོག་ལུ་བཀོད་དགོ། |
+| **MOFCOM ཕྱིར་འདྲེན་ཚད་འཛིན་ཐོ་ཡིག་དང་ཅ་དམ་ནང་འདྲེན་གྱི་ལམ་ལུགས་** | ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་ཐོན་སྐྱེད་ཚུ་ ཕྱིར་ཚོང་འཐབ་ཐངས་ཚད་འཛིན་འབད་ནི་ལུ་ ཨེལ་གོ་རི་དམ་/སྲ་ཆས་ལ་ལུ་ཅིག་གི་དོན་ལུ་ ཆོག་ཐམ་དགོཔ་ཨིན། | འབྱུང་ཁུངས་ཨང་རྟགས་དཔེ་བསྐྲུན་འདི་ སྤྱིར་བཏང་ལུ་ “མི་མང་མངའ་ཁོངས་” གི་དགོངས་དོན་ཚུ་གི་འོག་ལུ་ ཆ་མེད་གཏང་དགོཔ་ཨིན་རུང་ ཕྱིར་ཚོང་འཐབ་མི་འདི་གིས་ ཨེསི་ཨེམ་གྱི་ལྕོགས་གྲུབ་དང་གཅིག་ཁར་ གཉིས་ལྡན་གྱི་གཉིས་ལྡན་ཚུ་ ཆ་འཇོག་གྲུབ་མི་ཚུ་ལུ་ སྐྱེལ་འདྲེན་འབད་མ་ཚུགས་ཚུན་ཚོད་ ཐོ་གཞུང་འདི་ འབྱུང་བཅུགཔ་ཨིན། ནང་འདྲེན་འབད་མི་ཚུ་གིས་ མངའ་སྡེའི་ཚོང་འབྲེལ་གྱི་གསང་ཡིག་གསལ་བསྒྲགས་འབད་དགོ། |
 
-| Regulation | Scope | Impact on Iroha SM support |
-|------------|-------|----------------------------|
-| **Cryptography Law of the PRC (2019)** | Defines core/common/commercial cryptography, mandates management system, filing, and certification. | SM2/SM3/SM4 are “commercial cryptography” and must follow filing/certification rules when provided as products/services in China. |
-| **SCA Administrative Measures for Commercial Cryptography Products** | Governs production, sale, and service provision; requires product filing or certification. | Open-source software that implements SM algorithms needs operator filings when used in commercial offerings; developers should provide documentation to assist filings. |
-| **MLPS 2.0 (Cybersecurity Law + MLPS regulations)** | Requires operators to classify information systems and implement security controls; Level 3 or above needs cryptography compliance evidence. | Blockchain nodes handling financial/identity data typically register at MLPS Level 3; operators must document SM usage, key management, logging, and incident handling. |
-| **MOFCOM Export Control Catalogue & Customs Import Rules** | Controls export of cryptographic products, requires permits for certain algorithms/hardware. | Source code publication generally exempt under “public domain” provisions, but exporting compiled binaries with SM capability may trigger the catalogue unless shipped to approved recipients; importers must declare state commercial cryptography. |
+# འགན་འཁྲི།
 
-# Key Obligations
+## ༡.ཐོན་སྐྱེད་དང་ཞབས་ཞུའི་ཡིག་ཆ་ (མངའ་སྡེའི་ཕྲ་ཕུང་བདག་སྐྱོང་)
 
-## 1. Product & Service Filing (State Cryptography Administration)
+- **ཡིག་སྣོད་ཚུ་ག་ཅི་:** རྒྱ་ནག་ནང་ཐོན་སྐྱེད་/ཞབས་ཏོག་བྱིན་མི་ ངོ་བོ་ (དཔེར་ན་ བཀོལ་སྤྱོད་པ་ སཱའི་བྱིན་མི་)། ཁ་ཕྱེ་ཡོད་པའི་ཐོན་ཁུངས་རྒྱུན་སྐྱོང་པ་ཚུ་གིས་ ཡིག་སྣོད་བཙུགས་དགོཔ་མེད་རུང་ ཐུམ་སྒྲིལ་ལམ་སྟོན་ནང་ མར་འབབ་ཡིག་སྣོད་ཚུ་ ལྕོགས་ཅན་བཟོ་དགོ།
+- **བཀྲམ་སྤེལ་འབད་བཏུབ་མི་ཚུ་:** ཨེལ་གོ་རི་དམ་འགྲེལ་བཤད་ ཉེན་སྲུང་བཟོ་བཀོད་ཡིག་ཆ་ བརྟག་དཔྱད་སྒྲུབ་བྱེད་ བཀྲམ་སྤེལ་གྱི་རིམ་པ་ དང་ འབྲེལ་བ་འཐབ་སའི་ཁ་གསལ་ཚུ་ཨིན།
+- **Hyperledger བྱ་བ་:** ཨེལ་གོ་རི་དམ་ཁྱབ་ཚད་དང་ གཏན་འབེབས་བཟོ་བའི་ བཟོ་བསྐྲུན་གྱི་གོ་རིམ་ བརྟེན་པའི་ཧ་ཤེ་ དེ་ལས་ ཉེན་སྲུང་དྲི་ཚུ་གི་དོན་ལུ་ འབྲེལ་བ་འཐབ་ནི་ཚུ་རྩིས་ཏེ་ “ཨེསི་ཨེམ་ ཀིརིཔ་ཊོ་གཱ་ར་ཕི་གསལ་བསྒྲགས་” དཔར་བསྐྲུན་འབད།
 
-- **Who files:** The entity providing the product/service in China (e.g., operator, SaaS provider). Open-source maintainers are not required to file, but packaging guidance must enable downstream filings.
-- **Deliverables:** Algorithm description, security design docs, testing evidence, supply-chain provenance, and contact details.
-- **Iroha action:** Publish an “SM cryptography statement” including algorithm coverage, deterministic build steps, dependency hashes, and contact for security inquiries.
+## 2. ལག་ཁྱེར་དང་བརྟག་དཔྱད།
 
-## 2. Certification & Testing
+- ལས་ཁུངས་ལ་ལུ་ཅིག་ (དངུལ་འབྲེལ་དང་ བརྒྱུད་འཕྲིན་ དེ་ལས་ གལ་ཆེ་བའི་གཞི་རྟེན་) ཚུ་ལུ་ ངོས་ལེན་ཡོད་པའི་ བརྟག་དཔྱད་ཁང་བརྟག་དཔྱད་དང་ ཡང་ན་ ལག་ཁྱེར་དགོཔ་ཨིན།
+- GM/T གི་ཁྱད་ཚད་དང་འཁྲིལ་ཏེ་ བརྡ་སྟོན་འབད་མི་ འགྱུར་ལྡོག་བརྟག་དཔྱད་ཀྱི་ ཅ་ཆས་ཚུ་ བཙུགས་དགོ།
 
-- Certain sectors (finance, telecom, critical infrastructure) may require accredited lab testing or certification (e.g., CC-Grade/OSCCA certification).
-- Include regression test artefacts demonstrating compliance with GM/T specifications.
+## 3. MLPS 2.0 བཀོལ་སྤྱོད་ཚོད་འཛིན།
 
-## 3. MLPS 2.0 Operational Controls
+བཀོལ་སྤྱོད་པ་ཚུ་:1. ** blockchain system** འདི་ མི་མང་ཉེན་སྲུང་ལས་ཁུངས་དང་གཅིག་ཁར་ ཐོ་བཀོད་འབད།
+2. **ལྡེ་མིག་འཛིན་སྐྱོང་གི་སྲིད་བྱུས་ཚུ་ལག་ལེན་འཐབ་དགོ།: ལྡེ་མིག་མི་རབས་དང་བཀྲམ་སྤེལ་ བསྒྱིར་ཚད་ གཏོར་བཤིག་ SM2/SM4 དགོས་མཁོ་ཚུ་དང་མཐུན་སྒྲིག་འབད་ཡོདཔ། ལྡེ་མིག་མི་ཚེ་འཁོར་རིམ་གྱི་བྱུང་ལས་ཚུ།
+3. **ཉེན་སྲུང་རྩིས་ཞིབ་ལྕོགས་ཅན་བཟོ།**: ཨེསི་ཨེམ་ལྕོགས་ཅན་བཟོ་ཡོད་པའི་ཚོང་འབྲེལ་དྲན་ཐོ་ཚུ་ ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་བཀོལ་སྤྱོད་བྱུང་ལས་ དེ་ལས་ མ་འདྲཝ་བརྟག་དཔྱད་འབད། དྲན་ཐོ་ ≥ ཟླ་བ་ ༦ པ།
+4. **ལན་འདེབས་ལན་འདེབས་:** ཡིག་ཐོག་ལུ་བཀོད་པའི་ལན་འདེབས་འཆར་གཞི་ཚུ་ བདག་འཛིན་འཐབ་སྟེ་ གསང་ཡིག་རིག་པ་བཟོ་ནིའི་བྱ་རིམ་ཚུ་ བདེ་སྒྲིག་བཟོ་ནི་དང་ དུས་ཚོད་སྙན་ཞུ་ཚུ་ སྙན་ཞུ་འབད་ནི།
+༥. **Vendor འཛིན་སྐྱོང་:** ཡར་འཕེལ་ཅན་གྱི་མཉེན་ཆས་བྱིན་མི་ (Iroha ལས་འགུལ་) གིས་ ཉེན་ཁ་ཅན་གྱི་བརྡ་དོན་ཚུ་དང་ ཐིག་ཁྲམ་ཚུ་ བཀྲམ་སྤེལ་འབད་ཚུགས།
 
-Operators must:
+## 4. ནང་འདྲེན་/བསམ་གཞིགས།
 
-1. **Register the blockchain system** with the Public Security Bureau, including cryptography usage summaries.
-2. **Implement key management policies**: key generation, distribution, rotation, destruction aligned with SM2/SM4 requirements; log key lifecycle events.
-3. **Enable security auditing**: capture SM-enabled transaction logs, cryptographic operation events, and anomaly detection; retain logs ≥6 months.
-4. **Incident response:** maintain documented response plans that include cryptography compromise procedures and reporting timelines.
-5. **Vendor management:** ensure upstream software providers (Iroha project) can supply vulnerability notifications and patches.
+- **ཁ་ཕྱེ་ཡོད་པའི་འབྱུང་ཁུངས་ཨང་རྟགས་:** མི་མང་མངའ་ཁོངས་དམིགས་བསལ་གྱི་འོག་ལུ་ སྤྱིར་བཏང་སྦེ་ ཆ་མེད་གཏང་དགོཔ་ཨིན་རུང་ བདག་འཛིན་འཐབ་མི་ཚུ་གིས་ འཛུལ་སྤྱོད་དྲན་ཐོ་ཚུ་ བརྟག་ཞིབ་འབད་མི་ སར་བར་ཚུ་གུ་ཕབ་ལེན་འབད་དེ་ མངའ་སྡེ་ཚོང་འབྲེལ་གྱི་གསང་ཡིག་གཞི་བཞག་མི་ ཆོག་ཐམ་/བཀག་ཆ་འབད་མི་ཚུ་ཡང་ བཙུགས་དགོ།
+- **ཧེ་མ་ལས་བཟོ་ཡོད་པའི་གཉིས་ལྡན་:** ཕྱིར་འདྲེན་འབད་མི་ཚུ་གིས་ རྒྱ་ནག་ལས་/ཕྱི་ཁར་/ཕྱི་ཁར་/ཕྱི་ཁར་ཡོད་པའི་ གཉིས་ལྡན་གཉིས་ལྡན་གཏང་དགོཔ་ཨིན། སྤྱིར་བཏང་དགོས་དོན་མཉེན་ཆས་དམིགས་བསལ་གྱི་མཐུན་རྐྱེན་མེད་པའི་དོན་ལུ་ གཉིས་ལྡན་གྱི་གསལ་བསྒྲགས་འཇམ་ཏོང་ཏོ་ཅིག་གིས་ ལངམ་སྦེ་འོང་། བདག་འཛིན་པ་ཚུ་གིས་ ས་གནས་ཀྱི་བསླབ་བྱ་ལུ་ ཆ་འཇོག་མ་འབད་བ་ཅིན་ དབང་ཚད་དམ་དམ་ཡོད་པའི་ དབང་ཚད་ཚུ་ལས་ གཉིས་ལྡན་ཚུ་ བཀྲམ་སྤེལ་འབད་མི་ཆོག།
+- **Operator ནང་འདྲེན་:** གཉིས་ལྡན་འདི་ རྒྱ་ནག་ལུ་འབག་འོང་མི་ ངོ་བོ་ཚུ་གིས་ ཀིརིཔ་ཊོ་གཱ་ར་གི་ལག་ལེན་གསལ་བསྒྲགས་འབད་དགོ། ཧེཤ་ གསལ་སྟོན་ཚུ་བྱིན་ཞིནམ་ལས་ ཅ་དམ་བརྟག་དཔྱད་འདི་ འཇམ་ཏོང་ཏོ་བཟོ་ནི་ལུ་ ཨེསི་བི་ཨོ་ཨེམ་འབད།
 
-## 4. Import/Export Considerations
+# གྲོས་འཆར་བཀོད་པའི་ལས་གཞིའི་བྱ་བ་ཚུ།
 
-- **Open-source source code:** Typically exempt under public-domain exception, but maintainers should host downloads on servers that track access logs and include licence/disclaimer referencing state commercial cryptography.
-- **Pre-built binaries:** Exporters shipping SM-enabled binaries into/out of China should confirm whether the item is covered by the “Commercial Cryptography Export Control Catalogue”. For general-purpose software without specialised hardware, a simple dual-use declaration may suffice; maintainers should not distribute binaries from jurisdictions with stricter controls unless local counsel approves.
-- **Operator import:** Entities bringing binaries into China must declare cryptography usage. Provide hash manifests and SBOM to simplify customs inspection.
+1. **ཡིག་འཇགས་**།
+   - `docs/source/crypto/sm_program.md` མངའ་སྡེ་ཚོང་འབྲེལ་གྱི་གསང་ཡིག་གནས་རིམ་དང་ རེ་བ་ཚུ་ བཀོད་སྒྲིག་འབད་ནི་ དེ་ལས་ འབྲེལ་བ་འཐབ་སའི་ས་སྒོ་ཚུ་ལུ་ བསྟར་སྤྱོད་འབད་ནི།
+   - ཡིག་སྣོད་ཚུ་གྲ་སྒྲིག་འབད་བའི་སྐབས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ལག་ལེན་འཐབ་བཏུབ་པའི་ གསལ་སྟོན་ས་སྒོ་ (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) དཔར་བསྐྲུན་འབདཝ་ཨིན།
+   - Torii `/v1/node/capabilities` ཁྱབ་བསྒྲགས་ (དང་ `iroha runtime capabilities` CLI alias) གྲུ་གཟིངས་ཚུ་ གསར་བཏོན་ག་ར་དང་གཅིག་ཁར་ ངེས་གཏན་བཟོ།
+   - སྐད་ཡིག་གཉིས་ལྡན་ (EN/ZH) གིས་ འགན་ཁུར་ཚུ་ བཅུད་བསྡུ་སྟེ་ མགྱོགས་དྲགས་སྦེ་ འགོ་བཙུགས་དགོ།
+2. **བསྐྱར་བཟོ་གི་ཅ་ཆས་ཚུ་**
+   - ཨེསི་ཨེམ་ལྕོགས་ཅན་བཟོ་ཡོད་པའི་བཟོ་བསྐྲུན་ཚུ་གི་དོན་ལུ་ གྲུ་ཨེསི་བི་ཨོ་ཨེམ་/སི་ཀོ་ལཱོན་ཌི་ཨེགསི་ཡིག་སྣོད་ཚུ།
+   - གཏན་འབེབས་བཟོ་ནིའི་ ཡིག་ཆ་དང་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ ཌོག་ཀར་ཡིག་སྣོད་ཚུ་ བཙུགས་དགོ།
+3. **བཀོལ་སྤྱོད་ཡིག་སྣོད་ཚུ་རྒྱབ་སྐྱོར་འབད།**
+   - བདེན་ཁུངས་བཀལ་མི་ ཨེལ་གོ་རི་དམ་ལུ་ བསྟར་སྤྱོད་འབད་མི་ ཊེམ་པེལེཊི་ཡི་གུ་ཚུ་གིས་ གྲོགས་རམ་འབདཝ་ཨིན།
+   - ཚོང་པ་བརྡ་དོན་གྱི་དགོས་མཁོ་ཚུ་ གྲུབ་ཐབས་ལུ་ ཉེན་སྲུང་བསླབ་བྱའི་ཐོ་ཡིག་ཚུ་ ཡིག་འཕྲིན་ཐོ་ཡིག་ཅིག་ བདག་འཛིན་འཐབ་དགོ།
+4. **ནང་འཁོད་གཞུང་སྐྱོང་**
+   - བཏོན་གཏང་ནིའི་ཞིབ་དཔྱད་ཐོ་ཡིག་ནང་ ཨེསི་ཨེམ་ བསྟར་སྤྱོད་ཞིབ་དཔྱད་ས་ཚིགས་ཚུ་ འཚོལ་ཞིབ་ (རྩིས་ཞིབ་མཇུག་བསྡུ་ཡོདཔ་ ཡིག་ཆ་དུས་མཐུན་བཟོ་ཡོདཔ་ ས་སྒོ་གསལ་སྟོན་འབད་ནི་) འཚོལ་ཞིབ་འབད།)
 
-# Recommended Project Actions
+# བཀོལ་སྤྱོད་པའི་བྱ་བའི་རྣམ་གྲངས་ (རྒྱ་རིགས)།༡ བཀྲམ་སྤེལ་འདི་ “ཚོང་འབྲེལ་གྱི་གསང་ཡིག་ཐོན་སྐྱེད་/ཞབས་ཏོག་” ཅིག་ཨིན་པ་ཅིན་ གཏན་འབེབས་བཟོ། (ལས་འཛིན་ཡོངས་འབྲེལ་མང་ཤོས་ཅིག་གིས་ འབདཝ་ཨིན།)
+༢ ཡིག་སྣོད་ཐོན་སྐྱེད་/ཞབས་ཏོག མངའ་སྡེའི་ SCA ཡིག་ཚང་དང་གཅིག་ཁར་; Iroha བསྟར་སྤྱོད་ཀྱི་གསལ་བཤད་ SBOM, བརྟག་དཔྱད་སྙན་ཞུ།
+༣ MLPS 2.0, དམིགས་གཏད་གནས་རིམ་༣ པའི་ཚད་འཛིན་འོག་ལུ་ ཐོ་བཀོད་འབད་ཡོད་པའི་བཀག་ཆ་ལམ་ལུགས། ཉེན་སྲུང་ལྟ་རྟོག་ནང་ Iroha དྲན་ཐོ་ཚུ་ མཉམ་བསྡོམས་འབད།
+༤ ཨེསི་ཨེམ་ལྡེ་མིག་མི་ཚེ་འཁོར་རིམ་གྱི་བྱ་རིམ་ཚུ་གཞི་བཙུགས་འབད།
+༥ བྱུང་རྐྱེན་ལན་འདེབས་སྦྱོང་བརྡར་ནང་ གསང་ཡིག་རིག་པ་ བདེ་སྒྲིག་གནས་སྟངས་ཚུ་ བཙུགས་དགོ། Iroha བདག་འཛིན་འཐབ་མི་ཚུ་དང་གཅིག་ཁར་ ཡར་འཕར་གྱི་འབྲེལ་བ་ཚུ་གཞི་སྒྲིག་འབད།
+༦ མཐའ་མཚམས་ཀྱི་གནད་སྡུད་རྒྱུན་སྤེལ་གྱི་དོན་ལུ་ མི་སྒེར་གྱི་གནད་སྡུད་ཕྱིར་འདྲེན་འབད་བ་ཅིན་ སི་ཨེ་སི་ (Cyberspace བདག་སྐྱོང་) ཡིག་ཆ་ཁ་སྐོང་ཚུ་ ངེས་དཔྱད་འབད།
 
-1. **Documentation**
-   - Add a compliance appendix to `docs/source/crypto/sm_program.md` noting state commercial cryptography status, filing expectations, and contact points.
-   - Publish a Norito manifest field (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) that operators can use when preparing filings.
-   - Ensure the Torii `/v1/node/capabilities` advert (and the `iroha runtime capabilities` CLI alias) ships with every release so operators can capture the `crypto.sm` manifest snapshot for MLPS/密评 evidence.
-   - Provide bilingual (EN/ZH) compliance quickstart summarising obligations.
-2. **Release Artefacts**
-   - Ship SBOM/CycloneDX files for SM-enabled builds.
-   - Include deterministic build scripts and reproducible Dockerfiles.
-3. **Support Operator Filings**
-   - Offer template letters attesting algorithm compliance (e.g., GM/T references, test coverage).
-   - Maintain a security advisories mailing list to satisfy vendor-notification requirements.
-4. **Internal Governance**
-   - Track SM compliance checkpoints in release checklist (audit complete, documentation updated, manifest fields in place).
+# སི་ཊེན་ཌ་ལོན་པོརམཔི་ (འདྲ་བཤུས་/སྦྱར་པ)
 
-# Operator Action Items (China)
-
-1. Determine if the deployment constitutes a “commercial cryptography product/service” (most enterprise networks do).
-2. File product/service with provincial SCA bureau; attach Iroha compliance statement, SBOM, test reports.
-3. Register blockchain system under MLPS 2.0, target Level 3 controls; integrate Iroha logs into security monitoring.
-4. Establish SM key lifecycle procedures (use approved KMS/HSM where required).
-5. Include cryptography compromise scenarios in incident response drills; set escalation contacts with Iroha maintainers.
-6. For cross-border data flow, confirm additional CAC (Cyberspace Administration) filings if personal data is exported.
-
-# Standalone Prompt (Copy/Paste)
-
-> You are LLM acting as a compliance analyst for the Hyperledger Iroha crypto and platform teams.  
-> Background: Hyperledger Iroha is a Rust-based permissioned blockchain that now supports the Chinese GM/T SM2 (signatures), SM3 (hash), and SM4 (block cipher) primitives. Operators in mainland China must comply with the PRC Cryptography Law (2019), the Multi-Level Protection Scheme (MLPS 2.0), State Cryptography Administration (SCA) filing rules, and import/export controls overseen by MOFCOM and the Customs Administration. The Iroha project distributes SM-enabled open-source software internationally; some operators compile binaries domestically, while others import pre-built artefacts.  
-> Task: Summarise the legal obligations triggered by shipping SM2/SM3/SM4 support in open-source blockchain software. Cover the classification of these algorithms (commercial vs. core/common cryptography), required filings or certifications for software products, export/import controls relevant to source and binaries, and operational duties for network operators under MLPS 2.0 (key management, logging, incident response). Provide concrete action items for the Iroha project (documentation, manifests, compliance statements) and for operators deploying SM-enabled nodes inside China.
+> ཁྱོད་ཀྱིས་ Hyperledger Iroha ཀིརིཔ་ཊོ་དང་ སྟེགས་བུ་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ བསྟར་སྤྱོད་དབྱེ་དཔྱད་པ་སྦེ་ ལཱ་འབད་དོ་ཡོདཔ་ཨིན།  
+> རྒྱབ་ཁུངས་: Hyperledger Iroha འདི་ རཱསིཊི་གཞི་བཞག་པའི་གནང་བ་ཡོད་པའི་ བཀག་ཆ་ཅིག་ཨིནམ་ད་ ད་ལྟོ་ རྒྱ་ནག་ཇི་ཨེམ་/ཊི་ཨེསི་ཨེམ་༢ (མཚན་རྟགས་) དང་ ཨེསི་ཨེམ་༣ (ཧེཤ་) དེ་ལས་ ཨེསི་ཨེམ་༣ (བཀག་ཆ་སི་ཕར་) གནའ་དུས་ཚུ། རྒྱ་ནག་གི་ས་གནས་གཙོ་བོ་ནང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ པི་ཨར་སི་ ཀིརིཔ་ཊོ་གཱ་རཱ་ཕི་ ཁྲིམས་ལུགས་ (༢༠༡༩) དང་ གནས་རིམ་སྣ་ཚོགས་ཀྱི་ ཉེན་སྲུང་འཆར་གཞི་ (MLPS 2.0) མངའ་སྡེ་ ཀིརིཔ་ཊོ་གཱ་རཱ་ཕི་བདག་སྐྱོང་ (ཨེསི་སི་ཨེ་) ཡིག་ཆ་ཕུལ་ནིའི་ ཁྲིམས་ལུགས་ དེ་ལས་ MOFCOM དང་ ཅ་དམ་བདག་སྐྱོང་གིས་ ལྟ་རྟོག་འབད་དགོ། Iroha ལས་འགུལ་གྱིས་ SM-enabled ཁ་ཕྱེ་ཡོད་པའི་ཐོན་ཁུངས་མཉེན་ཆས་འདི་ རྒྱལ་སྤྱིའི་ནང་བཀྲམ་སྤེལ་འབདཝ་ཨིན། ལ་ལུ་ཅིག་གིས་ རྒྱལ་ཁབ་ནང་ལུ་ གཉིས་ལྡན་ཚུ་ བསྡུ་སྒྲིག་འབད་དོ་ཡོདཔ་ད་ ལ་ལུ་ཅིག་གིས་ སྔོན་སྒྲིག་འབད་བའི་ ཅ་ཆས་ཚུ་ ནང་འདྲེན་འབདཝ་ཨིན།  
+> ལས་ཀ་: ཁྲིམས་མཐུན་གྱི་འགན་ཁུར་ཚུ་ བསྡུ་སྒྲིག་འབད། འ་ནི་ཨཱལ་གོ་རི་དམ་གྱི་དབྱེ་ཁག་འདི་ གསང་བ་འབད་དགོ། ༼ཚོང་འབྲེལ་དང་ ཀོར་/སྤྱིར་བཏང་གསང་ཡིག་༽ Iroha ལས་འགུལ་ (ཡིག་ཆ་དང་ གསལ་སྟོན་ བསྟར་སྤྱོད་གསལ་བཤད་ཚུ་) དང་ རྒྱ་ནག་ནང་འཁོད་ལུ་ ཨེསི་ཨེམ་ལྕོགས་ཅན་བཟོ་ཡོད་པའི་ མཐུད་མཚམས་ཚུ་ བཀྲམ་སྤེལ་འབད་མི་ཚུ་གི་དོན་ལུ་ བྱིན་དགོ།

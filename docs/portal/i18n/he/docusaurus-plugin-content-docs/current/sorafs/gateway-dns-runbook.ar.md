@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/gateway-dns-runbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # دليل تشغيل انطلاقة Gateway وDNS في SoraFS
@@ -11,24 +13,24 @@ generator: docs/portal/scripts/sync-i18n.mjs
 تعكس نسخة البوابة هذا الدليل التشغيلي المعتمد الموجود في
 [`docs/source/sorafs_gateway_dns_design_runbook.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_design_runbook.md).
 وهي تلتقط الضوابط التشغيلية لمسار Decentralized DNS & Gateway كي تتمكن فرق
-الشبكات والعمليات والتوثيق من تدريب حزمة الأتمتة قبل انطلاقة 2025-03.
+תקשורת ותקשורת ומדידה 2025-03.
 
 ## النطاق والمخرجات
 
 - ربط معالم DNS (SF-4) وgateway (SF-5) عبر تمارين اشتقاق المضيفات الحتمي،
-  وإصدارات دليل resolvers، وأتمتة TLS/GAR، وجمع الأدلة.
+  ותיאום פתרונות, ותקשורת TLS/GAR, ותקשורת.
 - إبقاء مدخلات الانطلاقة (الأجندة، الدعوة، متعقب الحضور، لقطة تليمترية GAR)
   متزامنة مع آخر تعيينات المالكين.
 - إنتاج حزمة آرتيفاكتات قابلة للتدقيق لمراجعي الحوكمة: ملاحظات إصدار دليل
-  resolvers، سجلات فحوصات gateway، مخرجات أداة التوافق، وملخص Docs/DevRel.
+  פותרים, שער מערכות מידע, מערכות מידע, ותקשורת Docs/DevRel.
 
-## الأدوار والمسؤوليات
+## זכויות יוצרים ואולמות
 
 | المسار | المسؤوليات | الآرتيفاكتات المطلوبة |
 |--------|-------------|------------------------|
-| Networking TL (حزمة DNS) | الحفاظ على خطة المضيفات الحتمية، تشغيل إصدارات دليل RAD، نشر مدخلات تليمترية resolvers. | `artifacts/soradns_directory/<ts>/`، فروق `docs/source/soradns/deterministic_hosts.md`، وبيانات RAD الوصفية. |
-| Ops Automation Lead (gateway) | تنفيذ تمارين أتمتة TLS/ECH/GAR، تشغيل `sorafs-gateway-probe`، وتحديث خطافات PagerDuty. | `artifacts/sorafs_gateway_probe/<ts>/`، JSON للـ probe، ومدخلات `ops/drill-log.md`. |
-| QA Guild & Tooling WG | تشغيل `ci/check_sorafs_gateway_conformance.sh`، تنسيق fixtures، وأرشفة حزم self-cert الخاصة بـ Norito. | `artifacts/sorafs_gateway_conformance/<ts>/`، `artifacts/sorafs_gateway_attest/<ts>/`. |
+| Networking TL (حزمة DNS) | الحفاظ على خطة المضيفات الحتمية، تشغيل إصدارات دليل RAD، نشر مدخلات تليمترية resolvers. | `artifacts/soradns_directory/<ts>/`, פרופ' `docs/source/soradns/deterministic_hosts.md`, ודיאן RAD. |
+| Ops Automation Lead (שער) | تنفيذ تمارين أتمتة TLS/ECH/GAR، تشغيل `sorafs-gateway-probe`، وتحديث خطافات PagerDuty. | `artifacts/sorafs_gateway_probe/<ts>/`، JSON للـ probe، ومدخلات `ops/drill-log.md`. |
+| QA Guild & Tooling WG | تشغيل `ci/check_sorafs_gateway_conformance.sh`، تنسيق fixtures، وأرشفة حزم self-cert الخاصة بـ Norito. | `artifacts/sorafs_gateway_conformance/<ts>/`, `artifacts/sorafs_gateway_attest/<ts>/`. |
 | Docs / DevRel | تدوين المحاضر، تحديث pre-read التصميم + الملاحق، ونشر ملخص الأدلة في هذا البوابة. | ملفات `docs/source/sorafs_gateway_dns_design_*.md` المحدثة وملاحظات الإطلاق. |
 
 ## المدخلات والمتطلبات المسبقة
@@ -36,13 +38,13 @@ generator: docs/portal/scripts/sync-i18n.mjs
 - مواصفة المضيفات الحتمية (`docs/source/soradns/deterministic_hosts.md`) وبنية
   اعتماد resolvers (`docs/source/soradns/resolver_attestation_directory.md`).
 - آرتيفاكتات gateway: دليل المشغل، مساعدات أتمتة TLS/ECH، إرشادات direct-mode،
-  ومسار self-cert ضمن `docs/source/sorafs_gateway_*`.
-- الأدوات: `cargo xtask soradns-directory-release`،
-  `cargo xtask sorafs-gateway-probe`، `scripts/telemetry/run_soradns_transparency_tail.sh`،
+  אישור עצמי של `docs/source/sorafs_gateway_*`.
+- תווית: `cargo xtask soradns-directory-release`,
+  `cargo xtask sorafs-gateway-probe`, `scripts/telemetry/run_soradns_transparency_tail.sh`,
   `scripts/sorafs_gateway_self_cert.sh`، وأدوات CI المساعدة
   (`ci/check_sorafs_gateway_conformance.sh`, `ci/check_sorafs_gateway_probe.sh`).
 - الأسرار: مفتاح إصدار GAR، بيانات اعتماد ACME لـ DNS/TLS، مفتاح توجيه PagerDuty،
-  ورمز مصادقة Torii لجلب resolvers.
+  וריסולרים של Torii.
 
 ## قائمة التحقق قبل التنفيذ
 
@@ -50,12 +52,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
    `docs/source/sorafs_gateway_dns_design_attendance.md` وتعميم الأجندة الحالية
    (`docs/source/sorafs_gateway_dns_design_agenda.md`).
 2. تجهيز جذور الآرتيفاكتات مثل
-   `artifacts/sorafs_gateway_dns/<YYYYMMDD>/` و
+   `artifacts/sorafs_gateway_dns/<YYYYMMDD>/` ו
    `artifacts/soradns_directory/<YYYYMMDD>/`.
 3. تحديث fixtures (manifests الخاصة بـ GAR، أدلة RAD، حزم توافق gateway) مع التأكد
    من أن حالة `git submodule` تطابق آخر وسم تدريب.
 4. التحقق من الأسرار (مفتاح إصدار Ed25519، ملف حساب ACME، رمز PagerDuty) ومطابقة
-   checksums في vault.
+   checksums בכספת.
 5. تنفيذ smoke-test لأهداف التليمترية (endpoint الخاص بـ Pushgateway، لوحة GAR في Grafana)
    قبل التمرين.
 
@@ -80,9 +82,7 @@ cargo xtask soradns-directory-release \
 3. تدوين معرّف الدليل المطبوع وSHA-256 ومسارات الإخراج داخل
    `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` وفي محاضر الانطلاقة.
 
-### التقاط تليمترية DNS
-
-- تتبع سجلات شفافية resolvers لمدة ≥10 دقائق عبر
+### التقاط تليمترية DNS- تتبع سجلات شفافية resolvers لمدة ≥10 دقائق عبر
   `scripts/telemetry/run_soradns_transparency_tail.sh --mode staging`.
 - تصدير مقاييس Pushgateway وأرشفة لقطات NDJSON بجانب مجلد run ID.
 
@@ -100,7 +100,7 @@ cargo xtask sorafs-gateway-probe \
    (`scripts/sorafs_gateway_self_cert.sh`) لتحديث حزمة اعتماد Norito.
 3. التقاط أحداث PagerDuty/Webhook لإثبات أن مسار الأتمتة يعمل end-to-end.
 
-### تجميع الأدلة
+### בוחן
 
 - تحديث `ops/drill-log.md` بالطوابع الزمنية والمشاركين وهاشات probe.
 - تخزين الآرتيفاكتات ضمن مجلدات run ID ونشر ملخص تنفيذي ضمن محاضر Docs/DevRel.
@@ -127,9 +127,9 @@ cargo xtask sorafs-gateway-probe \
 `s3://sora-governance/sorafs/gateway_dns/`. الهاشات أدناه تعكس
 الـ manifest المعتمد (`artifacts/sorafs_gateway_dns/<run-id>/runbook_bundle/evidence_manifest_*.json`).
 
-- **Dry run — 2025-03-02 (`artifacts/sorafs_gateway_dns/20250302/`)**
-  - Tarball الحزمة: `b13571d2822c51f771d0e471f4f66d088a78ed6c1a5adb0d4b020b04dd9a5ae0`
-  - PDF المحاضر: `cac89ee3e6e4fa0adb9694941c7c42ffddb513f949cf1b0c9f375e14507f4f18`
+- **ריצה יבשה — 2025-03-02 (`artifacts/sorafs_gateway_dns/20250302/`)**
+  - Tarball מוצר: `b13571d2822c51f771d0e471f4f66d088a78ed6c1a5adb0d4b020b04dd9a5ae0`
+  - PDF מקור: `cac89ee3e6e4fa0adb9694941c7c42ffddb513f949cf1b0c9f375e14507f4f18`
 - **ورشة مباشرة — 2025-03-03 (`artifacts/sorafs_gateway_dns/20250303/runbook_bundle/`)**
   - `bc83e6a014c2d223433f04ddc3c588bfeff33ee5cdcb15aad6527efeba582a1c  minutes_20250303.md`
   - `030a98fb3e3a52dbb0fcf25a6ea4365b11d9487707bb6700cb632710f7c082e4  gar_snapshot_20250303.json`

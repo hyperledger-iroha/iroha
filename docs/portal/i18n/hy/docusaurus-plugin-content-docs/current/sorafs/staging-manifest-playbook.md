@@ -8,18 +8,20 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-## Overview
+## Տեսություն
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+Այս գրքույկը հնարավորություն է տալիս խորհրդարանի կողմից վավերացված chunker պրոֆիլը բեմադրող Torii տեղակայման միջոցով՝ նախքան արտադրության փոփոխությունը խթանելը: Այն ենթադրում է, որ SoraFS կառավարման կանոնադրությունը վավերացվել է, և կանոնական հարմարանքները հասանելի են պահոցում:
 
-## 1. Prerequisites
+## 1. Նախադրյալներ
 
-1. Sync the canonical fixtures and signatures:
+1. Համաժամացրեք կանոնական սարքերը և ստորագրությունները.
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -28,8 +30,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. Պատրաստեք ընդունելության ծրարի գրացուցակը, որը Torii-ը կկարդա գործարկման ժամանակ (օրինակ ուղի՝ `/var/lib/iroha/admission/sorafs`):
+3. Համոզվեք, որ Torii կազմաձևը հնարավորություն է տալիս հայտնաբերման քեշը և մուտքի կիրառումը.
 
    ```toml
    [torii.sorafs.discovery]
@@ -47,43 +49,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## 2. Հրապարակեք ընդունելության ծրարները
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. Պատճենեք հաստատված մատակարարի ընդունելության ծրարները `torii.sorafs.discovery.admission.envelopes_dir`-ի կողմից նշված գրացուցակում՝
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. Վերագործարկեք Torii-ը (կամ ուղարկեք SIGHUP, եթե բեռնիչը փաթաթել եք անմիջապես վերաբեռնմամբ):
+3. Պահեք ընդունելության հաղորդագրությունների տեղեկամատյանները.
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. Վավերացնել հայտնաբերման տարածումը
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. Տեղադրեք ստորագրված մատակարարի գովազդի օգտակար բեռը (Norito բայթ), որը արտադրվել է ձեր կողմից
+   մատակարարի խողովակաշար.
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. Հարցրեք հայտնաբերման վերջնակետին և հաստատեք, որ գովազդը հայտնվում է կանոնական կեղծանուններով.
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   Համոզվեք, որ `profile_aliases` ներառում է `"sorafs.sf1@1.0.0"` որպես առաջին մուտք:
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. Զորավարժությունների մանիֆեստ և պլանավորեք վերջնակետերը
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. Վերցրեք մանիֆեստի մետատվյալները (պահանջվում է հոսքի նշան, եթե ընդունումը պարտադիր է):
 
    ```bash
    sorafs-fetch \
@@ -94,25 +96,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. Ստուգեք JSON ելքը և ստուգեք.
+   - `chunk_profile_handle`-ը `sorafs.sf1@1.0.0` է:
+   - `manifest_digest_hex`-ը համապատասխանում է դետերմինիզմի զեկույցին:
+   - `chunk_digests_blake3` համահունչ է վերականգնված հարմարանքների հետ:
 
-## 5. Telemetry Checks
+## 5. Հեռաչափության ստուգումներ
 
-- Confirm Prometheus exposes the new profile metrics:
+- Հաստատեք, որ Prometheus-ը բացահայտում է պրոֆիլի նոր չափումները.
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- Վահանակները պետք է ցուցադրեն բեմադրող մատակարարին ակնկալվող կեղծանունների ներքո և պահեն զրոյական հաշվիչները՝ մինչ պրոֆիլը ակտիվ է:
 
-## 6. Rollout Readiness
+## 6. Տեղադրման պատրաստակամություն
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. Կատարեք կարճ զեկույց URL-ներով, մանիֆեստի ID-ով և հեռաչափության պատկերով:
+2. Կիսվեք զեկույցով Nexus թողարկման ալիքում՝ պլանավորված արտադրության ակտիվացման պատուհանի հետ մեկտեղ:
+3. Անցեք արտադրության ստուգաթերթին (`chunker_registry_rollout_checklist.md`-ի 4-րդ բաժին), երբ շահագրգիռ կողմերը ստորագրեն:
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+Այս գրքույկը թարմացված պահելը երաշխավորում է, որ յուրաքանչյուր բլոկ/ընդունելության թողարկում հետևում է նույն դետերմինիստական ​​քայլերին բեմադրության և արտադրության մեջ:

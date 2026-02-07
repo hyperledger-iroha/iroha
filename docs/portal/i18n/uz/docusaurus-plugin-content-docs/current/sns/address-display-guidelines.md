@@ -8,113 +8,115 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Address Display Guidelines
 sidebar_label: Address display
 description: UX and CLI requirements for IH58 vs compressed (`sora`) Sora address presentation (ADDR-6).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
+ExplorerAddressCard-ni '@site/src/components/ExplorerAddressCard' dan import qiling;
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
-as the canonical portal copy. The source file sticks around for translation PRs.
+::: Eslatma Kanonik manba
+Bu sahifa `docs/source/sns/address_display_guidelines.md`ni aks ettiradi va hozir xizmat qiladi
+kanonik portal nusxasi sifatida. Manba fayli tarjima PRlari uchun joylashadi.
 :::
 
-Wallets, explorers, and SDK samples must treat account addresses as immutable
-payloads. The Android retail wallet sample in
-`examples/android/retail-wallet` now demonstrates the required UX pattern:
+Hamyonlar, tadqiqotchilar va SDK namunalari hisob manzillarini o'zgarmas deb hisoblashlari kerak
+foydali yuklar. Android chakana hamyon namunasi
+`examples/android/retail-wallet` endi kerakli UX namunasini namoyish etadi:
 
-- **Dual copy targets.** Ship two explicit copy buttons—IH58 (preferred) and the
-  compressed Sora-only form (`sora…`, second-best). IH58 is always safe to share externally
-  and powers the QR payload. The compressed variant must include an inline
-  warning because it only works inside Sora-aware apps. The Android retail
-  wallet sample wires both Material buttons and their tooltips in
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and
-  the iOS SwiftUI demo mirrors the same UX via `AddressPreviewCard` inside
+- **Ikki nusxa ko'chirish maqsadlari.** Ikkita aniq nusxa ko'chirish tugmalarini yuboring — IH58 (afzal) va
+  siqilgan Sora faqat shakli (`sora…`, ikkinchi eng yaxshi). IH58 har doim tashqaridan baham ko'rish uchun xavfsizdir
+  va QR foydali yukini quvvatlaydi. Siqilgan variant qatorni o'z ichiga olishi kerak
+  ogohlantirish, chunki u faqat Sora-xabar ilovalar ichida ishlaydi. Android chakana savdosi
+  hamyon namuna simlari ham Materiallar tugmalari va ularning maslahatlari
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, va
+  iOS SwiftUI demosi `AddressPreviewCard` orqali bir xil UXni aks ettiradi
   `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, selectable text.** Render both strings with a monospace font and
-  `textIsSelectable="true"` so users can inspect values without invoking an IME.
-  Avoid editable fields: IMEs can rewrite kana or inject zero-width code points.
-- **Implicit default domain hints.** When the selector points at the implicit
-  `default` domain, surface a caption reminding operators no suffix is required.
-  Explorers should also highlight the canonical domain label when the selector
-  encodes a digest.
-- **IH58 QR payloads.** QR codes must encode the IH58 string. If QR generation
-  fails, display an explicit error instead of a blank image.
-- **Clipboard messaging.** After copying the compressed form, emit a toast or
-  snackbar reminding users that it is Sora-only and prone to IME mangling.
+- **Monobo'shliq, tanlanishi mumkin bo'lgan matn.** Ikkala qatorni ham monofazo shrift bilan ko'rsating va
+  `textIsSelectable="true"`, shuning uchun foydalanuvchilar IMEni chaqirmasdan qiymatlarni tekshirishlari mumkin.
+  Tahrirlanadigan maydonlardan saqlaning: IME'lar kanani qayta yozishi yoki nol kenglikdagi kod nuqtalarini kiritishi mumkin.
+- **Bevosita standart domen maslahatlari.** Selektor yashiringa ishora qilganda
+  `default` domeni, operatorlarga qo'shimcha shart emasligini eslatuvchi sarlavha qo'ying.
+  Tadqiqotchilar selektorda kanonik domen yorlig'ini ham ta'kidlashlari kerak
+  digestni kodlaydi.
+- **IH58 QR foydali yuklari.** QR kodlari IH58 qatorini kodlashi kerak. Agar QR ishlab chiqarish
+  bajarilmasa, bo'sh rasm o'rniga aniq xatoni ko'rsating.
+- **Buferdagi xabarlar.** Siqilgan shakldan nusxa olgandan so'ng, tost yoki
+  snackbar foydalanuvchilarga faqat Sora va IME buzilishiga moyil ekanligini eslatib turadi.
 
-Following these guardrails prevents Unicode/IME corruption and satisfies the
-ADDR-6 roadmap acceptance criteria for wallet/explorer UX.
+Ushbu to'siqlarga rioya qilish Unicode/IME buzilishining oldini oladi va talablarni qondiradi
+Hamyon/explorer UX uchun ADDR-6 yo‘l xaritasini qabul qilish mezonlari.
 
-## Screenshot fixtures
+## Skrinshot uchun moslamalar
 
-Use the following fixtures during localization reviews to ensure button labels,
-tooltips, and warnings stay aligned across platforms:
+Tugma yorliqlarini ta'minlash uchun mahalliylashtirishni tekshirish paytida quyidagi qurilmalardan foydalaning,
+maslahatlar va ogohlantirishlar platformalar bo'ylab mos keladi:
 
-- Android reference: `/img/sns/address_copy_android.svg`
+- Android uchun havola: `/img/sns/address_copy_android.svg`
 
-  ![Android dual copy reference](/img/sns/address_copy_android.svg)
+  ![Android dual copy mos yozuvi](/img/sns/address_copy_android.svg)
 
-- iOS reference: `/img/sns/address_copy_ios.svg`
+- iOS ma'lumotnomasi: `/img/sns/address_copy_ios.svg`
 
-  ![iOS dual copy reference](/img/sns/address_copy_ios.svg)
+  ![iOS ikki nusxadagi havola](/img/sns/address_copy_ios.svg)
 
-## SDK helpers
+## SDK yordamchilari
 
-Each SDK exposes a convenience helper that returns the IH58 (preferred) and compressed (`sora`, second-best)
-forms alongside the warning string so UI layers can stay consistent:
+Har bir SDK IH58 (afzal) va siqilgan (`sora`, ikkinchi eng yaxshi) ni qaytaradigan qulaylik yordamchisini taqdim etadi.
+UI qatlamlari izchil bo'lib qolishi uchun ogohlantirish qatori bilan birga shakllar:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` returns the compressed warning
-  string and appends it to `warnings` whenever callers provide a `sora…`
-  literal, so explorers/wallet dashboards can surface the Sora-only notice
-  during paste/validation flows instead of only when they generate the
-  compressed form themselves.
+- JavaScript inspektori: `inspectAccountId(...)` siqilgan ogohlantirishni qaytaradi
+  string va qo'ng'iroq qiluvchilar `sora…` taqdim etganda uni `warnings` ga qo'shadi
+  so'zma-so'z, shuning uchun tadqiqotchilar/hamyon asboblar panelida faqat Sora xabarnomasi paydo bo'lishi mumkin
+  joylashtirish/validatsiya oqimlari o'rniga faqat ular hosil qilganda
+  siqilgan shaklning o'zlari.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Tezkor: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-Use these helpers instead of reimplementing the encode logic in UI layers.
-The JavaScript helper also exposes a `selector` payload on `domainSummary`
-(`tag`, `digest_hex`, `registry_id`, `label`) so UIs can indicate whether a
-selector is Local-12 or registry-backed without re-parsing the raw payload.
+UI qatlamlarida kodlash mantig'ini qayta tiklash o'rniga ushbu yordamchilardan foydalaning.
+JavaScript yordamchisi `domainSummary` da `selector` foydali yukini ham ochib beradi.
+(`tag`, `digest_hex`, `registry_id`, `label`) shuning uchun UIlar
+selektor Local-12 yoki xom yukni qayta tahlil qilmasdan registr tomonidan qo'llab-quvvatlanadi.
 
-## Explorer instrumentation demo
+## Explorer asboblari demosi
 
 <ExplorerAddressCard />
 
-Explorers should mirror the wallet telemetry and accessibility work:
+Tadqiqotchilar hamyon telemetriyasi va foydalanish imkoniyatini aks ettirishi kerak:
 
-- Apply `data-copy-mode="ih58|compressed|qr"` to copy buttons so front-ends can emit usage counters
-  alongside the Torii-side `torii_address_format_total` metric. The demo component above dispatches
-  an `iroha:address-copy` event with `{mode,timestamp}`—wire this into your analytics/telemetry
-  pipeline (e.g., push to Segment or a NORITO-backed collector) so dashboards can correlate server
-  address-format usage with client copy behaviour. Also mirror the Torii domain counters
-  (`torii_address_domain_total{domain_kind}`) in the same feed so Local-12 retirement reviews can
-  export a 30-day `domain_kind="local12"` zero-usage proof directly from the `address_ingest`
-  Grafana board.
-- Pair every control with distinct `aria-label`/`aria-describedby` hints that explain whether a
-  literal is safe to share (`IH58`) or Sora-only (compressed `sora`). Include the implicit-domain caption in
-  the description so assistive technology surfaces the same context shown visually.
-- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
-  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
+- Nusxalash tugmalari uchun `data-copy-mode="ih58|compressed|qr"` ni qo'llang, shunda old qismlar foydalanish hisoblagichlarini chiqarishi mumkin
+  Torii tomoni `torii_address_format_total` metrikasi bilan birga. Yuqoridagi demo komponenti yuboriladi
+  `iroha:address-copy` hodisasi `{mode,timestamp}` bilan - buni analitika/telemetriyaga ulang
+  asboblar paneli serverni o'zaro bog'lashi uchun quvur liniyasi (masalan, Segmentga surish yoki NORITO tomonidan qo'llab-quvvatlanadigan kollektor)
+  mijozning nusxa ko'chirish harakati bilan manzil formatidan foydalanish. Shuningdek, Torii domen hisoblagichlarini aks ettiring
+  (`torii_address_domain_total{domain_kind}`) bir xil tasmada, shuning uchun Mahalliy-12 pensiya sharhlari
+  30 kunlik `domain_kind="local12"` noldan foydalanish isbotini bevosita `address_ingest` dan eksport qiling
+  Grafana doska.
+- Har bir boshqaruvni aniq `aria-label`/`aria-describedby` ko'rsatmalari bilan bog'lang.
+  literal almashish xavfsiz (`IH58`) yoki faqat Sora (siqilgan `sora`). Yashirin domen sarlavhasini kiriting
+  Ta'rif, shuning uchun yordamchi texnologiya vizual ravishda ko'rsatilgan kontekstni yuzaga keltiradi.
+- Nusxa natijalarini e'lon qiladigan jonli hududni (masalan, `<output aria-live="polite">…</output>`) ko'rsatish va
+  Endi Swift/Android namunalariga ulangan VoiceOver/TalkBack xatti-harakatlariga mos keladigan ogohlantirishlar.
 
-This instrumentation satisfies ADDR-6b by proving operators can observe both Torii ingestion and
-client-side copy modes before Local selectors are disabled.
+Ushbu qurilma operatorlar Torii yutilishini ham kuzatishi mumkinligini isbotlash orqali ADDR-6b ni qondiradi.
+Mahalliy tanlagichlar o'chirilishidan oldin mijoz tomonidan nusxa ko'chirish rejimlari.
 
-## Local → Global migration toolkit
+## Mahalliy → Global migratsiya vositalari toʻplami
 
-Use the [Local → Global toolkit](local-to-global-toolkit.md) to automate
-JSON audit report and the converted preferred IH58 / second-best compressed (`sora`) list that operators attach
-to readiness tickets, while the accompanying runbook links the Grafana
-dashboards and Alertmanager rules that gate the strict-mode cutover.
+Avtomatlashtirish uchun [Local → Global Toolkit](local-to-global-toolkit.md) dan foydalaning
+JSON audit hisoboti va o'zgartirilgan afzal qilingan IH58 / operatorlar biriktiradigan ikkinchi eng yaxshi siqilgan (`sora`) ro'yxati
+Tayyorlik chiptalari bilan birga kelgan runbook Grafana ni bog'laydi.
+asboblar paneli va Alertmanager qoidalari qat'iy rejimni kesib o'tadi.
 
-## Binary layout quick reference (ADDR-1a)
+## Ikkilik tartibning tezkor ma'lumotnomasi (ADDR-1a)
 
-When SDKs surface advanced address tooling (inspectors, validation hints,
-manifest builders), point developers at the canonical wire format captured in
-`docs/account_structure.md`. The layout is always
-`header · selector · controller`, where the header bits are:
+SDKlar rivojlangan manzil vositalarini (inspektorlar, tekshirish bo'yicha maslahatlar,
+manifest quruvchilari), ishlab chiquvchilarni tasvirlangan kanonik sim formatiga ishora qiling
+`docs/account_structure.md`. Tartib har doim
+`header · selector · controller`, bu erda sarlavha bitlari:
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -123,14 +125,14 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-- `addr_version = 0` (bits 7‑5) today; non-zero values are reserved and must
-  raise `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class` distinguishes single (`0`) vs multisig (`1`) controllers.
-- `norm_version = 1` encodes the Norm v1 selector rules. Future norms will reuse
-  the same 2-bit field.
-- `ext_flag` is always `0`—set bits indicate unsupported payload extensions.
+- `addr_version = 0` (bits7‑5) bugun; nolga teng bo'lmagan qiymatlar saqlangan va kerak
+  `AccountAddressError::InvalidHeaderVersion` ko'taring.
+- `addr_class` bitta (`0`) va multisig (`1`) kontrollerlarini ajratib turadi.
+- `norm_version = 1` Normv1 selektor qoidalarini kodlaydi. Kelajakdagi normalar qayta qo'llaniladi
+  bir xil 2 bitli maydon.
+- `ext_flag` har doim `0` - o'rnatilgan bitlar qo'llab-quvvatlanmaydigan foydali yuk kengaytmalarini bildiradi.
 
-The selector immediately follows the header:
+Selektor darhol sarlavhani kuzatib boradi:
 
 ```
 ┌──────────┬──────────────────────────────────────────────┐
@@ -138,35 +140,35 @@ The selector immediately follows the header:
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-UI and SDK surfaces should be ready to display the selector kind:
+UI va SDK sirtlari selektor turini ko'rsatishga tayyor bo'lishi kerak:
 
-- `0x00` = implicit default domain (no payload).
-- `0x01` = local digest (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = global registry entry (big-endian `registry_id:u32`).
+- `0x00` = yashirin standart domen (yuksiz).
+- `0x01` = mahalliy dayjest (12 bayt `blake2s_mac("SORA-LOCAL-K:v1", label)`).
+- `0x02` = global registrga kirish (katta-endian `registry_id:u32`).
 
-Canonical hex examples that wallet tooling can link or embed in docs/tests:
+Hamyon asboblari hujjatlar/testlarga ulanishi yoki joylashtirishi mumkin bo'lgan kanonik olti burchakli misollar:
 
-| Selector kind | Canonical hex |
-|---------------|---------------|
-| Implicit default | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Global registry (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
+| Selektor turi | Kanonik hex |
+|-------------|---------------|
+| Yashirin sukut | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Mahalliy dayjest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
+| Global registr (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
-Refer to `docs/source/references/address_norm_v1.md` for the full selector/state
-table and `docs/account_structure.md` for the complete byte diagram.
+To'liq selektor/holat uchun `docs/source/references/address_norm_v1.md` ga qarang
+to'liq bayt diagrammasi uchun jadval va `docs/account_structure.md`.
 
-## Enforcing canonical forms
+## Kanonik shakllarni qo'llash
 
-strings must follow the CLI workflow documented under ADDR-5:
+satrlar ADDR-5 ostida hujjatlashtirilgan CLI ish jarayoniga mos kelishi kerak:
 
-1. `iroha tools address inspect` now emits a structured JSON summary with IH58,
-   compressed, and canonical hex payloads. The summary also includes a `domain`
-   object with `kind`/`warning` fields and echoes any provided domain via the
-   `input_domain` field. When `kind` is `local12`, the CLI prints a warning to
-   stderr and the JSON summary echoes the same guidance so CI pipelines and SDKs
-   can surface it. Pass `--append-domain` whenever you want the converted
-   encoding replayed as `<ih58>@<domain>`.
-2. SDKs can surface the same warning/summary via the JavaScript helper:
+1. `iroha tools address inspect` endi IH58 bilan tuzilgan JSON xulosasini chiqaradi,
+   siqilgan va kanonik olti burchakli foydali yuklar. Xulosa shuningdek, `domain` ni ham o'z ichiga oladi
+   `kind`/`warning` maydonlariga ega ob'ekt va har qanday taqdim etilgan domen orqali aks sado beradi.
+   `input_domain` maydoni. `kind` `local12` bo'lsa, CLI ogohlantirishni chop etadi.
+   stderr va JSON xulosasi bir xil ko'rsatmalarni aks ettiradi, shuning uchun CI quvurlari va SDKlar
+   uni yuzaga keltirishi mumkin. Konvertatsiya qilishni xohlagan vaqtda `--append-domain` ga o'ting
+   kodlash `<ih58>@<domain>` sifatida takrorlandi.
+2. SDK JavaScript yordamchisi orqali bir xil ogohlantirish/xulosa chiqarishi mumkin:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -177,69 +179,67 @@ strings must follow the CLI workflow documented under ADDR-5:
    }
    console.log(summary.ih58.value, summary.compressed);
    ```
-  The helper preserves the IH58 prefix detected from the literal unless you
-  explicitly provide `networkPrefix`, so summaries for non-default networks do
-  not silently re-render with the default prefix.
+  Yordamchi literaldan aniqlangan IH58 prefiksini saqlaydi, agar siz bo'lmasa
+  `networkPrefix` ni aniq taqdim eting, shuning uchun standart bo'lmagan tarmoqlar uchun xulosalar
+  standart prefiks bilan jimgina qayta ko'rsatmang.
 
-3. Convert the canonical payload by reusing the `ih58.value` or `compressed`
-   fields from the summary (or request another encoding via `--format`). These
-   strings are already safe to share externally.
-4. Update manifests, registries, and customer-facing documents with the
-   canonical form and notify counterparties that Local selectors will be
-   rejected once the cutover completes.
-5. For bulk data sets, run
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
-   reads newline-separated literals (comments starting with `#` are ignored, and
-   `--input -` or no flag uses STDIN), emits a JSON report with
-   canonical/preferred IH58/second-best compressed (`sora`) summaries for every entry, and counts both parse
-   dumps that contain junk rows, and gate automation with `--fail-on-warning`
-   once operators are ready to block Local selectors in CI.
-6. When you need a newline-to-newline rewrite, use
-  For Local-selector remediation spreadsheets, use
-  to export a `input,status,format,…` CSV that highlights canonical encodings, warnings, and parse failures in one pass.
-   The helper skips non-Local rows by default, converts every remaining entry
-   into the requested encoding (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the
-   original domain when `--append-domain` is set. Pair it with `--allow-errors`
-   to keep scanning even when a dump contains malformed literals.
-7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts
-   the Local selectors from `fixtures/account/address_vectors.json`, converts
-   them via `iroha tools address normalize`, and replays
-   `iroha tools address audit --fail-on-warning` to prove releases no longer emit
-   Local digests.
-
-`torii_address_local8_total{endpoint}` plus
+3. `ih58.value` yoki `compressed` dan qayta foydalanish orqali kanonik foydali yukni aylantiring.
+   Xulosadagi maydonlarni (yoki `--format` orqali boshqa kodlashni talab qiling). Bular
+   strings allaqachon tashqaridan almashish uchun xavfsiz.
+4. Manifestlar, registrlar va mijozlarga tegishli hujjatlarni yangilang
+   kanonik shakl va kontragentlarga mahalliy tanlovchilar bo'lishi haqida xabar bering
+   kesish tugagach, rad etiladi.
+5. Ommaviy ma'lumotlar to'plamlari uchun ishga tushiring
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. Buyruq
+   yangi satr bilan ajratilgan harflarni o'qiydi (`#` bilan boshlangan izohlar e'tiborga olinmaydi va
+   `--input -` yoki hech qanday bayroq STDIN ishlatmaydi), JSON hisobotini chiqaradi
+   kanonik/afzal IH58/ikkinchi-eng yaxshi siqilgan (`sora`) har bir yozuv uchun xulosalar va ikkala tahlilni ham hisoblaydi
+   keraksiz qatorlarni o'z ichiga olgan axlatxonalar va `--fail-on-warning` bilan eshiklarni avtomatlashtirish
+   operatorlar CI-da Mahalliy selektorlarni bloklashga tayyor bo'lganda.
+6. Yangi satrdan yangi qatorga qayta yozish kerak bo'lganda, foydalaning
+  Mahalliy tanlagichni tuzatish elektron jadvallari uchun foydalaning
+  bir o'tishda kanonik kodlashlar, ogohlantirishlar va tahlil xatolarini ta'kidlaydigan `input,status,format,…` CSV ni eksport qilish.
+   Yordamchi sukut bo'yicha Lokal bo'lmagan qatorlarni o'tkazib yuboradi, qolgan har bir yozuvni o'zgartiradi
+   so'ralgan kodlashga (IH58 afzal/siqilgan (`sora`) ikkinchi eng yaxshi/hex/JSON) kiritadi va saqlaydi
+   `--append-domain` o'rnatilganda asl domen. Uni `--allow-errors` bilan bog'lang
+   axlatda noto'g'ri shakllangan harflar bo'lsa ham skanerlashni davom ettirish.
+7. CI/lint avtomatizatsiyasi chiqaradigan `ci/check_address_normalize.sh`-ni ishga tushirishi mumkin.
+   `fixtures/account/address_vectors.json` dan mahalliy selektorlar, o'zgartiradi
+   ularni `iroha tools address normalize` orqali va qayta o'ynaydi
+   Relizlar endi chiqmasligini isbotlash uchun `iroha tools address audit --fail-on-warning`
+   Mahalliy hazm qilish.`torii_address_local8_total{endpoint}` plus
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, and the
-Grafana board `dashboards/grafana/address_ingest.json` provide the enforcement
-signal: once production dashboards show zero legitimate Local submissions and
-zero Local-12 collisions for 30 consecutive days, Torii will flip the Local-8
-gate to hard-fail on mainnet, followed by Local-12 once global domains have
-matching registry entries. Consider the CLI output the operator-facing notice
-for this freeze—the same warning string is used across SDK tooltips and
-automation to keep parity with the roadmap exit criteria. Torii now defaults to
-when diagnosing regressions. Keep mirroring `torii_address_domain_total{domain_kind}`
-into Grafana (`dashboards/grafana/address_ingest.json`) so the ADDR-7 evidence pack
-can prove `domain_kind="local12"` stayed at zero for the required 30-day window before
-(`dashboards/alerts/address_ingest_rules.yml`) adds three guardrails:
+`torii_address_collision_domain_total{endpoint,domain}` va
+Grafana taxtasi `dashboards/grafana/address_ingest.json` ijroni ta'minlaydi
+signal: ishlab chiqarish asboblar panelida nol qonuniy Mahalliy taqdimotlar va
+30 kun ketma-ket nol Lokal-12 to'qnashuvi, Torii Local-8ni aylantiradi
+Mainnet tarmog'ida qattiq muvaffaqiyatsizlikka uchragan darvoza, keyin esa global domenlar mavjud bo'lganda Local-12
+mos keladigan ro'yxatga olish kitobi yozuvlari. Operatorga tegishli bildirishnomaning CLI chiqishini ko'rib chiqing
+bu muzlatish uchun - bir xil ogohlantirish qatori SDK asboblar maslahatlarida ishlatiladi va
+yo'l xaritasidan chiqish mezonlari bilan tenglikni saqlash uchun avtomatlashtirish. Torii endi sukut bo'yicha
+regressiyalarni tashxislashda. `torii_address_domain_total{domain_kind}` aks ettirishda davom eting
+Grafana (`dashboards/grafana/address_ingest.json`) ichiga, shuning uchun ADDR-7 dalillar to'plami
+oldin talab qilinadigan 30 kunlik oyna uchun `domain_kind="local12"` nolda qolganini isbotlay oladi
+(`dashboards/alerts/address_ingest_rules.yml`) uchta himoya panjarasini qo'shadi:
 
-- `AddressLocal8Resurgence` pages whenever a context reports a fresh Local-8
-  increment. Halt strict-mode rollouts, locate the offending SDK surface in the
-  until the signal returns to zero—then restore the default (`true`).
-- `AddressLocal12Collision` fires when two Local-12 labels hash to the same
-  digest. Pause manifest promotions, run the Local → Global toolkit to audit
-  the digest mapping, and coordinate with Nexus governance before reissuing the
-  registry entry or re-enabling downstream rollouts.
-- `AddressInvalidRatioSlo` warns when the fleet-wide invalid ratio (excluding
-  Local-8/strict-mode rejections) exceeds the 0.1 % SLO for ten minutes. Use
-  `torii_address_invalid_total` to pinpoint the responsible context/reason and
-  coordinate with the owning SDK team before re-enabling strict mode.
+- `AddressLocal8Resurgence` sahifalar har safar kontekst yangi Local-8 haqida xabar berganda
+  oshirish. Qattiq rejimni ishga tushirishni to'xtating, SDK-ning buzilgan joyini toping
+  signal nolga qaytgunicha - keyin standartni tiklang (`true`).
+- `AddressLocal12Collision` ikkita Local-12 yorlig'i bir xil bo'lganda yonadi
+  hazm qilish. Manifest reklamalarini to'xtatib turing, tekshirish uchun Mahalliy → Global asboblar to'plamini ishga tushiring
+  dayjest xaritasini tuzing va uni qayta chiqarishdan oldin Nexus boshqaruvi bilan muvofiqlashtiring.
+  registrga kirish yoki quyi oqimlarni qayta yoqish.
+- `AddressInvalidRatioSlo` flot bo'ylab yaroqsiz nisbatda ogohlantiradi (istisno).
+  Mahalliy-8/qat'iy rejimni rad etish) o'n daqiqa davomida 0,1% SLO dan oshadi. Foydalanish
+  `torii_address_invalid_total` mas'ul kontekstni/sababni va
+  qat'iy rejimni qayta yoqishdan oldin egasi SDK jamoasi bilan muvofiqlashtiring.
 
-### Release note snippet (wallet & explorer)
+### Eslatma parchasini chiqarish (hamyon va tadqiqotchi)
 
-Include the following bullet in the wallet/explorer release notes when shipping
-the cutover:
+Yuborilganda hamyon/tadqiqotchi relizlar qaydlariga quyidagi o‘qni qo‘shing
+kesish:
 
-> **Addresses:** Added the `iroha tools address normalize --only-local --append-domain`
-> helper and wired it into CI (`ci/check_address_normalize.sh`) so wallet/explorer
-> before Local-8/Local-12 are blocked on mainnet. Update any custom exports to
-> run the command and attach the normalized list to the release evidence bundle.
+> **Manzillar:** `iroha tools address normalize --only-local --append-domain` qo‘shildi
+> yordamchi va uni CI (`ci/check_address_normalize.sh`) ga ulab qo'ydi, shuning uchun hamyon/explorer
+> Local-8/Local-12 asosiy tarmoqda bloklanishidan oldin. Har qanday maxsus eksportlarni yangilang
+> buyruqni bajaring va normallashtirilgan ro'yxatni chiqarish dalillari to'plamiga qo'shing.

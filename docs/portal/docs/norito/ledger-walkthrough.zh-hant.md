@@ -10,42 +10,43 @@ translation_last_reviewed: 2026-02-07
 title: Ledger Walkthrough
 description: Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.
 slug: /norito/ledger-walkthrough
+translator: machine-google-reviewed
 ---
 
-This walkthrough complements the [Norito quickstart](./quickstart.md) by showing
-how to mutate and inspect ledger state with the `iroha` CLI. You will register a
-new asset definition, mint some units into the default operator account, transfer
-part of the balance to another account, and verify the resulting transactions
-and holdings. Each step mirrors the flows covered in the Rust/Python/JavaScript
-SDK quickstarts so you can confirm parity between CLI and SDK behaviour.
+本演練通過展示對 [Norito 快速入門](./quickstart.md) 進行了補充
+如何使用 `iroha` CLI 改變和檢查賬本狀態。您將註冊一個
+新的資產定義，將一些單位鑄造到默認操作員帳戶中，轉移
+將部分餘額轉移到另一個賬戶，並驗證由此產生的交易
+和持股。每個步驟都反映了 Rust/Python/JavaScript 中涵蓋的流程
+SDK 快速入門，以便您可以確認 CLI 和 SDK 行為之間的一致性。
 
-## Prerequisites
+## 先決條件
 
-- Follow the [quickstart](./quickstart.md) to boot the single-peer network via
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Ensure `iroha` (the CLI) is built or downloaded and that you can reach the
-  peer using `defaults/client.toml`.
-- Optional helpers: `jq` (formatting JSON responses) and a POSIX shell for the
-  environment-variable snippets used below.
+- 按照[快速入門](./quickstart.md)通過以下方式啟動單點網絡
+  `docker compose -f defaults/docker-compose.single.yml up --build`。
+- 確保 `iroha`（CLI）已構建或下載，並且您可以訪問
+  對等體使用 `defaults/client.toml`。
+- 可選助手：`jq`（格式化 JSON 響應）和 POSIX shell
+  下面使用的環境變量片段。
 
-Throughout the guide, replace `$ADMIN_ACCOUNT` and `$RECEIVER_ACCOUNT` with the
-account IDs you plan to use. The defaults bundle already includes two accounts
-derived from the demo keys:
+在整個指南中，將 `$ADMIN_ACCOUNT` 和 `$RECEIVER_ACCOUNT` 替換為
+您計劃使用的帳戶 ID。默認捆綁包已包含兩個帳戶
+從演示密鑰派生：
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirm the values by listing the first few accounts:
+通過列出前幾個帳戶來確認值：
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspect the genesis state
+## 1. 檢查創世狀態
 
-Start by exploring the ledger the CLI is targeting:
+首先探索 CLI 所針對的賬本：
 
 ```sh
 # Domains registered in genesis
@@ -60,26 +61,26 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-These commands rely on Norito-backed responses, so filtering and pagination are
-deterministic and match what the SDKs receive.
+這些命令依賴於 Norito 支持的響應，因此過濾和分頁是
+確定性並與 SDK 收到的內容相匹配。
 
-## 2. Register an asset definition
+## 2. 註冊資產定義
 
-Create a new, infinitely mintable asset called `coffee` inside the `wonderland`
-domain:
+在 `wonderland` 內創建一個名為 `coffee` 的新的、可無限鑄造的資產
+域名：
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-The CLI prints the submitted transaction hash (for example,
-`0x5f…`). Save it so you can query the status later.
+CLI 打印提交的交易哈希（例如，
+`0x5f…`）。保存下來以便以後查詢狀態。
 
-## 3. Mint units into the operator account
+## 3. 將鑄幣單位存入運營商賬戶
 
-Asset quantities live under the `(asset definition, account)` pair. Mint 250
-units of `coffee#wonderland` into `$ADMIN_ACCOUNT`:
+資產數量位於 `(asset definition, account)` 貨幣對下。薄荷 250
+將 `coffee#wonderland` 轉換為 `$ADMIN_ACCOUNT` 的單位：
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -87,14 +88,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Again, capture the transaction hash (`$MINT_HASH`) from the CLI output. To
-double-check the balance, run:
+再次從 CLI 輸出中捕獲事務哈希 (`$MINT_HASH`)。至
+仔細檢查餘額，運行：
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-or, to target just the new asset:
+或者，僅針對新資產：
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -102,9 +103,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfer part of the balance to another account
+## 4.將部分餘額轉入另一個賬戶
 
-Move 50 units from the operator account to `$RECEIVER_ACCOUNT`:
+將 50 個單位從操作員帳戶移至 `$RECEIVER_ACCOUNT`：
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -113,8 +114,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Save the transaction hash as `$TRANSFER_HASH`. Query the holdings on both
-accounts to verify the new balances:
+將交易哈希保存為 `$TRANSFER_HASH`。查詢雙方持股情況
+帳戶以驗證新余額：
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -124,35 +125,35 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verify ledger evidence
+## 5. 驗證賬本證據
 
-Use the saved hashes to confirm that both transactions committed:
+使用保存的哈希值來確認兩個事務均已提交：
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-You can also stream recent blocks to see which block included the transfer:
+您還可以流式傳輸最近的塊以查看哪個塊包含傳輸：
 
 ```sh
 # Stream from the latest block and stop after ~5 seconds
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Every command above uses the same Norito payloads as the SDKs. If you replicate
-this flow via code (see the SDK quickstarts below), the hashes and balances will
-line up as long as you target the same network and defaults.
+上面的每個命令都使用與 SDK 相同的 Norito 有效負載。如果你複製
+通過代碼進行此流程（請參閱下面的 SDK 快速入門），哈希值和余額將
+只要您的目標網絡和默認值相同，就可以排隊。
 
-## SDK parity links
+## SDK 比價鏈接
 
-- [Rust SDK quickstart](../sdks/rust) — demonstrates registering instructions,
-  submitting transactions, and polling status from Rust.
-- [Python SDK quickstart](../sdks/python) — shows the same register/mint
-  operations with Norito-backed JSON helpers.
-- [JavaScript SDK quickstart](../sdks/javascript) — covers Torii requests,
-  governance helpers, and typed query wrappers.
+- [Rust SDK 快速入門](../sdks/rust) — 演示註冊指令，
+  提交交易，並從 Rust 輪詢狀態。
+- [Python SDK 快速入門](../sdks/python) — 顯示相同的寄存器/鑄幣廠
+  使用 Norito 支持的 JSON 幫助程序進行操作。
+- [JavaScript SDK 快速入門](../sdks/javascript) — 涵蓋 Torii 請求，
+  治理助手和類型化查詢包裝器。
 
-Run the CLI walkthrough first, then repeat the scenario with your preferred SDK
-to make sure both surfaces agree on transaction hashes, balances, and query
-outputs.
+首先運行 CLI 演練，然後使用您首選的 SDK 重複該場景
+確保兩個表面在交易哈希、餘額和查詢上達成一致
+輸出。

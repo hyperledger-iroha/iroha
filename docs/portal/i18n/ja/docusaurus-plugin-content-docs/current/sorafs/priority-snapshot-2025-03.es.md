@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: Snapshot de prioridades — marzo de 2025 (Beta)
-description: Espejo del snapshot de steering de Nexus 2025-03; pendiente de ACKs antes del rollout publico.
+id: 優先度-スナップショット-2025-03
+タイトル: 優先順位のスナップショット — 2025 年の予定 (ベータ版)
+説明: Nexus 2025-03 のステアリングのスナップショット。公開前に ACK を保留します。
 ---
 
-> Fuente canonica: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> フエンテ カノニカ: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Estado: **Beta / esperando ACKs de steering** (Networking, Storage, Docs leads).
+> Estado: **ベータ版 / esperando ACKs deステアリング** (ネットワーキング、ストレージ、ドキュメント リード)。
 
-## Resumen
+## 履歴書
 
-El snapshot de marzo mantiene las iniciativas de docs/content-network alineadas
-con las pistas de entrega de SoraFS (SF-3, SF-6b, SF-9). Una vez que todos los
-leads confirmen el snapshot en el canal de steering de Nexus, elimina la nota
-“Beta” de arriba.
+マルゾ・マンティエンのドキュメント/コンテンツ ネットワークの開始時のスナップショット
+SoraFS (SF-3、SF-6b、SF-9) を参照してください。ウナ・ベス・ケ・トドス・ロス
+リードは Nexus のステアリングの運河のスナップショットを確認し、ノートを削除します
+「ベータ」デ・アリバ。
 
-### Hilos de enfoque
+### ヒロス デ エンフォク
 
-1. **Circular snapshot de prioridades** — recopilar acknowledgements y
-   registrarlos en las minutas del council del 2025-03-05.
-2. **Cierre del kickoff de Gateway/DNS** — ensayar el nuevo kit de facilitacion
-   (Seccion 6 del runbook) antes del workshop 2025-03-03.
-3. **Migracion de runbooks de operadores** — el portal `Runbook Index` esta live;
-   expone la URL de beta preview despues del sign-off de onboarding de reviewers.
-4. **Hilos de entrega de SoraFS** — alinear el trabajo restante de SF-3/6b/9 con
-   el plan/roadmap:
-   - Worker de ingesta PoR + endpoint de estado en `sorafs-node`.
-   - Pulido de bindings CLI/SDK en integraciones de orchestrator Rust/JS/Swift.
-   - Cableado de runtime del coordinador PoR y eventos de GovernanceLog.
+1. **事前循環スナップショット** — 確認応答の再コピー
+   registrarlos en las minutas del Council del 2025-03-05。
+2. **ゲートウェイ/DNS のキックオフ** — 新しいキットの円滑化
+   (ランブックのセクション 6) 2025 年 3 月 3 日のワークショップ前。
+3. **オペラドールのランブックの移行** — ポータル `Runbook Index` ライブ。
+   ベータ プレビューの URL とレビュー担当者の承認とオンボーディングを説明します。
+4. **SoraFS の拡張子** — SF-3/6b/9 の直線状のトラバホ レストスタンテ
+   計画/ロードマップ:
+   - ワーカーが PoR を取り込み、エンドポイントが `sorafs-node` で取り込まれます。
+   - オーケストレーター Rust/JS/Swift と統合された CLI/SDK のバインディングを実行します。
+   - ランタイム デル コーディネーターとガバナンス ログ イベントのケーブル。
 
-Consulta el archivo fuente para la tabla completa, el checklist de distribucion
-y las entradas de log.
+タブラの完全なアーカイブ、配布のチェックリストを参照してください。
+ログを記録します。

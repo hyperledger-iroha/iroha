@@ -6,71 +6,73 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This page captures the ADDR-6c documentation deliverable. Apply these
-constraints to wallets, explorers, SDK tooling, and any portal surface that
-renders or accepts human-facing addresses. The canonical data model lives in
-`docs/account_structure.md`; the checklist below explains how to expose those
-formats without compromising safety or accessibility.
+ეს გვერდი ასახავს ADDR-6c დოკუმენტაციის მიწოდებას. გამოიყენეთ ესენი
+შეზღუდვები საფულეებზე, მკვლევარებზე, SDK ინსტრუმენტებზე და პორტალის ნებისმიერ ზედაპირზე
+აწვდის ან იღებს მისამართებს ადამიანის მიმართ. კანონიკური მონაცემთა მოდელი ცხოვრობს
+`docs/account_structure.md`; ქვემოთ მოცემული ჩამონათვალი განმარტავს, თუ როგორ უნდა გამოაშკარავოთ ისინი
+ფორმატები უსაფრთხოების ან ხელმისაწვდომობის კომპრომისის გარეშე.
 
-## Safe sharing flows
+## უსაფრთხო გაზიარების ნაკადები
 
-- Default every copy/share action to the IH58 address. Display the resolved
-  domain as supporting context so the checksummed string stays front and centre.
-- Offer a “Share” affordance that bundles the full plain-text address and a QR
-  code derived from the same payload. Let users inspect both before committing.
-- When space requires truncation (tiny cards, notifications), keep the leading
-  human-readable prefix, show ellipses, and retain the final 4–6 characters so
-  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
-  string without truncation.
-- Prevent clipboard desync by emitting a confirmation toast that previews the
-  exact IH58 string that was copied. Where telemetry is available, count copy
-  attempts versus share actions so UX regressions surface quickly.
+- ნაგულისხმევი ყველა ასლი/გაზიარება მოქმედება IH58 მისამართზე. მოგვარებულის ჩვენება
+  დომენი, როგორც დამხმარე კონტექსტი, ასე რომ შეჯამებული სტრიქონი რჩება წინ და ცენტრში.
+- შესთავაზეთ „გაზიარების“ ფასი, რომელიც აერთიანებს სრულ ტექსტურ მისამართს და QR-ს
+  კოდი, რომელიც მიღებულია იმავე დატვირთვისგან. მიეცით საშუალება მომხმარებლებს შეამოწმონ ორივე ჩადენამდე.
+- როდესაც სივრცე მოითხოვს შეკვეცას (პატარა ბარათები, შეტყობინებები), შეინარჩუნეთ ლიდერობა
+  ადამიანის წაკითხვადი პრეფიქსი, აჩვენე ელიფსები და შეინარჩუნე ბოლო 4-6 სიმბოლო
+  საკონტროლო ჯამის წამყვანი გადარჩა. მიაწოდეთ შეხების/კლავიატურის მალსახმობი სრული კოპირებისთვის
+  სტრიქონი შეკვეცის გარეშე.
+- ბუფერის დესინქრონიზაციის თავიდან აცილება დამადასტურებელი სადღეგრძელოს გამოცემით, რომელიც წინასწარ ათვალიერებს
+  ზუსტი IH58 სტრიქონი, რომელიც დაკოპირდა. სადაც ტელემეტრია ხელმისაწვდომია, დათვალეთ ასლი
+  მცდელობები გაზიარების მოქმედებების წინააღმდეგ, რათა UX რეგრესია სწრაფად აღმოჩნდეს.
 
-## IME & input safeguards
+## IME და შეყვანის დაცვა
 
-- Reject non-ASCII input in address fields. When IME composition artefacts (full
-  width, Kana, tone marks) appear, surface an inline warning that explains how
-  to switch the keyboard to Latin input before retrying.
-- Provide a plain-text paste zone that strips combining marks and replaces
-  whitespace with ASCII spaces before validation. This keeps users from losing
-  progress when they disable their IME mid-flow.
-- Harden validation against zero-width joiners, variation selectors, and other
-  stealth Unicode code points. Log the rejected code point category so fuzzing
-  suites can import the telemetry.
+- უარყოთ არა-ASCII შეყვანა მისამართის ველებში. როდესაც IME კომპოზიციის არტეფაქტები (სრული
+  სიგანე, კანა, ტონის ნიშნები) გამოჩნდება, ჩნდება შიდა გაფრთხილება, რომელიც განმარტავს როგორ
+  ხელახლა ცდამდე კლავიატურაზე ლათინურ შეყვანაზე გადართვა.
+- მიაწოდეთ უბრალო ტექსტის პასტის ზონა, რომელიც ამოიღებს კომბინირებულ ნიშნებს და ჩაანაცვლებს
+  ვალიდაციამდე ASCII სივრცეები. ეს იცავს მომხმარებლებს დაკარგვისგან
+  პროგრესი, როდესაც ისინი გამორთავს მათ IME შუა ნაკადს.
+- გამკაცრდეს ვალიდაცია ნულოვანი სიგანის შესაერთებლების, ვარიაციის სელექტორების და სხვა
+  სტელსი Unicode კოდის წერტილები. დაარეგისტრირეთ უარყოფილი კოდის წერტილის კატეგორია ისე ბუნდოვანი
+  კომპლექტებს შეუძლიათ ტელემეტრიის იმპორტი.
 
-## Assistive technology expectations
+## დამხმარე ტექნოლოგიების მოლოდინი
 
-- Annotate every address block with `aria-label` or `aria-describedby` that
-  spells out the human-readable prefix and chunks the payload in 4–8 character
-  groups (“ih dash b three two …”). This stops screen readers from producing an
-  unintelligible stream of characters.
-- Announce successful copy/share events via a polite live region update. Include
-  the destination (clipboard, share sheet, QR) so the user knows the action
-  completed without moving focus.
-- Supply descriptive `alt` text for QR previews (e.g., “IH58 address for
-  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
-  fallback adjacent to the QR canvas for low-vision users.
+- მიანიშნეთ ყველა მისამართის ბლოკის ანოტირება `aria-label` ან `aria-describedby`
+  წერს ადამიანის მიერ წასაკითხ პრეფიქსს და ანაწილებს დატვირთვას 4–8 სიმბოლოდ
+  ჯგუფები („ih ტირე b სამი ორი…“). ეს აჩერებს ეკრანის მკითხველს აწარმოოს
+  პერსონაჟების გაუგებარი ნაკადი.
+- გამოაცხადეთ წარმატებული კოპირება/გაზიარება ღონისძიებები თავაზიანი ცოცხალი რეგიონის განახლების მეშვეობით. ჩართეთ
+  დანიშნულება (გაცვლის ბუფერი, გაზიარების ფურცელი, QR), რათა მომხმარებელმა იცოდეს მოქმედება
+  დასრულდა ფოკუსის გადაადგილების გარეშე.
+- მიაწოდეთ აღწერითი `alt` ტექსტი QR გადახედვისთვის (მაგ., „IH58 მისამართი
+  `<account>` ჯაჭვზე `0x1234`”). მიუთითეთ „დააკოპირეთ მისამართი ტექსტად“
+  უკან დაბრუნება QR ტილოს მიმდებარედ დაბალი ხედვის მომხმარებლებისთვის.
 
-## Sora-only compressed addresses
+## მხოლოდ Sora-ზე შეკუმშული მისამართები
 
-- Gating: hide the `sora…` compressed string behind an explicit confirmation.
-  The confirmation must reiterate that the form only works on Sora Nexus chains.
-- Labelling: every occurrence must include a visible “Sora-only” badge and a
-  tooltip describing why other networks require the IH58 form.
-- Guardrails: if the active chain discriminant is not the Nexus allocation,
-  refuse to generate the compressed address entirely and direct the user back to
+- კარიბჭე: დამალეთ `sora…` შეკუმშული სტრიქონი აშკარა დადასტურების უკან.
+  დადასტურებამ უნდა გაიმეოროს, რომ ფორმა მუშაობს მხოლოდ Sora Nexus ჯაჭვებზე.
+- მარკირება: ყველა მოვლენა უნდა შეიცავდეს ხილულ "მხოლოდ სორას" სამკერდე ნიშანს და ა
+  ინსტრუმენტული მინიშნება, რომელიც აღწერს, რატომ მოითხოვს სხვა ქსელებს IH58 ფორმა.
+- დაცვა: თუ აქტიური ჯაჭვის დისკრიმინანტი არ არის Nexus განაწილება,
+  უარი თქვას შეკუმშული მისამართის გენერირებაზე და მიმართეთ მომხმარებელს უკან
   IH58.
-- Telemetry: record how often the compressed form is requested and copied so the
-  incident playbook can detect accidental sharing spikes.
+- ტელემეტრია: ჩაწერეთ რამდენად ხშირად ხდება შეკუმშული ფორმის მოთხოვნა და კოპირება
+  ინციდენტის სათამაშო წიგნს შეუძლია აღმოაჩინოს შემთხვევითი გაზიარების მწვერვალები.
 
-## Quality gates
+## ხარისხის კარიბჭე
 
-- Extend automated UI tests (or storybook a11y suites) to assert that address
-  components expose the required ARIA metadata and that IME rejection messages
-  appear.
-- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
-  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
-- Surface these checks in release checklists alongside the IH58 parity tests
-  so regressions remain blocked until corrected.
+- გააფართოვეთ ავტომატური ინტერფეისის ტესტები (ან მოთხრობების წიგნი a11y კომპლექტები) ამ მისამართის დასამტკიცებლად
+  კომპონენტები ავლენს საჭირო ARIA მეტამონაცემებს და IME-ს უარყოფის შეტყობინებებს
+  გამოჩნდება.
+- ჩართეთ ხელით QA სცენარები IME შეყვანისთვის (კანა, პინინი), ეკრანის წამკითხველის საშვი
+  (VoiceOver/NVDA) და QR კოპირება მაღალი კონტრასტის თემებზე გამოშვებამდე.
+- გადაიტანეთ ეს შემოწმებები გამოშვების საკონტროლო სიებში IH58 პარიტეტის ტესტებთან ერთად
+  ასე რომ, რეგრესიები დაბლოკილია, სანამ არ გამოსწორდება.

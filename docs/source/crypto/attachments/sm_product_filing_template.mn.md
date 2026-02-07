@@ -7,94 +7,92 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2025-12-29T18:16:35.938246+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 Бүтээгдэхүүн мэдүүлэх (开发备案) Загвар
+% Hyperledger Iroha Дагаж мөрдөх ажлын хэсэг
 % 2026-05-06
 
-# Instructions
+# Заавар
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+Аймагт *бүтээгдэхүүний хөгжүүлэлтийн мэдүүлэг* өгөхдөө энэ загварыг ашиглаарай
+эсвэл тараахаас өмнө хотын Улсын Криптографийн Захиргааны (SCA) оффис
+SM-ийг идэвхжүүлсэн хоёртын файлууд эсвэл эх газрын Хятад дахь эх олдворууд. -ийг солих
+Төсөлд зориулсан дэлгэрэнгүй мэдээлэл бүхий орлуулагчид бөглөсөн маягтыг PDF хэлбэрээр экспортлох боломжтой
+шаардлагатай бөгөөд хяналтын хуудсанд дурдсан олдворуудыг хавсаргана уу.
 
-# 1. Applicant & Product Summary
+# 1. Өргөдөл гаргагч ба бүтээгдэхүүний хураангуй
 
-| Field | Value |
+| Талбай | Үнэ цэнэ |
 |-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| Байгууллагын нэр | {{ БАЙГУУЛЛАГА }} |
+| Бүртгэлтэй хаяг | {{ ХАЯГ }} |
+| Хууль ёсны төлөөлөгч | {{ ЭРХ ЗҮЙН_REP }} |
+| Үндсэн холбоо барих хаяг (нэр / гарчиг / имэйл / утас) | {{ ХОЛБОО БАРИХ }} |
+| Бүтээгдэхүүний нэр | Hyperledger Iroha {{ RELEASE_NAME }} |
+| Бүтээгдэхүүний хувилбар / бүтээх ID | {{ ХУВИЛБАР }} |
+| Бүртгэлийн төрөл | Бүтээгдэхүүн боловсруулах (开发备案) |
+| Өргөдлийн огноо | {{ ЖЭЭЖ-АА-ӨГӨ }} |
 
-# 2. Cryptography Usage Overview
+# 2. Криптографийн хэрэглээний тойм
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
+- Дэмжигдсэн алгоритмууд: `SM2`, `SM3`, `SM4` (доорх ашиглалтын матрицыг өгнө үү).
+- Хэрэглээний нөхцөл:
+  | Алгоритм | Бүрэлдэхүүн хэсэг | Зорилго | Детерминист хамгаалалтууд |
   |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+  | SM2 | {{ БҮРЭЛДЭХҮҮН }} | {{ ЗОРИЛГО }} | RFC6979 + каноник r∥-ийн хэрэгжилт |
+  | SM3 | {{ БҮРЭЛДЭХҮҮН }} | {{ ЗОРИЛГО }} | `Sm3Digest` |-ээр дамжуулан тодорхойлогч хэш хийх
+  | SM4 | {{ БҮРЭЛДЭХҮҮН }} | {{ ЗОРИЛГО }} | AEAD (GCM/CCM) нь хэрэгжүүлээгүй бодлоготой |
+- Бүтэц дэх SM бус алгоритмууд: {{ OTHER_ALGORITHMS }} (бүрэн байдлын хувьд).
 
-# 3. Development & Supply Chain Controls
+# 3. Хөгжил ба нийлүүлэлтийн сүлжээний хяналт
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- Эх кодын хадгалах газар: {{ REPOSITORY_URL }}
+- Тодорхойлогч бүтээх заавар:
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (шаардлагатай бол тохируулна уу).
+  3. `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`) -ээр үүсгэгдсэн SBOM.
+- Тасралтгүй нэгтгэх орчны тойм:
+  | Зүйл | Үнэ цэнэ |
   |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  | OS / хувилбарыг бүтээх | {{ BUILD_OS }} |
+  | Хөрвүүлэгч хэрэгслийн гинж | {{ ХЭРЭГСЛИЙН ХЭРЭГСЭЛ }} |
+  | OpenSSL / Tongsuo эх сурвалж | {{ OPENSSL_SOURCE }} |
+  | Дахин үржих чадварыг шалгах нийлбэр | {{ ХЯНАЛТЫН нийлбэр }} |
 
-# 4. Key Management & Security
+# 4. Гол удирдлага ба аюулгүй байдал
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
+- Өгөгдмөлөөр идэвхжүүлсэн SM функцууд: {{ өгөгдмөл }} (жишээ нь: зөвхөн баталгаажуулах).
+- Гарын үсэг зурахад шаардлагатай тохиргооны тугууд: {{ CONFIG_FLAGS }}.
+- Асран хамгаалах үндсэн арга барил:
+  | Зүйл | Дэлгэрэнгүй |
   |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
+  | Түлхүүр үүсгэх хэрэгсэл | {{ KEY_TOOL }} |
+  | Хадгалах орчин | {{ ХАДГАЛАХ_ДУНД }} |
+  | Нөөцлөх бодлого | {{ НӨӨЦЛӨЛТ_БОДЛОГО }} |
+  | Хандалтын удирдлага | {{ ACCESS_CONTROLS }} |
+- Ослын хариу арга хэмжээний холбоо барих хаяг (24/7):
+  | Үүрэг | Нэр | Утас | Имэйл |
   |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+  | Crypto тэргүүлэх | {{ НЭР }} | {{ УТАС }} | {{ EMAIL }} |
+  | Платформын үйл ажиллагаа | {{ НЭР }} | {{ УТАС }} | {{ EMAIL }} |
+  | Хууль эрх зүйн харилцаа | {{ НЭР }} | {{ УТАС }} | {{ EMAIL }} |
 
-# 5. Attachments Checklist
+# 5. Хавсралтыг шалгах хуудас- [ ] Эх кодын хормын хувилбар (`{{ SOURCE_ARCHIVE }}`) болон хэш.
+- [ ] Тодорхойлогч бүтээх скрипт / хуулбарлах тэмдэглэл.
+- [ ] SBOM (`{{ SBOM_PATH }}`) ба хараат байдлын манифест (`Cargo.lock` хурууны хээ).
+- [ ] Тодорхойлогч тестийн хуулбар (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
+- [ ] SM ажиглалтыг харуулсан телеметрийн хяналтын самбар экспорт.
+- [ ] Экспортын хяналтын мэдэгдэл (тусдаа загварыг үзнэ үү).
+- [ ] Аудитын тайлан эсвэл гуравдагч талын үнэлгээ (хэрэв аль хэдийн дууссан бол).
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+# 6. Өргөдөл гаргагчийн мэдүүлэг
 
-# 6. Applicant Declaration
+> Дээрх мэдээлэл үнэн зөв, ил болсон гэдгийг би баталж байна
+> криптографийн ажиллагаа нь БНХАУ-ын холбогдох хууль тогтоомжид нийцэж байгаа,
+> мөн байгууллага нь ирүүлсэн олдворуудыг дор хаяж хугацаанд хадгалах болно
+> гурван жил.
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- Гарын үсэг (хууль ёсны төлөөлөгч): ______________________
+- Огноо: ______________________

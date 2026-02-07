@@ -6,95 +6,93 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: e7116d28e32d8bd77434edd6767427cc3d2ae0624f4de132b1d0cec3c7d44b86
 source_last_modified: "2026-01-03T18:07:57.069144+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Product Filing (开发备案) Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+٪ SM2/SM3/SM4 پروڈکٹ فائلنگ (开发备案) ٹیمپلیٹ
+٪ Hyperledger Iroha تعمیل ورکنگ ورکنگ گروپ
+٪ 2026-05-06
 
-# Instructions
+# ہدایات
 
-Use this template when submitting a *product development filing* to a provincial
-or municipal State Cryptography Administration (SCA) office before distributing
-SM-enabled binaries or source artefacts from within mainland China. Replace the
-placeholders with project-specific details, export the completed form as PDF if
-required, and attach the artefacts referenced in the checklist.
+جب کسی * پروڈکٹ ڈویلپمنٹ فائلنگ * کو کسی صوبائی میں پیش کرتے ہو تو اس ٹیمپلیٹ کا استعمال کریں
+یا تقسیم کرنے سے پہلے میونسپل اسٹیٹ کریپٹوگرافی انتظامیہ (ایس سی اے) کا دفتر
+سرزمین چین کے اندر سے ایس ایم کے قابل بائنریز یا ماخذ نوادرات۔ تبدیل کریں
+منصوبے سے متعلق تفصیلات رکھنے والے پلیس ہولڈرز ، مکمل فارم کو پی ڈی ایف کے بطور برآمد کریں اگر
+مطلوبہ ، اور چیک لسٹ میں حوالہ کردہ نوادرات کو منسلک کریں۔
 
-# 1. Applicant & Product Summary
+# 1. درخواست دہندہ اور مصنوعات کا خلاصہ
 
-| Field | Value |
-|-------|-------|
-| Organisation name | {{ ORGANISATION }} |
-| Registered address | {{ ADDRESS }} |
-| Legal representative | {{ LEGAL_REP }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Product name | Hyperledger Iroha {{ RELEASE_NAME }} |
-| Product version / build ID | {{ VERSION }} |
-| Filing type | Product development (开发备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| فیلڈ | قیمت |
+| ------- | ------- |
+| تنظیم کا نام | {{تنظیم}} |
+| رجسٹرڈ ایڈریس | {{ایڈریس}} |
+| قانونی نمائندہ | {{قانونی_رپ}} |
+| بنیادی رابطہ (نام / عنوان / ای میل / فون) | {{رابطہ}} |
+| مصنوعات کا نام | Hyperledger Iroha {{release_name}} |
+| پروڈکٹ ورژن / بلڈ آئی ڈی | {{ورژن}} |
+| فائلنگ کی قسم | پروڈکٹ ڈویلپمنٹ (开发备案) |
+| فائلنگ کی تاریخ | {{yyyy-mm-dd}} |
 
-# 2. Cryptography Usage Overview
+# 2. خفیہ نگاری کا استعمال جائزہ
 
-- Supported algorithms: `SM2`, `SM3`, `SM4` (provide usage matrix below).
-- Usage context:
-  | Algorithm | Component | Purpose | Deterministic safeguards |
-  |-----------|-----------|---------|--------------------------|
-  | SM2 | {{ COMPONENT }} | {{ PURPOSE }} | RFC6979 + canonical r∥s enforcement |
-  | SM3 | {{ COMPONENT }} | {{ PURPOSE }} | Deterministic hashing via `Sm3Digest` |
-  | SM4 | {{ COMPONENT }} | {{ PURPOSE }} | AEAD (GCM/CCM) with enforced nonce policy |
-- Non-SM algorithms in build: {{ OTHER_ALGORITHMS }} (for completeness).
+- معاون الگورتھم: `SM2` ، `SM3` ، `SM4` (ذیل میں استعمال میٹرکس فراہم کریں)۔
+- استعمال کا سیاق و سباق:
+  | الگورتھم | اجزاء | مقصد | تعی .ن حفاظتی انتظامات |
+  | ----------- | ----------- | --------- | ------------------------------ |
+  | SM2 | {{جزو}} | {{مقصد}} | RFC6979 + کیننیکل R∥S انفورسمنٹ |
+  | SM3 | {{جزو}} | {{مقصد}} | `Sm3Digest` کے ذریعے تعصب کی ہیشنگ |
+  | SM4 | {{جزو}} | {{مقصد}} | AEAD (GCM/CCM) نافذ شدہ نونس پالیسی کے ساتھ |
+- بلڈ میں غیر ایس ایم الگورتھم: {{دوسرے_الگوریتھم}} (مکمل ہونے کے لئے)۔
 
-# 3. Development & Supply Chain Controls
+# 3. ترقی اور سپلائی چین کنٹرول
 
-- Source code repository: {{ REPOSITORY_URL }}
-- Deterministic build instructions:
+- ماخذ کوڈ ذخیرہ: {{repository_url}}
+- تعی .ن سازی کی ہدایات:
   1. `git clone {{ REPOSITORY_URL }} && git checkout {{ COMMIT_SHA }}`
-  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (adjust as needed).
-  3. SBOM generated via `cargo auditable` / CycloneDX (`{{ SBOM_PATH }}`).
-- Continuous integration environment summary:
-  | Item | Value |
-  |------|-------|
-  | Build OS / version | {{ BUILD_OS }} |
-  | Compiler toolchain | {{ TOOLCHAIN }} |
-  | OpenSSL / Tongsuo source | {{ OPENSSL_SOURCE }} |
-  | Reproducibility checksum | {{ CHECKSUM }} |
+  2. `cargo build --workspace --locked --release --features "sm sm-ffi-openssl"` (ضرورت کے مطابق ایڈجسٹ کریں)۔
+  3. ایس بی او ایم `cargo auditable` / cyclonedx (`{{ SBOM_PATH }}`) کے ذریعے تیار کیا گیا ہے۔
+- مستقل انضمام ماحول کا خلاصہ:
+  | آئٹم | قیمت |
+  | ------ | ------- |
+  | OS / ورژن بنائیں | {{build_os}} |
+  | مرتب ٹولچین | {{ٹولچین}} |
+  | اوپن ایس ایل / ٹونگسو ماخذ | {{اوپن ایس ایل_سورس}} |
+  | تولیدی صلاحیت چیکم | {{چیکسم}} |
 
-# 4. Key Management & Security
+# 4. کلیدی انتظام اور سیکیورٹی
 
-- Default enabled SM features: {{ DEFAULTS }} (e.g., verify-only).
-- Configuration flags required for signing: {{ CONFIG_FLAGS }}.
-- Key custody approach:
-  | Item | Details |
-  |------|---------|
-  | Key generation tool | {{ KEY_TOOL }} |
-  | Storage medium | {{ STORAGE_MEDIUM }} |
-  | Backup policy | {{ BACKUP_POLICY }} |
-  | Access controls | {{ ACCESS_CONTROLS }} |
-- Incident response contacts (24/7):
-  | Role | Name | Phone | Email |
-  |------|------|-------|-------|
-  | Crypto lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Platform ops | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
-  | Legal liaison | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} |
+- پہلے سے طے شدہ ایس ایم کی خصوصیات: {{ڈیفالٹس}} (جیسے ، صرف تصدیق کریں)۔
+- دستخط کرنے کے لئے ترتیب کے جھنڈے درکار ہیں: {{config_flags}}.
+- کلیدی تحویل کا نقطہ نظر:
+  | آئٹم | تفصیلات |
+  | ------ | --------- |
+  | کلیدی جنریشن ٹول | {{key_tool}} |
+  | اسٹوریج میڈیم | {{اسٹوریج_میڈیم}} |
+  | بیک اپ پالیسی | {{بیک اپ_پولیسی}} |
+  | رسائی کنٹرول | {{رسائی_کنٹرولس}} |
+- واقعے کے جوابی رابطے (24/7):
+  | کردار | نام | فون | ای میل |
+  | ------ | ------ | ------- | ------- |
+  | کریپٹو لیڈ | {{نام}} | {{فون}} | {{ای میل}} |
+  | پلیٹ فارم آپس | {{نام}} | {{فون}} | {{ای میل}} |
+  | قانونی رابطہ | {{نام}} | {{فون}} | {{ای میل}} |
 
-# 5. Attachments Checklist
+# 5. منسلکات چیک لسٹ- [] ماخذ کوڈ اسنیپ شاٹ (`{{ SOURCE_ARCHIVE }}`) اور ہیش۔
+- [] ڈٹرمینسٹک بلڈ اسکرپٹ / تولیدی نوٹ کے نوٹ۔
+- [] SBOM (`{{ SBOM_PATH }}`) اور انحصار مینی فیسٹ (`Cargo.lock` فنگر پرنٹ)۔
+- [] تعی .ن ٹیسٹ ٹرانسکرپٹس (`scripts/sm_openssl_smoke.sh` ، `cargo test -p iroha_crypto sm`)۔
+- [] ٹیلی میٹری ڈیش بورڈ ایکسپورٹ کا مظاہرہ کرنے والے ایس ایم مشاہدات۔
+- [] برآمدی کنٹرول کا بیان (علیحدہ ٹیمپلیٹ دیکھیں)۔
+- [] آڈٹ رپورٹس یا تیسری پارٹی کے جائزے (اگر پہلے ہی مکمل ہوچکے ہیں)۔
 
-- [ ] Source code snapshot (`{{ SOURCE_ARCHIVE }}`) and hash.
-- [ ] Deterministic build script / reproducibility notes.
-- [ ] SBOM (`{{ SBOM_PATH }}`) and dependency manifest (`Cargo.lock` fingerprint).
-- [ ] Deterministic test transcripts (`scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`).
-- [ ] Telemetry dashboard export demonstrating SM observability.
-- [ ] Export-control statement (see separate template).
-- [ ] Audit reports or third-party assessments (if already completed).
+# 6. درخواست دہندہ کا اعلان
 
-# 6. Applicant Declaration
+> میں تصدیق کرتا ہوں کہ مذکورہ بالا معلومات درست ہے ، جو انکشاف کیا گیا ہے
+> کریپٹوگرافک فعالیت قابل اطلاق PRC قوانین اور ضوابط کی تعمیل کرتی ہے ،
+> اور یہ کہ تنظیم کم از کم جمع کروائی گئی نوادرات کو برقرار رکھے گی
+> تین سال۔
 
-> I confirm that the above information is accurate, that the disclosed
-> cryptographic functionality complies with applicable PRC laws and regulations,
-> and that the organisation will maintain the submitted artefacts for at least
-> three years.
-
-- Signature (legal representative): ________________________
-- Date: ________________________
-
+- دستخط (قانونی نمائندہ): ________________________
+- تاریخ: ________________________

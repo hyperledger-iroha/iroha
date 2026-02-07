@@ -6,18 +6,20 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Reserve Ledger Digest & Dashboards
 description: How to turn `sorafs reserve ledger` output into telemetry, dashboards, and alerts for the Reserve+Rent policy.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The Reserve+Rent policy (roadmap item **SFM‑6**) now ships the `sorafs reserve`
-CLI helpers plus the `scripts/telemetry/reserve_ledger_digest.py` translator so
-treasury runs can emit deterministic rent/reserve transfers. This page mirrors
-the workflow defined in `docs/source/sorafs_reserve_rent_plan.md` and explains
-how to wire the new transfer feed into Grafana + Alertmanager so economics and
-governance reviewers can audit every billing cycle.
+ད་ལྟོ་ ཟུར་གསོག་+ཁང་གླ་གི་སྲིད་བྱུས་ (ལམ་སབ་ཁྲ་གི་རྣམ་གྲངས་ **SFM‐6**) གིས་ `sorafs reserve` འདི་ བཏངམ་ཨིན།
+CLI གྲོགས་རམ་འབད་མི་ཚུ་དང་ I18NI0000010X སྐད་སྒྱུར་པ་ཚུ་ཨིན།
+དངུལ་ཁང་གི་རྒྱུག་འགྲན་ཚུ་གིས་ ཁང་གླ་/གསོག་འཇོག་སྤོ་བཤུད་ཚུ་ བཏོན་གཏང་ཚུགས། ཤོག་ངོས་འདིས་མེ་ལོང་།
+I18NI000000011X ནང་ངེས་འཛིན་འབད་ཡོད་པའི་ལཱ་གི་རྒྱུན་རིམ་དང་ འགྲེལ་བཤད་རྐྱབ།
+དཔལ་འབྱོར་རིག་པ་དང་ Grafana ལུ་ སྤོ་བཤུད་ཀྱི་ཕིཌ་གསརཔ་འདི་ ག་དེ་སྦེ་ གློག་ཐག་བཏང་དགོཔ་ཨིན་ན་དང་ དཔལ་འབྱོར་རིག་པ་དང་།
+གཞུང་སྐྱོང་བསྐྱར་ཞིབ་པ་ཚུ་གིས་ བྱུང་འཛིན་འཁོར་རིམ་ག་ར་ལུ་ རྩིས་ཞིབ་འབད་ཚུགས།
 
-## End-to-end workflow
+## མཇུག་ལས་མཇུག་བསྡུའི་ལས་རིམ།
 
-1. **Quote + ledger projection**
+1. **Quote + ལེཊི་ཇར་པར་བརྙན་**།
    ```bash
    sorafs reserve quote \
      --storage-class hot \
@@ -34,55 +36,47 @@ governance reviewers can audit every billing cycle.
     --asset-definition xor#sora \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
-   The ledger helper attaches a `ledger_projection` block (rent due, reserve
-   shortfall, top-up delta, underwriting booleans) plus the Norito `Transfer`
-   ISIs needed to move XOR between the treasury and reserve accounts.
+   ལེག་ཇར་གྱིས་ I18NI000000012X སྡེབ་ཚན་ (net rese sepe, secain, speer, speer,
+   མ་ཤོང་། མཐོ་ཚད་ཌེལ་ཊ་ འོག་གི་བྲི་བ་བུ་ལིན་) དང་ `Transfer` དང་།
+   ISIs གིས་ དངུལ་ཁང་དང་ གསོག་འཇོག་རྩིས་ཁྲ་ཚུ་གི་བར་ན་ XOR སྤོ་བཤུད་འབད་དགོཔ་ཐོན་ནུག།
 
-2. **Generate the digest + Prometheus/NDJSON outputs**
-   ```bash
-   python3 scripts/telemetry/reserve_ledger_digest.py \
-     --ledger artifacts/sorafs_reserve/ledger/provider-alpha-apr.json \
-     --label provider-alpha-apr \
-     --out-json artifacts/sorafs_reserve/ledger/provider-alpha-apr.digest.json \
-     --out-md docs/source/sorafs/reports/provider-alpha-apr-ledger.md \
-     --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
-     --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
-   ```
-   The digest helper normalises micro‑XOR totals into XOR, records whether the
-   projection meets underwriting, and emits the **transfer feed** metrics
-   `sorafs_reserve_ledger_transfer_xor` and
-   `sorafs_reserve_ledger_instruction_total`. When multiple ledgers need to be
-   processed (e.g., a batch of providers), repeat `--ledger`/`--label` pairs and
-   the helper writes a single NDJSON/Prometheus file containing every digest so
-   dashboards ingest the entire cycle without bespoke glue. The `--out-prom`
-   file targets a node-exporter textfile collector—drop the `.prom` file into
-   the exporter’s watched directory or upload it to the telemetry bucket
-   consumed by the Reserve dashboard job—while `--ndjson-out` feeds the same
-   payloads into data pipelines.
+2.*བཞུ་ + Prometheus/NDJSON ཐོན་འབྲས་**
+   I18NF0000008X
+   ཟས་བཅུད་ཀྱི་གྲོགས་རམ་པ་འདི་གིས་ མའི་ཀོརོ་ཨེགསི་ཨོ་ཨར་ བསྡོམས་རྩིས་ ཨེགསི་ཨོ་ཨར་ ནང་ལུ་ སྤྱིར་བཏང་སྦེ་ ཨེགསི་ཨོ་ཨར་ ནང་ལུ་ བསྡོམས་རྩིས་འབདཝ་ཨིན།
+   པར་བརྙན་ཚུ་ རྗེས་སུ་འབྲི་ནི་ལུ་ མཐུན་སྒྲིག་འབདཝ་ཨིནམ་དང་ **transfer ཕིཌི་** མེ་ཊིགསི་ཚུ་ བཏོནམ་ཨིན།
+   `sorafs_reserve_ledger_transfer_xor` དང་།
+   `sorafs_reserve_ledger_instruction_total`. ལེཌི་ཇར་སྣ་མང་དགོ་པའི་སྐབས།
+   ལས་སྦྱོར་ (དཔེར་ན་ བྱིན་མི་ཚུ་གི་སྡེ་ཚན་) ) `--ledger`/`--label` ཆ་ཚུ་ བསྐྱར་ལོག་འབདཝ་ཨིན།
+   གྲོགས་རམ་པ་འདི་གིས་ NDJSON/Prometheus ཡིག་སྣོད་གཅིག་འབྲི་སྟེ་ བཞུ་ཚད་ཆ་མཉམ་ཡོདཔ་ཨིན།
+   dashboods གིས་ འཁོར་རིམ་ཆ་མཉམ་རང་ མེ་ཏོག་མེད་པར་ བཏོནམ་ཨིན། `--out-prom`
+   ཡིག་སྣོད་དམིགས་གཏད་ཚུ་གིས་ མཐུད་མཚམས་ཕྱིར་འདྲེན་འབད་མི་ཚིག་ཡིག་ཡིག་སྣོད་བསྡུ་སྒྲིག་འབད་མི་— I18NI000000019X ཡིག་སྣོད་འདི་ནང་ལུ་བཀོག་བཞག་།
+   ཕྱིར་ཚོང་པ་གིས་ སྣོད་ཐོ་བལྟ་ ཡང་ན་ ཊེ་ལི་མི་ཊི་བཱ་ཀེཊ་ལུ་ སྐྱེལ་བཙུགས་འབད་ཡོདཔ་ཨིན།
+   གསོག་འཇོག་འབད་ཡོད་པའི་ ཌེཤ་བོརཌ་ལཱ་གིས་ བཀོལ་སྤྱོད་འབདཝ་ཨིན་— I18NI000000020X འདི་ ཅོག་འཐདཔ་འབདཝ་ཨིན།
+   གནད་སྡུད་མདོང་ལམ་ནང་ papploads.
 
-3. **Publish artefacts + evidence**
-   - Store digests under `artifacts/sorafs_reserve/ledger/<provider>/` and link
-     the Markdown summary from your weekly economics report.
-   - Attach the JSON digest to the rent burn-down (so auditors can replay the
-     math) and include the checksum inside the governance evidence packet.
-   - If the digest signals a top-up or underwriting breach, reference the alert
-     IDs (`SoraFSReserveLedgerTopUpRequired`,
-     `SoraFSReserveLedgerUnderwritingBreach`) and note which transfer ISIs were
-     applied.
+3. **དཔེ་སྐྲུན་ཁང་། + སྒྲུབ་བྱེད་**
+   - `artifacts/sorafs_reserve/ledger/<provider>/` དང་འབྲེལ་མཐུད་འོག་ལུ་ བཞུ་ཚུགས།
+     ཁྱོད་ཀྱི་བདུན་ཕྲག་དཔལ་འབྱོར་སྙན་ཞུ་ལས་ རྟགས་བཅུད་བསྡུས་པ།
+   - JSON ཟས་བཅུད་འཚིག་ཡོད་མི་འདི་ ཁང་གླ་མེ་གིས་འཚིགས་ཏེ་ (དེ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ བསྐྱར་རྩེད་འབད་ཚུགས།
+     math) དང་ གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཀྱི་ ཐུམ་སྒྲིལ་ནང་ ཅེག་སམ་ཚུ་ ཚུདཔ་ཨིན།
+   - བཞུ་ཁུ་གིས་ མགོ་ཡར་ ཡང་ན་ འོག་རིམ་གྱི་ བརྡ་རྟགས་ཅིག་ བརྡ་སྟོན་པ་ཅིན་ ཉེན་བརྡ་ལུ་ གཞི་བསྟུན་འབད།
+     ID (`SoraFSReserveLedgerTopUpRequired`,
+     `SoraFSReserveLedgerUnderwritingBreach`) དང་ ISIs སྤོ་བཤུད་གང་འདྲ་ཞིག་ཡིན་ནམ།
+     གློག་རིམ་
 
-## Metrics → dashboards → alerts
+## མེ་ཊིགསི་ → བཀྲམ་ཤོག་ → ཉེན་བརྡ།
 
-| Source metric | Grafana panel | Alert / policy hook | Notes |
-|---------------|---------------|---------------------|-------|
-| `torii_da_rent_base_micro_total`, `torii_da_protocol_reserve_micro_total`, `torii_da_provider_reward_micro_total` | “DA Rent Distribution (XOR/hour)” in `dashboards/grafana/sorafs_capacity_health.json` | Feed the weekly treasury digest; spikes in reserve flow propagate into `SoraFSCapacityPressure` (`dashboards/alerts/sorafs_capacity_rules.yml`). |
-| `torii_da_rent_gib_months_total` | “Capacity Usage (GiB-months)” (same dashboard) | Pair with the ledger digest to prove the invoiced storage matches the XOR transfers. |
-| `sorafs_reserve_ledger_rent_due_xor`, `sorafs_reserve_ledger_reserve_shortfall_xor`, `sorafs_reserve_ledger_top_up_shortfall_xor` | “Reserve Snapshot (XOR)” + status cards in `dashboards/grafana/sorafs_reserve_economics.json` | `SoraFSReserveLedgerTopUpRequired` fires when `requires_top_up=1`; `SoraFSReserveLedgerUnderwritingBreach` fires when `meets_underwriting=0`. |
-| `sorafs_reserve_ledger_transfer_xor`, `sorafs_reserve_ledger_instruction_total` | “Transfers by Kind”, “Latest Transfer Breakdown”, and the coverage cards in `dashboards/grafana/sorafs_reserve_economics.json` | `SoraFSReserveLedgerInstructionMissing`, `SoraFSReserveLedgerRentTransferMissing`, and `SoraFSReserveLedgerTopUpTransferMissing` warn when the transfer feed is absent or zeroed even though rent/top-up is required; the coverage cards fall to 0% in the same cases. |
+| འབྱུང་ཁུངས་མེ་ཊིག | I18NT0000004X པེ་ནཱལ་ | དྲན་སྐུལ་/ སྲིད་བྱུས་ཧུཀ་ | དྲན་ཐོ། |
+|------------------------------------------------------------------- --------|
+| `torii_da_rent_base_micro_total`, `torii_da_protocol_reserve_micro_total`, `torii_da_provider_reward_micro_total` | “DA ཁང་གླ་བཀྲམ་ (XOR/hour)” ནང་ I18NI0000027X | བདུན་ཕྲག་རེའི་ བང་མཛོད་ཀྱི་ བཞུ་བཅོས་ལུ་ ལྟོ་བྱིན་དགོ། `SoraFSCapacityPressure` (`dashboards/alerts/sorafs_capacity_rules.yml`) ནང་ལུ་ གསོག་འཇོག་འབད་སའི་ ཁྱབ་སྤེལ་ནང་ spikes ཚུ་ཨིན། |
+| `torii_da_rent_gib_months_total` | “ཤུགས་ཚད་ལག་ལེན་ (GiB-ཟླཝ་)” (Dashboard) | ཨེགསི་ཨོ་ཨར་ སྤོ་བཤུད་ཀྱི་ བྱུང་འཛིན་གསོག་འཇོག་མཐུན་སྒྲིག་ཚུ་ བདེན་ཁུངས་བསྐྱལ་ནིའི་དོན་ལུ་ ལེད་ཇར་ བཞུ་བཅོས་དང་གཅིག་ཁར་ ཆ་སྒྲིག་འབད། |
+| `sorafs_reserve_ledger_rent_due_xor`, `sorafs_reserve_ledger_reserve_shortfall_xor`, `sorafs_reserve_ledger_top_up_shortfall_xor`, “Snapshot (XOR)” + གནས་ཚད་ཤོག་བྱང་ཚུ་ I18NI000000034X ནང་ གསོག་འཇོག་འབད། | `SoraFSReserveLedgerTopUpRequired` I18NI000000036X སྐབས་མེ་འབར་བ་དང་། I18NI000000037X `meets_underwriting=0` སྐབས་མེ་འབར་བ། |
+| `sorafs_reserve_ledger_transfer_xor`, `sorafs_reserve_ledger_instruction_total` | “Transfers by Kind” “Latest Transfer Breakdown” དང་ I18NI0000041X ནང་ ཁྱབ་ཁོངས་ཤོག་བྱང་། | `SoraFSReserveLedgerInstructionMissing`, `SoraFSReserveLedgerRentTransferMissing`, དང་ I18NI000000044X ལུ་ སྤོ་བཤུད་ཀྱི་ཕིཌི་འདི་ མེད་པའི་སྐབས་ ཡང་ན་ ཀླད་ཀོར་འབད་ཡོདཔ་སྦེ་ ཉེན་བརྡ་འབདཝ་ཨིན། གནད་དོན་གཅིག་ནང་ ཁྱབ་ཚད་ཤོག་བྱང་ཚུ་ ༠% ལུ་ལྷོདཔ་ཨིན། |
 
-When a rent cycle completes, refresh the Prometheus/NDJSON snapshots, confirm
-that the Grafana panels pick up the new `label`, and attach screenshots +
-Alertmanager IDs to the rent governance packet. This proves the CLI projection,
-telemetry, and governance artefacts all stem from the **same** transfer feed and
-keeps the roadmap’s economics dashboards aligned with the Reserve+Rent
-automation. The coverage cards should read 100% (or 1.0) and the new alerts
-should clear once rent and reserve top-up transfers are present in the digest.
+ཁང་གླའི་འཁོར་རིམ་འདི་མཇུག་བསྡུ་བའི་སྐབས་ I18NT000000002X/NDJSON པར་ལེན་ཚུ་གསར་བསྐྲུན་འབད་ཞིནམ་ལས་ ངེས་གཏན་བཟོ།
+Grafana པེ་ནཱལ་ཚུ་གིས་ `label` གསརཔ་འདི་ འཐུ་ཞིནམ་ལས་ གསལ་གཞི་ཚུ་ + མཉམ་སྦྲགས་འབདཝ་ཨིན།
+ཉེན་བརྡ་འབད་མི་ ID ཚུ་ གཞུང་སྐྱོང་ཁང་ཚན་གྱི་སྦུང་ཚན་ལུ་ཨིན། འདི་གིས་ CLI དམིགས་ཚད་འདི་ བདེན་ཁུངས་བཀལཝ་ཨིན།
+telemetry དང་གཞུང་གིས་ *same** སྤོ་བཤུད་ཀྱི་ཕིཌ་དང་ ལས་རིགས་ཆ་མཉམ་ལུ་ རྩ་བ་བཏོནམ་ཨིན།
+ལམ་སྟོན་གྱི་དཔལ་འབྱོར་གྱི་ བརྡ་དོན་བཀོད་སྒྲིག་ཚུ་ ཟུར་གསོག་+ཁང་གླ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+རང་འགོད། ཁྱབ་ཁོངས་ཤོག་བྱང་ཚུ་ བརྒྱ་ཆ་༡༠༠ (ཡང་ན་ ༡.༠) དང་ དྲན་བསྐུལ་གསརཔ་ཚུ་ལྷག་དགོ།
+ཁང་གླ་འདི་ བཤུབ་དགོཔ་དང་ མཐོ་རིམ་སྤོ་བཤུད་ཚུ་ བཞུ་ཁུ་ནང་ལུ་ཡོདཔ་ཨིན།

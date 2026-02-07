@@ -11,69 +11,70 @@ id: public-preview-invite
 title: Public preview invite playbook
 sidebar_label: Preview invite playbook
 description: Checklist for announcing the docs portal preview to external reviewers.
+translator: machine-google-reviewed
 ---
 
-## Program goals
+## Proqram məqsədləri
 
-This playbook explains how to announce and run the public preview once the
-reviewer onboarding workflow is live. It keeps the DOCS-SORA roadmap honest by
-ensuring every invite ships with verifiable artefacts, security guidance, and a
-clear feedback path.
+Bu oyun kitabı bir dəfə ictimai önizləməni necə elan etməyi və işə salmağı izah edir
+rəyçinin işə qəbul iş prosesi canlıdır. DOCS-SORA yol xəritəsini dürüst saxlayır
+hər dəvət gəmisinin yoxlanıla bilən artefaktlarla təmin edilməsi, təhlükəsizlik təlimatı və a
+aydın əks əlaqə yolu.
 
-- **Audience:** curated list of community members, partners, and maintainers who
-  signed the preview acceptable-use policy.
-- **Ceilings:** default wave size ≤ 25 reviewers, 14-day access window, incident
-  response within 24h.
+- **Auditoriya:** icma üzvlərinin, tərəfdaşların və baxıcıların seçilmiş siyahısı
+  önizləmə məqbul istifadə siyasətini imzaladı.
+- **Tavanlar:** standart dalğa ölçüsü ≤ 25 rəyçi, 14 günlük giriş pəncərəsi, insident
+  24 saat ərzində cavab.
 
-## Launch gating checklist
+## Gating yoxlama siyahısını işə salın
 
-Complete these tasks before sending any invitation:
+Hər hansı dəvət göndərməzdən əvvəl bu tapşırıqları yerinə yetirin:
 
-1. Latest preview artefacts uploaded in CI (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle).
-2. `npm run --prefix docs/portal serve` (checksum-gated) tested on the same tag.
-3. Reviewer onboarding tickets approved and linked to the invite wave.
-4. Security, observability, and incident docs validated
+1. CI-də yüklənmiş ən son önizləmə artefaktları (`docs-portal-preview`,
+   yoxlama cəmi manifest, deskriptor, SoraFS paketi).
+2. `npm run --prefix docs/portal serve` (yoxlama məbləği qapalı) eyni etiketdə sınaqdan keçirilmişdir.
+3. Rəyçinin uçuş biletləri təsdiqləndi və dəvət dalğası ilə əlaqələndirildi.
+4. Təhlükəsizlik, müşahidə oluna bilənlik və insident sənədləri təsdiq edilmişdir
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
    [`incident-runbooks`](./incident-runbooks.md)).
-5. Feedback form or issue template prepared (include fields for severity,
-   reproduction steps, screenshots, and environment info).
-6. Announcement copy reviewed by Docs/DevRel + Governance.
+5. Rəy forması və ya buraxılış şablonu hazırlanmışdır (ciddilik üçün sahələr,
+   reproduksiya addımları, ekran görüntüləri və ətraf mühit haqqında məlumat).
+6. Docs/DevRel + Governance tərəfindən nəzərdən keçirilən elanın surəti.
 
-## Invite package
+## Dəvət paketi
 
-Every invite must include:
+Hər bir dəvət aşağıdakıları əhatə etməlidir:
 
-1. **Verified artefacts** — Provide the SoraFS manifest/plan or GitHub artefact
-   links plus the checksum manifest and descriptor. Reference the verification
-   command explicitly so reviewers can run it before launching the site.
-2. **Serve instructions** — Include the checksum-gated preview command:
+1. **Təsdiqlənmiş artefaktlar** — SoraFS manifest/plan və ya GitHub artefaktını təmin edin
+   bağlantılar üstəgəl yoxlama cəmi manifest və deskriptor. Doğrulamaya istinad edin
+   açıq şəkildə əmr edin ki, rəyçilər saytı işə salmazdan əvvəl onu işlətsinlər.
+2. **Xidmət təlimatları** — Checksum-qapalı önizləmə əmrini daxil edin:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Security reminders** — Call out that tokens expire automatically, links
-   must not be shared, and incidents should be reported immediately.
-4. **Feedback channel** — Link to the issue template/form and clarify response
-   time expectations.
-5. **Program dates** — Provide start/end dates, office hours or sync meetings,
-   and the next refresh window.
+3. **Təhlükəsizlik xatırlatmaları** — Tokenlərin avtomatik bitdiyini bildirin, linklər
+   paylaşılmamalı və hadisələr dərhal bildirilməlidir.
+4. **Əlaqə kanalı** — Problem şablonuna/formasına keçid edin və cavabı aydınlaşdırın
+   vaxt gözləntiləri.
+5. **Proqram tarixləri** — Başlama/bitmə tarixlərini, iş saatlarını və ya sinxron görüşləri təmin edin,
+   və növbəti yeniləmə pəncərəsi.
 
-The sample email in
+E-poçt nümunəsi
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-covers these requirements. Update the placeholders (dates, URLs, contacts)
-before sending.
+bu tələbləri əhatə edir. Yer tutanları yeniləyin (tarixlər, URL-lər, kontaktlar)
+göndərməzdən əvvəl.
 
-## Expose the preview host
+## Önizləmə hostunu ifşa edin
 
-Only promote the preview host once onboarding is complete and the change ticket
-is approved. See the [preview host exposure guide](./preview-host-exposure.md)
-for the end-to-end build/publish/verify steps used in this section.
+İlkin baxış aparıcısını yalnız işə qəbul tamamlandıqdan və bilet dəyişdirildikdən sonra təbliğ edin
+təsdiq edilir. [Önizləmə hostuna məruz qalma təlimatına](./preview-host-exposure.md) baxın
+bu bölmədə istifadə olunan başdan-başa qurma/nəşr etmə/doğrulama addımları üçün.
 
-1. **Build and package:** Stamp the release tag and produce deterministic
-   artefacts.
+1. **Yaradın və qablaşdırın:** Buraxılış etiketini möhürləyin və deterministik istehsal edin
+   artefaktlar.
 
    ```bash
    cd docs/portal
@@ -92,18 +93,18 @@ for the end-to-end build/publish/verify steps used in this section.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   The pin script writes `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   and `portal.dns-cutover.json` under `artifacts/sorafs/`. Attach those files to the
-   invite wave so every reviewer can verify the same bits.
+   Pin skripti yazır `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
+   və `portal.dns-cutover.json` `artifacts/sorafs/` altında. Həmin fayllara əlavə edin
+   dalğa dəvət edin ki, hər bir rəyçi eyni bitləri yoxlaya bilsin.
 
-2. **Publish the preview alias:** Rerun the command without `--skip-submit`
-   (supply `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, and the
-   governance-issued alias proof). The script will bind the manifest to
-   `docs-preview.sora` and emit `portal.manifest.submit.summary.json` plus
-   `portal.pin.report.json` for the evidence bundle.
+2. **Önizləmə ləqəbini dərc edin:** `--skip-submit` olmadan əmri yenidən icra edin
+   (təchizat `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]` və
+   idarəetmə tərəfindən verilmiş ləqəb sübutu). Skript manifestə bağlanacaq
+   `docs-preview.sora` və `portal.manifest.submit.summary.json` plus yayır
+   Sübut dəsti üçün `portal.pin.report.json`.
 
-3. **Probe the deployment:** Confirm the alias resolves and the checksum matches
-   the tag before sending invites.
+3. **Yerləşdirməni yoxlayın:** Təxəllənin həll edildiyini və yoxlama məbləğinin uyğunluğunu təsdiqləyin
+   dəvət göndərməzdən əvvəl etiket.
 
    ```bash
    npm run probe:portal -- \
@@ -111,26 +112,26 @@ for the end-to-end build/publish/verify steps used in this section.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Keep `npm run serve` (`scripts/serve-verified-preview.mjs`) handy as a
-   fallback so reviewers can spin up a local copy if the preview edge blips.
+   `npm run serve` (`scripts/serve-verified-preview.mjs`) kimi əlinizdə saxlayın
+   geri qaytarma, beləliklə, rəyçilər önizləmə kənarı sönərsə yerli nüsxəni çıxara bilsinlər.
 
-## Communications timeline
+## Rabitə qrafiki
 
-| Day | Action | Owner |
+| Gün | Fəaliyyət | Sahibi |
 | --- | --- | --- |
-| D-3 | Finalise invite copy, refresh artefacts, dry-run verification | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
-| D-1 | Send invites using the template, update tracker with recipient list | Docs/DevRel |
-| D | Kickoff call / office hours, monitor telemetry dashboards | Docs/DevRel + On-call |
-| D+7 | Midpoint feedback digest, triage blocking issues | Docs/DevRel |
-| D+14 | Close wave, revoke temporary access, publish summary in `status.md` | Docs/DevRel |
+| D-3 | Dəvət nüsxəsini yekunlaşdırın, artefaktları yeniləyin, quru işləmə yoxlaması | Sənədlər/DevRel |
+| D-2 | İdarəetmə qeydiyyatı + dəyişiklik bileti | Sənədlər/DevRel + İdarəetmə |
+| D-1 | Şablondan istifadə edərək dəvət göndərin, alıcı siyahısı ilə izləyicini yeniləyin | Sənədlər/DevRel |
+| D | Başlanğıc çağırışı / iş saatları, telemetriya tablosuna nəzarət | Sənədlər/DevRel + Zəng üzrə |
+| D+7 | Orta nöqtə geribildirim həzmi, triajın bloklanması məsələləri | Sənədlər/DevRel |
+| D+14 | Dalğanı bağlayın, müvəqqəti girişi ləğv edin, xülasəni `status.md`-də dərc edin | Sənədlər/DevRel |
 
-## Access tracking & telemetry
+## Giriş izləmə və telemetriya
 
-1. Record every recipient, invite timestamp, and revocation date with the
-   preview feedback logger (see
-   [`preview-feedback-log`](./preview-feedback-log)) so every wave shares the
-   same evidence trail:
+1. Hər bir alıcını qeyd edin, dəvət vaxtı damğası və ləğv tarixi
+   geribildirim qeydçisi (bax
+   [`preview-feedback-log`](./preview-feedback-log)) beləliklə hər dalğa paylaşır
+   eyni sübut izi:
 
    ```bash
    # Append a new invite event to artifacts/docs_portal_preview/feedback_log.json
@@ -141,41 +142,41 @@ for the end-to-end build/publish/verify steps used in this section.
      --notes "wave-01 seed"
    ```
 
-   Supported events are `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, and `access-revoked`. The log lives at
-   `artifacts/docs_portal_preview/feedback_log.json` by default; attach it to
-   the invite wave ticket together with consent forms. Use the summary helper
-   to produce an auditable roll-up before the close-out note:
+   Dəstəklənən hadisələr `invite-sent`, `acknowledged`,
+   `feedback-submitted`, `issue-opened` və `access-revoked`. Günlük yaşayır
+   Defolt olaraq `artifacts/docs_portal_preview/feedback_log.json`; əlavə edin
+   razılıq formaları ilə birlikdə dəvət dalğası bileti. Xülasə köməkçisindən istifadə edin
+   bağlanma qeydindən əvvəl yoxlanıla bilən bir hesabat hazırlamaq üçün:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   The JSON summary enumerates invites per wave, open recipients, feedback
-   counts, and the timestamp of the most recent event. The helper is backed by
+   JSON xülasəsi hər dalğa üçün dəvətləri, açıq alıcıları, rəyləri sadalayır
+   sayılar və ən son hadisənin vaxt möhürü. Köməkçi tərəfindən dəstəklənir
    [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   so the same workflow can run locally or in CI. Use the digest template in
+   beləliklə, eyni iş axını yerli və ya CI-də işləyə bilər. Həzm şablonundan istifadə edin
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   when publishing the wave recap.
-2. Tag telemetry dashboards with the `DOCS_RELEASE_TAG` used for the wave so
-   spikes can be correlated with invite cohorts.
-3. Run `npm run probe:portal -- --expect-release=<tag>` after the deploy to
-   confirm the preview environment advertises the correct release metadata.
-4. Capture any incidents in the runbook template and link them to the cohort.
+   dalğa xülasəsini dərc edərkən.
+2. Telemetriya panellərini dalğa üçün istifadə olunan `DOCS_RELEASE_TAG` ilə etiketləyin.
+   sünbüllər dəvət kohortları ilə əlaqələndirilə bilər.
+3. Yerləşdirmədən sonra `npm run probe:portal -- --expect-release=<tag>`-i işə salın
+   önizləmə mühitinin düzgün buraxılış metadatasını reklam etdiyini təsdiqləyin.
+4. Runbook şablonunda hər hansı insidentləri qeyd edin və onları kohorta əlaqələndirin.
 
-## Feedback & close-out
+## Rəy və bağlanma
 
-1. Aggregate feedback in a shared doc or issue board. Label items with
-   `docs-preview/<wave>` so roadmap owners can query them easily.
-2. Use the preview logger’s summary output to populate the wave report, then
-   summarise the cohort in `status.md` (participants, major findings, planned
-   fixes) and update `roadmap.md` if the DOCS-SORA milestone changed.
-3. Follow the offboarding steps from
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoke access, archive
-   requests, and thank participants.
-4. Prepare the next wave by refreshing artefacts, re-running the checksum gates,
-   and updating the invite template with new dates.
+1. Paylaşılan sənəd və ya buraxılış lövhəsində rəyi ümumiləşdirin. Elementləri ilə etiketləyin
+   `docs-preview/<wave>` beləliklə, yol xəritəsi sahibləri onları asanlıqla sorğulaya bilsinlər.
+2. Dalğa hesabatını doldurmaq üçün ilkin baxış qeydinin xülasə çıxışından istifadə edin, sonra
+   `status.md`-də kohortu ümumiləşdirin (iştirakçılar, əsas tapıntılar, planlaşdırılan
+   düzəlişlər) və DOCS-SORA mərhələ dəyişibsə, `roadmap.md`-i yeniləyin.
+3. Buradan kənara çıxma addımlarını izləyin
+   [`reviewer-onboarding`](./reviewer-onboarding.md): girişi ləğv edin, arxivləşdirin
+   rica edir və iştirakçılara təşəkkür edir.
+4. Artefaktları təravətləndirərək, yoxlama qapılarını yenidən işə salmaqla növbəti dalğanı hazırlayın,
+   və dəvət şablonunun yeni tarixlərlə yenilənməsi.
 
-Consistently applying this playbook keeps the preview program auditable and
-gives Docs/DevRel a repeatable way to scale invites as the portal approaches GA.
+Ardıcıl olaraq bu kitabçanın tətbiqi önizləmə proqramını yoxlanıla bilir və saxlayır
+Portal GA-ya yaxınlaşdıqca, Docs/DevRel-ə dəvətləri ölçmək üçün təkrarlanan üsul verir.

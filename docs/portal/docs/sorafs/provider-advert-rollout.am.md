@@ -8,138 +8,139 @@ source_hash: b80573de9799c783b62fe4babb553de4dd0778b028cd6d6ad58eb3094f7284eb
 source_last_modified: "2026-01-04T08:19:26.497389+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Provider Advert Rollout Plan"
+translator: machine-google-reviewed
 ---
 
-> Adapted from [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).
+> ከ[`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md) የተወሰደ።
 
-# SoraFS Provider Advert Rollout Plan
+# SoraFS አቅራቢ የማስታወቂያ ልቀት እቅድ
 
-This plan coordinates the cut-over from permissive provider advertisements to
-the fully-governed `ProviderAdvertV1` surface required for multi-source chunk
-retrieval. It focuses on three deliverables:
+ይህ እቅድ ከፈቃድ ሰጪ አቅራቢዎች ማስታዎቂያዎች እስከ መቋረጥን ያስተባብራል።
+ሙሉ በሙሉ የሚተዳደረው I18NI0000030X ወለል ለብዙ-ምንጭ ቁራጭ ያስፈልጋል
+መልሶ ማግኘት. በሦስት ማቅረቢያዎች ላይ ያተኩራል-
 
-- **Operator guide.** Step-by-step actions storage providers must complete
-  before each gate flips.
-- **Telemetry coverage.** Dashboards and alerts that Observability and Ops use
-  to confirm the network only accepts compliant adverts.
-The rollout aligns with SF-2b/2c milestones in the [SoraFS migration
-roadmap](./migration-roadmap) and assumes the admission policy in the
-[provider admission policy](./provider-admission-policy) is already in
-effect.
+- ** የኦፕሬተር መመሪያ።** የደረጃ በደረጃ እርምጃዎች ማከማቻ አቅራቢዎች ማጠናቀቅ አለባቸው
+  እያንዳንዱ በር ከመገለባበጥ በፊት.
+- **የቴሌሜትሪ ሽፋን።** ታዛቢነት እና ኦፕስ የሚጠቀሙባቸው ዳሽቦርዶች እና ማንቂያዎች
+  ለማረጋገጥ አውታረ መረቡ የሚያከብሩ ማስታወቂያዎችን ብቻ ይቀበላል።
+ልቀቱ በ[SoraFS ፍልሰት ውስጥ ከSF-2b/2c ችካሎች ጋር ይስማማል።
+የመንገድ ካርታ](./migration-roadmap) እና የመግቢያ ፖሊሲውን በ
+[የአቅራቢ መግቢያ ፖሊሲ](./provider-admission-policy) አስቀድሞ ገብቷል።
+ተፅዕኖ.
 
-## Current Requirements
+## ወቅታዊ መስፈርቶች
 
-SoraFS accepts only governance-enveloped `ProviderAdvertV1` payloads. The
-following requirements are enforced at admission:
+SoraFS የሚቀበለው በአስተዳደር የታሸጉ `ProviderAdvertV1` ክፍያዎችን ብቻ ነው። የ
+በመግቢያው ላይ የሚከተሉት መስፈርቶች ተፈጻሚ ይሆናሉ
 
-- `profile_id=sorafs.sf1@1.0.0` with canonical `profile_aliases` present.
-- `chunk_range_fetch` capability payloads must be included for multi-source
-  retrieval.
-- `signature_strict=true` with council signatures attached to the advert
-  envelope.
-- `allow_unknown_capabilities` is only permitted during explicit GREASE drills
-  and must be logged.
+- `profile_id=sorafs.sf1@1.0.0` ከቀኖናዊ I18NI0000033X ጋር።
+- `chunk_range_fetch` የችሎታ ጭነት ለብዙ ምንጭ መካተት አለበት።
+  መልሶ ማግኘት.
+- `signature_strict=true` የምክር ቤት ፊርማዎች ከማስታወቂያው ጋር ተያይዘዋል።
+  ኤንቨሎፕ.
+- `allow_unknown_capabilities` የሚፈቀደው በግልፅ የ GREASE ልምምዶች ጊዜ ብቻ ነው።
+  እና መመዝገብ አለበት.
 
-## Operator Checklist
+## የኦፕሬተር ማረጋገጫ ዝርዝር
 
-1. **Inventory adverts.** List every published advert and record:
-   - Governing envelope path (`defaults/nexus/sorafs_admission/...` or production equivalent).
-   - Advert `profile_id` and `profile_aliases`.
-   - Capability list (expect at least `torii_gateway` and `chunk_range_fetch`).
-   - `allow_unknown_capabilities` flag (required when vendor-reserved TLVs are present).
-2. **Regenerate with provider tooling.**
-   - Rebuild the payload with your provider advert publisher, ensuring:
+1. **የእቃ ዝርዝር ማስታወቂያዎች** እያንዳንዱን የታተመ ማስታወቂያ እና መዝገብ ይዘርዝሩ፡-
+   - የአስተዳደር ፖስታ መንገድ (`defaults/nexus/sorafs_admission/...` ወይም የምርት አቻ)።
+   - `profile_id` እና I18NI0000039X ያስተዋውቁ።
+   - የችሎታ ዝርዝር (ቢያንስ `torii_gateway` እና `chunk_range_fetch` ይጠብቁ)።
+   - `allow_unknown_capabilities` ባንዲራ (በሻጭ የተያዙ TLVዎች በሚኖሩበት ጊዜ ያስፈልጋል)።
+2. ** በአገልግሎት አቅራቢ መሳሪያዎች እንደገና ማመንጨት።**
+   - ክፍያውን በአቅራቢዎ የማስታወቂያ አታሚ እንደገና ይገንቡ፣
      - `profile_id=sorafs.sf1@1.0.0`
-     - `capability=chunk_range_fetch` with a defined `max_span`
-     - `allow_unknown_capabilities=<true|false>` when GREASE TLVs are present
-   - Validate via `/v1/sorafs/providers` and `sorafs_fetch`; warnings about unknown
-     capabilities must be triaged.
-3. **Validate multi-source readiness.**
-   - Execute `sorafs_fetch` with `--provider-advert=<path>`; the CLI now fails
-     when `chunk_range_fetch` is missing and prints warnings for ignored unknown
-     capabilities. Capture the JSON report and archive it with operations logs.
-4. **Stage renewals.**
-   - Submit `ProviderAdmissionRenewalV1` envelopes at least 30 days before
-     expiration. Renewals must retain the canonical handle and capability set;
-     only stake, endpoints, or metadata should change.
-5. **Communicate with dependent teams.**
-   - SDK owners must release versions that surface warnings to operators when
-     adverts are rejected.
-   - DevRel announces each phase transition; include dashboard links and the
-     threshold logic below.
-6. **Install dashboards & alerts.**
-   - Import the Grafana export and place it under **SoraFS / Provider
-     Rollout** with dashboard UID `sorafs-provider-admission`.
-   - Ensure the alert rules point to the shared `sorafs-advert-rollout`
-     notification channel in staging and production.
+     - `capability=chunk_range_fetch` ከተገለጸው I18NI0000045X ጋር
+     - GREASE TLVs ሲገኙ `allow_unknown_capabilities=<true|false>`
+   - በI18NI0000047X እና I18NI0000048X በኩል ያረጋግጡ; ስለማይታወቅ ማስጠንቀቂያዎች
+     ችሎታዎች መከፋፈል አለባቸው.
+3. **የባለብዙ ምንጭ ዝግጁነትን ያረጋግጡ።**
+   - `sorafs_fetch` በ I18NI0000050X ያስፈጽሙ; CLI አሁን አልተሳካም።
+     `chunk_range_fetch` ሲጎድል እና ችላ ተብሎ ለማይታወቅ ማስጠንቀቂያዎችን ሲያትም።
+     ችሎታዎች. የJSON ሪፖርቱን ይቅረጹ እና በኦፕሬሽን ምዝግብ ማስታወሻዎች ያስቀምጡት።
+4. ** የመድረክ እድሳት።**
+   - ቢያንስ ከ 30 ቀናት በፊት `ProviderAdmissionRenewalV1` ፖስታዎችን ያስገቡ
+     የማለቂያ ጊዜ. እድሳት ቀኖናዊውን እጀታ እና የችሎታ ስብስብ ማቆየት አለበት;
+     ድርሻ፣ የመጨረሻ ነጥብ ወይም ሜታዳታ ብቻ መቀየር አለበት።
+5. **ከጥገኛ ቡድኖች ጋር ተገናኝ።**
+   - የኤስዲኬ ባለቤቶች መቼ ለኦፕሬተሮች ማስጠንቀቂያ የሚሰጡ ስሪቶችን መልቀቅ አለባቸው
+     ማስታወቂያዎች ውድቅ ናቸው.
+   - DevRel እያንዳንዱን ደረጃ ሽግግር ያስታውቃል; ዳሽቦርድ አገናኞችን እና የ
+     የመነሻ አመክንዮ ከዚህ በታች።
+6. ** ዳሽቦርዶችን እና ማንቂያዎችን ጫን።**
+   - Grafana ወደ ውጭ መላክ እና በ **SoraFS / አቅራቢ ስር ያድርጉት
+     ልቀቅ *** ከዳሽቦርድ UID `sorafs-provider-admission`።
+   - የማንቂያ ደንቦቹ ወደ የተጋራው `sorafs-advert-rollout` እንደሚጠቁሙ ያረጋግጡ
+     በማዘጋጀት እና በምርት ውስጥ የማሳወቂያ ቻናል ።
 
-## Telemetry & Dashboards
+## ቴሌሜትሪ እና ዳሽቦርዶች
 
-The following metrics are already exposed via `iroha_telemetry`:
+የሚከተሉት መለኪያዎች ቀድሞውኑ በ`iroha_telemetry` በኩል ተጋልጠዋል።
 
-- `torii_sorafs_admission_total{result,reason}` — counts accepted, rejected,
-  and warning outcomes. Reasons include `missing_envelope`, `unknown_capability`,
-  `stale`, and `policy_violation`.
+- `torii_sorafs_admission_total{result,reason}` - ቆጠራዎች ተቀባይነት አግኝተዋል ፣ ውድቅ ተደርጓል ፣
+  እና የማስጠንቀቂያ ውጤቶች. ምክንያቶቹ `missing_envelope`፣ `unknown_capability`፣
+  `stale`፣ እና `policy_violation`።
 
-Grafana export: [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
-Import the file into the shared dashboards repository (`observability/dashboards`)
-and update only the datasource UID before publishing.
+Grafana ወደ ውጭ መላክ፡ [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json)።
+ፋይሉን ወደ የተጋራው ዳሽቦርድ ማከማቻ አስመጣ (`observability/dashboards`)
+እና ከማተምዎ በፊት የውሂብ ምንጭ UID ብቻ ያዘምኑ።
 
-The board publishes under the Grafana folder **SoraFS / Provider Rollout** with
-the stable UID `sorafs-provider-admission`. Alert rules
-`sorafs-admission-warn` (warning) and `sorafs-admission-reject` (critical) are
-pre-configured to use the `sorafs-advert-rollout` notification policy; adjust
-that contact point if the destination list changes rather than editing the
-dashboard JSON.
+ቦርዱ በI18NT0000004X አቃፊ **SoraFS/የአቅራቢ ልቀት** ያትማል።
+የተረጋጋው UID I18NI0000063X. የማንቂያ ደንቦች
+`sorafs-admission-warn` (ማስጠንቀቂያ) እና I18NI0000065X (ወሳኝ) ናቸው
+የ `sorafs-advert-rollout` የማሳወቂያ ፖሊሲን ለመጠቀም አስቀድሞ የተዋቀረ; ማስተካከል
+የመድረሻ ዝርዝሩን ከማርትዕ ይልቅ ከተቀየረ ያንን የመገናኛ ነጥብ
+ዳሽቦርድ JSON
 
-Recommended Grafana panels:
+የሚመከሩ Grafana ፓነሎች፡
 
-| Panel | Query | Notes |
-|-------|-------|-------|
-| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Stack chart to visualise accept vs warn vs reject. Alert when warn > 0.05 * total (warning) or reject > 0 (critical). |
-| **Warning ratio** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Single-line timeseries that feeds the pager threshold (5% warning rate rolling 15 minutes). |
-| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Drives runbook triage; attach links to mitigation steps. |
-| **Refresh debt** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Indicates providers missing the refresh deadline; cross-reference with discovery cache logs. |
+| ፓነል | ጥያቄ | ማስታወሻ |
+|-------|-------|------|
+| ** የመግቢያ ውጤት መጠን** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | በምስላዊ ለማየት ገበታ ቁልል ተቀበል እና አስጠንቅቅን አልቀበልም። አስጠንቅቅ> 0.05 * ጠቅላላ (ማስጠንቀቂያ) ወይም ውድቅ > 0 (ወሳኝ) |
+| **የማስጠንቀቂያ ጥምርታ** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | የፔጀር ጣራን የሚመግቡ ነጠላ-መስመር ተከታታይ ጊዜዎች (5% የማስጠንቀቂያ መጠን 15 ደቂቃ ማንከባለል)። |
+| ** ውድቅ የተደረገባቸው ምክንያቶች** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Runbook triage ያንቀሳቅሳል; አገናኞችን ወደ ቅነሳ እርምጃዎች ያያይዙ። |
+| **ዕዳ ያድሱ** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | የማደሻ ቀነ-ገደቡን የሚያጡ አቅራቢዎችን ያሳያል። ማመሳከሪያ ከግኝት መሸጎጫ ምዝግብ ማስታወሻዎች ጋር። |
 
-CLI artefacts for manual dashboards:
+በእጅ ዳሽቦርድ የ CLI ቅርሶች፡-
 
-- `sorafs_fetch --provider-metrics-out` writes `failures`, `successes`, and
-  `disabled` counters per provider. Import into ad-hoc dashboards to monitor
-  orchestrator dry-runs before switching production providers.
-- The JSON report’s `chunk_retry_rate` and `provider_failure_rate` fields
-  highlight throttling or stale payload symptoms that often precede admission
-  rejections.
+- `sorafs_fetch --provider-metrics-out` `failures`፣ `successes` ይጽፋል፣ እና
+  `disabled` ቆጣሪዎች በአንድ አቅራቢ። ለመከታተል ወደ ad-hoc ዳሽቦርዶች ያስመጡ
+  ኦርኬስትራ የማምረቻ አቅራቢዎችን ከመቀየርዎ በፊት ይደርቃል።
+- የJSON ዘገባ I18NI0000075X እና `provider_failure_rate` መስኮች
+  ብዙውን ጊዜ ከመግባት በፊት የሚመጡ የመጎሳቆል ወይም የቆዩ የክፍያ ምልክቶችን ያሳዩ
+  አለመቀበል።
 
-### Grafana dashboard layout
+### Grafana ዳሽቦርድ አቀማመጥ
 
-Observability publishes a dedicated board — **SoraFS Provider Admission
-Rollout** (`sorafs-provider-admission`) — under **SoraFS / Provider Rollout**
-with the following canonical panel IDs:
+ታዛቢነት ራሱን የቻለ ቦርድ ያትማል - ** SoraFS የአቅራቢ መግቢያ
+ልቀት** (I18NI0000077X) — በ**SoraFS/የአቅራቢ ልቀት** ስር
+ከሚከተሉት ቀኖናዊ ፓነል መታወቂያዎች ጋር፡-
 
-- Panel 1 — *Admission outcome rate* (stacked area, unit “ops/min”).
-- Panel 2 — *Warning ratio* (single series), emitting the expression
-  `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) /
-   sum(rate(torii_sorafs_admission_total[5m]))`.
-- Panel 3 — *Rejection reasons* (time series grouped by `reason`), sorted by
+- ፓነል 1 - * የመግቢያ ውጤት መጠን * (የተቆለለ ቦታ ፣ አሃድ “ops / ደቂቃ”)።
+- ፓነል 2 - * የማስጠንቀቂያ ጥምርታ * (ነጠላ ተከታታይ) ፣ አገላለጹን ያወጣል።
+  `ድምር(ተመን(የቶሪ_ሶራፍ_ጠቅላላ_መቀበያ_ጠቅላላ{ውጤት=«ማስጠንቀቂያ»[5ሚ]))) /
+   ድምር(ተመን(torii_sorafs_ጠቅላላ[5m]))`
+- ፓነል 3 - * ውድቅ የተደረገባቸው ምክንያቶች* (በ`reason` የተከፋፈሉ ተከታታይ) ፣ የተደረደሩ
   `rate(...[5m])`.
-- Panel 4 — *Refresh debt* (stat), mirroring the query in the table above and
-  annotated with the advert refresh deadlines pulled from the migration ledger.
+- ፓነል 4 - * ዕዳን አድስ * (ስታቲስቲክስ)፣ ከላይ ባለው ሠንጠረዥ ውስጥ ያለውን መጠይቅ በማንጸባረቅ እና
+  ከስደት ደብተር በተወጣው የማስታወቂያ ማደሻ ቀነ-ገደቦች ተብራርቷል።
 
-Copy (or create) the JSON skeleton in the infrastructure dashboards repo at
-`observability/dashboards/sorafs_provider_admission.json`, then update only the
-data source UID; the panel IDs and alert rules are referenced by the runbooks
-below, so avoid renumbering them without revising this documentation.
+በመሠረተ ልማት ዳሽቦርዶች ውስጥ የJSON አጽሙን ይቅዱ (ወይም ይፍጠሩ) በ
+`observability/dashboards/sorafs_provider_admission.json`፣ ከዚያ ማዘመን ብቻ
+የውሂብ ምንጭ UID; የፓነል መታወቂያዎች እና የማንቂያ ደንቦች በ runbooks ተጠቅሰዋል
+ከታች፣ ስለዚህ ይህን ሰነድ ሳይከልሱ እነሱን እንደገና ከመቁጠር ይቆጠቡ።
 
-For convenience the repository now ships a reference dashboard definition at
-`docs/source/grafana_sorafs_admission.json`; copy it into your Grafana folder if
-you need a starting point for local testing.
+ለመመቻቸት ማከማቻው አሁን የማመሳከሪያ ዳሽቦርድ ትርጉም በ ላይ ይልካል።
+`docs/source/grafana_sorafs_admission.json`; ከሆነ ወደ የእርስዎ Grafana አቃፊ ይቅዱት።
+ለአካባቢያዊ ሙከራዎች መነሻ ያስፈልግዎታል.
 
-### Prometheus alert rules
+### Prometheus ማንቂያ ደንቦች
 
-Add the following rule group to `observability/prometheus/sorafs_admission.rules.yml`
-(create the file if this is the first SoraFS rule group) and include it from
-your Prometheus configuration. Replace `<pagerduty>` with the actual routing
-label for your on-call rotation.
+የሚከተለውን ደንብ ቡድን ወደ I18NI0000082X ያክሉ
+(ይህ የመጀመሪያው SoraFS ደንብ ቡድን ከሆነ ፋይሉን ይፍጠሩ) እና ያካትቱት
+የእርስዎ Prometheus ውቅር። `<pagerduty>` በእውነተኛው ማዞሪያ ተካ
+በጥሪ ላይ ማሽከርከርዎ ላይ ምልክት ያድርጉ።
 
 ```yaml
 groups:
@@ -172,34 +173,34 @@ groups:
             the refresh deadline elapses.
 ```
 
-Run `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
-before pushing changes to ensure the syntax passes `promtool check rules`.
+`scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml` አሂድ
+አገባብ `promtool check rules` ማለፉን ለማረጋገጥ ለውጦችን ከመግፋቱ በፊት።
 
-## Admission Outcomes
+## የመግቢያ ውጤቶች
 
-- Missing `chunk_range_fetch` capability → reject with `reason="missing_capability"`.
-- Unknown capability TLVs without `allow_unknown_capabilities=true` → reject with
+- የጠፋ I18NI0000086X አቅም → ከ`reason="missing_capability"` ጋር ውድቅ አድርግ።
+- ያልታወቀ ችሎታ TLVs ያለ `allow_unknown_capabilities=true` → ውድቅ
   `reason="unknown_capability"`.
-- `signature_strict=false` → reject (reserved for isolated diagnostics).
-- Expired `refresh_deadline` → reject.
+- `signature_strict=false` → ውድቅ (ለገለልተኛ ምርመራ የተቀመጠ)።
+- ጊዜው ያለፈበት I18NI0000091X → ውድቅ
 
-## Communication & Incident Handling
+## ኮሙኒኬሽን እና የክስተት አያያዝ
 
-- **Weekly status mailer.** DevRel circulates a brief summary of admission
-  metrics, outstanding warnings, and upcoming deadlines.
-- **Incident response.** If `reject` alerts fire, on-call engineers:
-  1. Fetch the offending advert via Torii discovery (`/v1/sorafs/providers`).
-  2. Re-run advert validation in the provider pipeline and compare with
-     `/v1/sorafs/providers` to reproduce the error.
-  3. Coordinate with the provider to rotate the advert before the next refresh
-     deadline.
-- **Change freezes.** No capability schema changes land during R1/R2 unless
-  the rollout committee signs off; GREASE trials must be scheduled during the
-  weekly maintenance window and logged in the migration ledger.
+- ** ሳምንታዊ ሁኔታ ፖስታ።** DevRel የመግቢያ አጭር ማጠቃለያ ያሰራጫል።
+  መለኪያዎች፣ አስደናቂ ማስጠንቀቂያዎች እና መጪ የግዜ ገደቦች።
+- **የአደጋ ምላሽ።** `reject` ማስጠንቀቂያ ከተቃጠለ፣ የጥሪ መሐንዲሶች፡-
+  1. የሚያስከፋውን ማስታወቂያ በI18NT0000019X ግኝት (`/v1/sorafs/providers`) ያውጡ።
+  2. በአቅራቢው ቧንቧ መስመር ውስጥ የማስታወቂያ ማረጋገጫን እንደገና ያሂዱ እና ከ ጋር ያወዳድሩ
+     `/v1/sorafs/providers` ስህተቱን ለማባዛት.
+  3. ከሚቀጥለው እድሳት በፊት ማስታወቂያውን ለማዞር ከአቅራቢው ጋር ይተባበሩ
+     ቀነ ገደብ.
+- ** ይቀዘቅዛል።** በR1/R2 ጊዜ ምንም የችሎታ ንድፍ ካልሆነ በስተቀር መሬት አይቀየርም።
+  የታቀደው ኮሚቴ ይፈርማል; የGREASE ሙከራዎች በሂደቱ ጊዜ መርሐግብር ሊሰጣቸው ይገባል።
+  ሳምንታዊ የጥገና መስኮት እና ወደ ፍልሰት ደብተር ገብቷል።
 
-## References
+## ዋቢዎች
 
-- [SoraFS Node/Client Protocol](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
-- [Provider Admission Policy](./provider-admission-policy)
-- [Migration Roadmap](./migration-roadmap)
-- [Provider Advert Multi-Source Extensions](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)
+- [SoraFS መስቀለኛ መንገድ/የደንበኛ ፕሮቶኮል](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
+- [የአቅራቢ መግቢያ መመሪያ](./provider-admission-policy)
+- [የስደት ፍኖተ ካርታ](./migration-roadmap)
+- [የአቅራቢ ባለብዙ ምንጭ ቅጥያዎች](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)

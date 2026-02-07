@@ -7,20 +7,22 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript ledger flow recipe
 description: Register an asset, mint, transfer, and query balances with `@iroha2/torii-client`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+從“@site/src/components/SampleDownload”導入 SampleDownload；
 
-This recipe uses the Node.js `@iroha2/torii-client` and
-`@iroha2/crypto-target-node` packages to reproduce the CLI ledger walkthrough.
+本配方使用 Node.js `@iroha2/torii-client` 和
+`@iroha2/crypto-target-node` 軟件包可重現 CLI 賬本演練。
 
-<SampleDownload
+<樣本下載
   href="/sdk-recipes/javascript/ledger-flow.mjs"
-  filename="ledger-flow.mjs"
-  description="Download the exact JavaScript script used in this ledger walkthrough."
+  文件名=“ledger-flow.mjs”
+  description="下載本分類帳演練中使用的確切 JavaScript 腳本。"
 />
 
-## Prerequisites
+## 先決條件
 
 ```bash
 npm install @iroha2/torii-client @iroha2/crypto-target-node
@@ -29,7 +31,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## 示例腳本
 
 ```ts title="ledger-flow.mjs"
 import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
@@ -72,12 +74,12 @@ for (const asset of balances.items) {
 }
 ```
 
-Run with `node --env-file=.env ledger-flow.mjs` (or export the environment
-variables manually). The log should show the transaction hash (from the receipt
-payload) and the updated receiver balance.
+使用 `node --env-file=.env ledger-flow.mjs` 運行（或導出環境
+手動變量）。日誌應顯示交易哈希（來自收據
+有效負載）和更新的接收方餘額。
 
-## Verify parity
+## 驗證奇偶校驗
 
-- Fetch the transaction details via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Cross-check balances with `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Compare the emitted hash with the Rust and Python recipes to ensure SDK parity.
+- 通過 `iroha --config defaults/client.toml transaction get --hash <hash>` 獲取交易詳細信息。
+- 與 `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` 交叉檢查餘額。
+- 將發出的哈希值與 Rust 和 Python 配方進行比較，以確保 SDK 奇偶校驗。

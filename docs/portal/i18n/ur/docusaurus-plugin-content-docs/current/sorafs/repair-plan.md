@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+::: نوٹ کینونیکل ماخذ
+آئینہ `docs/source/sorafs_repair_plan.md`۔ اسفینکس سیٹ ریٹائر ہونے تک دونوں ورژن کو مطابقت پذیری میں رکھیں۔
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## گورننس کا فیصلہ لائف سائیکل
+1. بڑھتی ہوئی مرمت ایک سلیش پروپوزل ڈرافٹ بنائیں اور تنازعہ کی ونڈو کھولیں۔
+2. گورننس کے رائے دہندگان تنازعہ کی ونڈو کے دوران ووٹوں کی منظوری/مسترد کرتے ہیں۔
+3. `escalated_at_unix + dispute_window_secs` پر فیصلہ کا تعی .ن انداز میں حساب کیا جاتا ہے: کم سے کم رائے دہندگان ، منظوریوں سے متعلق رد re ی سے زیادہ ہے ، اور منظوری کا تناسب کورم کی دہلیز کو پورا کرتا ہے۔
+4. منظور شدہ فیصلے اپیل ونڈو کھولیں۔ I18NI0000000002X سے پہلے ریکارڈ کی گئی اپیلیں فیصلے کو اپیل کے مطابق نشان زد کریں۔
+5. تمام تجاویز پر پنلٹی کیپس کا اطلاق ہوتا ہے۔ ٹوپی کے اوپر گذارشات مسترد کردیئے گئے ہیں۔
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## گورننس میں اضافے کی پالیسی
+اسکیلیشن پالیسی `governance.sorafs_repair_escalation` سے `iroha_config` میں حاصل کی گئی ہے اور ہر مرمت سلیش تجویز کے لئے نافذ ہے۔
 
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| ترتیب | ڈیفالٹ | مطلب |
+| --------- | --------- | --------- |
+| i18ni00000005x | 6667 | گنتی ووٹوں میں کم سے کم منظوری کا تناسب (بنیاد پوائنٹس)۔ |
+| i18ni00000006x | 3 | فیصلے کو حل کرنے کے لئے درکار الگ ووٹرز کی کم سے کم تعداد۔ |
+| i18ni00000007x | 86400 | ووٹوں کو حتمی شکل دینے سے پہلے اضافے کے بعد وقت (سیکنڈ) |
+| i18ni00000008x | 604800 | منظوری کے بعد وقت جس کے دوران اپیلیں قبول کی جاتی ہیں (سیکنڈ) |
+| i18ni00000009x | 1،000،000،000 | زیادہ سے زیادہ سلیش جرمانے کی مرمت کے بڑھتے ہوئے (نینو زور) کی اجازت ہے۔ |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- شیڈولر سے تیار کردہ تجاویز `max_penalty_nano` پر بند ہیں۔ ٹوپی کے اوپر آڈیٹر کی گذارشات مسترد کردی گئیں۔
+- ووٹ کے ریکارڈ `repair_state.to` میں ڈٹرمینسٹک آرڈرنگ (I18NI0000000012X چھانٹ رہا ہے) کے ساتھ محفوظ کیے جاتے ہیں لہذا تمام نوڈس اسی فیصلے کا ٹائم اسٹیمپ اور نتائج اخذ کرتے ہیں۔

@@ -6,58 +6,57 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8ef338a20104dc5d15094e28a1332a604b68bdcfef1ff82fea784d43fdbd10b5
 source_last_modified: "2026-01-03T18:07:59.202230+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# GDPR DPIA Summary — Android SDK Telemetry (AND7)
+# תקציר GDPR DPIA - טלמטריית Android SDK (AND7)
 
-| Field | Value |
+| שדה | ערך |
 |-------|-------|
-| Assessment Date | 2026-02-12 |
-| Processing Activity | Android SDK telemetry export to shared OTLP backends |
-| Controllers / Processors | SORA Nexus Ops (controller), partner operators (joint controllers), Hyperledger Iroha Contributors (processor) |
-| Reference Docs | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, `docs/source/android_runbook.md` |
+| תאריך הערכה | 2026-02-12 |
+| פעילות עיבוד | ייצוא טלמטריה של Android SDK לממשקי קצה משותפים של OTLP |
+| בקרים / מעבדים | SORA Nexus Ops (בקר), מפעילי שותפים (בקרים משותפים), Hyperledger Iroha תורמים (מעבד) |
+| מסמכי עזר | `docs/source/sdk/android/telemetry_redaction.md`, `docs/source/android_support_playbook.md`, `docs/source/android_runbook.md` |
 
-## 1. Processing Description
+## 1. תיאור עיבוד
 
-- **Purpose:** Provide operational telemetry needed to support AND7 observability (latency, retries, attestation health) while mirroring the Rust node schema (§2 of `telemetry_redaction.md`).
-- **Systems:** Android SDK instrumentation -> OTLP exporter -> shared telemetry collector managed by SRE (see Support Playbook §8).
-- **Data subjects:** Operator staff using Android SDK-based apps; downstream Torii endpoints (authority strings are hashed per telemetry policy).
+- **מטרה:** לספק טלמטריה תפעולית הדרושה כדי לתמוך בצפיות AND7 (השהייה, ניסיונות חוזרים, תקינות אישור) תוך שיקוף של סכימת צומת Rust (§2 של `telemetry_redaction.md`).
+- **מערכות:** מכשור Android SDK -> יצואן OTLP -> אספן טלמטריה משותף המנוהל על ידי SRE (ראה מדריך תמיכה §8).
+- **נושאי נתונים:** צוות מפעיל המשתמש באפליקציות מבוססות Android SDK; נקודות קצה של Torii במורד הזרם (מחרוזות סמכות מקושטות לפי מדיניות טלמטריה).
 
-## 2. Data Inventory & Mitigations
+## 2. מלאי נתונים והפחתות
 
-| Channel | Fields | PII Risk | Mitigation | Retention |
-|---------|--------|----------|------------|-----------|
-| Traces (`android.torii.http.request`, `android.torii.http.retry`) | Route, status, latency | Low (no PII) | Authority hashed with Blake2b + rotating salt; no payload bodies exported. | 7–30 days (per telemetry doc). |
-| Events (`android.keystore.attestation.result`) | Alias label, security level, attestation digest | Medium (operational data) | Alias hashed (`alias_label`), `actor_role_masked` recorded for overrides with Norito audit tokens. | 90 days for success, 365 days for overrides/failures. |
-| Metrics (`android.pending_queue.depth`, `android.telemetry.export.status`) | Queue counts, exporter status | Low | Aggregated counts only. | 90 days. |
-| Device profile gauges (`android.telemetry.device_profile`) | SDK major, hardware tier | Medium | Bucketing (emulator/consumer/enterprise), no OEM or serial numbers. | 30 days. |
-| Network context events (`android.telemetry.network_context`) | Network type, roaming flag | Medium | Carrier name dropped entirely; supports compliance requirement to avoid subscriber data. | 7 days. |
+| ערוץ | שדות | סיכון PII | הקלה | שימור |
+|--------|--------|--------|----------------|-----------|
+| עקבות (`android.torii.http.request`, `android.torii.http.retry`) | מסלול, מצב, חביון | נמוך (ללא PII) | רשות גיבוב עם Blake2b + מלח מסתובב; לא יצאו גופי מטען. | 7-30 ימים (לכל מסמך טלמטריה). |
+| אירועים (`android.keystore.attestation.result`) | תווית כינוי, רמת אבטחה, תקציר אישור | בינוני (נתונים תפעוליים) | כינוי hashed (`alias_label`), `actor_role_masked` תועד עבור עקיפות עם אסימוני ביקורת Norito. | 90 ימים להצלחה, 365 ימים לעקיפות/כישלונות. |
+| מדדים (`android.pending_queue.depth`, `android.telemetry.export.status`) | ספירת תורים, סטטוס יצואן | נמוך | ספירות מצטברות בלבד. | 90 ימים. |
+| מדי פרופיל מכשיר (`android.telemetry.device_profile`) | ראשי SDK, שכבת חומרה | בינוני | באקטינג (אמולטור/צרכן/מפעל), ללא OEM או מספרים סידוריים. | 30 ימים. |
+| אירועי הקשר ברשת (`android.telemetry.network_context`) | סוג רשת, דגל נדידה | בינוני | שם הספק ירד לחלוטין; תומך בדרישת תאימות כדי להימנע מנתוני מנויים. | 7 ימים. |
 
-## 3. Lawful Basis & Rights
+## 3. בסיס וזכויות חוקיים
 
-- **Lawful basis:** Legitimate interest (Art. 6(1)(f)) — ensuring reliable operation of regulated ledger clients.
-- **Necessity test:** Metrics limited to operational health (no user content); hashed authority ensures parity with Rust nodes through reversible mapping available only to authorised support personnel (via override workflow).
-- **Balancing test:** Telemetry is scoped to operator-controlled devices, not end-user data. Overrides require signed Norito artefacts reviewed by Support + Compliance (Support Playbook §3 + §9).
-- **Data subject rights:** Operators contact Support Engineering (playbook §2) to request telemetry export/delete. Redaction overrides and logs (telemetry doc §Signal Inventory) enable fulfilment within 30 days.
+- **בסיס חוקי:** אינטרס לגיטימי (סעיף 6(1)(ו)) - הבטחת פעילות אמינה של לקוחות פנקסים בפיקוח.
+- **בדיקת נחיצות:** מדדים מוגבלים לבריאות תפעולית (ללא תוכן משתמש); סמכות hashed מבטיחה שוויון לצמתי Rust באמצעות מיפוי הפיך הזמין רק לאנשי תמיכה מורשים (באמצעות זרימת עבודה לעקוף).
+- **בדיקת איזון:** הטלמטריה מיועדת למכשירים הנשלטים על ידי מפעיל, לא לנתוני משתמש קצה. עקיפות דורשות חפצי אמנות Norito חתומים שנבדקו על ידי תמיכה + תאימות (Support Playbook §3 + §9).
+- **זכויות נושא הנתונים:** מפעילים יוצרים קשר עם הנדסת תמיכה (Playbook §2) כדי לבקש ייצוא/מחיקה של טלמטריה. עקיפות ביטול ויומנים (מסמך טלמטריה §מלאי אותות) מאפשרים מילוי תוך 30 יום.
 
-## 4. Risk Assessment
+## 4. הערכת סיכונים| סיכון | סבירות | השפעה | הפחתה שיורית |
+|------|--------|--------|------------------------|
+| זיהוי מחדש באמצעות רשויות hash | נמוך | בינוני | סיבוב מלח נרשם דרך `android.telemetry.redaction.salt_version`; מלחים המאוחסנים בכספת מאובטחת; עוקף מבוקר מדי רבעון. |
+| טביעת אצבע של מכשיר באמצעות דלי פרופיל | נמוך | בינוני | רק שכבה + SDK עיקרית מיוצאת; התמיכה ב-Playbook אוסרת בקשות הסלמה לנתוני OEM/טורי. |
+| לעקוף שימוש לרעה דולף PII | נמוך מאוד | גבוה | בקשות לעקוף Norito נרשמו, יפוג תוך 24 שעות, דורשות אישור SRE (`docs/source/android_runbook.md` §3). |
+| אחסון טלמטריה מחוץ לאיחוד האירופי | בינוני | בינוני | אספנים הפרוסים באזורי האיחוד האירופי + JP; מדיניות שמירה נאכפת באמצעות תצורת OTLP backend (מתועדת ב- Support Playbook §8). |
 
-| Risk | Likelihood | Impact | Residual Mitigation |
-|------|------------|--------|---------------------|
-| Re-identification via hashed authorities | Low | Medium | Salt rotation recorded through `android.telemetry.redaction.salt_version`; salts stored in secure vault; overrides audited quarterly. |
-| Device fingerprinting via profile buckets | Low | Medium | Only tier + SDK major exported; Support Playbook prohibits escalation requests for OEM/serial data. |
-| Override misuse leaking PII | Very Low | High | Norito override requests logged, expire within 24h, require SRE approval (`docs/source/android_runbook.md` §3). |
-| Telemetry storage outside EU | Medium | Medium | Collectors deployed in EU + JP regions; retention policy enforced via OTLP backend configuration (documented in Support Playbook §8). |
+סיכון שיורי נחשב מקובל בהתחשב בבקרות לעיל ובניטור מתמשך.
 
-Residual risk is deemed acceptable given the controls above and ongoing monitoring.
+## 5. פעולות ומעקבים
 
-## 5. Actions & Follow-ups
-
-1. **Quarterly review:** Validate telemetry schemas, salt rotations, and override logs; document in `docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md`.
-2. **Cross-SDK alignment:** Coordinate with Swift/JS maintainers to maintain consistent hashing/bucketing rules (tracked in roadmap AND7).
-3. **Partner comms:** Include DPIA summary in partner onboarding kits (Support Playbook §9) and link to this document from `status.md`.
+1. **סקירה רבעונית:** אימות סכימות טלמטריה, סיבובי מלח ויומני עקיפה; מסמך ב-`docs/source/sdk/android/telemetry_redaction_minutes_YYYYMMDD.md`.
+2. **יישור חוצה SDK:** תיאום עם מתחזקי Swift/JS כדי לשמור על כללי hashing/bucketing עקביים (מעקב במפת הדרכים AND7).
+3. **התקשרויות שותף:** כלול סיכום DPIA בערכות הצטרפות לשותפים (Support Playbook §9) וקישור למסמך זה מ-`status.md`.

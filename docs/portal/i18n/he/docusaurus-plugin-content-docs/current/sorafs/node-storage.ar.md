@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/node-storage.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -22,8 +24,8 @@ description: معمارية التخزين والحصص وخطافات دورة 
 توضح هذه المذكرة كيف يمكن لعقدة Iroha (Torii) الاشتراك في طبقة توفر بيانات
 SoraFS وتخصيص جزء من القرص المحلي لتخزين وخدمة القطع. وهي تكمل مواصفة discovery
 `sorafs_node_client_protocol.md` وأعمال fixtures لـ SF-1b عبر تفصيل معمارية جانب
-التخزين وضوابط الموارد وتوصيلات الإعداد التي يجب أن تصل إلى العقدة ومسارات
-بوابة Torii. توجد التدريبات العملية للمشغلين في
+מידע ותקשורת ותקשורת ותקשורת ותקשורת
+קוד Torii. توجد التدريبات العملية للمشغلين في
 [Runbook عمليات العقدة](./node-operations).
 
 ### الأهداف
@@ -89,9 +91,7 @@ adverts:
   availability = "hot"
   max_latency_ms = 500
   topics = ["sorafs.sf1.primary:global"]
-```
-
-- `enabled`: مفتاح مشاركة. عند false تعيد البوابة 503 لنقاط نهاية التخزين ولا تعلن العقدة نفسها في discovery.
+```- `enabled`: مفتاح مشاركة. عند false تعيد البوابة 503 لنقاط نهاية التخزين ولا تعلن العقدة نفسها في discovery.
 - `data_dir`: المجلد الجذري لبيانات القطع وأشجار PoR وتليمترية fetch. الافتراضي `<iroha.data_dir>/sorafs`.
 - `max_capacity_bytes`: حد صارم لبيانات القطع المثبتة. ترفض مهمة خلفية pins الجديدة عند بلوغ الحد.
 - `max_parallel_fetches`: سقف التوازي الذي يفرضه scheduler لتحقيق توازن بين IO القرص وحمل المُحقق.
@@ -99,13 +99,13 @@ adverts:
 - `por_sample_interval_secs`: وتيرة مهام أخذ عينات PoR التلقائية. كل مهمة تأخذ `N` ورقة (قابلة للضبط لكل manifest) وتصدر أحداث تليمترية. يمكن للحوكمة توسيع `N` بشكل حتمي عبر مفتاح metadata `profile.sample_multiplier` (عدد صحيح `1-4`). يمكن أن تكون القيمة رقما/نصا واحدا أو كائنا مع overrides لكل ملف تعريف، مثل `{"default":2,"sorafs.sf2@1.0.0":3}`.
 - `adverts`: بنية يستخدمها مولد adverts لملء حقول `ProviderAdvertV1` (stake pointer، إشارات QoS، topics). إذا تم حذفها تستخدم العقدة القيم الافتراضية من سجل الحوكمة.
 
-توصيلات الإعداد:
+מידע נוסף:
 
 - `[sorafs.storage]` معرف في `iroha_config` كـ `SorafsStorage` ويتم تحميله من ملف إعداد العقدة.
 - تقوم `iroha_core` و`iroha_torii` بتمرير إعداد التخزين إلى builder الخاص بالبوابة ومخزن القطع عند البدء.
 - توجد overrides للتطوير/الاختبار (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`)، لكن نشر الإنتاج يجب أن يعتمد على ملف الإعداد.
 
-### أدوات CLI
+### CLI
 
 بينما ما زالت واجهة Torii HTTP قيد التوصيل، يشحن crate `sorafs_node` واجهة CLI خفيفة حتى يتمكن المشغلون من أتمتة تمارين الإدخال/التصدير ضد الواجهة الخلفية الدائمة.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
 
@@ -131,13 +131,11 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > تعكس هذه النقاط خرج CLI بحيث يمكن للخطوط التحويل من scripts محلية إلى فحوصات HTTP دون تغيير المحللات.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
-### دورة حياة العقدة
-
-1. **البدء**:
+### دورة حياة العقدة1. **البدء**:
    - عند تفعيل التخزين تهيئ العقدة مخزن القطع بالمجلد والسعة المهيأة. يشمل ذلك التحقق أو إنشاء قاعدة بيانات PoR للـ manifest وإعادة تشغيل manifests المثبتة لتسخين الكاش.
    - تسجيل مسارات بوابة SoraFS (نقاط نهاية Norito JSON POST/GET لـ pin وfetch وأخذ عينات PoR والتليمترية).
    - تشغيل عامل أخذ عينات PoR ومراقب الحصص.
-2. **Discovery / Adverts**:
+2. **גילוי / פרסומות**:
    - توليد مستندات `ProviderAdvertV1` باستخدام السعة/الصحة الحالية، وتوقيعها بالمفتاح المعتمد من المجلس، ونشرها عبر قناة discovery. استخدم قائمة `profile_aliases` لإبقاء المقابض القياسية والقديمة متاحة.
 3. **تدفق pin**:
    - تستقبل البوابة manifest موقعا (يشمل خطة القطع وجذر PoR وتواقيع المجلس). تتحقق من قائمة aliases (`sorafs.sf1@1.0.0` مطلوب) وتؤكد أن خطة القطع تطابق بيانات manifest الوصفية.
@@ -152,12 +150,10 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 6. **الإخلاء/تطبيق الحصص**:
    - عند بلوغ السعة ترفض العقدة pins الجديدة افتراضيا. يمكن للمشغلين تكوين سياسات إخلاء (مثل TTL وLRU) عند توافق نموذج الحوكمة؛ حاليا يفترض التصميم حصصا صارمة وعمليات unpin يطلقها المشغل.
 
-### تكامل إعلان السعة والجدولة
-
-- تعيد Torii تمرير تحديثات `CapacityDeclarationRecord` من `/v1/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كل عقدة عرضا في الذاكرة لتخصيصات chunker/lane الملتزم بها. يكشف المدير لقطات read-only للتليمترية (`GET /v1/sorafs/capacity/state`) ويفرض حجوزات لكل ملف تعريف أو lane قبل قبول أوامر جديدة.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+### تكامل إعلان السعة والجدولة- تعيد Torii تمرير تحديثات `CapacityDeclarationRecord` من `/v1/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كل عقدة عرضا في الذاكرة لتخصيصات chunker/lane الملتزم بها. يكشف المدير لقطات read-only للتليمترية (`GET /v1/sorafs/capacity/state`) ويفرض حجوزات لكل ملف تعريف أو lane قبل قبول أوامر جديدة.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
 - يقبل endpoint `/v1/sorafs/capacity/schedule` حمولات `ReplicationOrderV1` الصادرة عن الحوكمة. عندما يستهدف الأمر المزوّد المحلي، يتحقق المدير من التكرار، ويفحص سعة chunker/lane، ويحجز الشريحة، ويعيد `ReplicationPlan` يصف السعة المتبقية لتتمكن أدوات orchestration من متابعة الإدخال. يتم الإقرار بالأوامر الخاصة بمزوّدين آخرين باستجابة `ignored` لتسهيل سير العمل متعدد المشغلين.【crates/iroha_torii/src/routing.rs:4845】
 - تقوم hooks الإكمال (مثل ما يحدث بعد نجاح الإدخال) باستدعاء `POST /v1/sorafs/capacity/complete` لإطلاق الحجوزات عبر `CapacityManager::complete_order`. يتضمن الرد لقطة `ReplicationRelease` (الإجماليات المتبقية وبقايا chunker/lane) حتى تتمكن أدوات orchestration من جدولة الأمر التالي دون polling. سيُوصل هذا بخط أنابيب مخزن القطع عند اكتمال منطق الإدخال.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
-- يمكن تعديل `TelemetryAccumulator` المضمن عبر `NodeHandle::update_telemetry`، مما يسمح لعمال الخلفية بتسجيل عينات PoR/uptime وفي النهاية اشتقاق حمولات `CapacityTelemetryV1` القياسية دون لمس internals الـ scheduler.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
+- يمكن تعديل `TelemetryAccumulator` المضمن عبر `NodeHandle::update_telemetry`، مما يسمح لعمال الخلفية بتسجيل عينات PoR/uptime وفي النهاية اشتقاق حمولات `CapacityTelemetryV1` القياسية دون لمس internals الـ מתזמן.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### التكاملات والعمل المستقبلي
 

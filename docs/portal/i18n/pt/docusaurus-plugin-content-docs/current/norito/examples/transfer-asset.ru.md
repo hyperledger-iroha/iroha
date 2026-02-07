@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/transfer-asset
-title: Перевести актив между аккаунтами
-description: Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
-source: examples/transfer/transfer.ko
+título: Перевести актив между аккаунтами
+description: Este cenário está ativado, usando o SDK de início rápido e a restauração do passo a passo.
+fonte: exemplos/transfer/transfer.ko
 ---
 
-Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
+No cenário de ativação ativa, consulte o SDK de início rápido e a restauração do passo a passo.
 
 ## Пошаговый обход реестра
 
-- Предварительно пополните Alice целевым активом (например через сниппет `register and mint` или потоки quickstart SDK).
+- Verifique se Alice está ativa (configure o trecho `register and mint` ou use o SDK de início rápido).
 - Выполните точку входа `do_transfer`, чтобы перевести 10 единиц от Alice к Bob, удовлетворяя разрешению `AssetTransferRole`.
-- Проверьте балансы (`FindAccountAssets`, `iroha_cli ledger assets list`) или подпишитесь на события pipeline, чтобы наблюдать результат перевода.
+- Prover balanceamentos (`FindAccountAssets`, `iroha_cli ledger assets list`) ou ajustar o pipeline, obter o resultado desejado primeiro.
 
-## Связанные руководства SDK
+## Como usar o SDK
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [Início rápido Rust SDK](/sdks/rust)
+- [Início rápido do SDK do Python](/sdks/python)
+- [SDK JavaScript de início rápido](/sdks/javascript)
 
-[Скачать исходник Kotodama](/norito-snippets/transfer-asset.ko)
+[Kotodama](/norito-snippets/transfer-asset.ko)
 
 ```text
 // Transfer example: uses typed pointer constructors and transfer_asset syscall

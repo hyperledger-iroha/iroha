@@ -11,29 +11,30 @@ id: repair-plan
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Көҙгөләр `docs/source/sorafs_repair_plan.md`. Ике версияны ла синхронлаштырыуға тиклем Сфинкс комплекты пенсияға сыҡҡансы һаҡлағыҙ.
+::: 1990 й.
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## Идара итеү ҡарары йәшәү циклы
+1. Киҫелешле ремонт үткәреү тәҡдим проектын ҡырҡып, бәхәс тәҙрәһен аса.
+.
+3. `escalated_at_unix + dispute_window_secs` ҡарары детерминистик рәүештә иҫәпләнә: минималь һайлаусылар, раҫлауҙар кире ҡағыуҙан артып китә, ​​ә раҫлау нисбәте кворум сигенә яуап бирә.
+4. Раҫланған ҡарарҙар апелляция тәҙрәһен аса; апелляциялар теркәлгән I18NI000000002X тиклем ҡарар ҡабул итеү, тип апелляция.
+5. Штраф ҡапҡастары бөтә тәҡдимдәргә лә ҡағыла; ҡапҡас өҫтөндәге тапшырыуҙар кире ҡағыла.
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## идара итеүҙең эскалация сәйәсәте
+Эскалация сәйәсәте `governance.sorafs_repair_escalation` I18NI000000004X-тағы сығанаҡтарҙан алынған һәм һәр ремонт үткәреү тәҡдиме өсөн үтәлә.
 
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| Ҡуйыу | Ғәҙәттәгесә | Мәғәнәһе |
+|--------|---------|----------|
+| `quorum_bps` | 6667 | Минималь раҫлау нисбәте (нигеҙендә) иҫәпләнгән тауыштар араһында. |
+| `minimum_voters` | 3 | Минималь һаны айырым һайлаусыларҙы хәл итеү өсөн талап ителә. |
+| I18NI0000007X | 86400 | Тауыштар алдынан эскалациянан һуң ваҡыт аныҡлана (икенсе). |
+| `appeal_window_secs` | 604800 | Раҫлауҙан һуң был мөрәжәғәттәр ҡабул ителә (секундтар). |
+| `max_penalty_nano` | 1000 000 000 | Максималь слэш штраф ремонтлау өсөн мөмкинлек бирә эскалациялар (нано-XOR). |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- График генерацияланған тәҡдимдәр I18NI000000010X-та ябылған; аудитор тапшырыуҙар өҫтөндә ҡапҡас кире ҡағыла.
+- Тауыш яҙмалары `repair_state.to`-та детерминистик заказ менән һаҡлана (I18NI000000012X сорттарға бүлергә) шулай итеп, бөтә төйөндәр ҙә шул уҡ ҡарар ҡабул итеү ваҡытын һәм һөҙөмтәне ала.

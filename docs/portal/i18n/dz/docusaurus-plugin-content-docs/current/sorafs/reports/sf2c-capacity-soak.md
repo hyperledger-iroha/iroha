@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SF-2c Capacity Accrual Soak Report
+# SF-2c ཤོང་ཚད་ཨ་ཁུ་སོ་ཀ་སྙན་ཞུ།
 
-Date: 2026-03-21
+ཚེས་གྲངས།: ༢༠༢༦-༠༣-༢༡
 
-## Scope
+## གོ་སྐབས
 
-This report records the deterministic SoraFS capacity accrual and payout soak
-tests requested under the SF-2c roadmap track.
+སྙན་ཞུ་འདི་གིས་ གཏན་འབེབས་ I18NT0000002X ལྕོགས་གྲུབ་དང་ གླ་ཆ་སྤྲོད་པའི་བཙོག་པ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+བརྟག་དཔྱད་ཚུ་ SF-2c ལམ་གྱི་ས་ཁྲ་འོག་ལུ་ཞུ་བ་འབད་ཡོདཔ།
 
-- **30-day multi-provider soak:** Exercised by
-  `capacity_fee_ledger_30_day_soak_deterministic` in
+- **30 ཉིན་མོ་སྣ་མང་མཁོ་སྤྲོད་པ་ ཆུ་བླུག་:** ལག་ལེན།
+  `capacity_fee_ledger_30_day_soak_deterministic` 2 2 201 2
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  The harness instantiates five providers, spans 30 settlement windows, and
-  validates that ledger totals match an independently computed reference
-  projection. The test emits a Blake3 digest (`capacity_soak_digest=...`) so
-  CI can capture and diff the canonical snapshot.
-- **Under-delivery penalties:** Enforced by
-  `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (same file). The test confirms strike thresholds, cooldowns, collateral slashes,
-  and ledger counters remain deterministic.
+  གྲུ་ཆུང་འདི་གིས་ བྱིན་མི་༥ ལུ་ གཞི་བཅག་པའི་སྒོ་སྒྲིག་༣༠ དང་།
+  ལེད་ཇར་བསྡོམས་རྩིས་རང་དབང་ཅན་གྱི་གཞི་བསྟུན་དང་མཐུན་སྒྲིག་འབད་མི་བདེན་དཔྱད་ཚུ།
+  པར་བརྙན་ བརྟག་དཔྱད་འདི་གིས་ Blake3 བཞུ་བཅོས་ (`capacity_soak_digest=...`) འདི་ བཏོནམ་ཨིན།
+  CI གིས་ འཛིན་བཟུང་དང་ ཁྲིམས་ལུགས་ཀྱི་ པར་ཚུ་ ཁྱབ་སྤེལ་འབད་ཚུགས།
+- **སྐྱབས་བཅོལ་གྱི་ཉེས་ཆད་:** གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ།
+  I18NI0000009X
+  (ཡིག་སྣོད་གཅིག)། བརྟག་དཔྱད་འདི་གིས་ བཀག་ཆ་འབད་ནིའི་ཚད་གཞི་དང་ བསིལ་དྲོད་ དེ་ལས་ བརྟན་བཞུགས་ཀྱི་ གྱང་ཤུགས་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+  དང་ ལག་ཐོག་ཁ་པར་ཚུ་ ཐག་བཅད་དེ་རང་ཡོདཔ་ཨིན།
 
-## Execution
+## སྲོག་ཁྲིམས་བཀལ་བ
 
-Run the soak validations locally with:
+ས་གནས་ནང་ བཙོ་བའི་བདེན་དཔྱད་ཚུ་ གཡོག་བཀོལ།
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-The tests complete in under one second on a standard laptop and require no
-external fixtures.
+བརྟག་དཔྱད་ཚུ་ ཚད་ལྡན་གྱི་ གློག་རིག་ཐོག་ལུ་ སྐར་ཆ་གཅིག་གི་ནང་ མཇུག་བསྡུ་ཡོདཔ་ལས་ མེན་དགོཔ་ཨིན།
+ཕྱིའི་སྒྲིག་ཆས།
 
-## Observability
+## བལྟ་རྟོག་འབད་ནི།
 
-Torii now exposes provider credit snapshots alongside fee ledgers so dashboards
-can gate on low balances and penalty strikes:
+Torii ད་ལྟ་ འཐུས་སྤྲོད་ལེན་གྱི་ བུ་ལོན་བཏབ་སྟེ་ འཐུས་སྤྲོད་ལེན་གྱི་ པར་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+དམའ་བའི་ལྷག་ལུས་དང་ཉེས་ཆད་ཀྱི་སྒོ་ལས་སྒོ་བསྡམ་ཚུགས།
 
-- REST: `GET /v1/sorafs/capacity/state` returns `credit_ledger[*]` entries that
-  mirror the ledger fields verified in the soak test. See
+- REST: I18NI000000010X སླར་ལོག་འབད་དེ་ I18NI0000000011X ཐོ་བཀོད་ཚུ་
+  ཆུ་བཤལ་བརྟག་དཔྱད་ནང་ བདེན་དཔྱད་འབད་ཡོད་པའི་ ལག་དེབ་ས་ཁོངས་འདི་ མེ་ལོང་། མཐོང
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` plots the
-  exported strike counters, penalty totals, and bonded collateral so on-call
-  staff can compare soak baselines with live environments.
+- Grafana ནང་འདྲེན་: `dashboards/grafana/sorafs_capacity_penalties.json`
+  ཕྱིར་ཚོང་འཐབ་འཛིང་དང་ཉེས་ཆད་བསྡོམས་རྩིས་ དེ་ལས་ འབྲེལ་འཐུད་འབད་བའི་ བརྟན་བཞུགས་ཚུ་ འབོད་བརྡ་ནང་ བཀལ་ཡོདཔ་ཨིན།
+  ལས་བྱེདཔ་ཚུ་གིས་ ཆུ་བོའི་གཞི་རྟེན་ཚུ་ མི་ཚེ་མཐའ་འཁོར་དང་གཅིག་ཁར་ ག་བསྡུར་འབད་ཚུགས།
 
-## Follow-up
+## འཕྲོ་མཐུད
 
-- Schedule weekly gate runs in CI to replay the soak test (smoke-tier).
-- Extend the Grafana board with Torii scrape targets once production telemetry
-  exports go live.
+- བདུན་ཕྲག་རེ་ནང་ འཛུལ་སྒོ་ཚུ་ CI ནང་ གཡོག་བཀོལ་ཏེ་ བཙོ་སྦྱང་འདི་ ལོག་གཏང་ནིའི་དོན་ལུ་ (ཐ་མག་-ཊི་ཡར་) བསྐྱར་རྩེད་འབདཝ་ཨིན།
+- ཐོན་སྐྱེད་བརྒྱུད་འཕྲིན་གཏང་ཚརཝ་ད་ I18NT000000001X འདི་ Torii གི་དམིགས་ཚད་ཚུ་ རྒྱ་སྐྱེད་འབད།
+  ཕྱིར་གཏོང་ཚུ་ ཐད་རི་འབའ་རི་ཨིན།

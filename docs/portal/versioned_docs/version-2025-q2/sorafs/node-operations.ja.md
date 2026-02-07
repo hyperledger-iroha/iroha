@@ -6,21 +6,21 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a37b7ca6ae1aa64e6289ecc44b48ef29c1c884abc039123c1a03b9c35b2e7120
 source_last_modified: "2026-01-22T15:38:30.655980+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Keep both copies aligned across releases.
+:::note 正規ソース
+ミラー `docs/source/sorafs/runbooks/sorafs_node_ops.md`。リリース間で両方のコピーを揃えておいてください。
 :::
 
-## Overview
+## 概要
 
-This runbook walks operators through validating an embedded `sorafs-node` deployment inside Torii. Each section maps directly to the SF-3 deliverables: pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
+この Runbook では、オペレータが Torii 内に埋め込まれた `sorafs-node` デプロイメントを検証する手順を説明します。各セクションは、SF-3 の成果物 (ピン/フェッチ ラウンド トリップ、再起動回復、クォータ拒否、PoR サンプリング) に直接マッピングされます。
 
-## 1. Prerequisites
+## 1. 前提条件
 
-- Enable the storage worker in `torii.sorafs.storage`:
+- `torii.sorafs.storage` でストレージ ワーカーを有効にします。
 
   ```toml
   [torii.sorafs.storage]
@@ -38,13 +38,13 @@ This runbook walks operators through validating an embedded `sorafs-node` deploy
   por_success_alpha = 0.25
   ```
 
-- Ensure the Torii process has read/write access to `data_dir`.
-- Confirm the node advertises the expected capacity via `GET /v1/sorafs/capacity/state` once a declaration is recorded.
-- When smoothing is enabled, dashboards expose both the raw and smoothed GiB·hour/PoR counters to highlight jitter-free trends alongside spot values.
+- Torii プロセスが `data_dir` への読み取り/書き込みアクセス権を持っていることを確認します。
+- 宣言が記録されたら、ノードが `GET /v1/sorafs/capacity/state` 経由で予想される容量をアドバタイズしていることを確認します。
+- スムージングが有効な場合、ダッシュボードには生の GiB 時間/PoR カウンターと平滑化された GiB 時間/PoR カウンターの両方が表示され、スポット値とともにジッターのない傾向が強調表示されます。
 
-### CLI Dry Run (Optional)
+### CLI ドライラン (オプション)
 
-Before exposing HTTP endpoints you can sanity-check the storage backend with the bundled CLI.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+HTTP エンドポイントを公開する前に、バンドルされた CLI を使用してストレージ バックエンドの健全性をチェックできます。【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -59,21 +59,21 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --payload-out ./out/payload.bin
 ```
 
-The commands print Norito JSON summaries and refuse chunk-profile or digest mismatches, making them useful for CI smoke checks ahead of Torii wiring.【crates/sorafs_node/tests/cli.rs#L1】
+このコマンドは、Norito JSON サマリーを出力し、チャンク プロファイルまたはダイジェストの不一致を拒否するため、Torii 配線の前に CI スモーク チェックを行うのに役立ちます。【crates/sorafs_node/tests/cli.rs#L1】
 
-Once Torii is live you can retrieve the same artefacts via HTTP:
+Torii が有効になると、HTTP 経由で同じアーティファクトを取得できます。
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+両方のエンドポイントは組み込みストレージ ワーカーによって提供されるため、CLI スモーク テストとゲートウェイ プローブは同期を保ちます。【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
 
-## 2. Pin → Fetch Round Trip
+## 2. ピン→フェッチの往復
 
-1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. Submit the manifest with base64 encoding:
+1. マニフェスト + ペイロード バンドルを作成します (たとえば、`iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`)。
+2. Base64 エンコードを使用してマニフェストを送信します。
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -81,8 +81,8 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      -d @pin_request.json
    ```
 
-   The request JSON must contain `manifest_b64` and `payload_b64`. A successful response returns `manifest_id_hex` and the payload digest.
-3. Fetch the pinned data:
+   リクエスト JSON には `manifest_b64` と `payload_b64` が含まれている必要があります。 A successful response returns `manifest_id_hex` and the payload digest.
+3. 固定されたデータをフェッチします。
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -94,26 +94,26 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-   Base64-decode the `data_b64` field and verify it matches the original bytes.
+   `data_b64` フィールドを Base64 デコードし、元のバイトと一致することを確認します。
 
-## 3. Restart Recovery Drill
+## 3. 復旧訓練を再開する
 
-1. Pin at least one manifest as above.
-2. Restart the Torii process (or the entire node).
-3. Re-submit the fetch request. The payload must still be retrievable and the returned digest must match the pre-restart value.
-4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the persisted manifests after the reboot.
+1. 上記のように少なくとも 1 つのマニフェストを固定します。
+2. Torii プロセス (またはノード全体) を再起動します。
+3. フェッチ要求を再送信します。ペイロードは引き続き取得可能である必要があり、返されたダイジェストは再起動前の値と一致する必要があります。
+4. `GET /v1/sorafs/storage/state` を調べて、再起動後に永続化されたマニフェストが `bytes_used` に反映されていることを確認します。
 
-## 4. Quota Rejection Test
+## 4. クォータ拒否テスト
 
-1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
-2. Pin one manifest; the request should succeed.
-3. Attempt to pin a second manifest of similar size. Torii must reject the request with HTTP `400` and an error message containing `storage capacity exceeded`.
-4. Restore the normal capacity limit when finished.
+1. `torii.sorafs.storage.max_capacity_bytes` を一時的に小さい値 (たとえば、単一マニフェストのサイズ) に下げます。
+2. マニフェストを 1 つ固定します。リクエストは成功するはずです。
+3. 同様のサイズの 2 番目のマニフェストを固定しようとします。 Torii は、HTTP `400` と `storage capacity exceeded` を含むエラー メッセージを含むリクエストを拒否する必要があります。
+4. 終了したら、通常の容量制限に戻します。
 
-## 5. PoR Sampling Probe
+## 5. PoR サンプリング プローブ
 
-1. Pin a manifest.
-2. Request a PoR sample:
+1. マニフェストを固定します。
+2. PoR サンプルをリクエストします。
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -125,21 +125,19 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-3. Verify the response contains `samples` with the requested count and that each proof validates against the stored manifest root.
+3. 応答に要求されたカウントを含む `samples` が含まれていること、および保存されているマニフェスト ルートに対して各プルーフが検証されていることを確認します。
 
-## 6. Automation Hooks
+## 6. 自動化フック
 
-- CI / smoke tests can reuse the targeted checks added in:
+- CI / スモーク テストでは、以下に追加されたターゲット チェックを再利用できます。
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
-  ```
-
-  which covers `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, and `por_sampling_returns_verified_proofs`.
-- Dashboards should track:
+  ```これには、`pin_fetch_roundtrip`、`pin_survives_restart`、`pin_quota_rejection`、および `por_sampling_returns_verified_proofs` が含まれます。
+- ダッシュボードは以下を追跡する必要があります。
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
-  - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
-  - Settlement publish attempts via `sorafs_node_deal_publish_total{result=success|failure}`
+  - `torii_sorafs_storage_pin_queue_depth` および `torii_sorafs_storage_fetch_inflight`
+  - `/v1/sorafs/capacity/state` 経由で PoR 成功/失敗カウンターが表示される
+  - `sorafs_node_deal_publish_total{result=success|failure}` を介した決済公開試行
 
-Following these drills ensures the embedded storage worker can ingest data, survive restarts, respect configured quotas, and generate deterministic PoR proofs before the node advertises capacity to the wider network.
+これらの訓練に従うことで、ノードがより広範なネットワークに容量をアドバタイズする前に、組み込みストレージ ワーカーがデータを取り込み、再起動に耐え、設定されたクォータを尊重し、決定論的な PoR 証明を生成できることが保証されます。

@@ -5,138 +5,140 @@ source: docs/portal/docs/sorafs/provider-advert-rollout.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: "SoraFS Provider Advert Rollout Plan"
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Adapted from [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).
+> [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md) dan moslashtirilgan.
 
-# SoraFS Provider Advert Rollout Plan
+# SoraFS Provayder reklamasini tarqatish rejasi
 
-This plan coordinates the cut-over from permissive provider advertisements to
-the fully-governed `ProviderAdvertV1` surface required for multi-source chunk
-retrieval. It focuses on three deliverables:
+Ushbu reja ruxsat beruvchi provayder reklamalaridan kesishni muvofiqlashtiradi
+ko'p manbali bo'lak uchun zarur bo'lgan to'liq boshqariladigan `ProviderAdvertV1` yuzasi
+olish. U uchta etkazib berishga qaratilgan:
 
-- **Operator guide.** Step-by-step actions storage providers must complete
-  before each gate flips.
-- **Telemetry coverage.** Dashboards and alerts that Observability and Ops use
-  to confirm the network only accepts compliant adverts.
-The rollout aligns with SF-2b/2c milestones in the [SoraFS migration
-roadmap](./migration-roadmap) and assumes the admission policy in the
-[provider admission policy](./provider-admission-policy) is already in
-effect.
+- **Operator qo'llanmasi.** Saqlash provayderlari bosqichma-bosqich amallarni bajarishi kerak
+  har bir darvoza burilishidan oldin.
+- **Telemetriya qamrovi.** Observability va Ops foydalanadigan asboblar paneli va ogohlantirishlar
+  tasdiqlash uchun tarmoq faqat mos reklamalarni qabul qiladi.
+Chiqarish [SoraFS migratsiyasida SF-2b/2c bosqichlari bilan mos keladi.
+yo'l xaritasi](./migration-roadmap) va qabul siyosatini qabul qiladi
+[provayderni qabul qilish siyosati](./provider-admission-policy) allaqachon kiritilgan
+ta'sir.
 
-## Current Requirements
+## Joriy talablar
 
-SoraFS accepts only governance-enveloped `ProviderAdvertV1` payloads. The
-following requirements are enforced at admission:
+SoraFS faqat boshqaruv bilan qoplangan `ProviderAdvertV1` foydali yuklarni qabul qiladi. The
+qabul qilishda quyidagi talablar qo‘yiladi:
 
-- `profile_id=sorafs.sf1@1.0.0` with canonical `profile_aliases` present.
-- `chunk_range_fetch` capability payloads must be included for multi-source
-  retrieval.
-- `signature_strict=true` with council signatures attached to the advert
-  envelope.
-- `allow_unknown_capabilities` is only permitted during explicit GREASE drills
-  and must be logged.
+- `profile_id=sorafs.sf1@1.0.0` kanonik `profile_aliases` mavjud.
+- `chunk_range_fetch` qobiliyatining foydali yuklari ko'p manba uchun kiritilishi kerak
+  olish.
+- `signature_strict=true` kengash imzolari bilan reklamaga ilova qilingan
+  konvert.
+- `allow_unknown_capabilities` faqat aniq GREASE mashqlari paytida ruxsat etiladi
+  va jurnalga kiritilishi kerak.
 
-## Operator Checklist
+## Operator nazorat ro'yxati
 
-1. **Inventory adverts.** List every published advert and record:
-   - Governing envelope path (`defaults/nexus/sorafs_admission/...` or production equivalent).
-   - Advert `profile_id` and `profile_aliases`.
-   - Capability list (expect at least `torii_gateway` and `chunk_range_fetch`).
-   - `allow_unknown_capabilities` flag (required when vendor-reserved TLVs are present).
-2. **Regenerate with provider tooling.**
-   - Rebuild the payload with your provider advert publisher, ensuring:
+1. **Inventar reklamalari.** Har bir eʼlon qilingan eʼlonni roʻyxatlang va yozib oling:
+   - Boshqaruvchi konvert yo'li (`defaults/nexus/sorafs_admission/...` yoki ishlab chiqarish ekvivalenti).
+   - Reklama `profile_id` va `profile_aliases`.
+   - Imkoniyatlar ro'yxati (kamida `torii_gateway` va `chunk_range_fetch` ni kuting).
+   - `allow_unknown_capabilities` bayrog'i (sotuvchi tomonidan ajratilgan TLVlar mavjud bo'lganda talab qilinadi).
+2. **Provayder vositalari yordamida qayta tiklang.**
+   - Provayderingizning reklama nashriyotchisi bilan foydali yukni qayta yarating, bu esa:
      - `profile_id=sorafs.sf1@1.0.0`
-     - `capability=chunk_range_fetch` with a defined `max_span`
-     - `allow_unknown_capabilities=<true|false>` when GREASE TLVs are present
-   - Validate via `/v1/sorafs/providers` and `sorafs_fetch`; warnings about unknown
-     capabilities must be triaged.
-3. **Validate multi-source readiness.**
-   - Execute `sorafs_fetch` with `--provider-advert=<path>`; the CLI now fails
-     when `chunk_range_fetch` is missing and prints warnings for ignored unknown
-     capabilities. Capture the JSON report and archive it with operations logs.
-4. **Stage renewals.**
-   - Submit `ProviderAdmissionRenewalV1` envelopes at least 30 days before
-     expiration. Renewals must retain the canonical handle and capability set;
-     only stake, endpoints, or metadata should change.
-5. **Communicate with dependent teams.**
-   - SDK owners must release versions that surface warnings to operators when
-     adverts are rejected.
-   - DevRel announces each phase transition; include dashboard links and the
-     threshold logic below.
-6. **Install dashboards & alerts.**
-   - Import the Grafana export and place it under **SoraFS / Provider
-     Rollout** with dashboard UID `sorafs-provider-admission`.
-   - Ensure the alert rules point to the shared `sorafs-advert-rollout`
-     notification channel in staging and production.
+     - Belgilangan `max_span` bilan `capability=chunk_range_fetch`
+     - GREASE TLV mavjud bo'lganda `allow_unknown_capabilities=<true|false>`
+   - `/v1/sorafs/providers` va `sorafs_fetch` orqali tasdiqlash; noma'lum haqida ogohlantirishlar
+     qobiliyatlarni triyajlash kerak.
+3. **Ko‘p manbali tayyorlikni tasdiqlang.**
+   - `sorafs_fetch` ni `--provider-advert=<path>` bilan bajaring; CLI endi ishlamayapti
+     `chunk_range_fetch` yo'q bo'lganda va e'tibor berilmagan noma'lum uchun ogohlantirishlarni chop etadi
+     qobiliyatlar. JSON hisobotini yozib oling va uni operatsiyalar jurnallari bilan arxivlang.
+4. **Bosqichni yangilash.**
+   - `ProviderAdmissionRenewalV1` konvertlarini kamida 30 kun oldin yuboring
+     amal qilish muddati. Yangilashda kanonik tutqich va imkoniyatlar to'plami saqlanib qolishi kerak;
+     faqat ulush, so'nggi nuqtalar yoki metama'lumotlar o'zgarishi kerak.
+5. **O'ziga qaram bo'lgan jamoalar bilan muloqot qiling.**
+   - SDK egalari operatorlarga ogohlantiruvchi versiyalarni chiqarishlari kerak
+     reklamalar rad etiladi.
+   - DevRel har bir fazaga o'tishni e'lon qiladi; asboblar paneli havolalari va
+     pastki mantiq chegarasi.
+6. **Boshqaruv paneli va ogohlantirishlarni o‘rnating.**
+   - Grafana eksportini import qiling va uni **SoraFS / Provayder ostida joylashtiring
+     Rollout** asboblar paneli UID `sorafs-provider-admission` bilan.
+   - Ogohlantirish qoidalari umumiy `sorafs-advert-rollout` ga ishora qilishiga ishonch hosil qiling
+     sahnalashtirish va ishlab chiqarishda bildirishnoma kanali.
 
-## Telemetry & Dashboards
+## Telemetriya va asboblar paneli
 
-The following metrics are already exposed via `iroha_telemetry`:
+Quyidagi ko'rsatkichlar allaqachon `iroha_telemetry` orqali ochilgan:
 
-- `torii_sorafs_admission_total{result,reason}` — counts accepted, rejected,
-  and warning outcomes. Reasons include `missing_envelope`, `unknown_capability`,
-  `stale`, and `policy_violation`.
+- `torii_sorafs_admission_total{result,reason}` - qabul qilingan, rad etilgan hisoblar,
+  va ogohlantirish natijalari. Sabablari orasida `missing_envelope`, `unknown_capability`,
+  `stale` va `policy_violation`.
 
-Grafana export: [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
-Import the file into the shared dashboards repository (`observability/dashboards`)
-and update only the datasource UID before publishing.
+Grafana eksporti: [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
+Faylni umumiy boshqaruv paneli omboriga import qiling (`observability/dashboards`)
+va nashr qilishdan oldin faqat ma'lumotlar manbai UIDni yangilang.
 
-The board publishes under the Grafana folder **SoraFS / Provider Rollout** with
-the stable UID `sorafs-provider-admission`. Alert rules
-`sorafs-admission-warn` (warning) and `sorafs-admission-reject` (critical) are
-pre-configured to use the `sorafs-advert-rollout` notification policy; adjust
-that contact point if the destination list changes rather than editing the
-dashboard JSON.
+Kengash Grafana jildida **SoraFS / Provider Rollout** ostida nashr etadi.
+barqaror UID `sorafs-provider-admission`. Ogohlantirish qoidalari
+`sorafs-admission-warn` (ogohlantirish) va `sorafs-admission-reject` (tanqidiy)
+`sorafs-advert-rollout` bildirishnoma siyosatidan foydalanish uchun oldindan tuzilgan; sozlash
+Agar maqsad ro'yxati tahrirlash o'rniga o'zgarsa, o'sha aloqa nuqtasi
+asboblar paneli JSON.
 
-Recommended Grafana panels:
+Tavsiya etilgan Grafana panellari:
 
-| Panel | Query | Notes |
+| Panel | So'rov | Eslatmalar |
 |-------|-------|-------|
-| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Stack chart to visualise accept vs warn vs reject. Alert when warn > 0.05 * total (warning) or reject > 0 (critical). |
-| **Warning ratio** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Single-line timeseries that feeds the pager threshold (5% warning rate rolling 15 minutes). |
-| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Drives runbook triage; attach links to mitigation steps. |
-| **Refresh debt** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Indicates providers missing the refresh deadline; cross-reference with discovery cache logs. |
+| **Qabul natijalari darajasi** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Qabul qilish va ogohlantirish va rad etishni tasavvur qilish uchun stek diagrammasi. Ogohlantirish > 0,05 * jami (ogohlantirish) yoki rad etish > 0 (tanqidiy) bo'lganda ogohlantirish. |
+| **Ogohlantirish nisbati** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Peyjer chegarasini ta'minlaydigan bir qatorli vaqt seriyasi (5% ogohlantirish tezligi 15 daqiqa). |
+| **Rad etish sabablari** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Drives runbook triage; yumshatish bosqichlariga havolalar qo'shing. |
+| **Qarzni yangilash** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Provayderlarni yangilash muddatini o'tkazib yuborganligini ko'rsatadi; kashfiyot kesh jurnallari bilan o'zaro havola. |
 
-CLI artefacts for manual dashboards:
+Qo'lda boshqaruv paneli uchun CLI artefaktlari:
 
-- `sorafs_fetch --provider-metrics-out` writes `failures`, `successes`, and
-  `disabled` counters per provider. Import into ad-hoc dashboards to monitor
-  orchestrator dry-runs before switching production providers.
-- The JSON report’s `chunk_retry_rate` and `provider_failure_rate` fields
-  highlight throttling or stale payload symptoms that often precede admission
-  rejections.
+- `sorafs_fetch --provider-metrics-out` `failures`, `successes` va
+  Har bir provayder uchun `disabled` hisoblagichlari. Kuzatuv uchun maxsus boshqaruv panellariga import qiling
+  ishlab chiqarish provayderlarini almashtirishdan oldin orkestr quruq ishlaydi.
+- JSON hisobotining `chunk_retry_rate` va `provider_failure_rate` maydonlari
+  ko'pincha qabul qilishdan oldin bo'shatuvchi yoki eskirgan yuk belgilarini ajratib ko'rsatish
+  rad etishlar.
 
-### Grafana dashboard layout
+### Grafana asboblar paneli tartibi
 
-Observability publishes a dedicated board — **SoraFS Provider Admission
-Rollout** (`sorafs-provider-admission`) — under **SoraFS / Provider Rollout**
-with the following canonical panel IDs:
+Observability maxsus kengashni nashr etadi - **SoraFS Provayderga kirish
+Rollout** (`sorafs-provider-admission`) — **SoraFS ostida / Provayder Rollout**
+quyidagi kanonik panel identifikatorlari bilan:
 
-- Panel 1 — *Admission outcome rate* (stacked area, unit “ops/min”).
-- Panel 2 — *Warning ratio* (single series), emitting the expression
-  `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) /
-   sum(rate(torii_sorafs_admission_total[5m]))`.
-- Panel 3 — *Rejection reasons* (time series grouped by `reason`), sorted by
+- Panel 1 — *Qabul natijalari darajasi* (to‘plangan maydon, “ops/min” birligi).
+- Panel 2 — *Ogohlantirish nisbati* (bitta seriya), ifodani chiqaradi
+  `sum(stavka(torii_sorafs_admission_jami{natija="ogohlantirish"}[5m])) /
+   summa(stavka(torii_sorafs_qabul_umumiy[5m]))`.
+- Panel 3 — *Rad etish sabablari* (vaqt seriyasi `reason` tomonidan guruhlangan), tartiblangan
   `rate(...[5m])`.
-- Panel 4 — *Refresh debt* (stat), mirroring the query in the table above and
-  annotated with the advert refresh deadlines pulled from the migration ledger.
+- Panel 4 — *Qarzni yangilash* (stat), yuqoridagi jadvaldagi so'rovni aks ettiruvchi va
+  migratsiya kitobidan olingan reklamani yangilash muddatlari bilan izohlanadi.
 
-Copy (or create) the JSON skeleton in the infrastructure dashboards repo at
-`observability/dashboards/sorafs_provider_admission.json`, then update only the
-data source UID; the panel IDs and alert rules are referenced by the runbooks
-below, so avoid renumbering them without revising this documentation.
+JSON skeletini infratuzilma asboblar panelidagi repo-dan nusxa ko'chiring (yoki yarating).
+`observability/dashboards/sorafs_provider_admission.json`, keyin faqat yangilang
+ma'lumotlar manbai UID; panel identifikatorlari va ogohlantirish qoidalariga runbooks havola qilinadi
+quyida, shuning uchun ushbu hujjatlarni qayta ko'rib chiqmasdan ularni qayta raqamlashdan saqlaning.
 
-For convenience the repository now ships a reference dashboard definition at
-`docs/source/grafana_sorafs_admission.json`; copy it into your Grafana folder if
-you need a starting point for local testing.
+Qulaylik uchun ombor endi ma'lumot paneli ta'rifini jo'natadi
+`docs/source/grafana_sorafs_admission.json`; agar bo'lsa, uni Grafana jildingizga nusxalash
+mahalliy test uchun boshlang'ich nuqtasi kerak.
 
-### Prometheus alert rules
+### Prometheus ogohlantirish qoidalari
 
-Add the following rule group to `observability/prometheus/sorafs_admission.rules.yml`
-(create the file if this is the first SoraFS rule group) and include it from
-your Prometheus configuration. Replace `<pagerduty>` with the actual routing
-label for your on-call rotation.
+Quyidagi qoidalar guruhini `observability/prometheus/sorafs_admission.rules.yml` ga qo'shing
+(agar bu birinchi SoraFS qoida guruhi bo'lsa, faylni yarating) va uni qo'shing
+sizning Prometheus konfiguratsiyasi. `<pagerduty>` ni haqiqiy marshrutlash bilan almashtiring
+qo'ng'iroq bo'yicha aylanishingiz uchun yorliq.
 
 ```yaml
 groups:
@@ -169,34 +171,34 @@ groups:
             the refresh deadline elapses.
 ```
 
-Run `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
-before pushing changes to ensure the syntax passes `promtool check rules`.
+`scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml` ni ishga tushiring
+sintaksisi `promtool check rules` o'tishini ta'minlash uchun o'zgarishlarni surishdan oldin.
 
-## Admission Outcomes
+## Qabul natijalari
 
-- Missing `chunk_range_fetch` capability → reject with `reason="missing_capability"`.
-- Unknown capability TLVs without `allow_unknown_capabilities=true` → reject with
+- `chunk_range_fetch` qobiliyati etishmayapti → `reason="missing_capability"` bilan rad etish.
+- `allow_unknown_capabilities=true` holda noma'lum qobiliyatli TLVlar → bilan rad etish
   `reason="unknown_capability"`.
-- `signature_strict=false` → reject (reserved for isolated diagnostics).
-- Expired `refresh_deadline` → reject.
+- `signature_strict=false` → rad etish (izolyatsiya qilingan diagnostika uchun ajratilgan).
+- Muddati tugagan `refresh_deadline` → rad etish.
 
-## Communication & Incident Handling
+## Aloqa va hodisalarni boshqarish
 
-- **Weekly status mailer.** DevRel circulates a brief summary of admission
-  metrics, outstanding warnings, and upcoming deadlines.
-- **Incident response.** If `reject` alerts fire, on-call engineers:
-  1. Fetch the offending advert via Torii discovery (`/v1/sorafs/providers`).
-  2. Re-run advert validation in the provider pipeline and compare with
-     `/v1/sorafs/providers` to reproduce the error.
-  3. Coordinate with the provider to rotate the advert before the next refresh
-     deadline.
-- **Change freezes.** No capability schema changes land during R1/R2 unless
-  the rollout committee signs off; GREASE trials must be scheduled during the
-  weekly maintenance window and logged in the migration ledger.
+- **Haftalik status xabari.** DevRel qabul haqida qisqacha ma'lumotni tarqatadi
+  ko'rsatkichlar, muhim ogohlantirishlar va yaqinlashib kelayotgan muddatlar.
+- **Hodisaga javob.** Agar `reject` yong'in haqida ogohlantirsa, chaqiruv bo'yicha muhandislar:
+  1. Torii kashfiyoti (`/v1/sorafs/providers`) orqali haqoratomuz reklamani oling.
+  2. Provayder kanalida reklama tekshiruvini qayta ishga tushiring va shu bilan solishtiring
+     Xatoni takrorlash uchun `/v1/sorafs/providers`.
+  3. Keyingi yangilashdan oldin reklamani aylantirish uchun provayder bilan kelishib oling
+     muddat.
+- **O'zgarish muzlaydi.** R1/R2 davomida hech qanday qobiliyat sxemasi erni o'zgartirmaydi
+  ishlab chiqarish komissiyasi imzo chekadi; GREASE sinovlari davomida rejalashtirilgan bo'lishi kerak
+  haftalik parvarishlash oynasi va migratsiya kitobiga kirgan.
 
-## References
+## Ma'lumotnomalar
 
-- [SoraFS Node/Client Protocol](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
-- [Provider Admission Policy](./provider-admission-policy)
-- [Migration Roadmap](./migration-roadmap)
-- [Provider Advert Multi-Source Extensions](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)
+- [SoraFS tugun/mijoz protokoli](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
+- [Provayderga kirish siyosati](./provider-admission-policy)
+- [Migratsiya yoʻl xaritasi](./migration-roadmap)
+- [Provayder reklamasi uchun koʻp manbali kengaytmalar](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)

@@ -4,27 +4,28 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+infutter གིས་ རཔ་ཌོག་པེ་ནེལ་ '@site/src/ཆ་ཤས་/རེ་པི་ཌོག་པེ་ནེལ་.jsx' ལས་ ལས་ '@site/src ལས་
 
-# Torii API (RapiDoc)
+# I18NT00000002 API (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+I18NI000000005X གིས་ Torii གཅིག་པའི་ ཡིག་ཆ་-དང་པོ་ བཀྲམ་སྟོན་འབདཝ་ཨིན།
+OpenAPI ཡིག་ཆ། ཁྱོད་ལུ་ སྟུག་ཚད་ཀྱི་སྤྱིར་བཏང་མཐོང་སྣང་ ཡང་ན་ ལྷག་རྐྱངམ་ཅིག་བསྐྱར་ཞིབ་དགོཔ་ད་ ལག་ལེན་འཐབ།
+ཞུ་བ་/ལན་འདེབས་དཔེ་གཞི།
 
-## Usage tips
+## ལག་ལེན ་མཐའ།
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- ཕན་ཚུན་འབྲེལ་བའི་འབོད་བརྡ་ཚུ་ལྕོགས་ཅན་བཟོ་ནི་ལུ་ བེ་ཡར་ཊོ་ཀེན་ཅིག་བཙུགས། གནས་གོང་འདི་ སྦེ་གདོང་བསྐྱོད་འབད་ཡོདཔ་ཨིན།
+  `X-TryIt-Auth` མགོ་ཡིག་དང་ ངོ་ཚབ་ཀྱིས་ སྤྱིར་བཏང་བཟོ་ཡོདཔ།
+- དྲྭ་ཚིགས་འདི་ཞབས་ཏོག་སྤྲོད་པའི་སྐབས་ I18NI000000007X རིམ་སྒྲིག་འབད།
+  ཞུ་བ་ཚུ་ གནས་རིམ་གྱི་ངོ་ཚབ་བརྒྱུད་དེ་ འགྲུལ་བསྐྱོད་འབདཝ་ཨིན། ཝིཌི་གེཊི་གིས་ ངོ་ཚབ་འབད་བའི་སྐབས་ ཉེན་བརྡ་འབདཝ་ཨིན།
+  ཡུ་ཨར་ཨེལ་འདི་མེདཔ་ཨིན།
+- གིས་དཔར་བསྐྲུན་འབད་ཡོད་པའི་ བྱུང་རབས་ཀྱི་ ཁྱད་ཚད་ཚུ་ མངོན་གསལ་འབད་ནི་ལུ་ “I18NT0000001X snapdout” འདི་ལག་ལེན་འཐབ།
+  I18NI0000008X; འདི་ `Latest (tracked)` གདམ་ཁ་འདི་ ཨ་རྟག་རང་ ལུ་ཐག་བཅདཔ་ཨིན།
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- “[I try it ](I18NU0000004X)” མཉམ་བསྡོམས་འབད།”
+  ངོ་ཚབ་དགོ་པའི་ འཁྲབ་སྟེགས་ཅན་གྱི་འཛུལ་སྒོ་ཚུ་ལུ་ ལཱ་འབད་ནི།
 
-<RapiDocPanel />

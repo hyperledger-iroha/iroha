@@ -11,19 +11,20 @@ id: developer-ci
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-# CI Recipes
+# CI 食谱
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS 管道受益于确定性分块、清单签名和
+证明验证。 `sorafs_cli` 命令界面使这些步骤保持便携
+跨 CI 提供商。本页重点介绍了规范食谱并指出
+即用型模板。
 
-## GitHub Actions (keyless)
+## GitHub 操作（无密钥）
 
 ```yaml
 name: sorafs-artifacts
@@ -96,11 +97,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+要点：
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- 不存储静态签名密钥； OIDC 令牌是按需获取的。
+- 上传工件（CAR、清单、捆绑、证明摘要）以供审核。
+- 该作业重复使用生产部署中使用的相同 Norito 架构。
 
 ## GitLab CI
 
@@ -136,15 +137,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- 通过 GitLab 的工作负载身份联合或
+  在执行发布阶段之前密封秘密。
+- 任何 CLI 步骤的失败都会导致管道停止，从而保持一致
+  文物。
 
-## Additional resources
+## 其他资源
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- 端到端模板（包括 Bash 助手、联合身份配置、
+  和清理步骤）：`docs/examples/sorafs_ci.md`
+- CLI 参考涵盖每个选项：`docs/source/sorafs_cli.md`
+- 提交前的治理/别名要求：
   `docs/source/sorafs/provider_admission_policy.md`

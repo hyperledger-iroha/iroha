@@ -7,60 +7,62 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus lane model
 description: Logical lane taxonomy, configuration geometry, and world-state merge rules for Sora Nexus.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Nexus Lane Model & WSV Partitioning
+#Nexus Lane Model & WSV Partitioning
 
-> **Status:** NX-1 deliverable — lane taxonomy, configuration geometry, and storage layout are ready for implementation.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Roadmap reference:** NX-1 in `roadmap.md`
+> **အခြေအနေ-** NX-1 ပေးပို့နိုင်သည် — လမ်းကြောအခွန်စည်းကြပ်မှု၊ ဖွဲ့စည်းမှုဂျီသြမေတြီနှင့် သိုလှောင်မှုအပြင်အဆင်တို့ကို အကောင်အထည်ဖော်ရန် အသင့်ဖြစ်နေပါပြီ။  
+> **ပိုင်ရှင်များ-** Nexus Core WG၊ အုပ်ချုပ်မှု WG  
+> **လမ်းပြမြေပုံရည်ညွှန်း-** `roadmap.md` ရှိ NX-1
 
-This portal page mirrors the canonical `docs/source/nexus_lanes.md` brief so Sora
-Nexus operators, SDK owners, and reviewers can read the lane guidance without
-diving into the mono-repo tree. The target architecture keeps the world state
-deterministic while allowing individual data spaces (lanes) to run public or
-private validator sets with isolated workloads.
+ဤပေါ်တယ်စာမျက်နှာသည် စည်းမျဉ်းခံ `docs/source/nexus_lanes.md` ကို အတိုချုံးပြထားသောကြောင့် Sora
+Nexus အော်ပရေတာများ၊ SDK ပိုင်ရှင်များနှင့် သုံးသပ်သူများသည် လမ်းကြောလမ်းညွှန်ချက်မပါဘဲ ဖတ်နိုင်သည်
+မိုနို-ရီပိုသစ်ပင်သို့ ခုန်ဆင်းသည်။ ပစ်မှတ်ဗိသုကာသည် ကမ္ဘာကြီးကို ထိန်းထားပေးသည်။
+တစ်ဦးချင်းစီ ဒေတာနေရာများ (လမ်းကြောများ) ကို အများသူငှာ လည်ပတ်ရန် ခွင့်ပြုနေစဉ် အဆုံးအဖြတ်ပေးသည်။
+သီးသန့် validator သည် သီးခြားအလုပ်ချိန်များဖြင့် သတ်မှတ်သည်။
 
-## Concepts
+## အယူအဆများ
 
-- **Lane:** Logical shard of the Nexus ledger with its own validator set and
-  execution backlog. Identified by a stable `LaneId`.
-- **Data Space:** Governance bucket grouping one or more lanes that share
-  compliance, routing, and settlement policies.
-- **Lane Manifest:** Governance-controlled metadata describing validators, DA
-  policy, gas token, settlement rules, and routing permissions.
-- **Global Commitment:** Proof emitted by a lane summarising new state roots,
-  settlement data, and optional cross-lane transfers. The global NPoS ring
-  orders commitments.
+- **လမ်းကြော-** Nexus လယ်ဂျာ၏ လော့ဂျစ်ချာ့ဒ်ကို ၎င်း၏ကိုယ်ပိုင် validator set နှင့်
+  ကွပ်မျက်ခြင်း မှတ်တမ်း။ တည်ငြိမ်သော `LaneId` ဖြင့် ဖော်ထုတ်ထားသည်။
+- **ဒေတာနေရာ-** မျှဝေသည့်လမ်းကြောင်းတစ်ခု သို့မဟုတ် တစ်ခုထက်ပိုသောလမ်းကြောင်းများကို အုပ်ချူပ်သော အုပ်ချုပ်မှုပုံး
+  လိုက်နာမှု၊ လမ်းကြောင်းနှင့် ဖြေရှင်းရေးမူဝါဒများ။
+- **Lane Manifest-** အုပ်ချုပ်မှု-ထိန်းချုပ်ထားသော မက်တာဒေတာ၊ DA၊
+  မူဝါဒ၊ ဓာတ်ငွေ့တိုကင်၊ အခြေချစည်းမျဉ်းများနှင့် လမ်းကြောင်းခွင့်ပြုချက်များ။
+- **ကမ္ဘာလုံးဆိုင်ရာ ကတိကဝတ်-** နိုင်ငံတော်၏ အမြစ်သစ်များကို အကျဉ်းချုပ်ဖော်ပြသော လမ်းသွယ်မှ ထုတ်လွှတ်သော အထောက်အထား၊
+  အခြေချဒေတာ၊ နှင့် ရွေးချယ်နိုင်သော လမ်းကြောဖြတ်ကျော်လွှဲပြောင်းမှုများ။ ကမ္ဘာလုံးဆိုင်ရာ NPoS လက်စွပ်
+  အမိန့်ကတိကဝတ်များ။
 
-## Lane taxonomy
+## လမ်းသွယ်အစီအစဥ်
 
-Lane types canonically describe their visibility, governance surface, and
-settlement hooks. The configuration geometry (`LaneConfig`) captures these
-attributes so nodes, SDKs, and tooling can reason about the layout without
-bespoke logic.
+လမ်းကြောအမျိုးအစားများသည် ၎င်းတို့၏မြင်နိုင်စွမ်း၊ အုပ်ချုပ်မှုမျက်နှာပြင်နှင့် စံသတ်မှတ်ချက်များကို ဖော်ပြသည်။
+အခြေချချိတ်။ configuration geometry (`LaneConfig`) က ဒါတွေကို ဖမ်းယူပါတယ်။
+ရည်ညွှန်းချက်များ ဖြစ်သောကြောင့် nodes၊ SDKs နှင့် tooling သည် layout နှင့် ပတ်သက်၍ အကြောင်းပြချက် မရှိပါ။
+စိတ်ကြိုက်ယုတ္တိဗေဒ။
 
-| Lane type | Visibility | Validator membership | WSV exposure | Default governance | Settlement policy | Typical use |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
-| `private_permissioned` | restricted | Fixed validator set (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
-| `hybrid_confidential` | restricted | Mixed membership; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| လမ်းသွားအမျိုးအစား | မြင်နိုင်စွမ်း | စာရင်းသွင်းသူ | WSV ထိတွေ့မှု | ပုံသေ အုပ်ချုပ်ရေး | ဖြေရှင်းရေးမူဝါဒ | ပုံမှန်အသုံးပြုမှု |
+|-----------|------------------|----------------------------------|-----------------|----------------------------------------------------------------|----------------|
+| `default_public` | အများသူငှာ | Permissionless (ကမ္ဘာ့အစုရှယ်ယာ) | ပြည်နယ်ပုံတူ | SORA လွှတ်တော် | `xor_global` | အခြေခံလူထုလယ်ဂျာ |
+| `public_custom` | အများသူငှာ | ခွင့်မပြုသော သို့မဟုတ် အစုရှယ်ယာ ကန့်သတ်ထားသော | အပြည့်အဝပြည်နယ်ပုံတူ | လောင်းကြေး တွက်ဆမှု သင်ခန်းစာ | `xor_lane_weighted` | High-throughput public applications |
+| `private_permissioned` | ကန့်သတ် | Fixed validator set (အုပ်ချုပ်မှုအတည်ပြု) | ကတိကဝတ်များ & သက်သေများ | ပဒေသရာဇ်ကောင်စီ | `xor_hosted_custody` | CBDC၊ လုပ်ငန်းစု အလုပ်များ |
+| `hybrid_confidential` | ကန့်သတ် | ရောနှောအဖွဲ့ဝင်; ZK အထောက်အထားများ | ထုပ်ပိုးထားသည်။ ကတိကဝတ် + ကထာထုတ်ဖော် | Programmable money module | `xor_dual_fund` | ကိုယ်ရေးကိုယ်တာ-ပရိုဂရမ်ထုတ်နိုင်သော ငွေကြေး |
 
-All lane types must declare:
+လမ်းသွားအမျိုးအစားအားလုံးကို ကြေငြာရမည်-
 
-- Dataspace alias — human-readable grouping that binds compliance policies.
-- Governance handle — identifier resolved through `Nexus.governance.modules`.
-- Settlement handle — identifier consumed by the settlement router to debit XOR
-  buffers.
-- Optional telemetry metadata (description, contact, business domain) surfaced
-  through `/status` and dashboards.
+- Dataspace alias — လိုက်နာမှုမူဝါဒများကို ပေါင်းစပ်ထားသည့် လူသားများဖတ်နိုင်သော အုပ်စုဖွဲ့ခြင်း။
+- အုပ်ချုပ်မှုလက်ကိုင် — `Nexus.governance.modules` မှတစ်ဆင့် ဖြေရှင်းထားသော အထောက်အထား။
+- Settlement handle — XOR ကို ငွေထုတ်ရန်အတွက် အခြေချရောက်တာမှ အသုံးပြုသည့် အထောက်အထား
+  ကြားခံများ။
+- ရွေးချယ်နိုင်သော telemetry မက်တာဒေတာ (ဖော်ပြချက်၊ အဆက်အသွယ်၊ စီးပွားရေးဒိုမိန်း) ပေါ်လာသည်။
+  `/status` နှင့် ဒက်ရှ်ဘုတ်များမှတဆင့်။
 
-## Lane configuration geometry (`LaneConfig`)
+## လမ်းကြောဖွဲ့စည်းပုံ ဂျီသြမေတြီ (`LaneConfig`)
 
-`LaneConfig` is the runtime geometry derived from the validated lane catalog. It
-does **not** replace governance manifests; instead it provides deterministic
-storage identifiers and telemetry hints for every configured lane.
+`LaneConfig` သည် တရားဝင်သော လမ်းသွားကတ်တလောက်မှ ဆင်းသက်လာသော runtime geometry ဖြစ်သည်။ အဲဒါ
+** အုပ်ချုပ်မှုဆိုင်ရာဖော်ပြချက်များကို အစားထိုးခြင်းမပြုပါ။ ၎င်းအစား အဆုံးအဖြတ်ပေးသည်။
+ပြင်ဆင်သတ်မှတ်ထားသော လမ်းကြောတိုင်းအတွက် သိုလှောင်မှု အထောက်အထားများနှင့် တယ်လီမီတာ အရိပ်အမြွက်များ။
 
 ```text
 LaneConfigEntry {
@@ -77,112 +79,112 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` recomputes the geometry whenever configuration is
-  loaded (`State::set_nexus`).
-- Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric
-  characters collapse into `_`. If the alias yields an empty slug we fall back
-  to `lane{id}`.
-- `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting
-  to `lane_id`) and drives the persisted shard cursor journal to keep DA replay
-  deterministic across restarts/resharding.
-- Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the
-  same backend is shared.
-- Kura segment names are deterministic across hosts; auditors can cross-check
-  segment directories and manifests without bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and
-  global state commitments for that lane.
+- `LaneConfig::from_catalog` သည် ဂျီသြမေတြီကို ပြန်လည်တွက်ချက်ပေးသည်
+  တင်ထားသည် (`State::set_nexus`)။
+- နံမည်များကို သေးငယ်သော ပက်ကျိများအဖြစ် သန့်စင်ထားပါသည်။ ဂဏန်းမဟုတ်သော ဆက်တိုက်
+  ဇာတ်ကောင်များသည် `_` သို့ ပြိုကျသွားသည်။ မျှော့အချည်းနှီးသော မျှော့တစ်ကောင်ကို ပေးလျှင် ငါတို့သည် နောက်ပြန်ဆုတ်သွားတတ်၏။
+  `lane{id}` သို့။
+- `shard_id` ကို ကတ်တလောက် မက်တာဒေတာကီး `da_shard_id` မှ ဆင်းသက်လာသည် (မူလသတ်မှတ်ထားသည်
+  `lane_id`) နှင့် DA ပြန်လည်ဖွင့်ခြင်းကို ဆက်လက်ထိန်းသိမ်းထားရန် ဆက်တိုက်ရှိနေသော shard cursor ဂျာနယ်ကို မောင်းနှင်သည်
+  ပြန်လည်စတင်ခြင်း/ပြန်လည်စတင်ခြင်းတွင် အဆုံးအဖြတ်ပေးသည်။
+- သော့ရှေ့ဆက်များသည် WSV သည် လမ်းသွားတိုင်းသော့ချက်အပိုင်းအခြားများကို ကွဲလွဲနေသည့်တိုင် ထိန်းကြောင်းသေချာစေပါသည်။
+  တူညီသော backend ကိုမျှဝေထားသည်။
+- Kura အပိုင်းအမည်များသည် host များတစ်လျှောက်တွင် အဆုံးအဖြတ်ပေးသည်။ စာရင်းစစ်များသည် အပြန်အလှန်စစ်ဆေးနိုင်သည်။
+  အပိုင်းလမ်းညွှန်များ နှင့် စိတ်ကြိုက်ကိရိယာများ မပါဘဲ ဖော်ပြသည်။
+- ပေါင်းစည်းခြင်း အပိုင်းများ (`lane_{id:03}_merge`) သည် နောက်ဆုံးပေါ်ပေါင်းစည်းခြင်း-အရိပ်အမြွက်အမြစ်များကို ကိုင်ဆောင်ထားပြီး၊
+  ထိုလမ်းအတွက် ကမ္ဘာ့နိုင်ငံတော်ကတိကဝတ်များ။
 
-## World-state partitioning
+## ကမ္ဘာ့နိုင်ငံအဖြစ် ပိုင်းခြားခြင်း။
 
-- The logical Nexus world state is the union of per-lane state spaces. Public
-  lanes persist full state; private/confidential lanes export Merkle/commitment
-  roots to the merge ledger.
-- MV storage prefixes every key with the 4-byte lane prefix from
-  `LaneConfigEntry::key_prefix`, yielding keys such as `[00 00 00 01] ++
-  PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) therefore store
-  entries grouped by lane prefix, keeping range scans deterministic.
-- Merge-ledger metadata mirrors the same layout: each lane writes merge-hint
-  roots and reduced global state roots to `lane_{id:03}_merge`, allowing
-  targeted retention or eviction when a lane retires.
-- Cross-lane indexes (account aliases, asset registries, governance manifests)
-  store explicit lane prefixes so operators can reconcile entries quickly.
-- **Retention policy** — public lanes retain full block bodies; commitment-only
-  lanes may compact older bodies after checkpoints because commitments are
-  authoritative. Confidential lanes keep ciphertext journals in dedicated
-  segments to avoid blocking other workloads.
-- **Tooling** — maintenance utilities (`kagami`, CLI admin commands) should
-  reference the slugged namespace when exposing metrics, Prometheus labels, or
-  archiving Kura segments.
+- ယုတ္တိတန်သော Nexus ကမ္ဘာ့နိုင်ငံတော်သည် လမ်းသွားတိုင်း ပြည်နယ်နေရာများ၏ ပြည်ထောင်စုဖြစ်သည်။ အများသူငှာ
+  လမ်းကြောများ အပြည့်ရှိနေသည် ။ ပုဂ္ဂလိက/လျှို့ဝှက်လမ်းများ Merkle/ကတိကဝတ်ကို တင်ပို့သည်။
+  ပေါင်းစည်းထားသောလယ်ဂျာသို့ အမြစ်များ။
+- MV သိုလှောင်မှုမှ 4-byte လမ်းသွားရှေ့ဆက်ဖြင့် သော့တိုင်းကို ရှေ့ဆက်သည်။
+  `LaneConfigEntry::key_prefix`၊ `[00 00 00 01] ++ ကဲ့သို့သော အထွက်နှုန်းရှိသောသော့များ၊
+  PackedKey`။
+- မျှဝေထားသောဇယားများ (အကောင့်များ၊ ပိုင်ဆိုင်မှုများ၊ အစပျိုးမှုများ၊ အုပ်ချုပ်မှုမှတ်တမ်းများ) ထို့ကြောင့် သိမ်းဆည်းပါ။
+  လမ်းသွားရှေ့ဆက်များဖြင့် အုပ်စုဖွဲ့ထားသည့် အပိုင်းများကို အပိုင်းအခြားစကင်န်ဖတ်ခြင်းများကို အဆုံးအဖြတ်ပေးသည်။
+- ပေါင်းစည်း-လယ်ဂျာ မက်တာဒေတာသည် တူညီသော အပြင်အဆင်ကို ထင်ဟပ်စေသည်- လမ်းကြောတစ်ခုစီသည် ပေါင်းစည်း-အရိပ်အမြွက်ကို ရေးသားသည်။
+  အမြစ်များနှင့် ကမ္ဘာလုံးဆိုင်ရာ ပြည်နယ်အမြစ်များကို `lane_{id:03}_merge` သို့ လျှော့ချခွင့်ပြုသည်။
+  လမ်းသွားသည့်အခါ ပစ်မှတ်ထား ထိန်းသိမ်းခြင်း သို့မဟုတ် နှင်ထုတ်ခြင်း
+- လမ်းသွားအညွှန်းများ (အကောင့်အမည်တူများ၊ ပိုင်ဆိုင်မှုစာရင်းသွင်းမှုများ၊ အုပ်ချုပ်မှုဖော်ပြချက်များ)
+  အော်ပရေတာများသည် ထည့်သွင်းမှုများကို လျင်မြန်စွာ ပြန်လည်ညှိနှိုင်းနိုင်စေရန် ရှင်းလင်းပြတ်သားသော လမ်းသွားရှေ့ဆက်များကို သိမ်းဆည်းပါ။
+- **ထိန်းသိမ်းခြင်းမူဝါဒ** — အများသူငှာ လမ်းကြောများသည် ပိတ်ဆို့နေသော လမ်းကြောင်းများကို အပြည့်အ၀ ထိန်းသိမ်းထားသည်။ ကတိကဝတ်များသာ
+  ကတိကဝတ်များဖြစ်သောကြောင့် စစ်ဆေးရေးဂိတ်များပြီးနောက် အဟောင်းကောင်များ ကျဉ်းသွားနိုင်သည်။
+  ကျမ်းကိုး။ လျှို့ဝှက်လမ်းများ သည် စာဝှက်စာသား ဂျာနယ်များကို သီးသန့်ထားရှိပါ။
+  အခြားအလုပ်များပိတ်ဆို့ခြင်းကို ရှောင်ရှားရန် အပိုင်းများ။
+- **Tooling** — ပြုပြင်ထိန်းသိမ်းမှုအသုံးအဆောင်များ (`kagami`၊ CLI admin commands) ရှိသင့်သည်
+  မက်ထရစ်များ၊ Prometheus အညွှန်းများကို ဖော်ထုတ်သည့်အခါ slugged namespace ကိုကိုးကားပါ သို့မဟုတ်
+  Kura အပိုင်းများကို သိမ်းဆည်းခြင်း။
 
-## Routing & APIs
+## လမ်းကြောင်းနှင့် API များ
 
-- Torii REST/gRPC endpoints accept an optional `lane_id`; absence implies
-  `lane_default`.
-- SDKs surface lane selectors and map user-friendly aliases to `LaneId` using
-  the lane catalog.
-- Routing rules operate on the validated catalog and may pick both lane and
-  dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and
-  logs.
+- Torii REST/gRPC အဆုံးမှတ်များသည် ရွေးချယ်နိုင်သော `lane_id` ကို လက်ခံသည်။ မရှိခြင်းကို ဆိုလိုသည်။
+  `lane_default`။
+- SDKs အပေါ်ယံလမ်းကြောရွေးချယ်မှုများနှင့် `LaneId` ကိုအသုံးပြု၍ အသုံးပြုရလွယ်ကူသော aliases များကို မြေပုံဆွဲပါ။
+  လမ်းသွားကတ်တလောက်။
+- လမ်းကြောင်းသတ်မှတ်ခြင်းဆိုင်ရာ စည်းမျဉ်းများသည် တရားဝင်အတည်ပြုထားသော ကတ်တလောက်တွင် လုပ်ဆောင်ပြီး လမ်းကြောနှစ်ခုလုံးကို ရွေးချယ်နိုင်သည်။
+  ဒေတာအာကာသ။ `LaneConfig` သည် ဒက်ရှ်ဘုတ်များနှင့်
+  သစ်လုံးများ
 
-## Settlement & fees
+## ငွေပေးချေမှု နှင့် အခကြေးငွေ
 
-- Every lane pays XOR fees to the global validator set. Lanes may collect native
-  gas tokens but must escrow XOR equivalents alongside commitments.
-- Settlement proofs include amount, conversion metadata, and proof of escrow
-  (for example, transfer to the global fee vault).
-- The unified settlement router (NX-3) debits buffers using the same lane
-  prefixes, so settlement telemetry lines up with storage geometry.
+- လမ်းသွားတိုင်းသည် ကမ္ဘာလုံးဆိုင်ရာ စစ်ဆေးရေးစနစ်အတွက် XOR အခကြေးငွေကို ပေးဆောင်သည်။ လမ်းကြောင်းများသည် မူရင်းအတိုင်း စုဆောင်းနိုင်သည်။
+  ဓာတ်ငွေ့တိုကင်များဖြစ်သော်လည်း ကတိကဝတ်များနှင့်အတူ XOR ညီမျှမှုများကို ပေးဆောင်ရပါမည်။
+- ငွေပေးချေမှုအထောက်အထားများတွင် ပမာဏ၊ ပြောင်းလဲခြင်း မက်တာဒေတာနှင့် အာမခံအထောက်အထားများ ပါဝင်သည်။
+  (ဥပမာ၊ ကမ္ဘာလုံးဆိုင်ရာ အခကြေးငွေ အခန်းသို့ လွှဲပြောင်းပါ။)
+- တစ်စုတစ်စည်းတည်း အခြေချနေထိုင်သည့်ရောက်တာ (NX-3) သည် တူညီသောလမ်းကြောင်းကို အသုံးပြု၍ ငွေထုတ်သည့်ကြားခံများ
+  ရှေ့ထွက်များ၊ ထို့ကြောင့် အခြေချ telemetry သည် storage geometry ဖြင့် လိုင်းတက်ပါသည်။
 
-## Governance
+## အုပ်ချုပ်ရေး
 
-- Lanes declare their governance module via the catalog. `LaneConfigEntry`
-  carries the original alias and slug to keep telemetry and audit trails
-  readable.
-- The Nexus registry distributes signed lane manifests that include the
-  `LaneId`, dataspace binding, governance handle, settlement handle, and
-  metadata.
-- Runtime-upgrade hooks continue to enforce governance policies
-  (`gov_upgrade_id` by default) and log diffs via the telemetry bridge
-  (`nexus.config.diff` events).
+- Lanes သည် catalog မှတစ်ဆင့် ၎င်းတို့၏ အုပ်ချုပ်မှုပုံစံကို ကြေညာသည်။ `LaneConfigEntry`
+  တယ်လီမီတာနှင့် စာရင်းစစ်လမ်းကြောင်းများကို ထိန်းသိမ်းရန် မူရင်းအမည်နှင့် မျှော့ကို သယ်ဆောင်သည်။
+  ဖတ်လို့ရတယ်။
+- Nexus မှတ်ပုံတင်ခြင်းတွင် လက်မှတ်ရေးထိုးထားသော လမ်းကြောများကို ဖြန့်ဝေပေးသည်
+  `LaneId`၊ dataspace binding၊ governance handle၊ settlement handle နှင့်
+  မက်တာဒေတာ။
+- Runtime-upgrade ချိတ်များသည် အုပ်ချုပ်ရေးမူဝါဒများကို ဆက်လက်ကျင့်သုံးရန်
+  ပုံသေအားဖြင့် (`gov_upgrade_id`) နှင့် တယ်လီမီတာတံတားမှတစ်ဆင့် မှတ်တမ်းကွဲပြားမှုများ
+  (`nexus.config.diff` ဖြစ်ရပ်များ)။
 
-## Telemetry & status
+## တယ်လီမီတာနှင့် အခြေအနေ
 
-- `/status` exposes lane aliases, dataspace bindings, governance handles, and
-  settlement profiles, derived from the catalog and `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) render lane aliases/slugs so
-  operators can map backlog and TEU pressure quickly.
-- `nexus_lane_configured_total` counts the number of derived lane entries and is
-  recomputed when configuration changes. Telemetry emits signed diffs whenever
-  lane geometry changes.
-- Dataspace backlog gauges include the alias/description metadata to help
-  operators associate queue pressure with business domains.
+- `/status` သည် လမ်းကြောအမည်တူများ၊ ဒေတာအာကာသချိတ်ဆက်မှုများ၊ အုပ်ချုပ်မှုလက်ကိုင်များကို ဖော်ထုတ်ပေးသည်နှင့်
+  ကက်တလောက်နှင့် `LaneConfig` မှဆင်းသက်လာသော အခြေချပရိုဖိုင်များ။
+- Scheduler metrics (`nexus_scheduler_lane_teu_*`) သည် လမ်းသွားအမည်များ/ပက်ကျိများကို ထုတ်ပေးသည်
+  အော်ပရေတာများသည် backlog နှင့် TEU ဖိအားကို လျင်မြန်စွာ ပုံဖော်နိုင်သည်။
+- `nexus_lane_configured_total` သည် ဆင်းသက်လာသော လမ်းသွားလမ်းကြောင်းများကို ရေတွက်ပြီး ဖြစ်သည်
+  ဖွဲ့စည်းမှုပြောင်းလဲသည့်အခါ ပြန်လည်တွက်ချက်သည်။ Telemetry သည် အချိန်တိုင်းတွင် ဆိုင်းဘုတ်ကွဲပြားမှုများကို ထုတ်လွှတ်သည်။
+  လမ်းကြော ဂျီသြမေတြီ အပြောင်းအလဲများ။
+- Dataspace backlog gauges များတွင် ကူညီရန် alias/description metadata ပါဝင်သည်။
+  အော်ပရေတာများသည် လုပ်ငန်းဒိုမိန်းများနှင့် တန်းစီခြင်းဖိအားများကို ဆက်စပ်ပေးသည်။
 
-## Configuration & Norito types
+## Configuration & Norito အမျိုးအစားများ
 
-- `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in
-  `iroha_data_model::nexus` and provide Norito-format structures for
-  manifests and SDKs.
-- `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived
-  automatically from the catalog; it does not require Norito encoding because it
-  is an internal runtime helper.
-- The user-facing configuration (`iroha_config::parameters::user::Nexus`)
-  continues to accept declarative lane and dataspace descriptors; parsing now
-  derives the geometry and rejects invalid aliases or duplicate lane IDs.
+- `LaneCatalog`၊ `LaneConfig` နှင့် `DataSpaceCatalog` နေထိုင်သည်
+  `iroha_data_model::nexus` နှင့် Norito ဖော်မတ်တည်ဆောက်ပုံများကို ပံ့ပိုးပေးသည်။
+  manifest များနှင့် SDKs များ။
+- `LaneConfig` သည် `iroha_config::parameters::actual::Nexus` တွင်နေထိုင်ပြီး ဆင်းသက်လာသည်
+  ကတ်တလောက်မှ အလိုအလျောက်၊ ၎င်းသည် Norito ကုဒ်နံပါတ် မလိုအပ်သောကြောင့်ဖြစ်သည်။
+  အတွင်းပိုင်း runtime အထောက်အကူဖြစ်သည်။
+- အသုံးပြုသူမျက်နှာစာဖွဲ့စည်းပုံ (`iroha_config::parameters::user::Nexus`)
+  declarative lane နှင့် dataspace descriptors များကို ဆက်လက်လက်ခံနေပါသည်။ ယခု ခွဲခြမ်းစိတ်ဖြာသည်။
+  ဂျီသြမေတြီကို ထုတ်ယူပြီး မမှန်ကန်သော နာမည်တူများ သို့မဟုတ် ပွားနေသော လမ်းသွား ID များကို ငြင်းပယ်သည်။
 
-## Outstanding work
+## ထူးချွန်သောအလုပ်
 
-- Integrate settlement router updates (NX-3) with the new geometry so XOR buffer
-  debits and receipts are tagged by lane slug.
-- Extend admin tooling to list column families, compact retired lanes, and
-  inspect per-lane block logs using the slugged namespace.
-- Finalise the merge algorithm (ordering, pruning, conflict detection) and
-  attach regression fixtures for cross-lane replay.
-- Add compliance hooks for whitelists/blacklists and programmable-money
-  policies (tracked under NX-12).
+- ဂျီသြမေတြီအသစ်ဖြင့် အခြေချနေထိုင်ခြင်း မွမ်းမံမှုများ (NX-3) ကို ပေါင်းစပ်ထားသောကြောင့် XOR ကြားခံ
+  အကြွေးများနှင့် ပြေစာများကို လမ်းသွား ပက်ကျိဖြင့် တဂ်ထားသည်။
+- ကော်လံမိသားစုများ၊ ကျစ်လစ်သိပ်သည်းသော အငြိမ်းစားလမ်းများ နှင့် ကော်လံမိသားစုများစာရင်းပြုစုရန် စီမံခန့်ခွဲရေးကိရိယာကို တိုးချဲ့ပါ။
+  slugged namespace ကို အသုံးပြု၍ လမ်းသွားတိုင်း ပိတ်ဆို့မှတ်တမ်းများကို စစ်ဆေးပါ။
+- ပေါင်းစည်းခြင်းဆိုင်ရာ အယ်လဂိုရီသမ် (အမိန့်စာ၊ ဖြတ်တောက်ခြင်း၊ ပဋိပက္ခရှာဖွေခြင်း) နှင့် အပြီးသတ်လုပ်ဆောင်ပါ။
+  လမ်းသွားအပြန်ပြန်ကန်ခြင်းအတွက် ဆုတ်ယုတ်မှုဆိုင်ရာ ကိရိယာများကို ပူးတွဲပါ။
+- ခွင့်ပြုထားသောစာရင်း/အမည်ပျက်စာရင်းများနှင့် ပရိုဂရမ်ထုတ်နိုင်သောငွေများအတွက် လိုက်နာမှုချိတ်များထည့်ပါ။
+  မူဝါဒများ (NX-12 အောက်တွင် ခြေရာခံသည်)။
 
 ---
 
-*This page will continue to track NX-1 follow-ups as NX-2 through NX-18 land.
-Please surface open questions in `roadmap.md` or the governance tracker so the
-portal stays aligned with the canonical docs.*
+*ဤစာမျက်နှာသည် NX-1 ၏နောက်ဆက်တွဲများကို NX-2 အဖြစ် NX-18 မြေယာမှတဆင့် ဆက်လက်ခြေရာခံပါမည်။
+ကျေးဇူးပြု၍ `roadmap.md` သို့မဟုတ် အုပ်ချုပ်မှုခြေရာခံစနစ်တွင် မေးခွန်းများဖွင့်ပါ
+portal သည် canonical docs နှင့် ချိန်ညှိနေပါသည်။*

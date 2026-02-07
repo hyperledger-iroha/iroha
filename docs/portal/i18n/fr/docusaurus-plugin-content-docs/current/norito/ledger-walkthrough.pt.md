@@ -4,43 +4,43 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Walkthrough do ledger
-description: Reproduza um fluxo deterministico de register -> mint -> transfer com o CLI `iroha` e verifique o estado do ledger resultante.
-slug: /norito/ledger-walkthrough
+titre : Procédure pas à pas pour le grand livre
+description : Reproduire un flux déterministe de registre -> menthe -> transfert avec la CLI `iroha` et vérifier l'état du grand livre résultant.
+slug : /norito/ledger-walkthrough
 ---
 
-Este walkthrough complementa o [Norito quickstart](./quickstart.md) ao mostrar como mutar e inspecionar o estado do ledger com o CLI `iroha`. Voce vai registrar uma nova definicao de ativo, mintar unidades na conta de operador padrao, transferir parte do saldo para outra conta e verificar as transacoes e holdings resultantes. Cada passo espelha os fluxos cobertos nos quickstarts de SDK Rust/Python/JavaScript para confirmar a paridade entre CLI e SDK.
+Cette procédure pas à pas complète le [démarrage rapide Norito] (./quickstart.md) pour montrer comment changer et inspecter l'état du grand livre avec la CLI `iroha`. Vous allez enregistrer une nouvelle définition d'activité, créer des unités auprès de l'opérateur responsable, transférer une partie de la vente pour l'autre compte et vérifier les transactions et les avoirs résultants. En passant par les flux liés à nos démarrages rapides du SDK Rust/Python/JavaScript pour confirmer la parité entre CLI et SDK.
 
-## Pre-requisitos
+## Pré-requis
 
-- Siga o [quickstart](./quickstart.md) para iniciar a rede de um unico peer via
+- Consultez le [quickstart](./quickstart.md) pour démarrer le redémarrage d'un homologue unique via
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Garanta que `iroha` (o CLI) esteja compilado ou baixado e que voce consiga
-  acessar o peer usando `defaults/client.toml`.
-- Helpers opcionais: `jq` (formatacao de respostas JSON) e um shell POSIX para
-  os snippets de variaveis de ambiente usados abaixo.
+- Garanta que `iroha` (ou CLI) est déjà compilé ou baixé et que vous avez lu
+  accéder au peer en utilisant `defaults/client.toml`.
+- Helpers optionnels : `jq` (format de réponse JSON) et un shell POSIX pour
+  les extraits de variations de l'environnement utilisé sont abaissés.
 
-Ao longo do guia, substitua `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT` pelos IDs de
-conta que voce planeja usar. O bundle padrao ja inclui duas contas derivadas das
-chaves de demo:
+Pendant ce temps, remplacez `$ADMIN_ACCOUNT` et `$RECEIVER_ACCOUNT` par les ID de
+conta que voce planja usar. Le bundle padrao comprend deux éléments dérivés de ceux-ci
+chaves de démo:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirme os valores listando as primeiras contas:
+Confirmez les valeurs répertoriées comme les premiers contenants :
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspecione o estado de genesis
-
-Comece explorando o ledger que o CLI esta mirando:
+## 1. Inspection de l'état de genèseVenez explorer le grand livre que la CLI est en train de regarder :
 
 ```sh
 # Domains registrados no genesis
@@ -55,25 +55,25 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-Esses comandos dependem de respostas respaldadas por Norito, entao o filtro e a paginacao sao deterministas e batem com o que os SDKs recebem.
+Ces commandes dépendent des réponses fournies par Norito, puis le filtre et la page sont déterminés et batem comme les SDK reçus.
 
-## 2. Registre uma definicao de ativo
+## 2. Enregistrez une définition d'activité
 
-Crie um novo ativo infinitamente mintable chamado `coffee` dentro do dominio
-`wonderland`:
+Crie un nouveau travail infiniment minable chamado `coffee` à l'intérieur du domicile
+`wonderland` :
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-O CLI imprime o hash da transacao enviada (por exemplo, `0x5f...`). Guarde-o para
-consultar o status mais tarde.
+La CLI imprime le hachage de la transaction envoyée (par exemple, `0x5f...`). Garde-o para
+consulter le statut plus tard.
 
-## 3. Minte unidades na conta do operador
+## 3. Donnez des unités au contact de l'opérateur
 
-As quantidades de ativos vivem sob o par `(asset definition, account)`. Minte 250
-unidades de `coffee#wonderland` em `$ADMIN_ACCOUNT`:
+As quantidades de activos vivem sob o par `(asset definition, account)`. Neuf 250
+unités de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -81,14 +81,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-De novo, capture o hash da transacao (`$MINT_HASH`) na saida do CLI. Para
-confirmar o saldo, rode:
+De nouveau, capturez le hachage de la transaction (`$MINT_HASH`) via la CLI. Para
+confirmer le saldo, monté :
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-ou, para mirar apenas o novo ativo:
+ou, pour regarder apenas ou novo ativo:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -98,7 +98,7 @@ iroha --config defaults/client.toml asset list filter \
 
 ## 4. Transfira parte do saldo para outra conta
 
-Mova 50 unidades da conta do operador para `$RECEIVER_ACCOUNT`:
+Déplacez 50 unités du contact de l'opérateur pour `$RECEIVER_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -107,8 +107,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Guarde o hash da transacao como `$TRANSFER_HASH`. Consulte os holdings em ambas
-as contas para verificar os novos saldos:
+Gardez le hachage de la transaction comme `$TRANSFER_HASH`. Consulter les avoirs en ambas
+comme contas pour vérifier les nouveaux saldos :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -118,36 +118,34 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verifique as evidencias do ledger
+## 5. Vérifier les preuves dans le grand livre
 
-Use os hashes salvos para confirmar que ambas as transacoes foram committed:
+Utilisez les hachages salvos pour confirmer que les ambas sont des transacoes foram commit :
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-Voce tambem pode fazer stream de blocos recentes para ver qual bloco incluiu a
-transferencia:
+Vous pouvez également diffuser des blocs récents pour voir quel bloc inclut un
+transfert :
 
 ```sh
 # Stream a partir do ultimo bloco e pare apos ~5 segundos
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
-```
+```Chaque commande permet d'utiliser mes charges utiles Norito que les SDK. Se voix répéter
+ce flux via codigo (voir les démarrages rapides du SDK abaixo), les hachages et les sauvegardes
+vao alinhar dede que voce mire a mesma rede e os mesmos default.
 
-Cada comando acima usa os mesmos payloads Norito que os SDKs. Se voce repetir
-este fluxo via codigo (veja os quickstarts de SDK abaixo), os hashes e saldos
-vao alinhar desde que voce mire a mesma rede e os mesmos defaults.
+## Liens de parité du SDK
 
-## Links de paridade de SDK
+- [Démarrage rapide du SDK Rust](../sdks/rust) - instructions de démonstration du registraire,
+  transacoes submétriques et statut de consultant à partir de Rust.
+- [Démarrage rapide du SDK Python](../sdks/python) - afficher les opérations de registre/mint
+  com helpers JSON répondu par Norito.
+- [Démarrage rapide du SDK JavaScript](../sdks/javascript) - requêtes cobre Torii,
+  helpers de gouvernance et wrappers de types de requêtes.
 
-- [Rust SDK quickstart](../sdks/rust) - demonstra registrar instrucoes,
-  submeter transacoes e consultar status a partir de Rust.
-- [Python SDK quickstart](../sdks/python) - mostra as mesmas operacoes register/mint
-  com helpers JSON respaldados por Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) - cobre requests Torii,
-  helpers de governanca e wrappers de query tipados.
-
-Rode o walkthrough do CLI primeiro, depois repita o cenario com o SDK de sua
-preferencia para garantir que as duas superficies concordem em hashes de
-transacao, saldos e outputs de query.
+J'ai parcouru la procédure pas à pas de la CLI d'abord, après avoir répété le scénario avec le SDK de votre
+préférence pour garantir que les deux surfaces concordent avec les hachages de
+transacao, saldos et sorties de requête.

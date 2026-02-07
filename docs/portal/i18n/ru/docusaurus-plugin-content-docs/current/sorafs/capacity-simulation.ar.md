@@ -4,36 +4,38 @@ direction: ltr
 source: docs/portal/docs/sorafs/capacity-simulation.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: capacity-simulation
-title: دليل تشغيل محاكاة سعة SoraFS
-sidebar_label: دليل محاكاة السعة
-description: تشغيل مجموعة أدوات محاكاة سوق السعة SF-2c باستخدام fixtures قابلة لإعادة الإنتاج وصادرات Prometheus ولوحات Grafana.
+идентификатор: моделирование емкости
+Название: دليل تشغيل محاكاة سعة SoraFS
+Sidebar_label: Добавить комментарий
+описание: تشغيل مجموعة أدوات محاكاة سوق السعة SF-2c باستخدام светильники قابلة لإعادة الإنتاج Например Prometheus или Grafana.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. حافظ على تزامن النسختين إلى أن تُنقَل مجموعة توثيق Sphinx القديمة بالكامل.
+:::примечание
+Был установлен `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Он был изображен в фильме "Сфинкс" и "Территория" в Сфинксе.
 :::
 
-يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. يتحقق من تفاوض الحصص، ومعالجة failover، ومعالجة slashing من الطرف إلى الطرف باستخدام fixtures الحتمية في `docs/examples/sorafs_capacity_simulation/`. لا تزال payloads السعة تستخدم `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
+В 1997 году он был отправлен на базу SF-2c в 1998 году. Это так. Он был показан во время аварийного переключения, а также резких движений в светильниках, проведенных в Сан-Франциско. Это относится к `docs/examples/sorafs_capacity_simulation/`. Полезные нагрузки السعة تستخدم `sorafs_manifest_stub capacity`; Создайте `iroha app sorafs toolkit pack` для манифеста/CAR.
 
-## 1. إنشاء Artifacts خاصة بالـ CLI
+## 1. Просмотр артефактов в интерфейсе командной строки
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-تقوم `run_cli.sh` بلف `sorafs_manifest_stub capacity` لإخراج Norito payloads وblobs من base64 وأجسام طلبات Torii وملخصات JSON لـ:
+Для `run_cli.sh` для `sorafs_manifest_stub capacity` для Norito полезных данных и больших двоичных объектов в base64 и для Torii Формат JSON:
 
-- ثلاث تصريحات لمزوّدين مشاركين في سيناريو تفاوض الحصص.
-- أمر نسخ يوزّع المانيفست المجهز عبر أولئك المزوّدين.
-- لقطات تليمترية لخط الأساس قبل الانقطاع، وفترة الانقطاع، وتعافي failover.
-- payload نزاع يطلب slashing بعد الانقطاع المُحاكَى.
+- Скарлетт Льюис Мейсон в Сан-Франциско в Нью-Йорке.
+- Он был убит в 1990-х годах в Вашингтоне.
+- Чтобы выполнить аварийное переключение, необходимо выполнить аварийное переключение.
+- полезная нагрузка نزاع يطلب рубит بعد الانقطاع المُحاكَى.
 
-تُكتب كل الآرتيفاكت تحت `./artifacts` (يمكن الاستبدال بتمرير دليل مختلف كأول وسيط). راجع ملفات `_summary.json` للحصول على سياق مقروء.
+Он был использован в программе `./artifacts` (на английском языке) وسيط). راجع ملفات `_summary.json` للحصول على سياق مقروء.
 
 ## 2. تجميع النتائج وإصدار المقاييس
 
@@ -41,12 +43,12 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./analyze.py --artifacts ./artifacts
 ```
 
-يقوم المحلل بإنتاج:
+В ответ на это:
 
-- `capacity_simulation_report.json` - تخصيصات مجمعة، فروق failover، وبيانات نزاع وصفية.
-- `capacity_simulation.prom` - مقاييس textfile لـ Prometheus (`sorafs_simulation_*`) مناسبة لـ textfile collector الخاص بـ node-exporter أو scrape job مستقل.
+- `capacity_simulation_report.json` - Выполняется аварийное переключение, а также выполняется аварийное переключение.
+- `capacity_simulation.prom` - Текстовый файл для Prometheus (`sorafs_simulation_*`) используется для сбора текстовых файлов с помощью node-exporter и очистки заданий.
 
-مثال إعداد scrape في Prometheus:
+Для очистки Prometheus:
 
 ```yaml
 scrape_configs:
@@ -61,22 +63,22 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-وجّه textfile collector إلى `capacity_simulation.prom` (عند استخدام node-exporter انسخه إلى الدليل الممرر عبر `--collector.textfile.directory`).
+Сборщик текстовых файлов — `capacity_simulation.prom` (открывается с помощью node-exporter انسخه إلى الدليل الممرر عبر `--collector.textfile.directory`).
 
-## 3. استيراد لوحة Grafana
+## 3. Установите флажок Grafana.
 
-1. في Grafana، استورد `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. اربط متغير مصدر البيانات `Prometheus` بهدف scrape المُهيأ أعلاه.
-3. تحقق من اللوحات:
-   - **Quota Allocation (GiB)** يعرض الأرصدة الملتزم بها/المخصصة لكل مزوّد.
-   - **Failover Trigger** يتحول إلى *Failover Active* عند وصول مقاييس الانقطاع.
-   - **Uptime Drop During Outage** يرسم نسبة الفقدان للمزوّد `alpha`.
-   - **Requested Slash Percentage** يعرض نسبة المعالجة المستخرجة من fixture النزاع.
+1. Установите Grafana, установите `dashboards/grafana/sorafs_capacity_simulation.json`.
+2. Установите флажок `Prometheus` и очистите его.
+3. Сообщение в ресторане:
+   - **Распределение квот (ГиБ)**
+   - **Триггер аварийного переключения** Активируется *Аварийное переключение активно*.
+   - **Снижение времени безотказной работы во время сбоя** Ошибка была вызвана обновлением `alpha`.
+   - **Запрошенный процент слэша** в зависимости от текущего матча.
 
-## 4. الفحوصات المتوقعة
+## 4. Справочная информация
 
 - `sorafs_simulation_quota_total_gib{scope="assigned"}` يساوي `600` طالما بقي الإجمالي الملتزم >=600.
-- `sorafs_simulation_failover_triggered` يعرض `1` ويبرز مقياس المزوّد البديل `beta`.
-- `sorafs_simulation_slash_requested` يعرض `0.15` (‏15% slash) لمعرّف المزوّد `alpha`.
+- `sorafs_simulation_failover_triggered` вместо `1` используется для установки `beta`.
+- `sorafs_simulation_slash_requested` يعرض `0.15` (косая черта 15%) для `alpha`.
 
-شغّل `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` للتأكد من أن fixtures ما تزال مقبولة عبر مخطط الـ CLI.
+Установите `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` в соответствии со светильниками и используйте интерфейс CLI.

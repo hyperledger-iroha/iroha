@@ -11,189 +11,190 @@ id: operations-playbook
 title: SoraFS Operations Playbook
 sidebar_label: Operations Playbook
 description: Incident response guides and chaos drill procedures for SoraFS operators.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.md`. Keep both copies in sync until the Sphinx documentation set is fully migrated.
+::: Canonical Source ကို သတိပြုပါ။
+ဤစာမျက်နှာသည် `docs/source/sorafs_ops_playbook.md` အောက်တွင် ထိန်းသိမ်းထားသော runbook ကို ထင်ဟပ်စေသည်။ Sphinx စာရွက်စာတမ်းအစုံအလင်ကို အပြည့်အ၀ ရွှေ့ပြောင်းပြီးသည်အထိ မိတ္တူနှစ်ခုလုံးကို တစ်ပြိုင်တည်း ထားရှိပါ။
 :::
 
-## Key References
+## အဓိက ကိုးကားချက်များ
 
-- Observability assets: refer to the Grafana dashboards under `dashboards/grafana/` and Prometheus alert rules in `dashboards/alerts/`.
-- Metric catalog: `docs/source/sorafs_observability_plan.md`.
-- Orchestrator telemetry surfaces: `docs/source/sorafs_orchestrator_plan.md`.
+- စောင့်ကြည့်နိုင်မှုပိုင်ဆိုင်မှု- Grafana အောက်တွင် `dashboards/grafana/` နှင့် Prometheus သတိပေးချက်စည်းမျဉ်းများအောက်ရှိ Grafana ဒိုင်ခွက်များကို ကိုးကားပါ။
+- မက်ထရစ်ကတ်တလောက်- `docs/source/sorafs_observability_plan.md`။
+- Orchestrator telemetry မျက်နှာပြင်များ- `docs/source/sorafs_orchestrator_plan.md`။
 
 ## Escalation Matrix
 
-| Priority | Trigger examples | Primary on-call | Backup | Notes |
-|----------|------------------|-----------------|--------|-------|
-| P1 | Global gateway outage, PoR failure rate > 5% (15 min), replication backlog doubling every 10 min | Storage SRE | Observability TL | Engage governance council if impact exceeds 30 min. |
-| P2 | Regional gateway latency SLO breach, orchestrator retry spike without SLA impact | Observability TL | Storage SRE | Continue rollout but gate new manifests. |
-| P3 | Non-critical alerts (manifest staleness, capacity 80–90%) | Intake triage | Ops guild | Address within next business day. |
+| ဦးစားပေး | ဥပမာများ | ပဏာမ အွန်လိုင်းခေါ်ဆိုမှု | အရန် | မှတ်စုများ |
+|----------|---------------------|-----------------|--------|--------|
+| P1 | ကမ္ဘာလုံးဆိုင်ရာ ဝင်ပေါက်ပြတ်တောက်မှု၊ PoR ချို့ယွင်းမှုနှုန်း > 5% (15 မိနစ်)၊ ကူးယူမှု မှတ်တမ်းသည် 10 မိနစ်တိုင်း နှစ်ဆတိုးလာသည် | သိုလှောင်မှု SRE | မြင်နိုင်စွမ်း TL | မိနစ် 30 ထက်ကျော်လွန်ပါက အုပ်ချုပ်ရေးကောင်စီနှင့် ချိတ်ဆက်ပါ။ |
+| P2 | ဒေသဆိုင်ရာ တံခါးပေါက် တုံ့ပြန်ချိန်ဆ SLO ချိုးဖောက်မှု၊ တီးခတ်သူသည် SLA သက်ရောက်မှုမရှိဘဲ ထပ်ခါတလဲလဲ ကြိုးစားမှု တိုးလာခြင်း | မြင်နိုင်စွမ်း TL | သိုလှောင်မှု SRE | ထုတ်လွှင့်မှုကို ဆက်လက်လုပ်ဆောင်သော်လည်း အင်္ဂါရပ်အသစ်များကို ပိတ်ပါ။ |
+| P3 | အရေးမပါသော သတိပေးချက်များ (မကြည်မလင်ဖြစ်မှုကို ထင်ရှားစွာပြသခြင်း၊ စွမ်းရည် 80–90%) | စားသုံးခြင်း triage | Ops guild | နောက်နေ့တွင် လိပ်စာ။ |
 
-## Gateway Outage / Degraded Availability
+## Gateway Outage/ Degraded Availability
 
-**Detection**
+**ထောက်လှမ်းခြင်း**
 
-- Alerts: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
-- Dashboard: `dashboards/grafana/sorafs_gateway_overview.json`.
+- သတိပေးချက်များ- `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`။
+- ဒက်ရှ်ဘုတ်- `dashboards/grafana/sorafs_gateway_overview.json`။
 
-**Immediate actions**
+**ချက်​ချင်းလုပ်​​ဆောင်​ချက်​များ**
 
-1. Confirm scope (single provider vs fleet) via request-rate panel.
-2. Switch Torii routing to healthy providers (if multi-provider) by toggling `sorafs_gateway_route_weights` in the ops config (`docs/source/sorafs_gateway_self_cert.md`).
-3. If all providers impacted, enable “direct fetch” fallback for CLI/SDK clients (`docs/source/sorafs_node_client_protocol.md`).
+1. တောင်းဆိုမှုနှုန်းဘောင်မှတဆင့် နယ်ပယ် (တစ်ခုတည်းသော ဝန်ဆောင်မှုပေးသူနှင့် ရေယာဉ်စု) ကို အတည်ပြုပါ။
+2. Torii ကို ops config (`docs/source/sorafs_gateway_self_cert.md`) တွင် `sorafs_gateway_route_weights` ကိုပြောင်းခြင်းဖြင့် ကျန်းမာသောဝန်ဆောင်မှုပေးသူများ (အများအပြားရှိလျှင်) သို့လမ်းကြောင်းပြောင်းပါ။
+3. ဝန်ဆောင်မှုပေးသူအားလုံး ထိခိုက်ပါက၊ CLI/SDK ဖောက်သည်များ (`docs/source/sorafs_node_client_protocol.md`) အတွက် “တိုက်ရိုက်ယူဆောင်မှု” လှည့်ပြန်မှုကို ဖွင့်ပါ။
 
-**Triage**
+**စမ်းသပ်မှု**
 
-- Check stream token utilisation against `sorafs_gateway_stream_token_limit`.
-- Inspect gateway logs for TLS or admission errors.
-- Run `scripts/telemetry/run_schema_diff.sh` to ensure the gateway exported schema matches the expected version.
+- `sorafs_gateway_stream_token_limit` နှင့် stream တိုကင်အသုံးပြုမှုကို စစ်ဆေးပါ။
+- TLS သို့မဟုတ် ဝင်ခွင့်အမှားများအတွက် ဂိတ်ဝေးမှတ်တမ်းများကို စစ်ဆေးပါ။
+- တင်ပို့သည့်တံခါးပေါက်အစီအစဉ်သည် မျှော်လင့်ထားသည့်ဗားရှင်းနှင့်ကိုက်ညီကြောင်းသေချာစေရန် `scripts/telemetry/run_schema_diff.sh` ကိုဖွင့်ပါ။
 
-**Remediation options**
+**ပြန်လည်ပြင်ဆင်မှုရွေးချယ်စရာများ**
 
-- Restart only the affected gateway process; avoid recycling the entire cluster unless multiple providers are failing.
-- Increase stream token limit by 10–15% temporarily if saturation is confirmed.
-- Re-run self-cert (`scripts/sorafs_gateway_self_cert.sh`) after stabilisation.
+- ထိခိုက်နေသော တံခါးပေါက် လုပ်ငန်းစဉ်ကိုသာ ပြန်လည်စတင်ပါ။ ပံ့ပိုးသူအများအပြား မအောင်မြင်ပါက အစုအဖွဲ့တစ်ခုလုံးကို ပြန်လည်အသုံးပြုခြင်းကို ရှောင်ကြဉ်ပါ။
+- saturation ကိုအတည်ပြုပါက stream တိုကင်ကန့်သတ်ချက်ကို 10-15% ယာယီတိုးမြှင့်ပါ။
+- တည်ငြိမ်ပြီးနောက် မိမိကိုယ်ကို အသိအမှတ်ပြုလက်မှတ် (`scripts/sorafs_gateway_self_cert.sh`) ကို ပြန်လည်လုပ်ဆောင်ပါ။
 
-**Post-incident**
+**အခင်းဖြစ်ပွားပြီး**
 
-- File a P1 postmortem using `docs/source/sorafs/postmortem_template.md`.
-- Schedule follow-up chaos drill if remediation relied on manual interventions.
+- `docs/source/sorafs/postmortem_template.md` ကို အသုံးပြု၍ P1 ကို အလောင်းပြန်စစ်ဆေးပါ။
+- လက်ဖြင့်ဝင်ရောက်စွက်ဖက်မှုများအပေါ် မှီခိုအားထား၍ ပြန်လည်ကုစားပါက ပရမ်းပတာနောက်ဆက်တွဲလေ့ကျင့်မှုကို အချိန်ဇယားဆွဲပါ။
 
-## Proof Failure Spike (PoR / PoTR)
+## သက်သေပြချက် ပျက်ကွက်မှု Spike (PoR / PoTR)
 
-**Detection**
+**ထောက်လှမ်းခြင်း**
 
-- Alerts: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
-- Dashboard: `dashboards/grafana/sorafs_proof_integrity.json`.
-- Telemetry: `torii_sorafs_proof_stream_events_total` and `sorafs.fetch.error` events with `provider_reason=corrupt_proof`.
+- သတိပေးချက်များ- `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`။
+- ဒက်ရှ်ဘုတ်- `dashboards/grafana/sorafs_proof_integrity.json`။
+- Telemetry- `torii_sorafs_proof_stream_events_total` နှင့် `sorafs.fetch.error` ဖြစ်ရပ်များ `provider_reason=corrupt_proof`။
 
-**Immediate actions**
+**ချက်​ချင်းလုပ်​​ဆောင်​ချက်​များ**
 
-1. Freeze new manifest admissions by flagging the manifest registry (`docs/source/sorafs/manifest_pipeline.md`).
-2. Notify Governance to pause incentives for affected providers.
+1. manifest registry (`docs/source/sorafs/manifest_pipeline.md`) ကို အလံပြခြင်းဖြင့် ထင်ရှားသော ဝင်ခွင့်အသစ်များကို ရပ်တန့်လိုက်ပါ။
+2. ထိခိုက်နစ်နာသူများအတွက် ပံ့ပိုးပေးသူများအတွက် မက်လုံးများကို ခေတ္တရပ်ထားရန် အုပ်ချုပ်ရေးကို အကြောင်းကြားပါ။
 
-**Triage**
+**စမ်းသပ်မှု**
 
-- Check PoR challenge queue depth vs `sorafs_node_replication_backlog_total`.
-- Validate proof verification pipeline (`crates/sorafs_node/src/potr.rs`) for recent deployments.
-- Compare provider firmware versions with the operator registry.
+- PoR စိန်ခေါ်မှုတန်းစီအတိမ်အနက်ကို `sorafs_node_replication_backlog_total` နှင့် စစ်ဆေးပါ။
+- မကြာသေးမီက ဖြန့်ကျက်မှုများအတွက် အထောက်အထားစိစစ်ရေးပိုက်လိုင်း (`crates/sorafs_node/src/potr.rs`) ကို မှန်ကန်ကြောင်း အတည်ပြုပါ။
+- ဝန်ဆောင်မှုပေးသူ firmware ဗားရှင်းများကို အော်ပရေတာ မှတ်ပုံတင်ခြင်းနှင့် နှိုင်းယှဉ်ပါ။
 
-**Remediation options**
+**ပြန်လည်ပြင်ဆင်မှုရွေးချယ်စရာများ**
 
-- Trigger PoR replays using `sorafs_cli proof stream` with the latest manifest.
-- If proofs consistently fail, remove provider from active set by updating the governance registry and forcing orchestrator scoreboards to refresh.
+- နောက်ဆုံးပေါ် manifest ဖြင့် `sorafs_cli proof stream` ကို အသုံးပြု၍ PoR ပြန်လည်ဖွင့်ခြင်းကို အစပျိုးပါ။
+- အထောက်အထားများ တသမတ်တည်း ပျက်ကွက်ပါက၊ အုပ်ချုပ်မှု မှတ်ပုံတင်ခြင်းအား အပ်ဒိတ်လုပ်ကာ တီးမှုတ်သူရမှတ်ဘုတ်များကို ပြန်လည်စတင်ရန် ခိုင်းစေခြင်းဖြင့် လက်ရှိသတ်မှတ်ထားသည့် ပံ့ပိုးသူကို ဖယ်ရှားပါ။
 
-**Post-incident**
+**အခင်းဖြစ်ပွားပြီး**
 
-- Run the PoR chaos drill scenario before the next production deploy.
-- Capture lessons in the postmortem template and update provider qualification checklist.
+- လာမည့်ထုတ်လုပ်မှုကိုမဖြန့်ကျက်မီ PoR ပရမ်းပတာအစမ်းလေ့ကျင့်မှုမြင်ကွင်းကိုလုပ်ဆောင်ပါ။
+- သေဆုံးမှုပုံစံပုံစံတွင် သင်ခန်းစာများကို ဖမ်းယူပြီး ဝန်ဆောင်မှုပေးသူ အရည်အချင်းစစ်စာရင်းကို အပ်ဒိတ်လုပ်ပါ။
 
-## Replication Lag / Backlog Growth
+## Replication Lag / Backlog တိုးတက်မှု
 
-**Detection**
+**ထောက်လှမ်းခြင်း**
 
-- Alerts: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Import
-  `dashboards/alerts/sorafs_capacity_rules.yml` and run
+- သတိပေးချက်များ- `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`။ သွင်းကုန်
+  `dashboards/alerts/sorafs_capacity_rules.yml` နဲ့ run လိုက်ပါ။
   `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
-  before promotion so Alertmanager reflects the documented thresholds.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
-- Metrics: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
+  အရောင်းမြှင့်တင်ခြင်းမပြုမီ ထို့ကြောင့် Alertmanager သည် မှတ်တမ်းတင်ထားသော အဆင့်သတ်မှတ်ချက်များကို ထင်ဟပ်စေသည်။
+- ဒက်ရှ်ဘုတ်- `dashboards/grafana/sorafs_capacity_health.json`။
+- မက်ထရစ်များ- `sorafs_node_replication_backlog_total`၊ `sorafs_node_manifest_refresh_age_seconds`။
 
-**Immediate actions**
+**ချက်​ချင်းလုပ်​​ဆောင်​ချက်​များ**
 
-1. Verify backlog scope (single provider or fleet) and pause non-essential replication tasks.
-2. If backlog is isolated, temporarily reassign new orders to alternate providers via the replication scheduler.
+1. backlog နယ်ပယ် (တစ်ခုတည်းသောဝန်ဆောင်မှုပေးသူ သို့မဟုတ် ရေယာဉ်စု) ကိုစစ်ဆေးပြီး မရှိမဖြစ်လိုအပ်သော ထပ်တူပြုခြင်းလုပ်ငန်းများကို ခေတ္တရပ်ပါ။
+2. backlog ကို သီးခြားခွဲထားလျှင်၊ ကူးယူမှု အစီအစဉ်ဆွဲသည့် အစီအစဉ်မှတစ်ဆင့် အလှည့်ကျ ဝန်ဆောင်မှုပေးသူများထံ ယာယီအမှာစာအသစ်များ ပြန်လည်သတ်မှတ်ပေးပါ။
 
-**Triage**
+**စမ်းသပ်မှု**
 
-- Inspect orchestrator telemetry for retry bursts that may cascade backlog.
-- Confirm storage targets have sufficient headroom (`sorafs_node_capacity_utilisation_percent`).
-- Review recent configuration changes (chunk profile updates, proof cadence).
+- နောက်ကျကျန်နေနိုင်စေမည့် ပြန်စမ်းကြည့်ခြင်းအတွက် သံစုံတီးဝိုင်းမှ တယ်လီမီတာကို စစ်ဆေးပါ။
+- သိုလှောင်မှုပစ်မှတ်များတွင် လုံလောက်သော headroom ရှိသည် (`sorafs_node_capacity_utilisation_percent`) အတည်ပြုပါ။
+- မကြာသေးမီက ဖွဲ့စည်းမှုပုံစံပြောင်းလဲမှုများကို ပြန်လည်သုံးသပ်ပါ (အတုံးအခဲပရိုဖိုင်းမွမ်းမံမှုများ၊ သက်သေပြကွက်များ)။
 
-**Remediation options**
+**ပြန်လည်ပြင်ဆင်မှုရွေးချယ်စရာများ**
 
-- Run `sorafs_cli` with the `--rebalance` option to redistribute content.
-- Scale replication workers horizontally for the impacted provider.
-- Trigger manifest refresh to re-align TTL windows.
+- အကြောင်းအရာကို ပြန်လည်ဖြန့်ဝေရန် `--rebalance` ကို `--rebalance` ရွေးချယ်မှုဖြင့် လုပ်ဆောင်ပါ။
+- သက်ရောက်မှုရှိသော ပံ့ပိုးပေးသူအတွက် အလျားလိုက် အတိုင်းအတာဖြင့် ပုံတူပွားလုပ်သားများ။
+- TTL ဝင်းဒိုးများကို ပြန်လည်ချိန်ညှိရန် မန်နီးဖက်စ် ပြန်လည်ဆန်းသစ်မှုကို အစပျိုးပါ။
 
-**Post-incident**
+**အခင်းဖြစ်ပွားပြီး**
 
-- Schedule a capacity drill focusing on provider saturation failure.
-- Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
+- ဝန်ဆောင်မှုပေးသူ၏ ရွှဲရွှဲချို့ယွင်းမှုအပေါ် အာရုံစိုက်သည့် စွမ်းရည်မြှင့်လေ့ကျင့်ခန်းကို အချိန်ဇယားဆွဲပါ။
+- `docs/source/sorafs_node_client_protocol.md` ရှိ ပုံတူ SLA စာရွက်စာတမ်းကို အပ်ဒိတ်လုပ်ပါ။
 
-## Repair Backlog & SLA Breaches
+## Backlog & SLA ချိုးဖောက်မှုများကို ပြုပြင်ပါ။
 
-**Detection**
+**ထောက်လှမ်းခြင်း**
 
-- Alerts:
-  - `SoraFSRepairBacklogHigh` (queue depth > 50 or oldest queued age > 4h for 10m).
-  - `SoraFSRepairEscalations` (> 3 escalations/hour).
-  - `SoraFSRepairLeaseExpirySpike` (> 5 lease expiries/hour).
-  - `SoraFSRetentionBlockedEvictions` (retention blocked by active repairs in last 15m).
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- သတိပေးချက်များ
+  - `SoraFSRepairBacklogHigh` (တန်းစီအတိမ်အနက် > 50 သို့မဟုတ် အသက်အကြီးဆုံး တန်းစီနေသောအသက် > 10 မီတာအတွက် 4 နာရီ)။
+  - `SoraFSRepairEscalations` (> ၃ ကြိမ်/နာရီ)။
+  - `SoraFSRepairLeaseExpirySpike` (အငှားသက်တမ်း 5 နာရီ/နာရီ)။
+  - `SoraFSRetentionBlockedEvictions` (ပြီးခဲ့သော 15m တွင် လုပ်ဆောင်နေသော ပြုပြင်မှုများကြောင့် ပိတ်ဆို့ထားသော ထိန်းသိမ်းမှု)။
+- ဒက်ရှ်ဘုတ်- `dashboards/grafana/sorafs_capacity_health.json`။
 
-**Immediate actions**
+**ချက်​ချင်းလုပ်​​ဆောင်​ချက်​များ**
 
-1. Identify affected providers (queue depth spikes) and pause new pins/replication orders for them.
-2. Verify repair worker liveness and increase worker concurrency if safe.
+1. သက်ရောက်မှုရှိသော ဝန်ဆောင်မှုပေးသူများ (Queue Depth Spikes) ကို ခွဲခြားသတ်မှတ်ပြီး ၎င်းတို့အတွက် ပင်နံပါတ်များ/ပုံတူခြင်း အမှာစာအသစ်များကို ခေတ္တရပ်ပါ။
+2. ဘေးကင်းပါက ပြုပြင်ရေးလုပ်သား၏ အသက်တာကို စိစစ်ပြီး အလုပ်သမားများ၏ တူညီသောငွေကြေးကို တိုးမြှင့်ပါ။
 
-**Triage**
+**စမ်းသပ်မှု**
 
-- Compare `torii_sorafs_repair_backlog_oldest_age_seconds` against the 4h SLA window.
-- Inspect `torii_sorafs_repair_lease_expired_total{outcome=...}` for crash/clock-skew patterns.
-- Review escalated tickets for repeated manifest/provider pairs and verify evidence bundles.
+- 4h SLA ဝင်းဒိုးနှင့် `torii_sorafs_repair_backlog_oldest_age_seconds` ကို နှိုင်းယှဉ်ပါ။
+- ပျက်စီးမှု/နာရီ-စဲသည့်ပုံစံများအတွက် `torii_sorafs_repair_lease_expired_total{outcome=...}` ကို စစ်ဆေးပါ။
+- ထပ်ခါတလဲလဲ manifest/provider အတွဲများအတွက် တိုးလာသောလက်မှတ်များကို ပြန်လည်သုံးသပ်ပြီး အထောက်အထားအစုအဝေးများကို စစ်ဆေးပါ။
 
-**Remediation options**
+**ပြန်လည်ပြင်ဆင်မှုရွေးချယ်စရာများ**
 
-- Reassign or restart stalled repair workers; clear orphaned leases via the normal claim flow.
-- Throttle new pins while repairs drain to prevent additional SLA pressure.
-- Escalate to governance if escalations persist and attach the repair audit artefacts.
+- ရပ်တန့်နေသော ပြုပြင်လုပ်သားများကို ပြန်လည်တာဝန်ပေးခြင်း သို့မဟုတ် ပြန်လည်စတင်ပါ။ မိဘမဲ့ ငှားရမ်းခများကို သာမာန် တောင်းဆိုမှု စီးဆင်းမှုမှတစ်ဆင့် ရှင်းလင်းခြင်း။
+- ထပ်ဆောင်း SLA ဖိအားကို ကာကွယ်ရန် ပြုပြင်နေစဉ် ပင်ချောင်းအသစ်များကို တွန်းထုတ်ပါ။
+- တိုးတက်မှုဆက်လက်ရှိနေပါက အုပ်ချုပ်မှုသို့ တိုးမြှင့်ပြီး ပြုပြင်မှုစာရင်းစစ်ပစ္စည်းများကို ပူးတွဲပါရှိသည်။
 
-## Retention / GC Inspection (Read-only)
+## ထိန်းသိမ်းခြင်း / GC စစ်ဆေးခြင်း (ဖတ်ရန်သာ)
 
-**Detection**
+**ထောက်လှမ်းခြင်း**
 
-- Alerts: `SoraFSCapacityPressure` or sustained `torii_sorafs_storage_bytes_used` > 90%.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- သတိပေးချက်များ- `SoraFSCapacityPressure` သို့မဟုတ် `torii_sorafs_storage_bytes_used` > 90%
+- ဒက်ရှ်ဘုတ်- `dashboards/grafana/sorafs_capacity_health.json`။
 
-**Immediate actions**
+**ချက်​ချင်းလုပ်​​ဆောင်​ချက်​များ**
 
-1. Run a local retention snapshot:
+1. စက်တွင်း ထိန်းသိမ်းမှု လျှပ်တစ်ပြက် ရိုက်ချက်တစ်ခုကို ဖွင့်ပါ-
    ```bash
    iroha app sorafs gc inspect --data-dir /var/lib/sorafs
    ```
-2. Capture an expired-only view for triage:
+2. triage အတွက် သက်တမ်းကုန်ဆုံးသွားသော တစ်ခုတည်းသော မြင်ကွင်းကို ရိုက်ကူးပါ-
    ```bash
    iroha app sorafs gc dry-run --data-dir /var/lib/sorafs
    ```
-3. Attach the JSON outputs to the incident ticket for auditability.
+3. စာရင်းစစ်နိုင်စေရန်အတွက် JSON ရလဒ်များကို အဖြစ်အပျက်လက်မှတ်တွင် ပူးတွဲပါ။
 
-**Triage**
+**စမ်းသပ်မှု**
 
-- Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
-- Use `retention_sources` in the GC JSON output to see which constraint set the effective
-  retention (`deal_end`, `governance_cap`, `pin_policy`, or `unbounded`). Deal and governance caps
-  are supplied via manifest metadata keys `sorafs.retention.deal_end_epoch` and
-  `sorafs.retention.governance_cap_epoch`.
-- If `dry-run` reports expired manifests but capacity remains pinned, verify no
-  active repairs or retention policy overrides block eviction.
-  Capacity-triggered sweeps evict expired manifests by least-recently-used order with
-  `manifest_id` tie-breakers.
+- မည်သည့်ဖော်ပြချက်သည် `retention_epoch=0` (သက်တမ်းကုန်ဆုံးခြင်းမရှိ) နှင့် သတ်မှတ်ရက်ပါရှိသည့် အစီရင်ခံစာကို အတည်ပြုပါ။
+- မည်သည့်ကန့်သတ်ချက်မှ ထိရောက်မှုကို သိရှိရန် GC JSON အထွက်တွင် `retention_sources` ကို အသုံးပြုပါ။
+  ထိန်းသိမ်းမှု (`deal_end`၊ `governance_cap`၊ `pin_policy`၊ သို့မဟုတ် `unbounded`)။ အပေးအယူနဲ့ အုပ်ချုပ်မှုထုပ်
+  မန်နီးဖက်စ် မက်တာဒေတာကီး `sorafs.retention.deal_end_epoch` နှင့်
+  `sorafs.retention.governance_cap_epoch`။
+- `dry-run` သည် သက်တမ်းကုန်သွားကြောင်း ထင်ရှားသော်လည်း စွမ်းရည်ကို ချိတ်ထားပါက၊ မရှိ စစ်ဆေးပါ။
+  အသက်ဝင်သော ပြုပြင်မှုများ သို့မဟုတ် ထိန်းသိမ်းမှုမူဝါဒသည် နှင်ထုတ်ခြင်းအား ပိတ်ဆို့ခြင်းအား အစားထိုးသည်။
+  စွမ်းရည်-အစပျိုးသည့် အရှိန်အဟုန်ဖြင့် သက်တမ်းကုန်ဆုံးသွားသော ထင်ရှားသည့်အရာများကို မကြာသေးမီက အသုံးပြုမှု အနည်းဆုံးဖြင့် နှင်ထုတ်သည်
+  `manifest_id` ကြိုးပြတ်များ။
 
-**Remediation options**
+**ပြန်လည်ပြင်ဆင်မှုရွေးချယ်စရာများ**
 
-- The GC CLI is read-only. Do not delete manifests or chunks manually in production.
-- Escalate to governance for retention policy adjustments or capacity expansion
-  when expired data accumulates without automated eviction.
+- GC CLI သည် ဖတ်ရန်သာဖြစ်သည်။ ထုတ်လုပ်ရေးတွင် manifests သို့မဟုတ် chunks များကို ကိုယ်တိုင်မဖျက်ပါနှင့်။
+- ထိန်းသိမ်းထားသောမူဝါဒ ပြုပြင်ပြောင်းလဲမှုများ သို့မဟုတ် စွမ်းဆောင်ရည် တိုးချဲ့ခြင်းအတွက် အုပ်ချုပ်မှုသို့ မြှင့်တင်ပါ။
+  သက်တမ်းကုန်သွားသောအခါတွင် အလိုအလျောက် ဖယ်ရှားခြင်းမရှိဘဲ ဒေတာများ စုပုံလာသည်။
 
 ## Chaos Drill Cadence
 
-- **Quarterly**: Combined gateway outage + orchestrator retry storm simulation.
-- **Biannual**: PoR/PoTR failure injection across two providers with recovery.
-- **Monthly spot-check**: Replication lag scenario using staging manifests.
-- Track drills in the shared runbook log (`ops/drill-log.md`) via:
+- **သုံးလပတ်**- ပေါင်းစည်းထားသော ဝင်ပေါက်ပြတ်တောက်မှု + တီးမှုတ်သူသည် မုန်တိုင်းဆင်နွဲမှုကို ထပ်စမ်းကြည့်ပါ။
+- **တစ်နှစ်**- ပြန်လည်ရယူသည့် ဝန်ဆောင်မှုပေးသူ နှစ်ဦးတွင် PoR/PoTR ချို့ယွင်းမှု ဆေးထိုးခြင်း။
+- **လစဉ် နေရာစုံ-စစ်ဆေးခြင်း**- ဇာတ်ညွှန်းဖော်ပြချက်များကို အသုံးပြု၍ ကူးယူမှု နောက်ကျသည့် မြင်ကွင်း။
+- မျှဝေထားသော runbook မှတ်တမ်း (`ops/drill-log.md`) မှတဆင့် လေ့ကျင့်ခန်းများကို ခြေရာခံပါ-
 
   ```bash
   scripts/telemetry/log_sorafs_drill.sh \
@@ -206,15 +207,15 @@ This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.
     --link "docs/source/sorafs/postmortem_template.md"
   ```
 
-- Validate the log before commits with:
+- မကျူးလွန်မီ မှတ်တမ်းကို အတည်ပြုပါ-
 
   ```bash
   scripts/telemetry/validate_drill_log.sh
   ```
 
-- Use `--status scheduled` for upcoming drills, `pass`/`fail` for completed runs, and `follow-up` when action items remain open.
-- Override the destination with `--log` for dry-runs or automated verification; without it the script continues to update `ops/drill-log.md`.
+- လာမည့်လေ့ကျင့်ခန်းများအတွက် `--status scheduled`၊ ပြီးမြောက်အောင်လုပ်ဆောင်ရန်အတွက် `pass`/`fail` နှင့် လုပ်ဆောင်ချက်ပစ္စည်းများကိုဖွင့်ထားချိန်တွင် `follow-up` ကိုအသုံးပြုပါ။
+- ခြောက်သွေ့သောပြေးခြင်း သို့မဟုတ် အလိုအလျောက်အတည်ပြုခြင်းအတွက် ဦးတည်ရာကို `--log` ဖြင့် အစားထိုးပါ။ ၎င်းမပါဘဲ script သည် `ops/drill-log.md` ကို ဆက်လက်မွမ်းမံနေပါသည်။
 
-## Postmortem Template
+## Postmortem ပုံစံ
 
-Use `docs/source/sorafs/postmortem_template.md` for every P1/P2 incident and for chaos drill retrospectives. The template covers timeline, impact quantification, contributing factors, corrective actions, and follow-up verification tasks.
+P1/P2 ဖြစ်ရပ်တိုင်းအတွက် `docs/source/sorafs/postmortem_template.md` ကို အသုံးပြုပြီး ပရမ်းပတာလေ့ကျင့်မှု နောက်ကြောင်းပြန်မှုများအတွက်။ နမူနာပုံစံတွင် အချိန်ဇယား၊ အကျိုးသက်ရောက်မှု အရေအတွက်၊ ပံ့ပိုးပေးသည့်အချက်များ၊ မှန်ကန်သောလုပ်ဆောင်ချက်များနှင့် နောက်ဆက်တွဲ စိစစ်ခြင်းလုပ်ငန်းများ ပါဝင်သည်။

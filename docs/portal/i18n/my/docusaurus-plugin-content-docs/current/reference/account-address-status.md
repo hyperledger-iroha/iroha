@@ -7,16 +7,18 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Account address compliance
 description: Summary of the ADDR-2 fixture workflow and how SDK teams stay in sync.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) captures
-IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature, and negative fixtures.
-Every SDK + Torii surface relies on the same JSON so we can detect any codec
-drift before it hits production. This page mirrors the internal status brief
-(`docs/source/account_address_status.md` in the root repository) so portal
-readers can reference the workflow without digging through the mono-repo.
+Canonical ADDR-2 အစုအဝေး (`fixtures/account/address_vectors.json`) ဖမ်းယူသည်
+IH58 (ပိုနှစ်သက်သည်)၊ ဖိသိပ်ထားသည် (`sora`၊ ဒုတိယအကောင်းဆုံး၊ တစ်ဝက်/အပြည့် အကျယ်)၊ တံဆိပ်ပေါင်းစုံ၊ နှင့် အနုတ်လက္ခဏာပြကိရိယာများ။
+SDK + Torii မျက်နှာပြင်တိုင်းသည် တူညီသော JSON ပေါ်တွင် အားကိုးသဖြင့် မည်သည့်ကုဒ်ဒရိုက်ကိုမဆို သိရှိနိုင်သည်
+ထုတ်လုပ်မှုကို မရောက်ခင်မှာ ပျံ့လွင့်နေပါတယ်။ ဤစာမျက်နှာသည် အတွင်းပိုင်းအခြေအနေအကျဉ်းကို ထင်ဟပ်စေသည်။
+(`docs/source/account_address_status.md` သည် root repository တွင်) ထို့ကြောင့်ပေါ်တယ်
+စာဖတ်သူများသည် mono-repo ကို မတူးဘဲ အလုပ်အသွားအလာကို ကိုးကားနိုင်သည်။
 
-## Regenerate or verify the bundle
+## အစုအဝေးကို ပြန်ထုတ်ပါ သို့မဟုတ် အတည်ပြုပါ။
 
 ```bash
 # Refresh the canonical fixture (writes fixtures/account/address_vectors.json)
@@ -26,34 +28,34 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-Flags:
+အလံများ
 
-- `--stdout` — emit the JSON to stdout for ad-hoc inspection.
-- `--out <path>` — write to a different path (e.g., when diffing changes locally).
-- `--verify` — compare the working copy against freshly generated content (cannot
-  be combined with `--stdout`).
+- `--stdout` — ad-hoc စစ်ဆေးခြင်းအတွက် stdout လုပ်ရန် JSON ကို ထုတ်လွှတ်သည်။
+- `--out <path>` — မတူညီသောလမ်းကြောင်းတစ်ခုသို့ စာရေးပါ (ဥပမာ၊ diffing သည် locally ပြောင်းလဲသောအခါ)။
+- `--verify` — အသစ်ထုတ်လုပ်ထားသော အကြောင်းအရာနှင့် အလုပ်လုပ်သော မိတ္တူကို နှိုင်းယှဉ်ပါ (မရပါ
+  `--stdout`) နှင့် ပေါင်းစပ်ထားသည်။
 
-The CI workflow **Address Vector Drift** runs `cargo xtask address-vectors --verify`
-any time the fixture, generator, or docs change to alert reviewers immediately.
+CI အလုပ်အသွားအလာ **Address Vector Drift** သည် `cargo xtask address-vectors --verify` ကို လုပ်ဆောင်သည်
+ဘယ်အချိန်မဆို မီးခြစ်၊ မီးစက် သို့မဟုတ် docs သည် သုံးသပ်သူများကို ချက်ချင်းသတိပေးသည်။
 
-## Who consumes the fixture?
+## ဘယ်သူက ခံစစ်ကို စားသုံးတာလဲ။
 
-| Surface | Validation |
+| မျက်နှာပြင် | အတည်ပြုချက် |
 |---------|------------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` |
-| Torii (server) | `crates/iroha_torii/tests/account_address_vectors.rs` |
+| သံချေးဒေ - မော်ဒယ် | `crates/iroha_data_model/tests/account_address_vectors.rs` |
+| Torii (ဆာဗာ) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | JavaScript SDK | `javascript/iroha_js/test/address.test.js` |
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Each harness round-trips canonical bytes + IH58 + compressed (`sora`, second-best) encodings and
-checks that Norito-style error codes line up with the fixture for negative cases.
+ကြိုးဝိုင်းတစ်ခုစီသည် အသွားအပြန် canonical bytes + IH58 + ချုံ့ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး) ကုဒ်များနှင့်
+Norito ပုံစံ အမှားအယွင်းကုဒ်များသည် အနှုတ်လက္ခဏာဆောင်သည့် ကိစ္စများအတွက် တပ်ဆင်မှုနှင့်အတူ လိုင်းတက်နေကြောင်း စစ်ဆေးသည်။
 
-## Need automation?
+## အလိုအလျောက်စနစ်လိုပါသလား။
 
-Release tooling can script fixture refreshes with the helper
-`scripts/account_fixture_helper.py`, which fetches or verifies the canonical
-bundle without copy/paste steps:
+ဖြန့်ချိရေးကိရိယာသည် အကူအညီပေးသူနှင့်အတူ script fixture ကိုပြန်လည်စတင်နိုင်သည်။
+`scripts/account_fixture_helper.py` သည် ကျမ်းဂန်များကို ရယူခြင်း သို့မဟုတ် အတည်ပြုခြင်း ဖြစ်သည်။
+ကော်ပီ/ကူးထည့်ခြင်း အဆင့်များမပါဘဲ အတွဲလိုက်-
 
 ```bash
 # Download to a custom path (defaults to fixtures/account/address_vectors.json)
@@ -69,20 +71,20 @@ python3 scripts/account_fixture_helper.py check \
   --metrics-label android
 ```
 
-The helper accepts `--source` overrides or the `IROHA_ACCOUNT_FIXTURE_URL`
-environment variable so SDK CI jobs can point at their preferred mirror.
-When `--metrics-out` is supplied the helper writes
-`account_address_fixture_check_status{target=\"…\"}` along with the canonical
-SHA-256 digest (`account_address_fixture_remote_info`) so Prometheus textfile
-collectors and Grafana dashboard `account_address_fixture_status` can prove
-every surface remains in sync. Alert whenever a target reports `0`. For
-multi-surface automation use the wrapper `ci/account_fixture_metrics.sh`
-(accepts repeated `--target label=path[::source]`) so on-call teams can publish
-one consolidated `.prom` file for the node-exporter textfile collector.
+အကူအညီပေးသူက `--source` အစားထိုးမှုများကို လက်ခံသည် သို့မဟုတ် `IROHA_ACCOUNT_FIXTURE_URL` ကို လက်ခံသည်
+ပတ်၀န်းကျင် ပြောင်းလဲနိုင်သော ပြောင်းလဲနိုင်သော SDK CI အလုပ်များသည် ၎င်းတို့၏ နှစ်သက်ရာမှန်ကို ညွှန်ပြနိုင်သည်။
+`--metrics-out` ကို ပံ့ပိုးသောအခါ အကူအညီပေးသူက ရေးသည်။
+`account_address_fixture_check_status{target=\"…\"}` နှင့်အတူ canonical
+SHA-256 digest (`account_address_fixture_remote_info`) ဒါကြောင့် Prometheus textfile
+စုဆောင်းသူများနှင့် Grafana ဒက်ရှ်ဘုတ် `account_address_fixture_status` သက်သေပြနိုင်သည်
+မျက်နှာပြင်တိုင်းသည် ထပ်တူကျနေပါသည်။ ပစ်မှတ်က `0` ကို သတင်းပို့သည့်အခါတိုင်း သတိပေးချက်။ အဘို့
+multi-surface automation သည် wrapper `ci/account_fixture_metrics.sh` ကို အသုံးပြုသည်။
+(`--target label=path[::source]` ကို ထပ်ခါတလဲလဲ လက်ခံသည်) ထို့ကြောင့် ခေါ်ဆိုမှုအဖွဲ့များသည် ထုတ်ဝေနိုင်သည်
+node-exporter textfile စုဆောင်းသူအတွက် စုစည်းထားသော `.prom` ဖိုင်တစ်ခု။
 
-## Need the full brief?
+## အကျဉ်းချုပ် အပြည့်အစုံ လိုအပ်ပါသလား။
 
-The full ADDR-2 compliance status (owners, monitoring plan, open action items)
-lives in `docs/source/account_address_status.md` within the repository along
-with the Address Structure RFC (`docs/account_structure.md`). Use this page as a
-quick operational reminder; defer to the repo docs for in-depth guidance.
+အပြည့်အဝ ADDR-2 လိုက်နာမှုအခြေအနေ (ပိုင်ရှင်များ၊ စောင့်ကြည့်ရေးအစီအစဉ်၊ လုပ်ဆောင်ချက်ဖွင့်ထားသည့်အရာများ)
+repository တစ်လျှောက် `docs/source/account_address_status.md` တွင်နေထိုင်သည်။
+လိပ်စာဖွဲ့စည်းပုံ RFC (`docs/account_structure.md`) နှင့်အတူ။ ဤစာမျက်နှာကို အသုံးပြုပါ။
+အမြန်လည်ပတ်မှုသတိပေးချက် အတွင်းကျကျလမ်းညွှန်မှုအတွက် repo docs ကို ဆိုင်းငံ့ထားပါ။

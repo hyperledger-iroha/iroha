@@ -4,26 +4,28 @@ direction: ltr
 source: docs/portal/docs/sorafs/staging-manifest-playbook.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: دليل مانيفست الـstaging
-sidebar_label: دليل مانيفست الـstaging
-description: قائمة تحقق لتمكين ملف chunker المصادق عليه برلمانياً على نشرات Torii الخاصة بـ staging.
+id: puesta en escena-manifiesto-libro de estrategias
+título: دليل مانيفست الـpuesta en escena
+sidebar_label: دليل مانيفست الـpuesta en escena
+descripción: قائمة تحقق لتمكين ملف chunker المصادق عليه برلمانياً على نشرات Torii الخاصة بـ staging.
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. احرص على إبقاء نسخة Docusaurus ونسخة Markdown القديمة متطابقتين حتى يتم إيقاف مجموعة Sphinx بالكامل.
+:::nota المصدر المعتمد
+Utilice el código `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Aquí está el software Docusaurus y el Markdown de Sphinx.
 :::
 
 ## نظرة عامة
 
-يرشد هذا الدليل إلى تمكين ملف chunker المصادق عليه برلمانياً في نشر Torii الخاص بـ staging قبل ترقية التغيير إلى الإنتاج. يفترض أن ميثاق حوكمة SoraFS تم التصديق عليه وأن الـ fixtures المعتمدة متاحة داخل المستودع.
+يرشد هذا الدليل إلى تمكين ملف chunker المصادق عليه برلمانياً في نشر Torii الخاص بـ staging قبل ترقية التغيير إلى الإنتاج. يفترض أن ميثاق حوكمة SoraFS تم التصديق عليه وأن الـ accesorios المعتمدة متاحة داخل المستودع.
 
 ## 1. المتطلبات المسبقة
 
-1. زامن الـ fixtures المعتمدة والتواقيع:
+1. زامن الـ accesorios المعتمدة والتواقيع:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -33,7 +35,7 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
    ```
 
 2. حضّر دليل أظرف القبول الذي يقرأه Torii عند الإقلاع (مسار مثال): `/var/lib/iroha/admission/sorafs`.
-3. تأكد من أن إعدادات Torii تفعّل مخبأ discovery وتطبيق القبول:
+3. تأكد من أن إعدادات Torii تفعّل مخبأ descubrimiento y تطبيق القبول:
 
    ```toml
    [torii.sorafs.discovery]
@@ -60,31 +62,29 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. أعد تشغيل Torii (أو أرسل SIGHUP إذا كانت أداة التحميل تدعم إعادة التحميل الفورية).
+2. Presione Torii (si usa SIGHUP, presione el botón de encendido).
 3. راقب السجلات لرسائل القبول:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. التحقق من انتشار discovery
+## 3. التحقق من انتشار descubrimiento
 
-1. انشر حمولة provider advert الموقعة (بايتات Norito) الناتجة عن خط المزوّد:
+1. Anuncio del proveedor de انشر حمولة الموقعة (بايتات Norito) الناتجة عن خط المزوّد:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. استعلم عن نقطة discovery وتأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:
-
-   ```bash
+2. استعلم عن نقطة descubrimiento y تأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   تأكد من أن `profile_aliases` تتضمن `"sorafs.sf1@1.0.0"` كأول إدخال.
+   Utilice el `profile_aliases` y el `"sorafs.sf1@1.0.0"`.
 
-## 4. اختبار نقاط نهاية manifest وplan
+## 4. Manifiesto y plan de اختبار نقاط نهاية
 
 1. اجلب بيانات manifest الوصفية (يتطلب stream token إذا كان القبول مفعّلًا):
 
@@ -97,10 +97,10 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
      --json-out=reports/staging_manifest.json
    ```
 
-2. افحص إخراج JSON وتحقق من:
-   - أن `chunk_profile_handle` يساوي `sorafs.sf1@1.0.0`.
+2. Insertar JSON y crear:
+   - Aquí `chunk_profile_handle` y `sorafs.sf1@1.0.0`.
    - أن `manifest_digest_hex` يطابق تقرير الحتمية.
-   - أن `chunk_digests_blake3` تتطابق مع الـ fixtures المعاد توليدها.
+   - أن `chunk_digests_blake3` تتطابق مع الـ accesorios المعاد توليدها.
 
 ## 5. فحوصات التليمترية
 
@@ -110,12 +110,12 @@ description: قائمة تحقق لتمكين ملف chunker المصادق عل
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- يجب أن تعرض لوحات المتابعة مزوّد staging تحت الاسم المستعار المتوقع وأن تبقى عدادات brownout عند الصفر أثناء تفعيل الملف.
+- يجب أن تعرض لوحات المتابعة مزوّد puesta en escena تحت الاسم المستعار المتوقع وأن تبقى عدادات apagón عند الصفر أثناء تفعيل الملف.
 
 ## 6. الجاهزية للإطلاق
 
-1. التقط تقريرًا مختصرًا يتضمن عناوين URL ومعرّف manifest ولقطة التليمترية.
+1. التقط تقريرًا مختصرًا يتضمن عناوين URL y manifest ولقطة التليمترية.
 2. شارك التقرير في قناة Nexus rollout مع نافذة التفعيل المخطط لها في الإنتاج.
-3. انتقل إلى قائمة التحقق الخاصة بالإنتاج (Section 4 في `chunker_registry_rollout_checklist.md`) بعد موافقة أصحاب المصلحة.
+3. انتقل إلى قائمة التحقق الخاصة بالإنتاج (Sección 4 في `chunker_registry_rollout_checklist.md`) بعد موافقة أصحاب المصلحة.
 
-الحفاظ على هذا الدليل محدثًا يضمن أن كل إطلاق لـ chunker/admission يتبع نفس الخطوات الحتمية بين staging والإنتاج.
+الحفاظ على هذا الدليل محدثًا يضمن أن كل إطلاق لـ fragmentador/admisión يتبع نفس الخطوات الحتمية بين puesta en escena y والإنتاج.

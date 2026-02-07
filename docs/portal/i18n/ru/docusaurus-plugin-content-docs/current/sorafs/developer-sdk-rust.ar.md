@@ -4,25 +4,27 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-sdk-rust.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-sdk-rust
-title: مقتطفات Rust SDK
-sidebar_label: مقتطفات Rust
-description: أمثلة Rust دنيا لاستهلاك تدفقات الأدلة والمانيفستات.
+идентификатор: разработчик-sdk-rust
+Название: Обновление Rust SDK
+Sidebar_label: Добавлено Rust
+описание: Раст играет в фильме "Ржавчина".
 ---
 
-:::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/developer/sdk/rust.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.
+:::примечание
+Был установлен на `docs/source/sorafs/developer/sdk/rust.md`. Он был создан в честь Сфинкса.
 :::
 
-تغذّي حزم Rust في هذا المستودع واجهة CLI ويمكن تضمينها داخل مُنسِّقات أو خدمات مخصّصة.
-تسلط المقتطفات التالية الضوء على المساعدات التي يطلبها معظم المطورين.
+Создан в Rust в интерфейсе CLI и создан в 2017 году. خدمات مخصّصة.
+Он сказал, что хочет, чтобы это произошло с ним.
 
 ## مساعد تدفق الأدلة
 
-أعد استخدام محلل تدفق الأدلة الحالي لتجميع المقاييس من استجابة HTTP:
+Вы можете получить доступ к веб-сайту по протоколу HTTP:
 
 ```rust
 use std::error::Error;
@@ -60,45 +62,45 @@ pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, B
 }
 ```
 
-تتوفر النسخة الكاملة (مع الاختبارات) في `docs/examples/sorafs_rust_proof_stream.rs`.
-تنتج `ProofStreamSummary::to_json()` نفس JSON للمقاييس الذي يصدره CLI، ما يسهل تغذية
-منصات الرصد أو فرضيات CI.
+Установите флажок (в виде файла) для `docs/examples/sorafs_rust_proof_stream.rs`.
+Создайте `ProofStreamSummary::to_json()` для JSON-файла в CLI и воспользуйтесь файлами CLI.
+Создан в CI.
 
 ## تقييم الجلب متعدد المصادر
 
-يعرض الموديول `sorafs_car::multi_fetch` مُجدول الجلب غير المتزامن المستخدم في CLI.
-نفّذ `sorafs_car::multi_fetch::ScorePolicy` ومرّره عبر `FetchOptions::score_policy`
+Установите `sorafs_car::multi_fetch` для изменения настроек в CLI.
+Код `sorafs_car::multi_fetch::ScorePolicy` и код `FetchOptions::score_policy`
 لضبط ترتيب المزوّدين. يوضح اختبار الوحدة
-`multi_fetch::tests::score_policy_can_filter_providers` كيفية فرض تفضيلات مخصصة.
+`multi_fetch::tests::score_policy_can_filter_providers` был отправлен на сервер.
 
-عناصر أخرى تعكس أعلام CLI:
+Откройте интерфейс командной строки:
 
-- `FetchOptions::per_chunk_retry_limit` يطابق علم `--retry-budget` لتشغيلات CI التي
+- `FetchOptions::per_chunk_retry_limit` для `--retry-budget` для CI التي
   تحد عدد المحاولات عمدًا.
 - اجمع بين `FetchOptions::global_parallel_limit` و`--max-peers` لتقييد عدد المزوّدين
   المتزامنين.
 - يقوم `OrchestratorConfig::with_telemetry_region("region")` بوسم مقاييس
-  `sorafs_orchestrator_*`، بينما يعكس `OrchestratorConfig::with_transport_policy`
-  علم CLI `--transport-policy`. تُشحن `TransportPolicy::SoranetPreferred` كافتراضي عبر
-  أسطح CLI/SDK؛ استخدم `TransportPolicy::DirectOnly` فقط عند اختبار downgrade أو اتباع
-  توجيه امتثال، واحجز `SoranetStrict` لطيارين PQ-only بموافقة صريحة.
+  `sorafs_orchestrator_*`, بينما يعكس `OrchestratorConfig::with_transport_policy`
+  Используйте CLI `--transport-policy`. Код `TransportPolicy::SoranetPreferred`
+  Использование CLI/SDK; استخدم `TransportPolicy::DirectOnly` для понижения версии до более ранней версии.
+  Для этого используется `SoranetStrict`, предназначенный только для PQ.
 - اضبط `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` لفرض رفع PQ-only؛ سيعزز المساعد سياسات
-  النقل/إخفاء الهوية تلقائيًا ما لم يتم تجاوزها صراحةً.
+  Some(WriteModeHint::UploadPqOnly)` для PQ-only; سيعزز المساعد سياسات
+  Он/она сказал, что он был в восторге от Трэвиса.
 - استخدم `SorafsGatewayFetchOptions::policy_override` لتثبيت طبقة نقل أو إخفاء هوية
-  مؤقتة لطلب واحد؛ تمرير أي حقل يتجاوز تخفيض brownout ويفشل عندما يتعذر تلبية الطبقة
+  مؤقتة لطلب واحد؛ Он сыграл с Дэвидом Уилсоном, когда он отключился от электросети, и Сэнсэй Уоррен в 2007 году.
   المطلوبة.
-- تستخدم روابط Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) وJavaScript
-  (`sorafsMultiFetchLocal`) نفس المُجدول، لذا اضبط `return_scoreboard=true` في تلك المساعدات
-  لاسترجاع الأوزان المحسوبة مع إيصالات الـ chunk.
-- يسجل `SorafsGatewayScoreboardOptions::telemetry_source_label` تدفق OTLP الذي أنتج
-  حزمة تبنٍ. عند الإغفال، يستنتج العميل `region:<telemetry_region>` (أو `chain:<chain_id>`) تلقائيًا
-  حتى تحمل الميتاداتا دائمًا وسمًا وصفيًا.
+- Поддержка Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) и JavaScript.
+  (`sorafsMultiFetchLocal`) Зарегистрируйтесь, чтобы установить `return_scoreboard=true` в приложении.
+  Нажмите на кусок куска.
+- Код `SorafsGatewayScoreboardOptions::telemetry_source_label` для OTLP-файла.
+  حزمة تبنٍ. Установите флажок `region:<telemetry_region>` (или `chain:<chain_id>`)
+  Он сказал ему, что он Уайт.
 
 ## الجلب عبر `iroha::Client`
 
-تضم حزمة Rust SDK مساعد الجلب عبر البوابة؛ مرر مانيفست مع أوصاف المزوّدين
-(بما في ذلك رموز البث) ودع العميل يدير الجلب متعدد المصادر:
+Использование Rust SDK для создания новых приложений Создатель Миссисипи в Сан-Франциско
+(Джон и Дональд Трамп)
 
 ```rust
 use eyre::Result;
@@ -148,21 +150,19 @@ pub async fn fetch_payload(
 ```
 
 اضبط `transport_policy` إلى `Some(TransportPolicy::SoranetStrict)` عندما يجب أن ترفض
-الرفوعات المرحلات الكلاسيكية، أو `Some(TransportPolicy::DirectOnly)` عندما يجب تجاوز
-SoraNet بالكامل. وجّه `scoreboard.persist_path` إلى دليل آرتيفاكتات الإصدار، واضبط
-اختياريًا `scoreboard.now_unix_secs`، واملأ `scoreboard.metadata` بسياق الالتقاط
-(وسوم fixtures، هدف Torii، إلخ) حتى يستهلك `cargo xtask sorafs-adoption-check` JSON
-حتميًا عبر SDKs مع ملف المصدر الذي يتوقعه SF-6c.
-تقوم `Client::sorafs_fetch_via_gateway` الآن بإثراء تلك الميتاداتا بمعرف المانيفست،
-وتوقع CID المانيفست الاختياري، وعلم `gateway_manifest_provided` عبر فحص
-`GatewayFetchConfig` المقدم، بحيث تلبي الالتقاطات التي تتضمن ظرف مانيفست موقع متطلبات
-دليل SF-6c دون تكرار تلك الحقول يدويًا.
+الرفوعات المرحلات الكلاسيكية, أو `Some(TransportPolicy::DirectOnly)` عندما يجب تجاوز
+SoraNet بالكامل. وجّه `scoreboard.persist_path` إلى دليل آرتيفاكتات الإصدار, واضبط
+Код `scoreboard.now_unix_secs`, а также `scoreboard.metadata`.
+(Светильники, Torii, إلخ) حتى يستهلك `cargo xtask sorafs-adoption-check` JSON
+Созданы SDK для разработки SF-6c.
+تقوم `Client::sorafs_fetch_via_gateway` в разделе "Программное обеспечение".
+Для CID используется код `gateway_manifest_provided`.
+`GatewayFetchConfig`. متطلبات
+На борту SF-6c был Дэниел Тэхен в Уэльсе.
 
 ## مساعدات المانيفست
 
-يظل `ManifestBuilder` الطريقة المعتمدة لتجميع حمولات Norito برمجيًا:
-
-```rust
+Для `ManifestBuilder` установите флажок Norito:```rust
 use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};
 
 fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>> {
@@ -177,5 +177,5 @@ fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>
 }
 ```
 
-ضمّن المنشئ حيثما احتاجت الخدمات إلى توليد المانيفستات ديناميكيًا؛ تظل CLI هي المسار
-الموصى به للخطوط الحتمية.
+Он выступил в роли президента США Дональда Трампа в Вашингтоне. Использование CLI в интерфейсе
+Он сказал, что это не так.

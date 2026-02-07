@@ -11,64 +11,65 @@ id: reviewer-onboarding
 title: Preview reviewer onboarding
 sidebar_label: Reviewer onboarding
 description: Process and checklists for enrolling reviewers in the docs portal public preview.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## 概述
 
-DOCS-SORA tracks a staged launch of the developer portal. Checksum-gated builds
-(`npm run serve`) and hardened Try it flows unblock the next milestone:
-onboarding vetted reviewers before the public preview opens broadly. This guide
-describes how to collect requests, verify eligibility, provision access, and
-offboard participants safely. Refer to the
-[preview invite flow](./preview-invite-flow.md) for cohort planning, invite
-cadence, and telemetry exports; the steps below focus on the actions to take
-once a reviewer has been selected.
+DOCS-SORA 跟踪開發人員門戶的分階段啟動。校驗和門控構建
+(`npm run serve`) 並強化嘗試流程，解鎖下一個里程碑：
+在公開預覽版廣泛開放之前，讓經過審查的審稿人加入。本指南
+描述如何收集請求、驗證資格、提供訪問權限以及
+參與者安全下機。請參閱
+[預覽邀請流程](./preview-invite-flow.md) 用於群組規劃、邀請
+節奏和遙測導出；以下步驟重點關注要採取的行動
+一旦選定審稿人。
 
-- **Scope:** reviewers who need access to the docs preview (`docs-preview.sora`,
-  GitHub Pages builds, or SoraFS bundles) before GA.
-- **Out-of-scope:** Torii or SoraFS operators (covered by their own onboarding
-  kits) and production portal deployments (see
-  [`devportal/deploy-guide`](./deploy-guide.md)).
+- **範圍：**需要訪問文檔預覽的審閱者（`docs-preview.sora`，
+  GA 之前的 GitHub Pages 版本或 SoraFS 捆綁包）。
+- **超出範圍：** Torii 或 SoraFS 操作員（由他們自己的入職培訓涵蓋）
+  套件）和生產門戶部署（請參閱
+  [`devportal/deploy-guide`](./deploy-guide.md))。
 
-## Roles & prerequisites
+## 角色和先決條件
 
-| Role | Typical goals | Required artefacts | Notes |
-| --- | --- | --- | --- |
-| Core maintainer | Verify new guides, run smoke tests. | GitHub handle, Matrix contact, signed CLA on file. | Usually already in the `docs-preview` GitHub team; still file a request so access is auditable. |
-| Partner reviewer | Validate SDK snippets or governance content before public release. | Corporate email, legal POC, signed preview terms. | Must acknowledge telemetry + data handling requirements. |
-| Community volunteer | Provide usability feedback on guides. | GitHub handle, preferred contact, timezone, acceptance of CoC. | Keep cohorts small; prioritize reviewers who have signed the contributor agreement. |
+|角色 |典型目標 |所需文物|筆記|
+| ---| ---| ---| ---|
+|核心維護者 |驗證新指南，運行冒煙測試。 | GitHub 句柄、Matrix 聯繫人、已簽署的 CLA 存檔。 |通常已經在 `docs-preview` GitHub 團隊中；仍然提出請求，以便訪問是可審核的。 |
+|合作夥伴審稿人 |在公開發布之前驗證 SDK 片段或治理內容。 |公司電子郵件、合法 POC、簽署的預覽條款。 |必須承認遙測+數據處理要求。 |
+|社區志願者|提供有關指南的可用性反饋。 | GitHub 句柄、首選聯繫人、時區、CoC 接受情況。 |保持小規模；優先考慮已簽署貢獻者協議的審稿人。 |
 
-All reviewer types must:
+所有審閱者類型必須：
 
-1. Acknowledge the acceptable-use policy for preview artefacts.
-2. Read the security/observability appendices
+1. 確認預覽製品的可接受使用政策。
+2.閱讀安全性/可觀察性附錄
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-3. Agree to run `docs/portal/scripts/preview_verify.sh` before serving any
-   snapshot locally.
+   [`incident-runbooks`](./incident-runbooks.md))。
+3. 同意在提供任何服務之前運行 `docs/portal/scripts/preview_verify.sh`
+   本地快照。
 
-## Intake workflow
+## 攝入工作流程
 
-1. Ask the requester to fill out the
+1.請請求者填寫
    [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   form (or copy/paste it into an issue). Capture at least: identity, contact
-   method, GitHub handle, intended review dates, and confirmation that the
-   security docs were read.
-2. Record the request in the `docs-preview` tracker (GitHub issue or governance
-   ticket) and assign an approver.
-3. Validate prerequisites:
-   - CLA / contributor agreement on file (or partner contract reference).
-   - Acceptable-use acknowledgement stored in the request.
-   - Risk assessment complete (for example, partner reviewers approved by Legal).
-4. Approver signs off in the request and links the tracking issue to any
-   change-management entry (example: `DOCS-SORA-Preview-####`).
+   表單（或將其複制/粘貼到問題中）。至少捕獲：身份、聯繫方式
+   方法、GitHub 句柄、預期審核日期以及確認
+   已閱讀安全文檔。
+2. 在 `docs-preview` 跟踪器中記錄請求（GitHub 問題或治理
+   票）並指定審批者。
+3. 驗證先決條件：
+   - CLA/貢獻者協議存檔（或合作夥伴合同參考）。
+   - 存儲在請求中的可接受使用確認。
+   - 風險評估完成（例如，經法務部批准的合作夥伴審核員）。
+4. 審批者在請求中籤字並將跟踪問題鏈接到任何
+   變更管理條目（示例：`DOCS-SORA-Preview-####`）。
 
-## Provisioning & tooling
+## 配置和工具
 
-1. **Share artefacts** — Provide the latest preview descriptor + archive from
-   the CI workflow or SoraFS pin (`docs-portal-preview` artefact). Remind
-   reviewers to run:
+1. **共享工件** — 提供最新的預覽描述符+存檔
+   CI 工作流程或 SoraFS 引腳（`docs-portal-preview` 工件）。提醒
+   審稿人運行：
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -77,65 +78,65 @@ All reviewer types must:
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Serve with checksum enforcement** — Point reviewers at the checksum-gated
-   command:
+2. **提供校驗和執行服務** - 將審核者指向校驗和門控
+   命令：
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-   This reuses `scripts/serve-verified-preview.mjs` so no unverified build can be
-   launched accidentally.
+   這會重用 `scripts/serve-verified-preview.mjs`，因此不會出現未經驗證的構建
+   意外啟動。
 
-3. **Grant GitHub access (optional)** — If reviewers need unpublished branches,
-   add them to the `docs-preview` GitHub team for the duration of the review and
-   record the membership change in the request.
+3. **授予 GitHub 訪問權限（可選）** — 如果審閱者需要未發布的分支，
+   在審核期間將它們添加到 `docs-preview` GitHub 團隊，並
+   在請求中記錄成員資格變更。
 
-4. **Communicate support channels** — Share the on-call contact (Matrix/Slack)
-   and incident procedure from [`incident-runbooks`](./incident-runbooks.md).
+4. **溝通支持渠道** — 共享待命聯繫人 (Matrix/Slack)
+   以及來自 [`incident-runbooks`](./incident-runbooks.md) 的事件程序。
 
-5. **Telemetry + feedback** — Remind reviewers that anonymised analytics are
-  collected (see [`observability`](./observability.md)). Provide the feedback
-  form or issue template referenced in the invite and log the event with the
-  [`preview-feedback-log`](./preview-feedback-log) helper so the wave summary
-  stays current.
+5. **遙測+反饋** - 提醒審閱者匿名分析是
+  收集（請參閱 [`observability`](./observability.md)）。提供反饋
+  邀請中引用的表單或問題模板，並使用以下內容記錄事件
+  [`preview-feedback-log`](./preview-feedback-log) 幫手所以波總結
+  保持最新狀態。
 
-## Reviewer checklist
+## 審稿人清單
 
-Before accessing the preview, reviewers must complete the following:
+在訪問預覽之前，審閱者必須完成以下操作：
 
-1. Verify the downloaded artefacts (`preview_verify.sh`).
-2. Launch the portal via `npm run serve` (or `serve:verified`) to ensure the
-   checksum guard is active.
-3. Read the security and observability notes linked above.
-4. Test the OAuth/Try it console using device-code login (if applicable) and
-   avoid reusing production tokens.
-5. File findings in the agreed tracker (issue, shared doc, or form) and tag
-   them with the preview release tag.
+1. 驗證下載的工件 (`preview_verify.sh`)。
+2. 通過 `npm run serve`（或 `serve:verified`）啟動門戶，以確保
+   校驗和防護處於活動狀態。
+3. 閱讀上面鏈接的安全性和可觀察性說明。
+4. 使用設備代碼登錄（如果適用）測試 OAuth/Try it 控制台並
+   避免重複使用生產代幣。
+5. 在商定的跟踪器（問題、共享文檔或表單）和標籤中記錄結果
+   它們帶有預覽版本標籤。
 
-## Maintainer responsibilities & offboarding
+## 維護者職責和離職
 
-| Phase | Actions |
-| --- | --- |
-| Kickoff | Confirm intake checklist is attached to the request, share artefacts + instructions, append an `invite-sent` entry via [`preview-feedback-log`](./preview-feedback-log), and schedule a midpoint sync if the review lasts longer than one week. |
-| Monitoring | Track preview telemetry (look for unusual Try it traffic, probe failures) and follow the incident runbook if anything suspicious occurs. Log `feedback-submitted`/`issue-opened` events as findings arrive so the wave metrics stay accurate. |
-| Offboarding | Revoke temporary GitHub or SoraFS access, record `access-revoked`, archive the request (include feedback summary + outstanding actions), and update the reviewer registry. Ask the reviewer to purge local builds and attach the digest generated from [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+|相|行動|
+| ---| ---|
+|開球 |確認請求中附加了接收清單，共享工件 + 說明，通過 [`preview-feedback-log`](./preview-feedback-log) 附加 `invite-sent` 條目，並在審核持續時間超過一周的情況下安排中點同步。 |
+|監控|跟踪預覽遙測（查找異常的 Try it 流量、探測失敗），並在發生任何可疑情況時遵循事件運行手冊。當發現結果到達時記錄 `feedback-submitted`/`issue-opened` 事件，以便波指標保持準確。 |
+|離職|撤銷臨時 GitHub 或 SoraFS 訪問權限，記錄 `access-revoked`，存檔請求（包括反饋摘要 + 未完成的操作），並更新審閱者註冊表。要求審閱者清除本地構建並附加從 [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md) 生成的摘要。 |
 
-Use the same process when rotating reviewers between waves. Keeping the
-paper trail in the repo (issue + templates) helps DOCS-SORA remain auditable and
-lets governance confirm that preview access followed the documented controls.
+在輪換審閱者時使用相同的流程。保持
+存儲庫中的書面記錄（問題 + 模板）有助於 DOCS-SORA 保持可審核性
+讓治理確認預覽訪問遵循記錄的控制。
 
-## Invite templates & tracking
+## 邀請模板和跟踪
 
-- Start every outreach with the
+- 開始每次外展活動
   [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  file. It captures the minimum legal language, preview checksum instructions,
-  and the expectation that reviewers acknowledge the acceptable-use policy.
-- When editing the template, replace the placeholders for `<preview_tag>`,
-  `<request_ticket>`, and contact channels. Store a copy of the final message in
-  the intake ticket so reviewers, approvers, and auditors can reference the
-  exact wording that was sent.
-- After dispatching the invite, update the tracking spreadsheet or issue with
-  the `invite_sent_at` timestamp and expected end date so the
-  [preview invite flow](./preview-invite-flow.md) report can pick up the cohort
-  automatically.
+  文件。它捕獲最低限度的法律語言、預覽校驗和指令、
+  以及審閱者認可可接受使用政策的期望。
+- 編輯模板時，替換`<preview_tag>`的佔位符，
+  `<request_ticket>`，以及聯繫渠道。將最終消息的副本存儲在
+  受理單，以便審閱者、批准者和審計員可以參考
+  發送的確切措辭。
+- 發送邀請後，更新跟踪電子表格或問題
+  `invite_sent_at` 時間戳和預期結束日期，因此
+  [預覽邀請流程](./preview-invite-flow.md) 舉報可領取隊列
+  自動。

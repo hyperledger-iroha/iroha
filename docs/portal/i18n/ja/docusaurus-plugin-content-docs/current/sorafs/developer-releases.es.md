@@ -4,43 +4,45 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-releases.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Proceso de lanzamiento
-summary: Ejecuta el gate de lanzamiento de CLI/SDK, aplica la política de versionado compartida y publica notas de lanzamiento canónicas.
+タイトル: ランサミエントの手続き
+概要: CLI/SDK の出口とランザミエントの公開情報、バージョン比較の政治アプリ。
 ---
 
-# Proceso de lanzamiento
+# プロセソ・デ・ランサミエント
 
-Los binarios de SoraFS (`sorafs_cli`, `sorafs_fetch`, helpers) y los crates de SDK
-(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) se publican juntos. El pipeline
-de lanzamiento mantiene el CLI y las bibliotecas alineados, asegura cobertura de
-lint/test y captura artefactos para consumidores downstream. Ejecuta la lista de
-verificación de abajo para cada tag candidato.
+SoraFS (`sorafs_cli`、`sorafs_fetch`、ヘルパー) の SDK の損失
+(`sorafs_car`、`sorafs_manifest`、`sorafs_chunker`) パブリック・ジュント。エルパイプライン
+ランザミエント マンティエン エル CLI と las bibliotecas alineados、asegura cobertura de
+lint/test y キャプチャ アーティファクト パラ コンスミドール ダウンストリーム。エジェクタ ラ リスタ デ
+タグ候補の検証。
 
-## 0. Confirmar la aprobación de la revisión de seguridad
+## 0. 不正行為の見直しを確認する
 
-Antes de ejecutar el gate técnico de lanzamiento, captura los artefactos más
-recientes de la revisión de seguridad:
+出口までのアクセス、ランサミエントの技術情報のキャプチャ
+セグリダードの改訂履歴:
 
-- Descarga el memo más reciente de revisión de seguridad SF-6 ([reports/sf6-security-review](./reports/sf6-security-review.md))
-  y registra su hash SHA256 en el ticket de lanzamiento.
-- Adjunta el enlace del ticket de remediación (por ejemplo, `governance/tickets/SF6-SR-2026.md`) y anota
-  los aprobadores de Security Engineering y del Tooling Working Group.
-- Verifica que la lista de remediación del memo esté cerrada; los ítems sin resolver bloquean el lanzamiento.
-- Prepárate para subir los logs del harness de paridad (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
-  junto con el bundle del manifest.
-- Confirma que el comando de firma que planeas ejecutar incluya tanto `--identity-token-provider` como
-  un `--identity-token-audience=<aud>` explícito para que el alcance de Fulcio quede capturado en la evidencia del release.
+- SF-6 の見直しに関するメモを削除 ([reports/sf6-security-review](./reports/sf6-security-review.md))
+  ランザミエントのチケットのハッシュ SHA256 を登録します。
+- 救済チケットの補助 (例、`governance/tickets/SF6-SR-2026.md`) とその内容
+  セキュリティ エンジニアリングとツール ワーキング グループの概要。
+- 修復メモのリストを確認し、セラダを確認します。ロス・テムス・シン・リゾルバー・ブロックアン・エル・ランザミエント。
+- ハーネスのログを準備してください (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+  マニフェストのバンドルを調整します。
+- タント `--identity-token-provider` コモを含む飛行機の脱出コマンドを確認してください
+  Un `--identity-token-audience=<aud>` は、リリースの証拠となるキャプチャを明示的に示します。
 
-Incluye estos artefactos al notificar a gobernanza y publicar el lanzamiento.
+政府の通知およびランサミエントの公開情報を含めます。
 
-## 1. Ejecutar el gate de lanzamiento/pruebas
+## 1. ランザミエント/プルエバスの出口
 
-El helper `ci/check_sorafs_cli_release.sh` ejecuta formateo, Clippy y tests
-sobre los crates de CLI y SDK con un directorio target local al workspace (`.target`)
-para evitar conflictos de permisos al ejecutarse dentro de contenedores CI.
+El ヘルパー `ci/check_sorafs_cli_release.sh` 出力フォーマット、Clippy y テスト
+CLI と SDK のディレクトリ ターゲットのローカル ワークスペースの損失が深刻です (`.target`)
+パラ エビタール コンフリクト デ パーミソス アル エジェキュタルス デントロ デ コンテネドール CI。
 
 ```bash
 CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
@@ -48,66 +50,64 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 
 El script realiza las siguientes comprobaciones:
 
-- `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (con la feature `cli`),
+- `cargo fmt --all -- --check` (ワークスペース)
+- `cargo clippy --locked --all-targets` パラ `sorafs_car` (機能 `cli`)、
   `sorafs_manifest` y `sorafs_chunker`
-- `cargo test --locked --all-targets` para esos mismos crates
+- `cargo test --locked --all-targets` パラ エソス ミスモス クレート
 
-Si algún paso falla, corrige la regresión antes de etiquetar. Los builds de release
-deben estar continuos con main; no hagas cherry-pick de fixes en ramas de release.
-El gate también comprueba que los flags de firma sin claves (`--identity-token-issuer`,
-`--identity-token-audience`) se proporcionen donde corresponda; los argumentos
-faltantes hacen fallar la ejecución.
+失敗した場合は、倫理規定を修正してください。リリース後のビルドの損失
+デベン・エスター・コンメイン。リリース時に修正をチェリーピックする必要はありません。
+クラベスのフラグを確認してください (`--identity-token-issuer`,
+`--identity-token-audience`) 比例して対応します。ロス・アーギュロス
+ファルタンテス・ハセン・フォールラル・ラ・エジェクシオン。
 
-## 2. Aplicar la política de versionado
+## 2. 政治的バージョンの適用
 
-Todos los crates de CLI/SDK de SoraFS usan SemVer:
+SoraFS の SemVer を使用した CLI/SDK のタスク:
 
-- `MAJOR`: Se introduce para el primer release 1.0. Antes de 1.0 el incremento
-  menor `0.y` **indica cambios con ruptura** en la superficie del CLI o en los
-  esquemas Norito.
-- `MINOR`: Trabajo de funciones sin ruptura (nuevos comandos/flags, nuevos
-  campos Norito protegidos por política opcional, adiciones de telemetría).
-- `PATCH`: Correcciones de bugs, releases solo de documentación y actualizaciones de
-  dependencias que no cambian el comportamiento observable.
+- `MAJOR`: パラエルプライマーリリース 1.0 を導入します。 1.0 エルインクリメントのアンテス
+  menor `0.y` **インディカ カンビオス コン ルプチュラ** en la superficie del CLI o en los
+  エスケマスNorito。
+- `MINOR`: 破裂機能のトラバホ (ヌエボス コマンド/フラグ、ヌエボス)
+  カンポス Norito 政治オプショナル、遠隔測定のプロテギドス)。
+- `PATCH`: バグの修正、ドキュメントおよび実際の単独のリリース
+  カンビアンと同胞は観察できない依存性。
 
-Siempre mantén `sorafs_car`, `sorafs_manifest` y `sorafs_chunker` en la misma versión
-para que los consumidores de SDK downstream puedan depender de una única cadena
-alineada. Al incrementar versiones:
+管理 `sorafs_car`、`sorafs_manifest` および `sorafs_chunker` アン ラ ミスマ バージョン
+SDK のダウンストリーム プエダンに依存するパラ ケ ロス コンスミドール デ ウナ カデナ
+アリネアダ。すべての増分バージョン:
 
-1. Actualiza los campos `version =` en cada `Cargo.toml`.
-2. Regenera el `Cargo.lock` vía `cargo update -p <crate>@<new-version>` (el workspace
-   exige versiones explícitas).
-3. Ejecuta el gate de lanzamiento otra vez para asegurar que no queden artefactos
-   obsoletos.
+1. 実際は `version =` と `Cargo.toml` です。
+2. `cargo update -p <crate>@<new-version>` 経由で `Cargo.lock` を再生成 (ワークスペースから)
+   exige versiones explícitas)。
+3. ランサミエントの門を出て、芸術品のない宮殿を出てください
+   時代遅れ。
 
-## 3. Preparar notas de lanzamiento
+## 3. ランサミエントの準備をする
 
 Cada release debe publicar un changelog en markdown que resalte cambios que
-impacten CLI, SDK y gobernanza. Usa la plantilla en
-`docs/examples/sorafs_release_notes.md` (cópiala a tu directorio de artefactos de
-release y completa las secciones con detalles concretos).
+CLI、SDK、およびゴーベルナンザに影響を与えます。アメリカ・ラ・プランティラ・エン
+`docs/examples/sorafs_release_notes.md` (成果物ディレクトリのコピー)
+具体的なセクションを完了してください)。
 
-Contenido mínimo:
+ミニモの内容:
 
-- **Destacados**: titulares de funciones para consumidores de CLI y SDK.
-- **Impacto**: cambios con ruptura, upgrades de políticas, requisitos
-  mínimos de gateway/nodo.
-- **Pasos de actualización**: comandos TL;DR para actualizar dependencias cargo y
-  reejecutar fixtures deterministas.
-- **Verificación**: hashes o envoltorios de salida de comandos y la revisión exacta
-  de `ci/check_sorafs_cli_release.sh` ejecutada.
+- **デスタカード**: CLI および SDK のコンスミドールの機能のタイトル。
+- **影響**: 混乱、政治のアップグレード、要求事項
+  ゲートウェイ/ノードの最小限。
+- **現実化の手順**: TL;DR パラメタ現実化依存関係の貨物とコマンド
+  リージェキュターの試合結果は決定者。
+- **検証**: 正確な改訂を実行するためのコマンドのハッシュ
+  `ci/check_sorafs_cli_release.sh` を出力します。
 
-Adjunta las notas de lanzamiento completas al tag (por ejemplo, el cuerpo del release
-en GitHub) y guárdalas junto a los artefactos generados de forma determinista.
+ランサミエントの完全なタグの付属品 (一時停止、リリースの解除)
+en GitHub) と、決定的な形式の生成を決定するための準備です。
 
-## 4. Ejecutar los hooks de release
-
-Ejecuta `scripts/release_sorafs_cli.sh` para generar el bundle de firmas y el
-resumen de verificación que se envía con cada release. El wrapper compila el CLI
-cuando es necesario, llama a `sorafs_cli manifest sign` y reproduce de inmediato
-`manifest verify-signature` para que los fallos aparezcan antes de etiquetar.
-Ejemplo:
+## 4. エジェクターロスフックデリリースEjecuta `scripts/release_sorafs_cli.sh` 一般的な企業バンドル
+リリースに関する検証を再開します。ラッパーコンパイルと CLI
+cuando es necesario、ラマ `sorafs_cli manifest sign` y メディアを再現します
+`manifest verify-signature` パラケロスファロスアパレスカンアンテスデエチケット。
+例:
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -121,34 +121,34 @@ scripts/release_sorafs_cli.sh \
   --expect-token-hash "$(cat .release/token.hash)"
 ```
 
-Consejos:
+コンセホス:
 
-- Registra los inputs del release (payload, plans, summaries, hash de token esperado)
-  en tu repo o config de despliegue para que el script sea reproducible. El bundle
-  de fixtures en `fixtures/sorafs_manifest/ci_sample/` muestra el layout canónico.
-- Basa la automatización de CI en `.github/workflows/sorafs-cli-release.yml`; ejecuta
-  el gate de release, invoca el script anterior y archiva bundles/firmas como
-  artefactos del workflow. Refleja el mismo orden de comandos (gate de release → firmar
-  → verificar) en otros sistemas CI para que los logs de auditoría coincidan con los
-  hashes generados.
-- Mantén juntos `manifest.bundle.json`, `manifest.sig`, `manifest.sign.summary.json`
-  y `manifest.verify.summary.json`; forman el paquete referenciado en la notificación
-  de gobernanza.
-- Cuando el release actualice fixtures canónicos, copia el manifest actualizado,
-  el chunk plan y los summaries en `fixtures/sorafs_manifest/ci_sample/` (y actualiza
-  `docs/examples/sorafs_ci_sample/manifest.template.json`) antes de etiquetar.
-  Los operadores downstream dependen de los fixtures versionados para reproducir
-  el bundle de release.
-- Captura el log de ejecución de la verificación de canales acotados de
-  `sorafs_cli proof stream` y adjúntalo al paquete del release para demostrar que
-  las salvaguardas de proof streaming siguen activas.
-- Registra el `--identity-token-audience` exacto usado durante la firma en las
-  notas de lanzamiento; gobernanza verifica el audience contra la política de Fulcio
-  antes de aprobar la publicación.
+- レジストラのリリース入力 (ペイロード、計画、要約、トークンエスペラードのハッシュ)
+  スクリプト全体のリポジトリ設定は再現可能です。エルバンドル
+  `fixtures/sorafs_manifest/ci_sample/` のレイアウトの固定具。
+- CI の自動化システム `.github/workflows/sorafs-cli-release.yml`。エジェクタ
+  リリースゲート、アーカイブバンドル/ファーム共通のスクリプトの呼び出し
+  ワークフローのアーティファクト。 Refleja el missmo orden de comandos (ゲート デ リリース → ファームア)
+  → verificar) en otros sistemas CI para que los logs de Auditoría concidan con los
+  ハッシュジェネラド。
+- マンテン ジュントス `manifest.bundle.json`、`manifest.sig`、`manifest.sign.summary.json`
+  y `manifest.verify.summary.json`;通知と書式の参照
+  デ・ゴベルナンザ。
+- Cuando el releaseactualice fixtures canónicos、コピア el マニフェストactualizado、
+  チャンク プランとロスの概要 en `fixtures/sorafs_manifest/ci_sample/` (実際の
+  `docs/examples/sorafs_ci_sample/manifest.template.json`) 安全策。
+  ロス オペラドールのダウンストリームは、ロス フィクスチャのバージョンに応じて再現されます。
+  エルバンドルリリース。
+- カナレスの検証結果を記録するキャプチャ
+  `sorafs_cli proof stream` はデモ用のリリースに関する追加パッケージです
+  証拠ストリーミングシグエンアクティバスのサルバガード。
+- Registra el `--identity-token-audience` 正確な米国の会社の期間
+  ランサミエントのノート。フルシオの政治に対する聴衆の検証
+  公開前に。
 
-Usa `scripts/sorafs_gateway_self_cert.sh` cuando el release también incluya un
-rollout de gateway. Apunta al mismo bundle de manifest para probar que la
-atestación coincide con el artefacto candidato:
+米国 `scripts/sorafs_gateway_self_cert.sh` は、国連を含むリリースを取得します
+ゲートウェイのロールアウト。プロバール・ケ・ラのマニフェスト・バンドルを確認する
+芸術品の候補と一致する可能性:
 
 ```bash
 scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_cert.conf \
@@ -156,42 +156,42 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
   --manifest-bundle artifacts/release/manifest.bundle.json
 ```
 
-## 5. Etiquetar y publicar
+## 5. エチケットと広報
 
-Después de que los checks pasen y los hooks se completen:
+フックのチェックが完了していることを確認します:
 
-1. Ejecuta `sorafs_cli --version` y `sorafs_fetch --version` para confirmar que los binarios
-   reportan la nueva versión.
-2. Prepara la configuración del release en un `sorafs_release.toml` versionado (preferido)
-   o en otro archivo de config rastreado por tu repo de despliegue. Evita depender de
-   variables de entorno ad-hoc; pasa rutas al CLI con `--config` (o equivalente) para que
-   los inputs del release sean explícitos y reproducibles.
-3. Crea un tag firmado (preferido) o un tag anotado:
+1. Ejecuta `sorafs_cli --version` y `sorafs_fetch --version` paraconfirmar que los binarios
+   ルタン・ラ・ヌエバ版。
+2. `sorafs_release.toml` バージョンのリリース構成を準備します (優先)
+   rastreado 設定のアーカイブ、レポートの保存。エビータ依存者
+   エンターノアドホック変数。 PASA RUTAS AL CLI con `--config` (同等) パラメータ
+   ショーンの明示的な再現可能性を解放するための入力が失われます。
+3. タグ ファームド (preferido) を作成し、タグ アノタードを作成します。
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
    git push origin sorafs-vX.Y.Z
    ```
-4. Sube los artefactos (bundles CAR, manifests, resúmenes de proofs, notas de release,
-   outputs de atestación) al registry del proyecto siguiendo el checklist de gobernanza
-   en la [guía de despliegue](./developer-deployment.md). Si el release generó nuevos
-   fixtures, súbelos al repositorio de fixtures compartido o al object store para que la
-   automatización de auditoría pueda comparar el bundle publicado con el control de
-   versiones.
-5. Notifica al canal de gobernanza con enlaces al tag firmado, notas de release, hashes
-   del bundle/firmas del manifest, resúmenes archivados de `manifest.sign/verify` y
-   cualquier envoltorio de atestación. Incluye la URL del job CI (o archivo de logs) que
-   ejecutó `ci/check_sorafs_cli_release.sh` y `scripts/release_sorafs_cli.sh`. Actualiza
-   el ticket de gobernanza para que los auditores puedan trazar las aprobaciones a los
-   artefactos; cuando el job `.github/workflows/sorafs-cli-release.yml` publique
-   notificaciones, enlaza los hashes registrados en lugar de pegar resúmenes ad-hoc.
+4. 完全な成果物 (CAR、マニフェスト、証明の概要、リリースの注意事項、
+   アスタシオンの出力) プロジェクト シギエンドおよびゴベルナンザのチェックリストのすべてのレジストリ
+   en la [guía de despliegue](./developer-deployment.md)。新しい世代のリリース
+   フィクスチャ、オブジェクト ストア パラケラのフィクスチャのリポジトリを保存
+   オーディオ プエダの自動制御バンドルの比較および制御の自動化
+   バージョン。
+5. タグファームド、リリースノート、ハッシュに関する通知を行う
+   バンドル/マニフェストのファイル、`manifest.sign/verify` のアーカイブの履歴
+   cualquier envoltorio de astación。ジョブCI (またはログのアーカイブ) クエリのURLを含める
+   `ci/check_sorafs_cli_release.sh` と `scripts/release_sorafs_cli.sh` を取り出します。アクチュアリーザ
+   エル チケット デ ゴベルナンサ パラ ケ ロス アウディトレス プエダン トラザール ラス アプロバシオネス ア ロス
+   工芸品。クアンド エル ジョブ `.github/workflows/sorafs-cli-release.yml` パブリック
+   通知、一時的な再開のハッシュ登録。
 
-## 6. Seguimiento posterior al release
+## 6. 後部リリースのセギミエント
 
-- Asegura que la documentación que apunta a la nueva versión (quickstarts, plantillas de CI)
-  esté actualizada o confirma que no se requieren cambios.
-- Registra entradas de roadmap si se requiere trabajo posterior (por ejemplo, flags de
-- Archiva los logs de salida del gate de release para auditoría: guárdalos junto a los
-  artefactos firmados.
+- 新しいバージョンのドキュメントを作成する (クイックスタート、CI のプランティージャ)
+  事実を確認するためには、カンビオが必要です。
+- 事後管理が必要なロードマップの登録 (記録、フラグ)
+- アーカイブ ログ デ サリダ デル ゲート デ リリース パラ オーディオ: guárdalos junto a los
+  アーティファクト・フィルマドス。
 
-Seguir este pipeline mantiene el CLI, los crates del SDK y el material de gobernanza
-alineados para cada ciclo de release.
+Seguir エステ パイプライン マンティエン エル CLI、ロス デル SDK および ゴベルナンザ マテリアル
+リリースに関する最新情報。

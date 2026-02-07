@@ -6,123 +6,120 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 473b2b49d32c32d2b884b670ba35e9aa3d0606cfd451d441a7ca927c1160311d
 source_last_modified: "2026-01-03T18:07:59.262670+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Failover Drill Runbook (AND6/AND7)
+# Android ڈیوائس لیب فیل اوور ڈرل رن بک (and6/and7)
 
-This runbook captures the procedure, evidence requirements, and contact matrix
-used when exercising the **device-lab contingency plan** referenced in
-`roadmap.md` (§“Regulatory artefact approvals & lab contingency”). It complements
-the reservation workflow (`device_lab_reservation.md`) and the incident log
-(`device_lab_contingency.md`) so compliance reviewers, legal counsel, and SRE
-have a single source of truth for how we validate failover readiness.
+یہ رن بک طریقہ کار ، ثبوت کی ضروریات ، اور میٹرکس سے رابطہ کرتی ہے
+** ڈیوائس لیب ہنگامی منصوبہ ** میں حوالہ دیتے وقت استعمال کیا جاتا ہے
+`roadmap.md` (§ "ریگولیٹری آرٹ فیکٹ منظوری اور لیب ہنگامی")۔ یہ تکمیل ہوتا ہے
+ریزرویشن ورک فلو (`device_lab_reservation.md`) اور واقعہ لاگ
+(`device_lab_contingency.md`) تو تعمیل جائزہ لینے والے ، قانونی مشیر ، اور SRE
+حقیقت کا ایک واحد ذریعہ ہے کہ ہم کس طرح فیل اوور تیاری کی توثیق کرتے ہیں۔
 
-## Purpose & Cadence
+## مقصد اور کیڈینس
 
-- Demonstrate that the Android StrongBox + general device pools can fail over
-  to the fallback Pixel lanes, shared pool, Firebase Test Lab burst queue, and
-  external StrongBox retainer without missing AND6/AND7 SLAs.
-- Produce an evidence bundle that legal can attach to ETSI/FISC submissions
-  ahead of the Feb compliance review.
-- Run at least once per quarter, plus any time the lab hardware roster changes
-  (new devices, retirement, or maintenance longer than 24 h).
+- یہ ظاہر کریں کہ Android strongbox + جنرل ڈیوائس پولز ناکام ہوسکتے ہیں
+  فال بیک بیک پکسل لین ، مشترکہ پول ، فائر بیس ٹیسٹ لیب برسٹ قطار ، اور
+  بیرونی مضبوط باکس کو برقرار رکھنے والا اور 6/اور 77 ایس ایل اے کے بغیر۔
+- ایک ثبوت کا بنڈل تیار کریں جو قانونی ETSI/FISC کی گذارشات سے منسلک ہوسکتا ہے
+  فروری کی تعمیل کے جائزے سے پہلے۔
+- ہر سہ ماہی میں کم از کم ایک بار چلائیں ، نیز کسی بھی وقت لیب ہارڈویئر روسٹر تبدیل ہوجاتا ہے
+  (نئے آلات ، ریٹائرمنٹ ، یا دیکھ بھال 24h سے زیادہ لمبی ہے)۔
 
-| Drill ID | Date | Scenario | Evidence Bundle | Status |
-|----------|------|----------|-----------------|--------|
-| DR-2026-02-Q1 | 2026-02-20 | Simulated Pixel 8 Pro lane outage + attestation backlog with AND7 telemetry rehearsal | `artifacts/android/device_lab_contingency/20260220-failover-drill/` | ✅ Completed — bundle hashes recorded in `docs/source/compliance/android/evidence_log.csv`. |
-| DR-2026-05-Q2 | 2026-05-22 (scheduled) | StrongBox maintenance overlap + Nexus rehearsal | `artifacts/android/device_lab_contingency/20260522-failover-drill/` *(pending)* — `_android-device-lab` ticket **AND6-DR-202605** holds the reservations; bundle will be populated post-drill. | 🗓 Scheduled — calendar block added to “Android Device Lab – Reservations” per AND6 cadence. |
+| ڈرل ID | تاریخ | منظر | ثبوت بنڈل | حیثیت |
+| ---------- | ------ | ---------- | ------------------- | -------- |
+| DR-2026-02-Q1 | 2026-02-20 | مصنوعی پکسل 8 پرو لین آؤٹج + اور 7 ٹیلی میٹری ریہرسل کے ساتھ تصدیق کا بیکلاگ | `artifacts/android/device_lab_contingency/20260220-failover-drill/` | ✅ مکمل - `docs/source/compliance/android/evidence_log.csv` میں ریکارڈ شدہ بنڈل ہیش۔ |
+| DR-2026-05-Q2 | 2026-05-22 (شیڈول) | مضبوط باکس مینٹیننس اوورلیپ + Nexus ریہرسل | `artifacts/android/device_lab_contingency/20260522-failover-drill/`*(زیر التواء)*-`_android-device-lab` ٹکٹ ** and-dr-202605 ** تحفظات کا انعقاد ؛ بنڈل پوسٹ ڈرل کو آباد کیا جائے گا۔ | 🗓 شیڈول - کیلنڈر بلاک میں "Android ڈیوائس لیب - تحفظات" فی اور 6 کیڈینس میں شامل کیا گیا۔ |
 
-## Procedure
+## طریقہ کار
 
-### 1. Pre-drill preparation
+### 1. پری ڈرل تیاری
 
-1. Confirm baseline capacity in `docs/source/sdk/android/android_strongbox_capture_status.md`.
-2. Export the reservation calendar for the target ISO week via
-   `python3 scripts/android_device_lab_export.py --week <ISO week>`.
-3. File `_android-device-lab` ticket
-   `AND6-DR-<YYYYMM>` with scope (“failover drill”), planned slots, and affected
-   workloads (attestation, CI smoke, telemetry chaos).
-4. Update the contingency log template in `device_lab_contingency.md` with a
-   placeholder row for the drill date.
+1. `docs/source/sdk/android/android_strongbox_capture_status.md` میں بیس لائن صلاحیت کی تصدیق کریں۔
+2. ہدف آئی ایس او ہفتہ کے لئے ریزرویشن کیلنڈر برآمد کریں
+   `python3 scripts/android_device_lab_export.py --week <ISO week>`۔
+3. فائل `_android-device-lab` ٹکٹ
+   `AND6-DR-<YYYYMM>` اسکوپ کے ساتھ ("فیل اوور ڈرل") ، منصوبہ بند سلاٹ ، اور متاثرہ
+   کام کے بوجھ (تصدیق ، CI دھواں ، ٹیلی میٹری افراتفری)۔
+4. `device_lab_contingency.md` میں ایک کے ساتھ ہنگامی لاگ ٹیمپلیٹ کو اپ ڈیٹ کریں
+   ڈرل کی تاریخ کے لئے پلیس ہولڈر قطار۔
 
-### 2. Simulate failure conditions
+### 2. ناکامی کی شرائط کی نقالی کریں
 
-1. Disable or depool the primary lane (`pixel8pro-strongbox-a`) inside the lab
-   scheduler and tag the reservation entry as “drill”.
-2. Trigger a mock outage alert in PagerDuty (`AND6-device-lab` service) and
-   capture the notification export for the evidence bundle.
-3. Annotate the Buildkite jobs that normally consume the lane
-   (`android-strongbox-attestation`, `android-ci-e2e`) with the drill ID.
+1. لیب کے اندر پرائمری لین (`pixel8pro-strongbox-a`) کو غیر فعال یا ڈپول کریں
+   شیڈولر اور ریزرویشن انٹری کو "ڈرل" کے بطور ٹیگ کریں۔
+2. پیجریڈی (`AND6-device-lab` سروس) میں ایک مذاق کی بندش کے انتباہ کو متحرک کریں اور
+   ثبوت کے بنڈل کے لئے نوٹیفکیشن برآمد پر قبضہ کریں۔
+3. بلڈکائٹ ملازمتوں کی تشریح کریں جو عام طور پر لین کا استعمال کرتے ہیں
+   (`android-strongbox-attestation` ، `android-ci-e2e`) ڈرل ID کے ساتھ۔
 
-### 3. Failover execution
+### 3. فیل اوور پر عمل درآمد1. فال بیک بیک پکسل 7 لین کو پرائمری سی آئی کے ہدف میں فروغ دیں اور شیڈول کریں
+   اس کے خلاف منصوبہ بند کام کا بوجھ۔
+2. `firebase-burst` لین کے ذریعے فائر بیس ٹیسٹ لیب برسٹ سویٹ کو متحرک کریں
+   خوردہ دیواروں کے دھواں کے ٹیسٹ جبکہ مضبوط باکس کی کوریج مشترکہ میں منتقل ہوتی ہے
+   لین آڈٹ کے لئے ٹکٹ میں سی ایل آئی کی دعوت (یا کنسول ایکسپورٹ) پر قبضہ کریں
+   برابری
+3. مختصر تصدیق کے جھاڑو کے لئے بیرونی مضبوط باکس لیب برقرار رکھنے والے کو مشغول کریں۔
+   جیسا کہ ذیل میں بیان کیا گیا ہے اس سے رابطہ کریں
+4. تمام بلڈکائٹ رن آئی ڈی ، فائر بیس جاب یو آر ایل ، اور برقرار رکھنے والے ٹرانسکرپٹس کو ریکارڈ کریں
+   `_android-device-lab` ٹکٹ اور ثبوت بنڈل ظاہر ہوتا ہے۔
 
-1. Promote the fallback Pixel 7 lane to primary CI target and schedule the
-   planned workloads against it.
-2. Trigger the Firebase Test Lab burst suite via the `firebase-burst` lane for
-   the retail-wallet smoke tests while StrongBox coverage moves to the shared
-   lane. Capture the CLI invocation (or console export) in the ticket for audit
-   parity.
-3. Engage the external StrongBox lab retainer for a short attestation sweep;
-   log contact acknowledgement as described below.
-4. Record all Buildkite run IDs, Firebase job URLs, and retainer transcripts in
-   the `_android-device-lab` ticket and the evidence bundle manifest.
+### 4. توثیق اور رول بیک
 
-### 4. Validation & rollback
+1. بیس لائن کے خلاف تصدیق/CI رن ٹائم کا موازنہ کریں۔ پرچم ڈیلٹا> 10 ٪
+   ہارڈ ویئر لیب لیڈ۔
+2. پرائمری لین کو بحال کریں اور صلاحیت کے اسنیپ شاٹ کے علاوہ تیاری کو اپ ڈیٹ کریں
+   میٹرکس ایک بار توثیق سے گزرتا ہے۔
+3. `device_lab_contingency.md` میں ٹرگر ، ایکشنز کے ساتھ آخری قطار کو شامل کریں ،
+   اور فالو اپ۔
+4. اپ ڈیٹ `docs/source/compliance/android/evidence_log.csv` کے ساتھ:
+   بنڈل پاتھ ، SHA-256 منشور ، بلڈکائٹ رن IDs ، پیجریڈی برآمد ہیش ، اور
+   جائزہ لینے والا سائن آف۔
 
-1. Compare attestation/CI runtimes against baseline; flag deltas >10 % to the
-   Hardware Lab Lead.
-2. Restore the primary lane and update the capacity snapshot plus the readiness
-   matrix once validation passes.
-3. Append the final row to `device_lab_contingency.md` with trigger, actions,
-   and follow-ups.
-4. Update `docs/source/compliance/android/evidence_log.csv` with:
-   bundle path, SHA-256 manifest, Buildkite run IDs, PagerDuty export hash, and
-   reviewer sign-off.
+## ثبوت بنڈل لے آؤٹ
 
-## Evidence Bundle Layout
+| فائل | تفصیل |
+| ------ | --------------- |
+| `README.md` | خلاصہ (ڈرل ID ، دائرہ کار ، مالکان ، ٹائم لائن) |
+| `bundle-manifest.json` | بنڈل میں ہر فائل کے لئے SHA-256 نقشہ۔ |
+| `calendar-export.{ics,json}` | برآمدی اسکرپٹ سے آئی ایس او ہفتہ ریزرویشن کیلنڈر۔ |
+| `pagerduty/incident_<id>.json` | پیجریڈی واقعہ کی برآمدات انتباہ + اعتراف ٹائم لائن کو دکھا رہی ہیں۔ |
+| `buildkite/<job>.txt` | متاثرہ ملازمتوں کے لئے بلڈکائٹ یو آر ایل اور لاگ ان کریں۔ |
+| `firebase/burst_report.json` | فائر بیس ٹیسٹ لیب برسٹ پھانسی کا خلاصہ۔ |
+| `retainer/acknowledgement.eml` | بیرونی مضبوط باکس لیب سے تصدیق۔ |
+| `photos/` | اگر ہارڈ ویئر کو دوبارہ بند کیا گیا تھا تو لیب ٹوپولوجی کے اختیاری تصاویر/اسکرین شاٹس۔ |
 
-| File | Description |
-|------|-------------|
-| `README.md` | Summary (drill ID, scope, owners, timeline). |
-| `bundle-manifest.json` | SHA-256 map for every file in the bundle. |
-| `calendar-export.{ics,json}` | ISO-week reservation calendar from the export script. |
-| `pagerduty/incident_<id>.json` | PagerDuty incident export showing alert + acknowledgement timeline. |
-| `buildkite/<job>.txt` | Buildkite run URLs & logs for affected jobs. |
-| `firebase/burst_report.json` | Firebase Test Lab burst execution summary. |
-| `retainer/acknowledgement.eml` | Confirmation from the external StrongBox lab. |
-| `photos/` | Optional photos/screenshots of lab topology if hardware was re-cabled. |
+بنڈل کو اسٹور کریں
+`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` اور ریکارڈ
+ثبوت لاگ کے علاوہ اور 6 تعمیل چیک لسٹ کے اندر منشور چیکسم۔
 
-Store the bundle at
-`artifacts/android/device_lab_contingency/<YYYYMMDD>-failover-drill/` and record
-the manifest checksum inside the evidence log plus the AND6 compliance checklist.
+## رابطہ اور اسکیلیشن میٹرکس
 
-## Contact & Escalation Matrix
+| کردار | بنیادی رابطہ | چینل (زبانیں) | نوٹ |
+| ------ | ----------------- | -------------- | ------- |
+| ہارڈ ویئر لیب لیڈ | پریا راماناتھن | `@android-lab` سلیک · +81-3-5550-1234 | سائٹ پر عمل اور کیلنڈر کی تازہ کاریوں کا مالک ہے۔ |
+| ڈیوائس لیب آپس | میٹو کروز | `_android-device-lab` قطار | ریزرویشن ٹکٹ + بنڈل اپ لوڈ کوآرڈینیٹ کرتا ہے۔ |
+| ریلیز انجینئرنگ | الیکسی موروزوف | جاری سلیک · `release-eng@iroha.org` | بلڈکائٹ شواہد کی توثیق کرتا ہے + ہیشوں کو شائع کرتا ہے۔ |
+| بیرونی مضبوط باکس لیب | ساکورا آلات NOC | `noc@sakura.example` · +81-3-5550-9876 | برقرار رکھنے والا رابطہ ؛ 6h کے اندر دستیابی کی تصدیق کریں۔ |
+| فائر بیس برسٹ کوآرڈینیٹر | ٹیسا رائٹ | `@android-ci` سلیک | جب فال بیک کی ضرورت ہوتی ہے تو فائر بیس ٹیسٹ لیب آٹومیشن کو متحرک کرتا ہے۔ |
 
-| Role | Primary Contact | Channel(s) | Notes |
-|------|-----------------|------------|-------|
-| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | Owns on-site actions and calendar updates. |
-| Device Lab Ops | Mateo Cruz | `_android-device-lab` queue | Coordinates reservation tickets + bundle uploads. |
-| Release Engineering | Alexei Morozov | Release Eng Slack · `release-eng@iroha.org` | Validates Buildkite evidence + publishes hashes. |
-| External StrongBox Lab | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | Retainer contact; confirm availability within 6 h. |
-| Firebase Burst Coordinator | Tessa Wright | `@android-ci` Slack | Triggers Firebase Test Lab automation when fallback is needed. |
+مندرجہ ذیل ترتیب میں اضافہ کریں اگر کوئی ڈرل مسائل کو مسدود کرنے سے پردہ اٹھاتی ہے:
+1 ہارڈ ویئر لیب لیڈ
+2. اینڈروئیڈ فاؤنڈیشن TL
+3. پروگرام لیڈ / ریلیز انجینئرنگ
+4. تعمیل لیڈ + قانونی وکیل (اگر ڈرل ریگولیٹری خطرہ ظاہر کرتا ہے)
 
-Escalate in the following order if a drill uncovers blocking issues:
-1. Hardware Lab Lead
-2. Android Foundations TL
-3. Program Lead / Release Engineering
-4. Compliance Lead + Legal Counsel (if drill reveals regulatory risk)
-
-## Reporting & Follow-Ups
-
-- Link this runbook alongside the reservation procedure whenever referencing
-  failover readiness in `roadmap.md`, `status.md`, and governance packets.
-- Email the quarterly drill recap to Compliance + Legal with the evidence bundle
-  hash table and attach the `_android-device-lab` ticket export.
-- Mirror key metrics (time-to-failover, workloads restored, outstanding actions)
-  inside `status.md` and the AND7 hot-list tracker so reviewers can trace the
-  dependency to a concrete rehearsal.
+## رپورٹنگ اور فالو اپ- جب بھی حوالہ دیتے ہو تو ریزرویشن کے طریقہ کار کے ساتھ ساتھ اس رن بک کو لنک کریں
+  `roadmap.md` ، `status.md` ، اور گورننس پیکٹ میں فیل اوور تیاری۔
+- سہ ماہی ڈرل ریکپ کو تعمیل + قانونی ثبوت کے بنڈل کے ساتھ ای میل کریں
+  ہیش ٹیبل اور `_android-device-lab` ٹکٹ برآمد کو منسلک کریں۔
+-آئینہ کلیدی میٹرکس (وقت سے خرابی ، کام کے بوجھ بحال ، بقایا اقدامات)
+  `status.md` اور اور 7 ہاٹ لسٹ ٹریکر کے اندر تاکہ جائزہ لینے والے اس کا سراغ لگاسکیں
+  کنکریٹ کی مشق پر انحصار۔

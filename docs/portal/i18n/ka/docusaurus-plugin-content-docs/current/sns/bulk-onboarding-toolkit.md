@@ -4,6 +4,8 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 <!--
@@ -12,52 +14,52 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 id: bulk-onboarding-toolkit
 title: SNS Bulk Onboarding Toolkit
-sidebar_label: Bulk onboarding toolkit
-description: CSV to RegisterNameRequestV1 automation for SN-3b registrar runs.
+sidebar_label: მასობრივი ჩართვის ხელსაწყოების ნაკრები
+აღწერა: CSV RegisterNameRequestV1 ავტომატიზაციისთვის SN-3b რეგისტრატორის გაშვებისთვის.
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sns/bulk_onboarding_toolkit.md` so external operators see
-the same SN-3b guidance without cloning the repository.
+:::შენიშვნა კანონიკური წყარო
+სარკეები `docs/source/sns/bulk_onboarding_toolkit.md` ასე რომ გარე ოპერატორები ხედავენ
+იგივე SN-3b სახელმძღვანელო საცავი კლონირების გარეშე.
 :::
 
 # SNS Bulk Onboarding Toolkit (SN-3b)
 
-**Roadmap reference:** SN-3b "Bulk onboarding tooling"  
-**Artifacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**საგზაო რუკის მითითება:** SN-3b "Bulk onboarding tooling"  
+**არტეფაქტები:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
 `docs/portal/scripts/sns_bulk_release.sh`
 
-Large registrars often pre-stage hundreds of `.sora` or `.nexus` registrations
-with the same governance approvals and settlement rails. Manually crafting JSON
-payloads or re-running the CLI does not scale, so SN-3b ships a deterministic
-CSV to Norito builder that prepares `RegisterNameRequestV1` structures for
-Torii or the CLI. The helper validates every row up front, emits both an
-aggregated manifest and optional newline-delimited JSON, and can submit the
-payloads automatically while recording structured receipts for audits.
+დიდი რეგისტრატორები ხშირად წინასწარ ატარებენ ასობით `.sora` ან `.nexus` რეგისტრაციას
+იგივე მმართველობის დამტკიცებითა და დასახლების რელსებით. JSON-ის ხელით დამზადება
+ტვირთამწეობა ან CLI-ის ხელახლა გაშვება არ მასშტაბირებს, ამიტომ SN-3b აგზავნის დეტერმინისტულ
+CSV to Norito მშენებელი, რომელიც ამზადებს `RegisterNameRequestV1` სტრუქტურებს
+Torii ან CLI. დამხმარე ამოწმებს ყველა მწკრივს წინ, ასხივებს ორივეს ან
+აგრეგირებული მანიფესტი და სურვილისამებრ ახალი ხაზით გამოყოფილი JSON და შეუძლია გაგზავნოს
+იტვირთება ავტომატურად აუდიტის სტრუქტურირებული ქვითრების ჩაწერისას.
 
-## 1. CSV schema
+## 1. CSV სქემა
 
-The parser requires the following header row (order is flexible):
+პარსერს სჭირდება შემდეგი სათაურის სტრიქონი (შეკვეთა მოქნილია):
 
-| Column | Required | Description |
+| სვეტი | საჭირო | აღწერა |
 |--------|----------|-------------|
-| `label` | Yes | Requested label (mixed case accepted; tool normalises per Norm v1 and UTS-46). |
-| `suffix_id` | Yes | Numeric suffix identifier (decimal or `0x` hex). |
-| `owner` | Yes | AccountId string (IH58 literal; optional @domain hint) for the registration owner. |
-| `term_years` | Yes | Integer `1..=255`. |
-| `payment_asset_id` | Yes | Settlement asset (for example `xor#sora`). |
-| `payment_gross` / `payment_net` | Yes | Unsigned integers representing asset-native units. |
-| `settlement_tx` | Yes | JSON value or literal string describing the payment transaction or hash. |
-| `payment_payer` | Yes | AccountId that authorised the payment. |
-| `payment_signature` | Yes | JSON or literal string containing the steward or treasury signature proof. |
-| `controllers` | Optional | Semicolon- or comma-separated list of controller account addresses. Defaults to `[owner]` when omitted. |
-| `metadata` | Optional | Inline JSON or `@path/to/file.json` providing resolver hints, TXT records, etc. Defaults to `{}`. |
-| `governance` | Optional | Inline JSON or `@path` pointing at a `GovernanceHookV1`. `--require-governance` enforces this column. |
+| `label` | დიახ | მოთხოვნილი ეტიკეტი (მიღებულია შერეული შემთხვევა; ინსტრუმენტი ნორმალიზდება ნორმის მიხედვით v1 და UTS-46). |
+| `suffix_id` | დიახ | რიცხვითი სუფიქსის იდენტიფიკატორი (ათწილადი ან `0x` თექვსმეტობითი). |
+| `owner` | დიახ | AccountId სტრიქონი (IH58 ლიტერალური; სურვილისამებრ @domain მინიშნება) რეგისტრაციის მფლობელისთვის. |
+| `term_years` | დიახ | მთელი რიცხვი `1..=255`. |
+| `payment_asset_id` | დიახ | ანგარიშსწორების აქტივი (მაგალითად `xor#sora`). |
+| `payment_gross` / `payment_net` | დიახ | ხელმოუწერელი მთელი რიცხვები, რომლებიც წარმოადგენენ აქტივის მშობლიურ ერთეულებს. |
+| `settlement_tx` | დიახ | JSON მნიშვნელობა ან პირდაპირი სტრიქონი, რომელიც აღწერს გადახდის ტრანზაქციას ან ჰეშს. |
+| `payment_payer` | დიახ | ანგარიშის ID, რომელიც აძლევდა უფლებას გადახდას. |
+| `payment_signature` | დიახ | JSON ან პირდაპირი სტრიქონი, რომელიც შეიცავს სტიუარდის ან ხაზინის ხელმოწერის მტკიცებულებას. |
+| `controllers` | სურვილისამებრ | მძიმით ან მძიმით გამოყოფილი კონტროლერის ანგარიშის მისამართების სია. ნაგულისხმევად არის `[owner]`, როდესაც გამოტოვებულია. |
+| `metadata` | სურვილისამებრ | Inline JSON ან `@path/to/file.json` უზრუნველყოფს გადამწყვეტის მინიშნებებს, TXT ჩანაწერებს და ა.შ. ნაგულისხმევად არის `{}`. |
+| `governance` | სურვილისამებრ | Inline JSON ან `@path`, რომელიც მიუთითებს `GovernanceHookV1`-ზე. `--require-governance` ახორციელებს ამ სვეტს. |
 
-Any column may reference an external file by prefixing the cell value with `@`.
-Paths are resolved relative to the CSV file.
+ნებისმიერ სვეტს შეუძლია მიუთითოს გარე ფაილი უჯრედის მნიშვნელობის პრეფიქსით `@`-ით.
+ბილიკები წყდება CSV ფაილთან შედარებით.
 
-## 2. Running the helper
+## 2. დამხმარის გაშვება
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -65,16 +67,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-Key options:
+ძირითადი პარამეტრები:
 
-- `--require-governance` rejects rows without a governance hook (useful for
-  premium auctions or reserved assignments).
-- `--default-controllers {owner,none}` decides whether empty controller cells
-  fall back to the owner account.
-- `--controllers-column`, `--metadata-column`, and `--governance-column` rename
-  optional columns when working with upstream exports.
+- `--require-governance` უარყოფს სტრიქონებს მმართველობის კვალის გარეშე (გამოსადგება
+  პრემიუმ აუქციონები ან დაჯავშნილი დავალებები).
+- `--default-controllers {owner,none}` წყვეტს, ცარიელია თუ არა კონტროლერის უჯრედები
+  დაბრუნდეს მფლობელის ანგარიშზე.
+- `--controllers-column`, `--metadata-column` და `--governance-column` გადარქმევა
+  არასავალდებულო სვეტები ზემოთ ექსპორტთან მუშაობისას.
 
-On success the script writes an aggregated manifest:
+წარმატების შემთხვევაში სცენარი წერს აგრეგირებულ მანიფესტს:
 
 ```json
 {
@@ -111,8 +113,8 @@ On success the script writes an aggregated manifest:
 }
 ```
 
-If `--ndjson` is provided, each `RegisterNameRequestV1` is also written as a
-single-line JSON document so automations can stream requests directly into
+თუ მოწოდებულია `--ndjson`, თითოეული `RegisterNameRequestV1` ასევე იწერება როგორც
+ერთსტრიქონიანი JSON დოკუმენტი, რათა ავტომატიზაციამ შეძლოს მოთხოვნების პირდაპირ გადაცემა
 Torii:
 
 ```bash
@@ -125,12 +127,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. Automated submissions
+## 3. ავტომატური წარდგენები
 
-### 3.1 Torii REST mode
+### 3.1 Torii დასვენების რეჟიმი
 
-Specify `--submit-torii-url` plus either `--submit-token` or
-`--submit-token-file` to push every manifest entry directly into Torii:
+მიუთითეთ `--submit-torii-url` პლუს `--submit-token` ან
+`--submit-token-file` ყოველი მანიფესტის ჩანაწერის გადასატანად პირდაპირ Torii-ში:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -141,18 +143,18 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- The helper issues one `POST /v1/sns/registrations` per request and aborts on
-  the first HTTP error. Responses are appended to the log path as NDJSON
-  records.
-- `--poll-status` re-queries `/v1/sns/registrations/{selector}` after each
-  submission (up to `--poll-attempts`, default 5) to confirm that the record is
-  visible. Provide `--suffix-map` (JSON of `suffix_id` to `"suffix"` values) so
-  the tool can derive `{label}.{suffix}` literals for polling.
-- Tunables: `--submit-timeout`, `--poll-attempts`, and `--poll-interval`.
+- დამხმარე გასცემს ერთ `POST /v1/sns/registrations` მოთხოვნას და წყვეტს
+  პირველი HTTP შეცდომა. პასუხები დართულია ჟურნალის ბილიკზე, როგორც NDJSON
+  ჩანაწერები.
+- `--poll-status` ხელახლა სვამს შეკითხვას `/v1/sns/registrations/{selector}` ყოველი შემდეგ
+  წარდგენა (`--poll-attempts`-მდე, ნაგულისხმევი 5) დასადასტურებლად, რომ ჩანაწერი არის
+  ხილული. მიუთითეთ `--suffix-map` (JSON of `suffix_id` to `"suffix"` მნიშვნელობები) ასე
+  ხელსაწყოს შეუძლია გამოიტანოს `{label}.{suffix}` ლიტერალები გამოკითხვისთვის.
+- მორგება: `--submit-timeout`, `--poll-attempts` და `--poll-interval`.
 
-### 3.2 iroha CLI mode
+### 3.2 iroha CLI რეჟიმი
 
-To route each manifest entry through the CLI, supply the binary path:
+თითოეული მანიფესტის ჩანაწერის CLI-ში გადასატანად, მიაწოდეთ ბინარული გზა:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -162,20 +164,20 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Controllers must be `Account` entries (`controller_type.kind = "Account"`)
-  because the CLI currently exposes only account-based controllers.
-- Metadata and governance blobs are written to temporary files per request and
-  forwarded to `iroha sns register --metadata-json ... --governance-json ...`.
-- CLI stdout and stderr plus exit codes are logged; non-zero exit codes abort
-  the run.
+- კონტროლერები უნდა იყოს `Account` ჩანაწერები (`controller_type.kind = "Account"`)
+  რადგან CLI ამჟამად ავლენს მხოლოდ ანგარიშზე დაფუძნებულ კონტროლერებს.
+- მეტამონაცემები და მმართველობის ბლოგები იწერება დროებით ფაილებზე თითო მოთხოვნით და
+  გადაგზავნილია `iroha sns register --metadata-json ... --governance-json ...`-ზე.
+- ჩაწერილია CLI stdout და stderr plus გასასვლელი კოდები; არანულოვანი გასასვლელი კოდები წყვეტს
+  გაშვება.
 
-Both submission modes can run together (Torii and CLI) to cross-check registrar
-deployments or rehearse fallbacks.
+წარდგენის ორივე რეჟიმი შეიძლება ერთად მუშაობდეს (Torii და CLI) რეგისტრატორის გადასამოწმებლად
+განლაგება ან რეპეტიციები.
 
-### 3.3 Submission receipts
+### 3.3 წარდგენის ქვითრები
 
-When `--submission-log <path>` is provided, the script appends NDJSON entries
-capturing:
+როდესაც მოწოდებულია `--submission-log <path>`, სკრიპტი აერთებს NDJSON ჩანაწერებს
+გადაღება:
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -183,17 +185,17 @@ capturing:
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-Successful Torii responses include structured fields extracted from
-`NameRecordV1` or `RegisterNameResponseV1` (for example `record_status`,
+წარმატებული Torii პასუხები მოიცავს სტრუქტურირებულ ველებს, რომლებიც ამოღებულია
+`NameRecordV1` ან `RegisterNameResponseV1` (მაგალითად `record_status`,
 `record_pricing_class`, `record_owner`, `record_expires_at_ms`,
-`registry_event_version`, `suffix_id`, `label`) so dashboards and governance
-reports can parse the log without inspecting free-form text. Attach this log to
-registrar tickets alongside the manifest for reproducible evidence.
+`registry_event_version`, `suffix_id`, `label`) ასე რომ, დაფები და მართვა
+ანგარიშებს შეუძლიათ ჟურნალის გაანალიზება თავისუფალი ფორმის ტექსტის შემოწმების გარეშე. მიამაგრეთ ეს ჟურნალი
+რეგისტრატორის ბილეთები მანიფესტთან ერთად გამეორებადი მტკიცებულებისთვის.
 
-## 4. Docs portal release automation
+## 4. Docs პორტალის გამოშვების ავტომატიზაცია
 
-CI and portal jobs call `docs/portal/scripts/sns_bulk_release.sh`, which wraps
-the helper and stores artefacts under `artifacts/sns/releases/<timestamp>/`:
+CI და პორტალის სამუშაოები დარეკეთ `docs/portal/scripts/sns_bulk_release.sh`, რომელიც შეფუთულია
+დამხმარე და ინახავს არტეფაქტებს `artifacts/sns/releases/<timestamp>/` ქვეშ:
 
 ```bash
 docs/portal/scripts/sns_bulk_release.sh \
@@ -206,25 +208,25 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-The script:
+სცენარი:
 
-1. Builds `registrations.manifest.json`, `registrations.ndjson`, and copies the
-   original CSV into the release directory.
-2. Submits the manifest using Torii and/or the CLI (when configured), writing
-   `submissions.log` with the structured receipts above.
-3. Emits `summary.json` describing the release (paths, Torii URL, CLI path,
-   timestamp) so portal automation can upload the bundle to artefact storage.
-4. Produces `metrics.prom` (override via `--metrics`) containing
-   Prometheus-format counters for total requests, suffix distribution,
-   asset totals, and submission outcomes. The summary JSON links to this file.
+1. აშენებს `registrations.manifest.json`, `registrations.ndjson` და აკოპირებს
+   ორიგინალი CSV გამოშვების დირექტორიაში.
+2. აგზავნის მანიფესტს Torii-ის და/ან CLI-ის (კონფიგურაციისას) გამოყენებით, წერით
+   `submissions.log` სტრუქტურირებული ქვითრებით ზემოთ.
+3. გამოსცემს `summary.json`, რომელიც აღწერს გამოშვებას (ბილიკები, Torii URL, CLI ბილიკი,
+   დროის შტამპი) ასე რომ, პორტალის ავტომატიზაციას შეუძლია ატვირთოს ნაკრები არტეფაქტის საცავში.
+4. აწარმოებს `metrics.prom` (გადალახვა `--metrics`-ით) შემცველი
+   Prometheus ფორმატის მრიცხველები მთლიანი მოთხოვნებისთვის, სუფიქსის განაწილება,
+   აქტივების ჯამი და წარდგენის შედეგები. შემაჯამებელი JSON ბმულებია ამ ფაილთან.
 
-Workflows simply archive the release directory as a single artefact, which now
-contains everything governance needs for auditing.
+Workflows უბრალოდ დაარქივებს გამოშვების დირექტორიას, როგორც ერთ არტეფაქტს, რომელიც ახლა
+შეიცავს ყველაფერს, რაც მმართველობას სჭირდება აუდიტისთვის.
 
-## 5. Telemetry & dashboards
+## 5. ტელემეტრია და დაფები
 
-The metrics file generated by `sns_bulk_release.sh` exposes the following
-series:
+`sns_bulk_release.sh`-ის მიერ გენერირებული მეტრიკის ფაილი ასახავს შემდეგს
+სერია:
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -235,41 +237,41 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-Feed `metrics.prom` into your Prometheus sidecar (for example via Promtail or a
-batch importer) to keep registrars, stewards, and governance peers aligned on
-bulk progress. Grafana board
-`dashboards/grafana/sns_bulk_release.json` visualises the same data with panels
-for per-suffix counts, payment volume, and submission success/failure ratios.
-The board filters by `release` so auditors can drill into a single CSV run.
+შეიტანეთ `metrics.prom` თქვენს Prometheus გვერდით კარში (მაგალითად, Promtail-ის ან
+პარტიული იმპორტიორი) რეგისტრატორების, სტიუარდების და მმართველობის თანატოლების თანხვედრის მიზნით
+ნაყარი პროგრესი. Grafana დაფა
+`dashboards/grafana/sns_bulk_release.json` ვიზუალიზაციას უკეთებს იმავე მონაცემებს პანელებით
+თითო სუფიქსის დათვლისთვის, გადახდის მოცულობისა და წარდგენის წარმატება/წარუმატებლობის კოეფიციენტებისთვის.
+დაფა ფილტრავს `release`-ით, რათა აუდიტორებმა შეძლონ ერთჯერადი CSV გაშვება.
 
-## 6. Validation and failure modes
+## 6. ვალიდაციის და წარუმატებლობის რეჟიმები
 
-- **Label canonicalisation:** inputs are normalised with Python IDNA plus
-  lowercase and Norm v1 character filters. Invalid labels fail fast before any
-  network calls.
-- **Numeric guardrails:** suffix ids, term years, and pricing hints must fall
-  within `u16` and `u8` bounds. Payment fields accept decimal or hex integers
-  up to `i64::MAX`.
-- **Metadata or governance parsing:** inline JSON is parsed directly; file
-  references are resolved relative to the CSV location. Non-object metadata
-  produces a validation error.
-- **Controllers:** blank cells honour `--default-controllers`. Provide explicit
-  controller lists (for example `ih58...;ih58...`) when delegating to non-owner
-  actors.
+- **ლეიბლის კანონიკიზაცია:** შეყვანები ნორმალიზებულია Python IDNA plus-ით
+  მცირე და ნორმა v1 სიმბოლოების ფილტრები. არასწორი ეტიკეტები სწრაფად იშლება ნებისმიერზე ადრე
+  ქსელური ზარები.
+- ** რიცხვითი დამცავი ღობეები: ** სუფიქსის ID, ვადის წლები და ფასების მინიშნებები უნდა დაეცეს
+  `u16` და `u8` ფარგლებში. გადახდის ველები მიიღებენ ათობითი ან თექვსმეტობით რიცხვებს
+  `i64::MAX`-მდე.
+- **მეტამონაცემების ან მმართველობის გარჩევა:** inline JSON ანალიზდება პირდაპირ; ფაილი
+  მითითებები წყდება CSV მდებარეობის მიმართ. არაობიექტური მეტამონაცემები
+  წარმოქმნის ვალიდაციის შეცდომას.
+- **კონტროლერები:** ცარიელი უჯრედები პატივია `--default-controllers`. მიაწოდეთ მკაფიო
+  კონტროლერების სიები (მაგალითად `ih58...;ih58...`) არამფლობელზე დელეგირებისას
+  მსახიობები.
 
-Failures are reported with contextual row numbers (for example
-`error: row 12 term_years must be between 1 and 255`). The script exits with
-code `1` on validation errors and `2` when the CSV path is missing.
+წარუმატებლობა მოხსენებულია კონტექსტური მწკრივის ნომრებით (მაგალითად
+`error: row 12 term_years must be between 1 and 255`). სკრიპტი გადის
+კოდი `1` ვალიდაციის შეცდომებზე და `2` როცა CSV გზა აკლია.
 
-## 7. Testing and provenance
+## 7. ტესტირება და წარმოშობა
 
-- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` covers CSV parsing,
-  NDJSON emission, governance enforcement, and the CLI or Torii submission
-  paths.
-- The helper is pure Python (no additional dependencies) and runs anywhere
-  `python3` is available. Commit history is tracked alongside the CLI in the
-  main repository for reproducibility.
+- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` მოიცავს CSV ანალიზს,
+  NDJSON ემისია, მმართველობის აღსრულება და CLI ან Torii წარდგენა
+  ბილიკები.
+- დამხმარე არის სუფთა პითონი (დამატებითი დამოკიდებულების გარეშე) და მუშაობს სადმე
+  `python3` ხელმისაწვდომია. ჩადენის ისტორიას თვალყურს ადევნებენ CLI-სთან ერთად
+  განმეორებადობის მთავარი საცავი.
 
-For production runs, attach the generated manifest and NDJSON bundle to the
-registrar ticket so stewards can replay the exact payloads that were submitted
-to Torii.
+საწარმოო გაშვებებისთვის, მიამაგრეთ გენერირებული manifest და NDJSON პაკეტი
+რეგისტრატორის ბილეთი, რათა სტიუარდებმა შეძლონ გაიმეორონ გაგზავნილი ზუსტი დატვირთვები
+Torii-მდე.

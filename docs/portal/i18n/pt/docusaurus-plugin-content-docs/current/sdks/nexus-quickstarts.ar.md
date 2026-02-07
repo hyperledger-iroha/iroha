@@ -4,9 +4,11 @@ direction: ltr
 source: docs/portal/docs/sdks/nexus-quickstarts.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-الدليل الكامل موجود في `docs/source/nexus_sdk_quickstarts.md`. يسلط هذا الملخص في البوابة الضوء على المتطلبات المشتركة والاوامر لكل SDK حتى يتمكن المطورون من التحقق من اعداداتهم بسرعة.
+O nome do arquivo é `docs/source/nexus_sdk_quickstarts.md`. Você pode usar o SDK do SDK para obter mais informações sobre o SDK do seu site. Isso é algo que você pode fazer.
 
 ## الاعداد المشترك
 
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-قم بتنزيل حزمة تهيئة Nexus، وثبت تبعيات كل SDK، وتاكد من تطابق شهادات TLS مع ملف الاصدار (انظر `docs/source/sora_nexus_operator_onboarding.md`).
+Para obter o Nexus, você pode instalar o SDK no SDK e usar o TLS para usar. Nome (`docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## Ferrugem
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,25 +30,25 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-المراجع: `docs/source/sdk/rust.md`
+Nome: `docs/source/sdk/rust.md`
 
-## JavaScript / TypeScript
+##JavaScript/TypeScript
 
 ```bash
 npm run demo:nexus
 ```
 
-يقوم السكربت بتهيئة `ToriiClient` باستخدام متغيرات البيئة اعلاه ويطبع اخر كتلة.
+A chave `ToriiClient` pode ser usada para remover o problema.
 
-## Swift
+## Rápido
 
 ```bash
 make swift-nexus-demo
 ```
 
-يستخدم `Torii.Client` من `IrohaSwift` لجلب `FindNetworkStatus`.
+Use `Torii.Client` para `IrohaSwift` para `FindNetworkStatus`.
 
-## Android
+##Android
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -56,7 +58,7 @@ make swift-nexus-demo
 
 يشغل اختبار الجهاز المدار الذي يستهدف نقطة نهاية staging لنكسس.
 
-## CLI
+##CLI
 
 ```bash
 iroha_cli app nexus quickstart \
@@ -68,7 +70,7 @@ iroha_cli app nexus quickstart \
 ## استكشاف الاخطاء واصلاحها
 
 - اعطال TLS -> تاكد من حزمة CA القادمة من tarball اصدار Nexus.
-- `ERR_UNKNOWN_LANE` -> مرر `--lane-id`/`--dataspace-id` عندما يتم فرض التوجيه متعدد المسارات.
-- `ERR_SETTLEMENT_PAUSED` -> راجع [Nexus operations](../nexus/nexus-operations) لعملية الحوادث؛ قد تكون الحوكمة اوقفت المسار.
+- `ERR_UNKNOWN_LANE` -> Selecione `--lane-id`/`--dataspace-id`.
+- `ERR_SETTLEMENT_PAUSED` -> راجع [operações Nexus](../nexus/nexus-operations) لعملية الحوادث؛ قد تكون الحوكمة اوقفت المسار.
 
-للسياق الاضافي والشروح الخاصة بكل SDK راجع `docs/source/nexus_sdk_quickstarts.md`.
+Para obter mais informações sobre o SDK, use `docs/source/nexus_sdk_quickstarts.md`.

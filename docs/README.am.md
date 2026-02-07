@@ -7,83 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 26e6f90205e98b5db87d442eb7e4e7691cce47e1c33ef3d11c9bfba25269294e
 source_last_modified: "2026-01-14T17:53:24.552406+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Documentation
+# Iroha ሰነድ
 
-日本語版の概要は [`README.ja.md`](./README.ja.md) を参照してください。
+日本語版の概要は [`README.ja.md`](./README.ja.md)
 
-The workspace ships two release lines from the same codebase: **Iroha 2** (self-hosted deployments) and
-**Iroha 3 / SORA Nexus** (the single global Nexus ledger). Both reuse the same Iroha Virtual Machine (IVM) and
-Kotodama toolchain, so contracts and bytecode remain portable between deployment targets. Documentation applies
-to both unless otherwise noted.
+የስራ ቦታው ከተመሳሳይ ኮድ ቤዝ ሁለት የመልቀቂያ መስመሮችን ይላካል፡- **Iroha 2** (በራስ የሚስተናገዱ ማሰማራት) እና
+** Iroha 3 / SORA Nexus** (ነጠላው ዓለም አቀፍ Nexus መጽሐፍ)። ሁለቱም ተመሳሳይ I18NT0000015X ምናባዊ ማሽን (IVM) እና
+Kotodama የመሳሪያ ሰንሰለት፣ ስለዚህ ኮንትራቶች እና ባይትኮድ በማሰማራት ዒላማዎች መካከል ተንቀሳቃሽ ሆነው ይቆያሉ። ሰነድ ተፈጻሚ ይሆናል።
+ለሁለቱም ካልሆነ በስተቀር.
 
-In the [main Iroha documentation](https://docs.iroha.tech/) you will find:
+በ[ዋና I18NT0000016X ሰነድ](https://docs.iroha.tech/) ታገኛላችሁ፡-
 
-- [Get Started Guide](https://docs.iroha.tech/get-started/)
-- [SDK Tutorials](https://docs.iroha.tech/guide/tutorials/) for Rust, Python, Javascript, and Java/Kotlin
-- [API Reference](https://docs.iroha.tech/reference/torii-endpoints.html)
+- [መመሪያ ጀምር](https://docs.iroha.tech/get-started/)
+- [ኤስዲኬ አጋዥ ስልጠናዎች](https://docs.iroha.tech/guide/tutorials/) ለ Rust፣ Python፣ Javascript፣ እና Java/Kotlin
+- [ኤፒአይ ማጣቀሻ](https://docs.iroha.tech/reference/torii-endpoints.html)
 
-Release-specific whitepapers and specs:
+የሚለቀቁት ልዩ ነጭ ወረቀቶች እና ዝርዝሮች፡-
 
-- [Iroha 2 Whitepaper](./source/iroha_2_whitepaper.md) — self-hosted network specification.
-- [Iroha 3 (SORA Nexus) Whitepaper](./source/iroha_3_whitepaper.md) — Nexus multi-lane and data-space design.
-- [Data Model & ISI Spec (implementation‑derived)](./source/data_model_and_isi_spec.md) — reverse-engineered behavior reference.
-- [ZK Envelopes (Norito)](./source/zk_envelopes.md) — native IPA/STARK Norito envelopes and verifier expectations.
+- [Iroha 2 ነጭ ወረቀት](./source/iroha_2_whitepaper.md) - በራሱ የሚሰራ የአውታረ መረብ ዝርዝር መግለጫ።
+- [Iroha 3 (SORA Nexus) ነጭ ወረቀት](./source/iroha_3_whitepaper.md) - Nexus ባለብዙ መስመር እና የውሂብ-ቦታ ንድፍ።
+- [የውሂብ ሞዴል እና አይኤስአይ ዝርዝር (ተግባራዊ-የተገኘ)](./source/data_model_and_isi_spec.md) - የተገላቢጦሽ የምህንድስና ባህሪ ማጣቀሻ።
+- [ZK Envelopes (Norito)](./source/zk_envelopes.md) - ቤተኛ IPA/STARK Norito ፖስታዎች እና አረጋጋጭ የሚጠበቁ።
 
-## Localization
+## አካባቢያዊነት
 
-Japanese (`*.ja.*`), Hebrew (`*.he.*`), Spanish (`*.es.*`), Portuguese
-(`*.pt.*`), French (`*.fr.*`), Russian (`*.ru.*`), Arabic (`*.ar.*`), and Urdu
-(`*.ur.*`) documentation stubs live next to each English source file. See
-[`docs/i18n/README.md`](./i18n/README.md) for details on generating and
-maintaining translations, as well as guidance for adding new languages in the
-future.
+ጃፓንኛ (`*.ja.*`)፣ ዕብራይስጥ (I18NI0000049X)፣ ስፓኒሽ (`*.es.*`)፣ ፖርቱጋልኛ
+(`*.pt.*`)፣ ፈረንሳይኛ (`*.fr.*`)፣ ሩሲያኛ (`*.ru.*`)፣ አረብኛ (`*.ar.*`) እና ኡርዱ
+(`*.ur.*`) የሰነድ ወረቀቶች ከእያንዳንዱ የእንግሊዝኛ ምንጭ ፋይል አጠገብ ይኖራሉ። ተመልከት
+[`docs/i18n/README.md`](./i18n/README.md) ስለ ማመንጨት እና ዝርዝሮች
+ትርጉሞችን ማቆየት እና በ ውስጥ አዳዲስ ቋንቋዎችን ለመጨመር መመሪያ
+ወደፊት.
 
-## Tools
+## መሳሪያዎች
 
-In this repository you can find documentation for Iroha 2 tools:
+በዚህ ማከማቻ ውስጥ ለIroha 2 መሳሪያዎች ሰነዶችን ማግኘት ይችላሉ፡-
 
 - [Kagami](../crates/iroha_kagami/README.md)
-- [`iroha_derive`](../crates/iroha_derive/) macros for configuration structs (see the `config_base` feature)
-- [Profiling build steps](./profile_build.md) for identifying slow `iroha_data_model` compilation tasks
+- [`iroha_derive`](../crates/iroha_derive/) ማክሮዎች ለማዋቀር መዋቅር (የ`config_base` ባህሪን ይመልከቱ)
+- [የግንባታ ደረጃዎች](./profile_build.md) ቀርፋፋ `iroha_data_model` የማጠናቀር ተግባራትን ለመለየት
 
-## Swift / iOS SDK References
+## ስዊፍት / iOS SDK ማጣቀሻዎች
 
-- [Swift SDK overview](./source/sdk/swift/index.md) — pipeline helpers, acceleration toggles, and Connect/WebSocket APIs.
-- [Connect quickstart](./connect_swift_ios.md) — SDK-first walkthrough plus the CryptoKit reference.
-- [Xcode integration guide](./connect_swift_integration.md) — wiring NoritoBridgeKit/Connect into an app, with ChaChaPoly and frame helpers.
-- [SwiftUI demo contributor guide](./norito_demo_contributor.md) — running the iOS demo against a local Torii node, plus acceleration notes.
-- Run `make swift-ci` before publishing Swift artifacts or Connect changes; it verifies fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata.
+- [የስዊፍት ኤስዲኬ አጠቃላይ እይታ](./source/sdk/swift/index.md) - የቧንቧ መስመር ረዳቶች፣ የፍጥነት መቀየሪያዎች እና Connect/WebSocket APIs።
+- [ፈጣን ማስጀመሪያን ያገናኙ](./connect_swift_ios.md) - ኤስዲኬ-የመጀመሪያው የእግር ጉዞ እና የCryptoKit ማጣቀሻ።
+- [Xcode ውህደት መመሪያ](./connect_swift_integration.md) - የ NoritoBridgeKit ሽቦን ማገናኘት/ወደ አፕሊኬሽኑ ከ ChaChaPoly እና ከፍሬም ረዳቶች ጋር ያገናኙ።
+- [SwiftUI ማሳያ አስተዋጽዖ አበርካች መመሪያ](./norito_demo_contributor.md) - የiOS ማሳያን ከአካባቢያዊ I18NT0000024X መስቀለኛ መንገድ እና የማጣደፍ ማስታወሻዎች ጋር ማሄድ።
+- Swift artifacts ወይም Connect ለውጦችን ከማተምዎ በፊት `make swift-ci` ን ያሂዱ; የቋሚ እኩልነት፣ ዳሽቦርድ ምግቦች እና Buildkite I18NI0000061X ሜታዳታ ያረጋግጣል።
 
-## Norito (Serialization Codec)
+## Norito (ተከታታይ ኮድ)
 
-Norito is the workspace serialization codec. We do not use `parity-scale-codec`
-(SCALE). Where documentation or benchmarks compare to SCALE, it is only for
-context; all production paths use Norito. The `norito::codec::{Encode, Decode}`
-APIs provide a headerless ("bare") Norito payload for hashing and wire
-efficiency — it is Norito, not SCALE.
+Norito የስራ ቦታ ተከታታይ ኮዴክ ነው። `parity-scale-codec` አንጠቀምም።
+(ስኬል) ሰነዶች ወይም መመዘኛዎች ከ SCALE ጋር ሲወዳደሩ፣ ለ ብቻ ነው።
+አውድ; ሁሉም የምርት መንገዶች I18NT0000005X ይጠቀማሉ። `norito::codec::{Encode, Decode}`
+ኤፒአይዎች የራስጌ የሌለው ("ባሬ") Norito ክፍያ ለሃሺንግ እና ለሽቦ ይሰጣሉ
+ቅልጥፍና - እሱ I18NT0000007X እንጂ SCALE አይደለም።
 
-Latest state:
+የቅርብ ጊዜ ሁኔታ፡
 
-- Deterministic encoding/decoding with a fixed header (magic, version, 16‑byte schema, compression, length, CRC64, flags).
-- CRC64-XZ checksum with runtime‑selected acceleration:
-  - x86_64 PCLMULQDQ (carry‑less multiply) + Barrett reduction, folded over 32‑byte chunks.
-  - aarch64 PMULL with matching folding.
-  - Slicing‑by‑8 and bitwise fallbacks for portability.
-- Encoded length hints implemented by derives and core types to reduce allocations.
-- Larger streaming buffers (64 KiB) and incremental CRC update during decode.
-- Optional zstd compression; GPU acceleration is feature‑gated and deterministic.
-- Adaptive path selection: `norito::to_bytes_auto(&T)` chooses among no
-  compression, CPU zstd, or GPU‑offloaded zstd (when compiled and available)
-  based on payload size and cached hardware capabilities. Selection only affects
-  performance and the header's `compression` byte; payload semantics are unchanged.
+- በቋሚ ራስጌ (አስማት፣ ስሪት፣ 16-ባይት ሼማ፣ መጭመቂያ፣ ርዝመት፣ CRC64፣ ባንዲራዎች) ቆራጥ ኢንኮዲንግ/መግለጽ።
+- CRC64-XZ ቼክ ድምር በአሂድ ጊዜ-የተመረጠ ማጣደፍ፡-
+  - x86_64 PCLMULQDQ (ያለ ማባዛት) + ባሬት መቀነስ፣ በ32-ባይት ጥራጊዎች ላይ ተጣጥፎ።
+  - aarch64 PMULL ከተዛማጅ ማጠፍ ጋር።
+  - ለተንቀሳቃሽነት መቆራረጥ - በ 8 እና በመጠኑ መውደቅ።
+- ምደባዎችን ለመቀነስ በዲሪቭስ እና በዋና ዓይነቶች የተተገበሩ ኢንኮድ ርዝመት ፍንጮች።
+- ትላልቅ የዥረት ቋቶች (64 ኪቢ) እና ተጨማሪ የCRC ዝማኔ ኮድ በሚፈታበት ጊዜ።
+- አማራጭ zstd መጭመቂያ; የጂፒዩ ማጣደፍ በባህሪይ የተገጠመ እና የሚወስን ነው።
+- የሚለምደዉ መንገድ ምርጫ፡- `norito::to_bytes_auto(&T)` ከቁ መካከል ይመርጣል
+  መጭመቂያ፣ ሲፒዩ zstd፣ ወይም ጂፒዩ-የተጫነ zstd (ሲጠናቀር እና ሲገኝ)
+  የመጫኛ መጠን እና የተሸጎጡ የሃርድዌር ችሎታዎች ላይ በመመስረት። ምርጫ ብቻ ነው የሚነካው።
+  አፈጻጸም እና የራስጌው I18NI0000065X ባይት; የክፍያ ትርጉሞች አልተቀየሩም።
 
-See `crates/norito/README.md` for parity tests, benchmarks, and usage examples.
+ለተመጣጣኝ ሙከራዎች፣ መመዘኛዎች እና የአጠቃቀም ምሳሌዎች `crates/norito/README.md` ይመልከቱ።
 
-Note: Some subsystem docs (e.g., IVM acceleration and ZK circuits) are evolving. Where functionality is incomplete, the files call out the work that remains and the direction of travel.
+ማስታወሻ፡ አንዳንድ ንዑስ ስርዓት ሰነዶች (ለምሳሌ፡ IVM acceleration and ZK circuits) በሂደት ላይ ናቸው። ተግባራዊነት ያልተሟላ ከሆነ, ፋይሎቹ የቀረውን ስራ እና የጉዞ አቅጣጫን ይጠራሉ.
 
-Status endpoint encoding notes
-- Torii `/status` body uses Norito by default with a headerless ("bare") payload for compactness. Clients should attempt Norito decode first.
-- Servers may return JSON when requested; clients fall back to JSON if the `content-type` is `application/json`.
-- The wire format is Norito, not SCALE. The `norito::codec::{Encode,Decode}` APIs are used for the bare variant.
+የኹናቴ የመጨረሻ ነጥብ ኢንኮዲንግ ማስታወሻዎች
+- Torii I18NI0000067X አካል Norito በነባሪነት የራስጌ የሌለው ("ባዶ") ጭነትን ይጠቀማል። ደንበኞች መጀመሪያ I18NT0000009X መፍታት መሞከር አለባቸው።
+- አገልጋዮች ሲጠየቁ JSON መመለስ ይችላሉ; I18NI0000068X `application/json` ከሆነ ደንበኞች ወደ JSON ይመለሳሉ።
+- የሽቦ ቅርፀቱ Norito እንጂ SCALE አይደለም። የ `norito::codec::{Encode,Decode}` ኤፒአይዎች ለባዶ ልዩነት ጥቅም ላይ ይውላሉ።

@@ -8,25 +8,27 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview host exposure guide
 sidebar_label: Preview host exposure
 description: Publish and verify the beta preview host before sending invites.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The DOCS‑SORA roadmap requires every public preview to ride on the same
-checksum‑verified bundle that reviewers exercise locally. Use this runbook
-after reviewer onboarding (and the invite approval ticket) are complete to put
-the beta preview host online.
+የ DOCS-SORA ፍኖተ ካርታ በተመሳሳይ ለመሳፈር እያንዳንዱን የህዝብ ቅድመ እይታ ይፈልጋል
+ገምጋሚዎች በአካባቢው የሚለማመዱ በቼክሰም የተረጋገጠ ጥቅል። ይህን የሩጫ መጽሐፍ ተጠቀም
+ገምጋሚ ተሳፍሮ (እና የግብዣ ማጽደቂያ ትኬት) ለማስቀመጥ ከተጠናቀቀ በኋላ
+የቤታ ቅድመ እይታ አስተናጋጅ በመስመር ላይ።
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-- Reviewer onboarding wave approved and logged in the preview tracker.
-- Latest portal build present under `docs/portal/build/` and checksum
-  verified (`build/checksums.sha256`).
-- SoraFS preview credentials (Torii URL, authority, private key, submitted
-  epoch) stored either in environment variables or a JSON config such as
-  [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- DNS change ticket opened with the desired hostname (`docs-preview.sora.link`,
-  `docs.iroha.tech`, etc.) plus on-call contacts.
+- ገምጋሚ የቦርዲንግ ሞገድ አጽድቆ ወደ ቅድመ እይታ መከታተያ ገብቷል።
+- የቅርብ ጊዜ ፖርታል ግንባታ በI18NI0000013X እና በቼክሰም ስር ይገኛል።
+  የተረጋገጠ (`build/checksums.sha256`)።
+- SoraFS ቅድመ እይታ ምስክርነቶች (Torii URL፣ ባለስልጣን፣ የግል ቁልፍ፣ ገብቷል
+  epoch) በአከባቢው ተለዋዋጮች ወይም በ JSON ውቅር ውስጥ ተከማችቷል
+  [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json)።
+- የዲ ኤን ኤስ ለውጥ ትኬት በተፈለገው የአስተናጋጅ ስም (`docs-preview.sora.link` ፣
+  `docs.iroha.tech`፣ ወዘተ.) እንዲሁም በጥሪ ላይ ያሉ እውቂያዎች።
 
-## Step 1 – Build and verify the bundle
+## ደረጃ 1 - ጥቅሉን ይገንቡ እና ያረጋግጡ
 
 ```bash
 cd docs/portal
@@ -36,13 +38,13 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-The verify script refuses to continue when the checksum manifest is missing or
-tampered with, keeping every preview artefact audited.
+የማረጋገጫው ስክሪፕት የፍተሻ ሰነድ ሲጠፋ ወይም ለመቀጠል ፈቃደኛ አይሆንም
+መስተጓጎል፣ እያንዳንዱን የቅድመ እይታ ቅርስ ኦዲት እንዲደረግ ማድረግ።
 
-## Step 2 – Package the SoraFS artefacts
+## ደረጃ 2 - የ SoraFS ቅርሶችን ያሽጉ
 
-Convert the static site into a deterministic CAR/manifest pair. `ARTIFACT_DIR`
-defaults to `docs/portal/artifacts/`.
+የማይንቀሳቀስ ቦታን ወደ የሚወስን CAR/የግልፅ ጥንድ ይለውጡ። `ARTIFACT_DIR`
+ለ `docs/portal/artifacts/` ነባሪዎች።
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -58,13 +60,13 @@ node scripts/generate-preview-descriptor.mjs \
   --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Attach the generated `portal.car`, `portal.manifest.*`, descriptor, and checksum
-manifest to the preview wave ticket.
+የመነጨውን I18NI0000020X፣ `portal.manifest.*`፣ ገላጭ እና ቼክ ያያይዙ
+ለቅድመ እይታ ሞገድ ቲኬት አንጸባራቂ።
 
-## Step 3 – Publish the preview alias
+## ደረጃ 3 - የቅድመ እይታ ተለዋጭ ስም ያትሙ
 
-Re-run the pin helper **without** `--skip-submit` once you are ready to expose
-the host. Supply either the JSON config or explicit CLI flags:
+ለማጋለጥ ዝግጁ ከሆኑ በኋላ የፒን አጋዥውን እንደገና ያሂዱ ** ያለ *** `--skip-submit`
+አስተናጋጁ. የJSON ውቅር ወይም ግልጽ የCLI ባንዲራዎችን ያቅርቡ፡
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -75,11 +77,11 @@ the host. Supply either the JSON config or explicit CLI flags:
   --config ~/secrets/sorafs_preview_publish.json
 ```
 
-The command writes `portal.pin.report.json`,
-`portal.manifest.submit.summary.json`, and `portal.submit.response.json`, which
-must ship with the invite evidence bundle.
+ትዕዛዙ `portal.pin.report.json` ይጽፋል፣
+`portal.manifest.submit.summary.json`፣ እና `portal.submit.response.json`፣ ይህም
+ከግብዣው ማስረጃ ጥቅል ጋር መላክ አለበት።
 
-## Step 4 – Generate the DNS cutover plan
+## ደረጃ 4 - የዲ ኤን ኤስ መቁረጫ እቅድ ይፍጠሩ
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs \
@@ -94,11 +96,11 @@ node scripts/generate-dns-cutover-plan.mjs \
   --out artifacts/sorafs/portal.dns-cutover.json
 ```
 
-Share the resulting JSON with Ops so the DNS switch references the exact
-manifest digest. When reusing an earlier descriptor as the rollback source,
-append `--previous-dns-plan path/to/previous.json`.
+የዲ ኤን ኤስ መቀየሪያው በትክክል እንዲጠቅስ የተገኘውን JSON ለኦፕስ ያጋሩ
+አንጸባራቂ መፍጨት. የቀድሞ ገላጭን እንደ የመመለሻ ምንጭ እንደገና ሲጠቀሙ፣
+አባሪ `--previous-dns-plan path/to/previous.json`.
 
-## Step 5 – Probe the deployed host
+## ደረጃ 5 - የተዘረጋውን አስተናጋጅ መርምር
 
 ```bash
 npm run probe:portal -- \
@@ -106,23 +108,23 @@ npm run probe:portal -- \
   --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-The probe confirms the served release tag, CSP headers, and signature metadata.
-Repeat the command from two regions (or attach curl output) so auditors can see
-that the edge cache is warm.
+መርማሪው የቀረበውን የመልቀቂያ መለያ፣ የCSP ራስጌዎችን እና የፊርማ ዲበ ውሂብን ያረጋግጣል።
+ኦዲተሮች ማየት እንዲችሉ ከሁለት ክልሎች ትዕዛዙን ይድገሙት (ወይም የከርል ውፅዓት ያያይዙ)
+የጠርዝ መሸጎጫ ሞቃት እንደሆነ.
 
-## Evidence bundle
+## የማስረጃ ጥቅል
 
-Include the following artefacts in the preview wave ticket and refer to them in
-the invite email:
+በቅድመ-እይታ ማዕበል ትኬት ውስጥ የሚከተሉትን ቅርሶች ያካትቱ እና ወደ ውስጥ ያመልክቱ
+የግብዣ ኢሜል፡-
 
-| Artefact | Purpose |
-|----------|---------|
-| `build/checksums.sha256` | Proves the bundle matches the CI build. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Canonical SoraFS payload + manifest. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Shows the manifest submission + alias binding succeeded. |
-| `artifacts/sorafs/portal.dns-cutover.json` | DNS metadata (ticket, window, contacts), route promotion (`Sora-Route-Binding`) summary, the `route_plan` pointer (plan JSON + header templates), cache purge info, and rollback instructions for Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Signed descriptor tying the archive + checksum together. |
-| `probe` output | Confirms the live host advertises the expected release tag. |
+| Artefact | ዓላማ |
+|-------|--------|
+| `build/checksums.sha256` | ጥቅሉ ከCI ግንባታው ጋር እንደሚመሳሰል ያረጋግጣል። |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | ቀኖናዊ SoraFS ጭነት + አንጸባራቂ። |
+| `portal.pin.report.json`፣ `portal.manifest.submit.summary.json`፣ `portal.submit.response.json` | አንጸባራቂ ማስረከብ + ተለዋጭ ስም ማሰር እንደተሳካ ያሳያል። |
+| `artifacts/sorafs/portal.dns-cutover.json` | የዲኤንኤስ ሜታዳታ (ቲኬት፣ መስኮት፣ አድራሻዎች)፣ የመንገድ ማስተዋወቂያ (`Sora-Route-Binding`) ማጠቃለያ፣ የ`route_plan` ጠቋሚ (የእቅድ JSON + አርዕስት አብነቶች)፣ የመሸጎጫ ማጽዳት መረጃ እና ለኦፕስ የመመለሻ መመሪያዎች። |
+| `artifacts/sorafs/preview-descriptor.json` | የተፈረመ ገላጭ ማህደሩን + ቼክ ድምርን አንድ ላይ እያሰረ ነው። |
+| `probe` ውፅዓት | የቀጥታ አስተናጋጁ የሚጠበቀውን የመልቀቂያ መለያ እንደሚያስተዋውቅ ያረጋግጣል። |
 
-Once the host is live, follow the [preview invite playbook](./public-preview-invite.md)
-to distribute the link, log invites, and monitor telemetry.
+አንዴ አስተናጋጁ በቀጥታ ከተለቀቀ፣ [የግብዣ ጫወታ መጽሐፍን ቅድመ እይታ](./public-preview-invite.md) ይከተሉ።
+ሊንኩን ለማሰራጨት፣ ግብዣዎችን ለመመዝገብ እና ቴሌሜትሪ ለመቆጣጠር።

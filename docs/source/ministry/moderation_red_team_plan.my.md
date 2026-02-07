@@ -9,90 +9,85 @@ source_last_modified: "2025-12-29T18:16:35.978869+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Red-Team & Chaos Drill Plan
 summary: Execution plan for roadmap item MINFO-9 covering recurring adversarial campaigns, telemetry hooks, and reporting requirements.
+translator: machine-google-reviewed
 ---
 
 # Moderation Red-Team & Chaos Drills (MINFO-9)
 
-Roadmap reference: **MINFO-9 — Moderation red-team & chaos drills** (targets Q3 2026)
+လမ်းပြမြေပုံအကိုးအကား- **MINFO-9 — အနီရောင်အဖွဲ့နှင့် ပရမ်းပတာလေ့ကျင့်မှုများ** (ပစ်မှတ် Q32026)
 
-The Ministry of Information must run reproducible adversarial campaigns that stress AI moderation pipelines, bounty programs, gateways, and governance controls. This plan closes the “🈳 Not Started” gap noted in the roadmap by defining scope, cadence, drill templates, and evidence requirements that tie directly into the existing moderation dashboards (`dashboards/grafana/ministry_moderation_overview.json`) and emergency canon workflows.
+ပြန်ကြားရေးဝန်ကြီးဌာနသည် AI ထိန်းညှိပိုက်လိုင်းများ၊ အပိုဆုအစီအစဉ်များ၊ ဂိတ်ဝေးများနှင့် အုပ်ချုပ်မှုထိန်းချုပ်မှုများကို အလေးပေးသည့် ပြန်လည်ထုတ်လုပ်နိုင်သော ဆန့်ကျင်ဘက်လှုပ်ရှားမှုများကို လုပ်ဆောင်ရမည်ဖြစ်သည်။ ဤအစီအစဥ်သည် လမ်းပြမြေပုံတွင်ဖော်ပြထားသော "🈳 မစတင်ရသေးသော" ကွာဟချက်ကို အတိုင်းအတာ၊ အလေ့အထ၊ လေ့ကျင့်မှုပုံစံများနှင့် အထောက်အထားလိုအပ်ချက်များ (`dashboards/grafana/ministry_moderation_overview.json`) နှင့် အရေးပေါ် canon အလုပ်အသွားအလာတို့ကို သတ်မှတ်ခြင်းဖြင့် ပိတ်ပါသည်။
 
-## Goals & Deliverables
+## ရည်မှန်းချက်များ နှင့် ပေးပို့နိုင်မှုများ
 
-- Run quarterly red-team exercises that cover multi-part smuggling attempts, bribery/appeal tampering, and gateway side-channel probes before widening coverage to additional threat classes.
-- Capture deterministic artefacts (CLI logs, Norito manifests, Grafana exports, SoraFS CIDs) for every drill and file them via `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md`.
-- Feed drill output back into calibration manifests (`docs/examples/ai_moderation_calibration_*.json`) and the denylist policy so remediation tasks become traceable roadmap tickets.
-- Wire alert/runbook integration so failures surface alongside the MINFO-1 dashboards and Alertmanager packs (`dashboards/alerts/ministry_moderation_rules.yml`).
+- ကဏ္ဍပေါင်းစုံ မှောင်ခိုကြိုးပမ်းမှုများ၊ လာဘ်ပေးလာဘ်ယူမှု/အယူခံဝင်မှုများနှင့် အကျုံးဝင်သော ခြိမ်းခြောက်မှုဆိုင်ရာ အတန်းများအထိ အကျုံးမဝင်မီ သုံးလတစ်ကြိမ် အနီရောင်အဖွဲ့လေ့ကျင့်ခန်းများကို လုပ်ဆောင်ပါ။
+- လေ့ကျင့်မှုတိုင်းအတွက် သတ်မှတ်ထားသော အနုပညာပစ္စည်းများ (CLI မှတ်တမ်းများ၊ Norito၊ Grafana တင်ပို့မှုများ၊ SoraFS CIDs) များကို ဖမ်းယူပြီး `docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` မှတဆင့် ပေးပို့ပါ။
+- Feed drill output သည် calibration manifests (`docs/examples/ai_moderation_calibration_*.json`) နှင့် denylist policy သို့ပြန်လည်ရောက်ရှိသွားသောကြောင့် ပြန်လည်ပြုပြင်ခြင်းလုပ်ငန်းများသည် ခြေရာခံနိုင်သော လမ်းပြမြေပုံလက်မှတ်များဖြစ်လာပါသည်။
+- ဝိုင်ယာသတိပေးချက်/ runbook ပေါင်းစပ်မှုကြောင့် MINFO-1 ဒက်ရှ်ဘုတ်များနှင့် Alertmanager packs (`dashboards/alerts/ministry_moderation_rules.yml`) နှင့်အတူ ပျက်ကွက်မှုများ ပေါ်လာသည်။
 
-## Scope & Dependencies
+## နယ်ပယ်နှင့် မှီခိုမှု
 
-- **Systems under test:** SoraFS ingest/orchestrator paths, AI moderation runner defined in `docs/source/sorafs_ai_moderation_plan.md`, denylist/Merkle enforcement, appeal treasury tooling, and gateway rate-limits.
-- **Prerequisites:** Emergency canon & TTL policy (`docs/source/ministry/emergency_canon_policy.md`), moderation calibration fixtures, and Torii mock harness parity so reproducible payloads can be replayed during chaos runs.
-- **Out-of-scope:** SoraDNS policies, Kaigi conferencing, or non-Ministry communications channels (tracked separately under SNNet and DOCS-SORA programs).
+- ** စမ်းသပ်မှုအောက်တွင်ရှိသော စနစ်များ-** SoraFS သုံးစွဲမှု/သံစုံတီးဝိုင်းလမ်းကြောင်းများ၊ `docs/source/sorafs_ai_moderation_plan.md` တွင် သတ်မှတ်ထားသော AI ထိန်းညှိအပြေးသမား၊ ငြင်းပယ်စာရင်း/ Merkle ပြဋ္ဌာန်းမှု၊ အယူခံဝင်သည့်ဘဏ္ဍာရေးကိရိယာတန်ဆာပလာများနှင့် ဝင်ပေါက်နှုန်းကန့်သတ်ချက်များ။
+- **ကြိုတင်လိုအပ်ချက်များ-** Emergency canon & TTL မူဝါဒ (`docs/source/ministry/emergency_canon_policy.md`)၊ moderation calibration fixtures နှင့် Torii mock harness parity တို့သည် ပရမ်းပတာလည်ပတ်နေချိန်တွင် ပြန်လည်ထုတ်လုပ်နိုင်သော payload များကို ပြန်လည်ပြသနိုင်ပါသည်။
+- **နယ်ပယ်ပြင်ပ-** SoraDNS မူဝါဒများ၊ Kaigi အစည်းအဝေး သို့မဟုတ် ဝန်ကြီးဌာနမဟုတ်သော ဆက်သွယ်ရေးလမ်းကြောင်းများ (SNNet နှင့် DOCS-SORA ပရိုဂရမ်များအောက်တွင် သီးခြားခြေရာခံထားသည်)။
 
-## Roles & Responsibilities
+## ရာထူးတာဝန်
 
-| Role | Responsibilities | Primary Owner | Backup |
-|------|------------------|---------------|--------|
-| Drill Director | Approves scenario list, assigns red-teamers, signs off on runbooks | Ministry Security Lead | Deputy Moderator |
-| Adversarial Cell | Crafts payloads, runs attacks, records evidence | Security Engineering guild | Volunteer operators |
-| Observability Lead | Monitors dashboards/alerts, captures Grafana exports, files incident timelines | SRE / Observability TL | On-call SRE |
-| Moderator on Duty | Drives escalation flow, validates override requests, updates emergency canon records | Incident commander | Reserve commander |
-| Reporting Scribe | Populates the template under `docs/source/ministry/reports/moderation_red_team_template.md`, links artefacts, opens follow-up issues | Docs/DevRel | Product liaison |
+| အခန်းကဏ္ဍ | တာဝန်များ | မူလပိုင်ရှင် | အရန် |
+|--------|------------------|----------------|--------|
+| Drill Director | ဇာတ်ညွှန်းစာရင်းကို အတည်ပြုသည်၊ အနီရောင်အသင်းအဖွဲ့များကို တာဝန်ပေးသည်၊ runbooks | တွင် ဆိုင်းဘုတ်ပိတ်သည်။ ဝန်ကြီးဌာန လုံခြုံရေး ဦးဆောင် | ဒု-ထိန်းကျောင်း |
+| ဆန့်ကျင်ဘက်ဆဲလ် | လက်မှုထမ်းများ ၊ တိုက်ခိုက်မှုများ ၊ မှတ်တမ်းများ | လုံခြုံရေးအင်ဂျင်နီယာအသင်း | စေတနာ့ဝန်ထမ်း |
+| Observability ဦးဆောင် | ဒက်ရှ်ဘုတ်များ/သတိပေးချက်များကို စောင့်ကြည့်ပေးသည်၊ Grafana တင်ပို့မှုများ၊ ဖိုင်များ အဖြစ်အပျက် အချိန်စာရင်းများ | SRE / Observability TL | SRE | ခေါ်ဆိုမှု
+| Moderator on Duty | အရှိန်မြှင့်စီးဆင်းမှုကို တွန်းအားပေးသည်၊ တောင်းဆိုချက်များကို အစားထိုးအတည်ပြုသည်၊ အရေးပေါ် canon မှတ်တမ်းများ | အပ်ဒိတ်လုပ်သည်။ ဆူပူပတိ| အရံပတိ|
+| Scribe | အစီရင်ခံခြင်း။ `docs/source/ministry/reports/moderation_red_team_template.md` အောက်တွင် ပုံစံပလိတ်ကို ဖြည့်သွင်းပြီး ဆက်စပ်ပစ္စည်းများကို လင့်ခ်များ၊ နောက်ဆက်တွဲ ပြဿနာများကို ဖွင့်ပေးသည် | Docs/DevRel | ကုန်ပစ္စည်းဆက်ဆံရေးရုံး |
 
-## Cadence & Timeline
+## Cadence & Timeline| အဆင့် | ပစ်မှတ် Window | အဓိက လုပ်ဆောင်ချက်များ | လက်ရာများ |
+|--------|----------------|----------------|----------------|
+| **အစီအစဥ်** | T−4 ပတ် | အခြေအနေများကို ရွေးချယ်ပါ၊ ဝန်ဆောင်ခများကို ပြန်လည်ဆန်းသစ်ရန်၊ `scripts/ministry/scaffold_red_team_drill.py` မှတစ်ဆင့် Scaffold artefacts နှင့် အခြောက်လှန်းထားသော telemetry helpers (`scripts/telemetry/check_redaction_status.py`, `ci/run_android_telemetry_chaos_prep.sh`) တို့ပါဝင်သည့် လေ့ကျင့်မှုမှန် | ဇာတ်လမ်းအကျဉ်းများ၊ လက်မှတ်ခြေရာခံ |
+| **အဆင်သင့်** | T−1 ပတ် | ပါဝင်သူများကို လော့ခ်ချခြင်း၊ အဆင့် SoraFS/Torii သဲပုံးများ၊ ဒက်ရှ်ဘုတ်များ အေးခဲစေခြင်း/သတိပေးချက် hashes | အဆင်သင့် စစ်ဆေးရန်စာရင်း၊ ဒက်ရှ်ဘုတ် မှတ်တမ်းများ |
+| **Execute** | နေ့ (4h) |တူး ဆန့်ကျင်ဘက် စီးဆင်းမှုများကို စတင်ပါ၊ သတိပေးချက်မန်နေဂျာ အကြောင်းကြားချက်များကို စုဆောင်းပါ၊ Torii/CLI ခြေရာခံများကို ဖမ်းယူပါ၊ အတည်ပြုချက်များကို အစားထိုးသုံးပါ | တိုက်ရိုက်မှတ်တမ်းစာအုပ်၊ Grafana ဓာတ်ပုံများ |
+| **Recover** | T+1 ရက် | အစားထိုးမှုများ၊ ဒေတာအတွဲများကို ပွတ်တိုက်ခြင်း၊ မှတ်တမ်းပစ္စည်းများကို `artifacts/ministry/red-team/<YYYY-MM>/` နှင့် SoraFS သို့ ပြန်ပြောင်းပါ | အထောက်အထားအစုအဝေး၊ ထင်ရှားသော |
+| **အစီရင်ခံစာ** | T+1 ပတ် | နမူနာပုံစံ၊ မှတ်တမ်းပြန်လည်ပြင်ဆင်ခြင်းလက်မှတ်များ၊ လမ်းပြမြေပုံ/status.md | မွမ်းမံပြင်ဆင်ပါ။ ဖိုင်၊ Jira/GitHub လင့်ခ်များ |
 
-| Phase | Target Window | Key Activities | Artefacts |
-|-------|---------------|----------------|-----------|
-| **Plan** | T−4 weeks | Select scenarios, refresh payload fixtures, scaffold artefacts via `scripts/ministry/scaffold_red_team_drill.py`, and dry-run the telemetry helpers (`scripts/telemetry/check_redaction_status.py`, `ci/run_android_telemetry_chaos_prep.sh`) that the drills mirror | Scenario briefs, ticket tracker |
-| **Ready** | T−1 week | Lock participants, stage SoraFS/Torii sandboxes, freeze dashboards/alert hashes | Ready checklist, dashboard digests |
-| **Execute** | Drill day (4 h) | Launch adversarial flows, collect Alertmanager notifications, capture Torii/CLI traces, enforce override approvals | Live logbook, Grafana snapshots |
-| **Recover** | T+1 day | Revert overrides, scrub datasets, archive artefacts to `artifacts/ministry/red-team/<YYYY-MM>/` and SoraFS | Evidence bundle, manifest |
-| **Report** | T+1 week | Publish Markdown report from template, log remediation tickets, update roadmap/status.md | Report file, Jira/GitHub links |
+သုံးလပတ်လေ့ကျင့်ခန်းများ (မတ်/ဇွန်/စက်တင်ဘာ/ဒီဇင်ဘာ) အနည်းဆုံးလုပ်ဆောင်သည်။ အန္တရာယ်များသော တွေ့ရှိချက်များသည် တူညီသော အထောက်အထား အလုပ်အသွားအလာကို လိုက်နာသည့် ad-hoc လုပ်ဆောင်မှုများကို ဖြစ်ပေါ်စေသည်။
 
-Quarterly drills (Mar/Jun/Sep/Dec) run at minimum; high-risk findings trigger ad-hoc runs that follow the same evidence workflow.
+## ဇာတ်လမ်း စာကြည့်တိုက် (ကနဦး)
 
-## Scenario Library (Initial)
+| ဇာတ်လမ်း | ဖော်ပြချက် | အောင်မြင်မှုအချက်များ | အထောက်အထား သွင်းအားစုများ |
+|----------|----------------|-----------------|-----------------|
+| အစိတ်အပိုင်းပေါင်းစုံ မှောင်ခိုလုပ်ငန်း| SoraFS ဝန်ဆောင်မှုပေးသူများသည် အချိန်ကြာလာသည်နှင့်အမျှ AI စစ်ထုတ်မှုများကို ကျော်ဖြတ်ရန် ကြိုးပမ်းသည့် polymorphic payload များနှင့်အတူ အပိုင်းအစများ ဖြန့်ကျက်သည်။ လေ့ကျင့်ရေးမှူး အပိုင်းအခြားကို ထုတ်ယူမှု၊ ထိန်းညှိ TTLs နှင့် ငြင်းပယ်စာရင်း ဖြန့်ကျက်ခြင်းကို လေ့ကျင့်သည်။ | အသုံးပြုသူ ပို့ဆောင်ခြင်းမပြုမီ မှောင်ခိုကူးခြင်းကို တွေ့ရှိခဲ့သည်။ ငြင်းပယ်စာရင်း မြစ်ဝကျွန်းပေါ်ဒေသ ထုတ်လွှတ်ခြင်း၊ `ministry_moderation_overview` သည် SLA အတွင်း မီးလောင်ကျွမ်းမှုကို သတိပေးသည်။ | CLI ပြန်လည်ဖွင့်ခြင်းမှတ်တမ်းများ၊ အတုံးအခဲများဖော်ပြချက်များ၊ ငြင်းဆိုစာရင်းကွဲပြားမှု၊ `sorafs.fetch.*` ဒိုင်ခွက်များမှ ခြေရာခံ ID များ။ |
+| အဂတိလိုက်စားမှုနှင့် လက်ဆော့ခြင်း | မလိုလားအပ်သော စိစစ်သူ အတွဲများ သည် လာဘ်ပေးလာဘ်ယူမှု လွှမ်းမိုးမှုကို အတည်ပြုရန် ကြိုးပမ်းကြသည်၊ ငွေတိုက်စီးဆင်းမှုကို စမ်းသပ်ခြင်း၊ အတည်ပြုချက်များကို အစားထိုးခြင်း၊ နှင့် စာရင်းစစ် မှတ်တမ်းရယူခြင်း။ | မဖြစ်မနေ အထောက်အထားများဖြင့် ရေးသွင်းထားသော၊ ဘဏ္ဍာတိုက်လွှဲပြောင်းမှုများကို အလံပြထားသည့်၊ အုပ်ချုပ်မှုမဲများကို မှတ်တမ်းတင်ထားသည်။ | Norito မှတ်တမ်းများ၊ `docs/source/ministry/volunteer_brief_template.md` အပ်ဒိတ်များ၊ ဘဏ္ဍာတိုက်စာရင်းများ ထည့်သွင်းမှုများ။ |
+| Gateway side-channel probing | အလယ်အလတ်ရှိသော အကြောင်းအရာကို ကောက်ချက်ချရန်အတွက် ကက်ရှ်အချိန်နှင့် TTL များကို တိုင်းတာသည့် မိုက်မဲသော ထုတ်ဝေသူများကို တုပသည်။ SNNet-15 မတိုင်မီ CDN/gateway hardening လေ့ကျင့်ခန်း။ | အဆင့်ကန့်သတ်ချက်နှင့် မမှန်မကန် ဒက်ရှ်ဘုတ်များသည် စုံစမ်းစစ်ဆေးမှုများကို မီးမောင်းထိုးပြသည်; စီမံခန့်ခွဲသူ CLI သည် မူဝါဒကျင့်သုံးမှုကို ပြသသည်၊ အကြောင်းအရာပေါက်ကြားခြင်းမရှိပါ။ | ဂိတ်ဝေးဝင်ရောက်ခွင့်မှတ်တမ်းများ၊ Grafana `ministry_gateway_observability` အကန့်များကို ခြစ်ခြင်း၊ အော့ဖ်လိုင်းပြန်လည်သုံးသပ်ရန်အတွက် ထုပ်ပိုးမှုခြေရာခံများဖမ်းယူခြင်း (pcap)။ |
 
-| Scenario | Description | Success Signals | Evidence Inputs |
-|----------|-------------|-----------------|-----------------|
-| Multi-part smuggling | Chain of chunks spread across SoraFS providers with polymorphic payloads that attempt to bypass AI filters over time. Exercises orchestrator range fetches, moderation TTLs, and denylist propagation. | Smuggling detected before user delivery; denylist delta emitted; `ministry_moderation_overview` alerts fire within SLA. | CLI replay logs, chunk manifests, denylist diff, Trace IDs from `sorafs.fetch.*` dashboards. |
-| Bribery & appeal tampering | Pairs of malicious moderators attempt to approve bribe-induced overrides; tests treasury flows, override approvals, and audit logging. | Override logged with mandatory evidence, treasury transfers flagged, governance vote recorded. | Norito override records, `docs/source/ministry/volunteer_brief_template.md` updates, treasury ledger entries. |
-| Gateway side-channel probing | Simulates rogue publishers measuring cache timing and TTLs to infer moderated content. Exercises CDN/gateway hardening before SNNet-15. | Rate-limit & anomaly dashboards highlight probes; admin CLI shows policy enforcement; no content leak. | Gateway access logs, Grafana scrape of `ministry_gateway_observability` panels, capture packet traces (pcap) for offline review. |
+သင်ယူမှုအပိုင်းတွင် ကနဦးအခြေအနေသုံးခုမှ ဘွဲ့ရသည်နှင့် နောက်အနာဂတ်တွင် ထပ်ခါထပ်ခါပြုလုပ်မှုများသည် `honey-payload beacons`၊ `AI adversarial prompt floods` နှင့် `SoraFS metadata poisoning` တို့ကို ပေါင်းထည့်မည်ဖြစ်သည်။
 
-Future iterations will add `honey-payload beacons`, `AI adversarial prompt floods`, and `SoraFS metadata poisoning` once the initial three scenarios graduate from the learning cadence.
+## စီရင်ချက်စာရင်း1. **အကြိုတူးခြင်း**
+   - runbook + scenario doc ကို ထုတ်ဝေပြီး အတည်ပြုကြောင်း အတည်ပြုပါ။
+   - Snapshot ဒက်ရှ်ဘုတ်များ (`dashboards/grafana/ministry_moderation_overview.json`) နှင့် `artifacts/ministry/red-team/<YYYY-MM>/dashboards/` သို့ သတိပေးချက် စည်းမျဉ်းများ။
+   - အစီရင်ခံစာ + artefact လမ်းညွှန်များကို ဖန်တီးရန် `scripts/ministry/scaffold_red_team_drill.py` ကိုသုံးပါ၊ ထို့နောက် လေ့ကျင့်ခန်းအတွက် အဆင့်သတ်မှတ်ထားသော မည်သည့် fixture အစုအစည်းများအတွက် SHA256 အချေအတင်များကို မှတ်တမ်းတင်ပါ။
+   - ငြင်းဆန်သောစာရင်းတွင် Merkle အမြစ်များနှင့် ဆန့်ကျင်ဘက် ဝန်ထုပ်ဝန်ပိုးများကို မထည့်သွင်းမီ အရေးပေါ် Canon မှတ်စုများကို စစ်ဆေးပါ။
+2. **တူးဖော်နေစဉ်**
+   - လုပ်ဆောင်မှုတိုင်း (အချိန်တံဆိပ်တုံး၊ အော်ပရေတာ၊ အမိန့်ပေးစာ) ကို တိုက်ရိုက်မှတ်တမ်းစာအုပ် (မျှဝေထားသော doc သို့မဟုတ် `docs/source/ministry/reports/tmp/<timestamp>.md`) တွင် မှတ်တမ်းတင်ပါ။
+   - တောင်းဆိုချက် ID များ၊ မော်ဒယ်အမည်များနှင့် အန္တရာယ်ရမှတ်များအပါအဝင် Torii တုံ့ပြန်မှုများနှင့် AI ထိန်းညှိစီရင်ချက်များအား ဖမ်းယူပါ။
+   - တိုးမြှင့်လုပ်ဆောင်မှုအသွားအလာကို လေ့ကျင့်ပါ (တောင်းဆိုချက် → တပ်မှူးခွင့်ပြုချက် → `emergency_canon_policy` အပ်ဒိတ်ကို အစားထိုးရန်)။
+   - အနည်းဆုံးသတိပေးချက်ရှင်းလင်းရေးလေ့ကျင့်ခန်းတစ်ခုနှင့် စာရွက်စာတမ်းတုံ့ပြန်ချိန်နေချိန်ကို အစပျိုးပါ။
+3. **လွန်တူး**
+   - အစားထိုးမှုများကို ရှင်းရန်၊ ငြင်းဆိုထားသည့်စာရင်းများကို ထုတ်လုပ်မှုတန်ဖိုးများသို့ ပြန်လှည့်ကာ သတိပေးချက်များကို တိတ်တိတ်နေအောင် စစ်ဆေးပါ။
+   - Grafana/Alertmanager မှတ်တမ်း၊ CLI မှတ်တမ်းများ၊ Norito တို့ကို ထုတ်ယူပြီး အထောက်အထားအစုအဝေးတွင် ပူးတွဲပါရှိသည်။
+   - ပိုင်ရှင်များနှင့် သတ်မှတ်ရက်စွဲများဖြင့် ဖိုင်ပြင်ဆင်ခြင်းဆိုင်ရာ ပြဿနာများ (မြင့်/အလတ်/အနိမ့်)၊ နောက်ဆုံးအစီရင်ခံစာကို ချိတ်ဆက်ပါ။
 
-## Execution Checklist
+## တယ်လီမီတာ၊ မက်ထရစ်နှင့် အထောက်အထား
 
-1. **Pre-Drill**
-   - Confirm runbook + scenario doc is published and approved.
-   - Snapshot dashboards (`dashboards/grafana/ministry_moderation_overview.json`) and alert rules to `artifacts/ministry/red-team/<YYYY-MM>/dashboards/`.
-   - Use `scripts/ministry/scaffold_red_team_drill.py` to create the report + artefact directories, then record SHA256 digests for any fixture bundles staged for the drill.
-   - Verify denylist Merkle roots and emergency canon notes before injecting adversarial payloads.
-2. **During Drill**
-   - Log every action (timestamp, operator, command) into the live logbook (shared doc or `docs/source/ministry/reports/tmp/<timestamp>.md`).
-   - Capture Torii responses and AI moderation verdicts, including request IDs, model names, and risk scores.
-   - Exercise the escalation workflow (override request → commander approval → `emergency_canon_policy` update).
-   - Trigger at least one alert-clearing exercise and document response latency.
-3. **Post-Drill**
-   - Clear overrides, roll denylist entries back to production values, and verify alerts quiet.
-   - Export Grafana/Alertmanager history, CLI logs, Norito manifests, and attach them to the evidence bundle.
-   - File remediation issues (high/medium/low) with owners and due dates; link to the final report.
+- ** ဒက်ရှ်ဘုတ်များ-** `dashboards/grafana/ministry_moderation_overview.json` + အနာဂတ် `ministry_red_team_heatmap.json` (နေရာချထားသူ) တိုက်ရိုက်အချက်ပြမှုများကို ဖမ်းယူပါ။ လေ့ကျင့်ခန်းတစ်ခုလျှင် JSON လျှပ်တစ်ပြက်ရိုက်ချက်များကို ထုတ်ယူပါ။
+- **သတိပေးချက်-** `dashboards/alerts/ministry_moderation_rules.yml` နှင့် လာမည့် `ministry_red_team_rules.yml` တွင် စာရင်းစစ်များကို ရိုးရှင်းစေရန် drill ID နှင့် scenario ကို ရည်ညွှန်းသော မှတ်စာများ ပါဝင်ရပါမည်။
+- **Norito လက်ရာများ-** လေ့ကျင့်မှုတိုင်းကို `RedTeamDrillV1` အဖြစ် ကုဒ်ဝှက်ထားသောကြောင့် Torii/CLI ပို့ကုန်များသည် အဆုံးအဖြတ်ရှိပြီး အုပ်ချုပ်ရေးနှင့် မျှဝေနိုင်ပါသည်။
+- ** အစီရင်ခံစာ ပုံစံပလိတ်-** `docs/source/ministry/reports/moderation_red_team_template.md` ကို မိတ္တူကူးပြီး ဖြစ်ရပ်မှန်၊ တိုင်းထွာချက်များ၊ အထောက်အထား မှတ်တမ်းများ၊ ပြန်လည်ပြင်ဆင်မှု အခြေအနေနှင့် အုပ်ချုပ်မှု ဆိုင်းဘုတ်ကို ဖြည့်စွက်ပါ။
+- **Archive-** သိမ်းဆည်းထားသော ရှေးဟောင်းပစ္စည်းများကို `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/` (မှတ်တမ်းများ၊ CLI အထွက်၊ Norito အစုအဝေးများ၊ ဒက်ရှ်ဘုတ် တင်ပို့မှုများ) နှင့် ကိုက်ညီသော SoraFS CAR မန်နီးဖက်စ်ကို အုပ်ချုပ်ရေးမှ အတည်ပြုသည့်အခါ အများသူငါ ပြန်လည်သုံးသပ်ရန်အတွက် ထုတ်ဝေပါ။
 
-## Telemetry, Metrics & Evidence
+## အလိုအလျောက်စနစ်နှင့် နောက်အဆင့်များ1. `scripts/ministry/` အောက်တွင် မျိုးစေ့ပေးချေမှု တပ်ဆင်မှုများ ပြုလုပ်ရန်၊ ငြင်းပယ်စာရင်းသွင်းမှုများကို ပြောင်းရန်၊ CLI/Grafana တင်ပို့မှုများကို စုဆောင်းပါ။ (`scaffold_red_team_drill.py`၊ `moderation_payload_tool.py`၊ နှင့် `check_red_team_reports.py` တို့သည် ယခုအခါတွင် ငြမ်းများ၊ ဝန်ထုပ်ဝန်ပိုးများ ထုပ်ပိုးခြင်း၊ ငြင်းပယ်စာရင်း ဖာထေးခြင်းနှင့် နေရာယူခြင်းတို့ကို အကျုံးဝင်သည်; `export_red_team_evidence.py` သည် ပျောက်ဆုံးနေသော ဒက်ရှ်ဘုတ်/မှတ်တမ်း အထောက်အထားများကို I10000000X ဖြင့် ထည့်သွင်းထားပါသည်။ သန္နိဋ္ဌာန်ချထားပါ။)
+2. အစီရင်ခံစာများကို ပေါင်းစည်းခြင်းမပြုမီ နမူနာပုံစံ၏ ပြည့်စုံမှုနှင့် အထောက်အထားများကို အချေအတင်စစ်ဆေးရန် `ci/check_ministry_red_team.sh` ဖြင့် CI ကို တိုးချဲ့ပါ။ ✅ (`scripts/ministry/check_red_team_reports.py` သည် လေ့ကျင့်မှုအစီရင်ခံစာအားလုံးတွင် နေရာယူထားသည့်နေရာအား ဖယ်ရှားခြင်းကို တွန်းအားပေးပါသည်။)
+3. လာမည့်လေ့ကျင့်ခန်းများ၊ ပြုပြင်ခြင်းဆိုင်ရာအရာများနှင့် နောက်ဆုံးလုပ်ဆောင်နေသည့် မက်ထရစ်များကို ဖော်ပြရန်အတွက် `ministry_red_team_status` အပိုင်းကို `status.md` သို့ ထည့်ပါ။
+4. တူးဖော်မှု မက်တာဒေတာကို ပွင့်လင်းမြင်သာသော ပိုက်လိုင်းတွင် ပေါင်းစည်းခြင်းဖြင့် သုံးလပတ်အစီရင်ခံစာများသည် လတ်တလော ပရမ်းပတာရလဒ်များကို ကိုးကားနိုင်သည်။
+5. လေ့ကျင့်ခန်းလုပ်ခြင်းအစီရင်ခံစာများကို `cargo xtask ministry-transparency ingest --red-team-report <path>...` သို့တိုက်ရိုက်ထုတ်နှုတ်ထားသောကြောင့် သုံးလတစ်ကြိမ် တိုင်းထွာမှုများနှင့် အုပ်ချုပ်မှုဆိုင်ရာဖော်ပြချက်များသည် ရှိပြီးသားစာရင်းဇယား/အယူခံဝင်/ငြင်းဆိုစာရင်းဖိဒ်များနှင့်အတူ ပူးတွဲပါရှိသည့် လေ့ကျင့်ခန်း ID များ၊
 
-- **Dashboards:** `dashboards/grafana/ministry_moderation_overview.json` + future `ministry_red_team_heatmap.json` (placeholder) capture live signals. Export JSON snapshots per drill.
-- **Alerting:** `dashboards/alerts/ministry_moderation_rules.yml` plus upcoming `ministry_red_team_rules.yml` must include annotations referencing the drill ID and scenario to simplify audits.
-- **Norito artefacts:** encode every drill run as `RedTeamDrillV1` events (spec forthcoming) so Torii/CLI exports are deterministic and can be shared with governance.
-- **Report template:** copy `docs/source/ministry/reports/moderation_red_team_template.md` and fill in the scenario, metrics, evidence digests, remediation status, and governance sign-off.
-- **Archive:** Store artefacts in `artifacts/ministry/red-team/<YYYY-MM>/<scenario>/` (logs, CLI output, Norito bundles, dashboard exports) and publish a matching SoraFS CAR manifest for public review when governance approves.
-
-## Automation & Next Steps
-
-1. Implement helper scripts under `scripts/ministry/` to seed payload fixtures, toggle denylist entries, and collect CLI/Grafana exports. (`scaffold_red_team_drill.py`, `moderation_payload_tool.py`, and `check_red_team_reports.py` now cover scaffolding, payload bundling, denylist patching, and placeholder enforcement; `export_red_team_evidence.py` adds the missing dashboard/log export with Grafana API support so evidence manifests stay deterministic.)
-2. Extend CI with `ci/check_ministry_red_team.sh` to verify template completeness and evidence digests before merging reports. ✅ (`scripts/ministry/check_red_team_reports.py` enforces placeholder removal across all committed drill reports.)
-3. Add `ministry_red_team_status` section to `status.md` to surface upcoming drills, open remediation items, and last-run metrics.
-4. Integrate drill metadata into the transparency pipeline so quarterly reports can reference the most recent chaos results.
-5. Feed drill reports directly into `cargo xtask ministry-transparency ingest --red-team-report <path>...` so sanitized quarterly metrics and governance manifests carry the drill IDs, evidence bundles, and dashboard SHAs alongside the existing ledger/appeal/denylist feeds.
-
-Once these steps land, MINFO-9 transitions from 🈳 Not Started to 🈺 In Progress with traceable artefacts and measurable success criteria.
+ဤအဆင့်များရောက်သည်နှင့်၊ MINFO-9 သည် ခြေရာခံနိုင်သော ရှေးဟောင်းပစ္စည်းများနှင့် တိုင်းတာနိုင်သော အောင်မြင်မှုစံနှုန်းများဖြင့် 🈳 စတင်ခြင်းမှ မစတင်သေးသော 🈺 အဆင့်သို့ ကူးပြောင်းသွားပါသည်။

@@ -7,40 +7,42 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Governance & ISO bridge examples
 description: Drive advanced Torii workflows with `@iroha/iroha-js`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This field guide expands on the quickstart by demonstrating governance and
-ISO&nbsp;20022 bridge flows with `@iroha/iroha-js`. The snippets reuse the same
-runtime helpers that ship with `ToriiClient`, so you can copy them directly into
-CLI tooling, CI harnesses, or long-running services.
+Был ялан етәкселеге тиҙ старт өҫтөндә киңәйә, идара итеү һәм
+ISO 20022 күпер ағымы менән I18NI0000000018X. Фрагменттары шул уҡ ҡабаттан ҡулланыла
+йүгерә ярҙамсылар, тип судно менән I18NI0000000019X, шулай итеп, һеҙ уларҙы туранан-тура күсерергә мөмкин
+CLI инструменталь, CI йүгән, йәки оҙаҡ эшләгән хеҙмәттәр.
 
-Additional resources:
+Өҫтәмә ресурстар:
 
-- `javascript/iroha_js/recipes/governance.mjs` — runnable end-to-end script for
-  proposals, ballots, and council rotations.
-- `javascript/iroha_js/recipes/iso_bridge.mjs` — CLI helper for submitting
-  pacs.008/pacs.009 payloads and polling deterministic status.
-- `docs/source/finance/settlement_iso_mapping.md` — canonical ISO field mapping.
+- I18NI000000020X — 2012 йыл өсөн йүгерә торған ос-ос сценарийы.
+  тәҡдимдәр, бюллетендәр, һәм совет ротациялары.
+- `javascript/iroha_js/recipes/iso_bridge.mjs` — тапшырыу өсөн CLI ярҙамсыһы
+  pacs.008/pacs.009 файҙалы йөктәр һәм һорау алыу детерминистик статусы.
+- `docs/source/finance/settlement_iso_mapping.md` — канонлы ISO ялан картаһы.
 
-## Running the bundled recipes
+## Йүгереп йыйылған рецепттар
 
-These examples depend on the scripts in `javascript/iroha_js/recipes/`. Run
-`npm install && npm run build:native` beforehand so the generated bindings are
-available.
+Был миҫалдар I18NI000000023X-тағы сценарийҙарға бәйле. Йүгерергә
+I18NI0000000024X алдан шулай генерацияланған бәйләүҙәр .
+асыҡ.
 
-### Governance helper walkthrough
+### Идара итеү ярҙамсыһы проходка
 
-Configure the following environment variables before invoking
-`recipes/governance.mjs`:
+Конфигурациялау түбәндәге мөхит үҙгәртеүсәндәр алдынан саҡырыу .
+I18NI000000255Х:
 
-- `TORII_URL` — Torii endpoint.
-- `AUTHORITY` / `PRIVATE_KEY_HEX` — signer account and key (hex). Keep keys in a
-  secure secret store.
-- `CHAIN_ID` — optional network identifier.
-- `GOV_SUBMIT=1` — push the generated transactions to Torii.
-- `GOV_FETCH=1` — fetch proposals/locks after submission.
-- `GOV_PROPOSAL_ID`, `GOV_REFERENDUM_ID`, `GOV_LOCKS_ID` — optional lookups used
-  when `GOV_FETCH=1`.
+- `TORII_URL` — Torii ос нөктәһе.
+- `AUTHORITY` / I18NI000000028X — ҡултамға иҫәп һәм асҡыс (гекс). Асҡыстарҙы һаҡлау өсөн
+  йәшерен магазин.
+- `CHAIN_ID` — опциональ селтәр идентификаторы.
+- I18NI000000030X — генерацияланған транзакцияларҙы Torii-ҡа этәрергә.
+- `GOV_FETCH=1` — тапшырылғандан һуң тәҡдимдәр/блоктар алыу.
+- I18NI0000000032X, I18NI000000033X, I18NI000000034X — опциональ эҙләүҙәр ҡулланылған
+  ҡасан I18NI000000035X.
 
 ```bash
 npm run build:native
@@ -59,30 +61,30 @@ GOV_PROPOSAL_ID=calc.v1 \
 node javascript/iroha_js/recipes/governance.mjs
 ```
 
-Hashes are logged for every step, and Torii responses are surfaced when
-`GOV_SUBMIT=1` so CI jobs can fail fast on submission errors.
+Хэштар һәр аҙым өсөн логин, һәм I18NT0000000002X яуаптар өҫтөндә ҡасан да булһа .
+I18NI000000036X шулай CI эш урындары тиҙ уңышһыҙлыҡҡа осрай ала тапшырыу хаталары.
 
-### ISO bridge helper
+### ISO күпер ярҙамсыһы
 
-`recipes/iso_bridge.mjs` submits either a pacs.008 or pacs.009 message and polls
-the ISO bridge until the status settles. Configure it with:
+I18NI0000000037X йәки pacs.008 йәки pacs.009 хәбәр һәм һорау алыуҙар тапшыра
+ISO күпере статус урынлашҡанға тиклем. Уны конфигурациялау:
 
-- `TORII_URL` — Torii endpoint exposing the ISO bridge APIs.
-- `ISO_MESSAGE_KIND` — `pacs.008` (default) or `pacs.009`. The helper uses the
-  matching sample builder (`buildSamplePacs008Message` / `buildSamplePacs009Message`)
-  when you do not supply your own XML.
-- `ISO_MESSAGE_SUFFIX` — optional suffix appended to the sample payload IDs to
-  keep repeated rehearsals unique (defaults to the current epoch seconds in hex).
-- `ISO_CONTENT_TYPE` — override the `Content-Type` header for submissions
-  (for example `application/pacs009+xml`); ignored when you only poll an
-  existing message id.
-- `ISO_MESSAGE_ID` — skip submission altogether and only poll the supplied
-  identifier via `waitForIsoMessageStatus`.
-- `ISO_POLL_ATTEMPTS` / `ISO_POLL_INTERVAL_MS` — tune the wait strategy for
-  noisy or slow bridge deployments.
-- `ISO_RESOLVE_ON_ACCEPTED=1` — exit as soon as Torii returns `Accepted`,
-  even if the transaction hash is still pending (handy during bridge maintenance
-  when the ledger commit is delayed).
+- I18NI000000038X — ISO күпер API-ларын фашлаусы I18NT00000003Х.
+- I18NI000000039X — I18NI000000040X (ғәҙәти) йәки `pacs.009`. Ярҙамсы ҡуллана
+  тап килгән өлгө төҙөүсе (I18NI000000042X / I18NI000000043X)
+  ҡасан һеҙ үҙегеҙҙең XML тәьмин итмәй.
+- I18NI0000000044X — опциональ суффикс ҡушылған өлгө файҙалы йөк идентификаторҙары .
+  ҡабат-ҡабат репетицияларҙы үҙенсәлекле тотоу (алтын секундтарға тиклем гекста секундтарға тиклем ғәҙәттәгесә).
+- I18NI0000000045X — I18NI0000000046ХХХ-ның тапшырыуҙар өсөн башын күтәрә
+  (мәҫәлән, `application/pacs009+xml`); иғтибарға алынмаған, ҡасан һеҙ тик һорау алыу ан
+  булған хәбәр id.
+- I18NI000000048X — һикереп тапшырыу бөтөнләй һәм тик һорау алыу менән тәьмин итеү
+  I18NI000000049X аша идентификатор.
+- I18NI000000050X / I18NI000000051X — 1990 йылға көтөү стратегияһын көйләй.
+  шау-шыулы йәки яй күпер таратыу.
+- I18NI000000052X — I18NT00000000004X 3-сө һанлы 18NI0000000533Х ҡағиҙәһе менән сығыу.
+  хатта әгәр ҙә транзакция хеш һаман да көтөп тора (күперҙәрҙе хеҙмәтләндереүҙең ваҡытында ҡулайлы
+  ҡасан баш китап ҡылыу тотҡарлана).
 
 ```bash
 # Submit a pacs.009 message and wait for completion.
@@ -98,25 +100,25 @@ ISO_MESSAGE_ID=iso-demo-1 \
 node javascript/iroha_js/recipes/iso_bridge.mjs
 ```
 
-Both scripts exit with status code `1` if Torii never reports a terminal
-transition, making them suitable for CI gate jobs.
+Ике сценарий ҙа I18NI000000054X статус коды менән сыға, әгәр I18NT000000005X бер ҡасан да терминал тураһында хәбәр итә.
+күсеү, уларҙы CI ҡапҡа эштәренә яраҡлы итеү.
 
-### ISO alias helper
+### ИСО псевдоним ярҙамсыһы
 
-`recipes/iso_alias.mjs` targets the ISO alias endpoints so rehearsals can cover
-blinded-element hashing and alias lookups without writing bespoke tooling. It
-calls `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-and prints the backend, digest, account binding, source, and deterministic index
-returned by Torii.
+Torii маҡсатлы ISO псевдонимы ос нөктәләре шулай репетициялар ҡаплай ала
+һуҡыр-элемент хеширование һәм псевдоним эҙләүҙәр яҙмай, заказ буйынса инструменттар. Был
+шылтыратыуҙары I18NI0000000056X плюс `resolveAlias` / I18NI000000058X .
+һәм бэкэнд, үҙләштереү, иҫәп бәйләү, сығанаҡ һәм детерминистик индексы баҫтыра
+Torii ҡайтарып ҡайтара.
 
-Environment variables:
+Тирә-яҡ мөхит үҙгәртеүселәре:
 
-- `TORII_URL` — Torii endpoint exposing the alias helpers.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (defaults to `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — skip the VOPRF call when only testing lookups.
-- `ISO_ALIAS_LABEL` — literal alias to resolve (e.g., IBAN-style strings).
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index passed to `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for secured Torii deployments.
+- I18NI000000059X — Torii тамамлаусы псевдоним ярҙамсыларын фашлау.
+- `ISO_VOPRF_INPUT` — алты кодлы һуҡыр элемент (`deadbeef` тиклем ғәҙәттәгесә).
+- I18NI000000062X — VOPRF шылтыратыуын үткәреп ебәргәндә тик һынау ғына.
+- `ISO_ALIAS_LABEL` — туранан-тура псевдоним хәл итеү өсөн (мәҫәлән, IBAN стилендәге ҡылдар).
+- I18NI000000064X — унлыҡ йәки I18NI000000065X-префиксированный индекс `resolveAliasByIndex` XX.
+- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — Torii-ны һаҡлау өсөн өҫтәмә башлыҡтар.
 
 ```bash
 # Evaluate a blinded element and resolve an alias literal + deterministic index.
@@ -133,13 +135,13 @@ ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The helper mirrors Torii’s behaviour: it surfaces 404s when aliases are missing
-and treats runtime-disabled errors as soft skips so CI flows can tolerate bridge
-maintenance windows.
+Ярҙамсы көҙгө I18NT0000000009X’s тәртибе: ул 404-се урында тора, ҡасан псевдоним юҡ
+һәм эшкәртеү ваҡыты-инвалид хаталар кеүек йомшаҡ скиптар, шулай итеп, CI ағымдары күпер түҙә ала
+хеҙмәтләндереүҙең тәҙрәләре.
 
-## Governance workflows
+## Идара итеү эш ағымы
 
-### Inspect contract instances and proposals
+### Контракт инстанцияларын һәм тәҡдимдәрен тикшерергә
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -163,10 +165,10 @@ const proposal = await torii.getGovernanceProposal("proposal-001", {
 console.log(proposal?.kind, proposal?.status);
 ```
 
-### Submit proposals and ballots
+### Тәҡдимдәр һәм бюллетендәр
 
-Use an `AbortController` when you need to cancel or time-bound governance submissions—the SDK
-accepts an optional `{ signal }` object for every POST helper shown below.
+Ҡулланыу I18NI0000000069X, ҡасан һеҙгә кәрәк, йәки ваҡыт менән бәйле идара итеү тапшырыуҙарын юҡҡа сығарыу-SDK .
+ҡабул итә опциональ `{ signal }` объекты өсөн һәр POST ярҙамсыһы түбәндә күрһәтелгән.
 
 ```ts
 const authority = "ih58...";
@@ -213,7 +215,7 @@ await torii.governanceSubmitZkBallot({
 }, { signal: writeController.signal });
 ```
 
-### Council VRF and enactment
+### Совет VRF һәм ҡабул итеү
 
 ```ts
 const validatorPk = Buffer.alloc(48, 0xdd);
@@ -258,9 +260,9 @@ const enactDraft = await torii.governanceEnactProposalTyped({
 console.log("enact tx count", enactDraft.tx_instructions.length);
 ```
 
-## ISO&nbsp;20022 bridge recipes
+## ISO 20022 күпер рецептары
 
-### Build pacs.008 / pacs.009 payloads
+### Төҙөү pacs.008 / pacs.009 файҙалы йөкләмәләр
 
 ```ts
 import { buildPacs008Message } from "@iroha/iroha-js";
@@ -279,11 +281,11 @@ const settlement = buildPacs008Message({
 });
 ```
 
-All identifiers (BIC, LEI, IBAN, ISO amount) are validated before XML is
-generated. Swap `buildPacs008Message` for `buildPacs009Message` to emit PvP
-funding payloads.
+Бөтә идентификаторҙар (БИК, LEI, IBAN, ISO суммаһы) XML тиклем раҫланған.
+генерацияланған. I18NI0000071X өсөн I18NI000000072X өсөн PvP сығарыу өсөн Swap .
+финанслау файҙалы йөктәр.
 
-### Submit and poll ISO messages
+### ISO хәбәрҙәрен тапшырыу һәм һорау алыу
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -322,17 +324,17 @@ await torii.submitIsoMessage(
 );
 ```
 
-Both `resolveOnAccepted` and `resolveOnAcceptedWithoutTransaction` are valid; use either flag
-to treat `Accepted` statuses (without a transaction hash) as terminal when orchestrating polls.
+`resolveOnAccepted` һәм `resolveOnAcceptedWithoutTransaction` икеһе лә ғәмәлдә; йәки флаг ҡулланыу
+`Accepted` статустарын дауалау өсөн (транзакция хешыһыҙ) һорау алыуҙарҙы ойоштороуҙа терминал булараҡ.
 
-The helpers throw `IsoMessageTimeoutError` if the bridge never reports a
-terminal state. Use the lower-level `submitIsoPacs008` / `submitIsoPacs009`
-calls when you need to orchestrate custom polling logic; `getIsoMessageStatus`
-exposes a single-shot lookup.
+Ярҙамсылар ташлай I18NI0000000076X, әгәр күпер бер ҡасан да хәбәр
+терминаль хәле. Ҡулланыу түбән кимәлдә I18NI000000077X / I18NI000000078Х.
+шылтыратыуҙар ҡасан һеҙгә кәрәк, тип оркестрлаштырыу өсөн заказ буйынса һорау алыу логикаһы; `getIsoMessageStatus`.
+бер тапҡыр атыуҙы фашлай.
 
-### Related surfaces
+### Бәйләнешле ер өҫтө
 
-- `torii.getSorafsPorWeeklyReport("2026-W05")` fetches the ISO-week PoR bundle
-  referenced in the roadmap and can reuse the wait helpers for alerts.
-- `resolveAlias` / `resolveAliasByIndex` expose ISO bridge alias bindings so
-  reconciliation tools can prove account ownership before issuing a payment.
+- I18NI000000080X ISO-аҙна PoR өйөмөн килтерә
+  юл картаһында һылтанма һәм иҫкәртмәләр өсөн көтөү ярҙамсыларын ҡабаттан ҡуллана ала.
+- I18NI000000081X / I18NI000000082X ISO күпер псевдонимдарын фашлай.
+  яраштырыу ҡоралдары түләүҙе биргәнсе иҫәп милекселеген иҫбатлай ала.

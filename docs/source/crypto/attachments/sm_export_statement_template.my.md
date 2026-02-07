@@ -7,50 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6742d2b87b8fbbc1493c5ae2704147b0f8d5d23af78004c2c9a112fe881efb11
 source_last_modified: "2025-12-29T18:16:35.937402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 % SM2/SM3/SM4 Export-Control Statement Template
-% Hyperledger Iroha Compliance Working Group
-% 2026-05-06
+%Hyperledger Iroha လိုက်နာမှုလုပ်ငန်းအဖွဲ့
+ရာခိုင်နှုန်း 2026-05-06
 
-# Usage
+#အသုံးပြုမှု
 
-Embed this statement in release notes, manifests, or legal correspondence when
-distributing SM-enabled artefacts. Update the placeholders to match the release,
-jurisdiction, and applicable license exceptions. Retain a signed copy with the
-release checklist.
+ဤထုတ်ပြန်ချက်ကို ထုတ်ပြန်ရေးမှတ်စုများ၊ ဖော်ပြချက်များနှင့် ဥပဒေရေးရာစာပေးစာများတွင် ထည့်သွင်းသည့်အခါတွင် ထည့်သွင်းပါ။
+SM-ဖွင့်ထားသော ပစ္စည်းများကို ဖြန့်ဝေခြင်း။ ထုတ်ဝေမှုနှင့် ကိုက်ညီစေရန် နေရာကိုင်ဆောင်သူများကို အပ်ဒိတ်လုပ်ခြင်း၊
+တရားစီရင်ပိုင်ခွင့်နှင့် သက်ဆိုင်ရာလိုင်စင်ခြွင်းချက်။ လက်မှတ်ရေးထိုးထားသည့် မိတ္တူကို သိမ်းဆည်းပါ။
+စစ်ဆေးရန်စာရင်းကို ထုတ်ပြန်ပါ။
 
-# Statement
+# ထုတ်ပြန်ချက်
 
-> **Product:** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
+> **ထုတ်ကုန်-** Hyperledger Iroha {{ RELEASE_VERSION }} (`{{ ARTEFACT_ID }}`)
 >
-> **Algorithms Included:** SM2 digital signature, SM3 hashing, SM4 symmetric
-> encryption (GCM/CCM)
+> **ပါဝင်သည့် အယ်လဂိုရီသမ်များ-** SM2 ဒစ်ဂျစ်တယ် လက်မှတ်၊ SM3 hashing၊ SM4 symmetric
+> ကုဒ်ဝှက်ခြင်း (GCM/CCM)
 >
-> **Export Classification:** United States EAR Category 5, Part 2 (5D002.c.1);
-> European Union Regulation 2021/821 Annex 1, 5D002.
+> **ပို့ကုန် အမျိုးအစားခွဲခြားခြင်း-** United States EAR အမျိုးအစား 5၊ အပိုင်း 2 (5D002.c.1);
+> ဥရောပသမဂ္ဂ စည်းမျဉ်း 2021/821 နောက်ဆက်တွဲ 1, 5D002။
 >
-> **License Exception(s):** {{ LICENSE_EXCEPTION }} (e.g., ENC §740.17(b)(2),
-> TSU §740.13 for source distribution).
+> **လိုင်စင်ခြွင်းချက်(များ):** {{ LICENSE_EXCEPTION }} (ဥပမာ ENC §740.17(b)(2)၊
+အရင်းအမြစ်ဖြန့်ဖြူးမှုအတွက် > TSU §740.13)။
 >
-> **Distribution Scope:** {{ DISTRIBUTION_SCOPE }} (e.g., “Global, excluding
-> embargoed territories listed in 15 CFR 746”).
+> **ဖြန့်ဖြူးမှုနယ်ပယ်-** {{ DISTRIBUTION_SCOPE }} (ဥပမာ၊ “ကမ္ဘာ့၊ မပါဝင်၊
+> 15 CFR 746”) တွင် ဖော်ပြထားသော ပိတ်ဆို့ခံထားရသော နယ်မြေများ။
 >
-> **Operator Obligations:** Recipients must comply with applicable export,
-> import, and usage regulations. Deployments within the People’s Republic of
-> China require product and usage filings with the State Cryptography
-> Administration and adherence to mainland data residency requirements.
+> **အော်ပရေတာဝတ္တရားများ-** လက်ခံသူများသည် သက်ဆိုင်ရာ ပို့ကုန်ကို လိုက်နာရမည်၊
+> သွင်းကုန်၊ အသုံးပြုမှုစည်းမျဉ်းများ။ ပြည်သူ့သမ္မတနိုင်ငံအတွင်း ဖြန့်ကျက်ချထားခြင်း။
+> တရုတ်နိုင်ငံသည် နိုင်ငံတော်မှ ကူးယူဖော်ပြသည့် ထုတ်ကုန်နှင့် အသုံးပြုမှု စာရွက်စာတမ်းများ လိုအပ်သည်။
+> အုပ်ချုပ်ရေးနှင့် ပြည်မကြီး၏ နေထိုင်ခွင့်လိုအပ်ချက်များကို လိုက်နာခြင်း။
 >
-> **Contact:** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
+> **ဆက်သွယ်ရန်-** {{ LEGAL_CONTACT_NAME }} — {{ LEGAL_CONTACT_EMAIL }} /
 > {{ LEGAL_CONTACT_PHONE }}
 >
-> This statement accompanies the cryptography compliance checklist and filing
-> templates provided in `docs/source/crypto/sm_compliance_brief.md`. Retain this
-> document and associated filings for a minimum of three years.
+> ဤထုတ်ပြန်ချက်တွင် cryptography လိုက်နာမှုစစ်ဆေးချက်စာရင်းနှင့် ဖိုင်တွဲပါရှိသည်။
+> `docs/source/crypto/sm_compliance_brief.md` တွင် ပေးထားသော နမူနာများ။ ဒါကို ထိန်းသိမ်းပါ။
+> အနည်းဆုံးသုံးနှစ်အတွက် စာရွက်စာတမ်းနှင့် ဆက်စပ်စာရွက်စာတမ်းများ။
 
-# Signature
+#လက်မှတ်
 
-- Authorised representative: ________________________
-- Title: ________________________
-- Date: ________________________
-
+- တရားဝင်ကိုယ်စားလှယ်- ________________________
+- ခေါင်းစဉ်- ________________________
+- ရက်စွဲ- ________________________

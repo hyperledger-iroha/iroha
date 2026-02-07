@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Partner SLA Discovery Notes — Template
+# አንድሮይድ አጋር SLA የግኝት ማስታወሻዎች - አብነት
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+ለእያንዳንዱ የ AND8 SLA የግኝት ክፍለ ጊዜ ይህንን አብነት ይጠቀሙ። የተሞላውን ቅጂ ያስቀምጡ
+በ `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
+እና ደጋፊ ቅርሶችን ያያይዙ (የጥያቄ ምላሾች፣ እውቅናዎች፣
+አባሪዎች) በተመሳሳይ ማውጫ ውስጥ.
 
 ```
 Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
@@ -27,55 +28,55 @@ Android attendees: <Program Lead / Partner Eng / Support Eng / Compliance>
 Meeting link / ticket: <URL or ID>
 ```
 
-## 1. Agenda & Context
+## 1. አጀንዳ እና አውድ
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
-  telemetry dashboards).
+- የክፍለ-ጊዜው ዓላማ (የአብራሪ ወሰን, የመልቀቂያ መስኮት, የቴሌሜትሪ የሚጠበቁ).
+- የማጣቀሻ ሰነዶች ከጥሪው በፊት ተጋርተዋል (የመጫወቻ መጽሐፍን ይደግፉ ፣ የቀን መቁጠሪያ ይልቀቁ ፣
+  ቴሌሜትሪ ዳሽቦርዶች).
 
-## 2. Workload Overview
+## 2. የስራ ጫና አጠቃላይ እይታ
 
-| Topic | Notes |
-|-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+| ርዕስ | ማስታወሻ |
+|-------|------|
+| ዒላማ የሥራ ጫና / ሰንሰለት | |
+| የሚጠበቀው የግብይት መጠን | |
+| ወሳኝ የንግድ መስኮቶች / ጥቁር ጊዜ | |
+| የቁጥጥር አገዛዞች (GDPR, MAS, FISC, ወዘተ) | |
+| የሚፈለጉ ቋንቋዎች / ለትርጉም | |
 
-## 3. SLA Discussion
+## 3. SLA ውይይት
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
-|-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| SLA ክፍል | አጋር መጠበቅ | ዴልታ ከመነሻ መስመር? | እርምጃ ያስፈልጋል |
+|--------------
+| ወሳኝ ጥገና (48h) | | አዎ/አይ | |
+| ከፍተኛ ክብደት (5 የስራ ቀናት) | | አዎ/አይ | |
+| ጥገና (30 ቀናት) | | አዎ/አይ | |
+| የመቁረጫ ማስታወቂያ (60 ቀናት) | | አዎ/አይ | |
+| የክስተት ግንኙነት ማስረጃ | | አዎ/አይ | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+በአጋር የተጠየቀውን ማንኛውንም ተጨማሪ የ SLA አንቀጾችን ይመዝግቡ (ለምሳሌ የተወሰነ
+የስልክ ድልድይ፣ ተጨማሪ ቴሌሜትሪ ወደ ውጭ መላክ)።
 
-## 4. Telemetry & Access Requirements
+## 4. ቴሌሜትሪ እና የመዳረሻ መስፈርቶች
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / I18NT00000000 የመዳረሻ ፍላጎቶች
+- የምዝግብ ማስታወሻ/የመላክ መስፈርቶች፡-
+- ከመስመር ውጭ ማስረጃ ወይም ዶሴ የሚጠበቁ ነገሮች፡-
 
-## 5. Compliance & Legal Notes
+## 5. ተገዢነት እና የህግ ማስታወሻዎች
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- የሕግ ማሳወቂያ መስፈርቶች (ሕግ + ጊዜ)።
+- ለአደጋ ማሻሻያ የሚፈለጉ የሕግ ዕውቂያዎች።
+- የውሂብ የመኖሪያ ገደቦች / የማከማቻ መስፈርቶች.
 
-## 6. Decisions & Action Items
+## 6. ውሳኔዎች እና የእርምጃ እቃዎች
 
-| Item | Owner | Due | Notes |
-|------|-------|-----|-------|
+| ንጥል | ባለቤት | የሚከፈልበት | ማስታወሻ |
+|-------|-------|--------|
 | | | | |
 
-## 7. Acknowledgement
+## 7. እውቅና
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- አጋር የመነሻ መስመር SLA? (ዋይ/ን)
+- የክትትል እውቅና ዘዴ (ኢሜል / ቲኬት / ፊርማ)
+- ከመዘጋቱ በፊት የማረጋገጫ ኢሜይል ወይም የስብሰባ ደቂቃዎችን ከዚህ ማውጫ ጋር ያያይዙ።

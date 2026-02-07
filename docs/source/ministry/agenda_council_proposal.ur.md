@@ -6,74 +6,73 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: d2a7a47fdf0c80d189c912baafa5d6ce81a17a4c90f2b1797e532989a56f5060
 source_last_modified: "2026-01-03T18:07:57.726224+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Agenda Council Proposal Schema (MINFO-2a)
+# ایجنڈا کونسل پروپوزل اسکیما (MINFO-2A)
 
-Roadmap reference: **MINFO-2a — Proposal format validator.**
+روڈ میپ حوالہ: ** MINFO-2A-تجویز کی شکل درست کرنے والا۔ **
 
-The Agenda Council workflow batches citizen-submitted blacklist and policy change
-proposals before the governance panels review them. This document defines the
-canonical payload schema, evidence requirements, and duplication detection rules
-consumed by the new validator (`cargo xtask ministry-agenda validate`) so
-proposers can lint JSON submissions locally before uploading them to the portal.
+ایجنڈا کونسل کے ورک فلو نے شہریوں سے سبمڈ بلیک لسٹ اور پالیسی میں تبدیلی کی
+گورننس پینل سے پہلے ان کی تجاویز کا جائزہ لیں۔ یہ دستاویز اس کی وضاحت کرتی ہے
+کیننیکل پے لوڈ اسکیما ، شواہد کی ضروریات ، اور نقل کا پتہ لگانے کے قواعد
+نئے توثیق کار (`cargo xtask ministry-agenda validate`) کے ذریعہ استعمال کیا گیا ہے
+پروپوزر JSON گذارشات کو پورٹل پر اپ لوڈ کرنے سے پہلے مقامی طور پر پیش کرسکتے ہیں۔
 
-## Payload overview
+## پے لوڈ کا جائزہ
 
-Agenda proposals use the `AgendaProposalV1` Norito schema
-(`iroha_data_model::ministry::AgendaProposalV1`). Fields are encoded as JSON when
-submitting through CLI/portal surfaces.
+ایجنڈا کی تجاویز `AgendaProposalV1` Norito اسکیما استعمال کرتی ہیں
+(`iroha_data_model::ministry::AgendaProposalV1`)۔ کھیتوں کو JSON کے طور پر انکوڈ کیا جاتا ہے جب
+سی ایل آئی/پورٹل سطحوں کے ذریعے جمع کروانا۔
 
-| Field | Type | Requirements |
-|-------|------|--------------|
-| `version` | `1` (u16) | Must equal `AGENDA_PROPOSAL_VERSION_V1`. |
-| `proposal_id` | string (`AC-YYYY-###`) | Stable identifier; enforced during validation. |
-| `submitted_at_unix_ms` | u64 | Milliseconds since Unix epoch. |
-| `language` | string | BCP‑47 tag (`"en"`, `"ja-JP"`, etc.). |
-| `action` | enum (`add-to-denylist`, `remove-from-denylist`, `amend-policy`) | Requested Ministry action. |
-| `summary.title` | string | ≤256 chars recommended. |
-| `summary.motivation` | string | Why the action is required. |
-| `summary.expected_impact` | string | Outcomes if the action is accepted. |
-| `tags[]` | lowercase strings | Optional triage labels. Allowed values: `csam`, `malware`, `fraud`, `harassment`, `impersonation`, `policy-escalation`, `terrorism`, `spam`. |
-| `targets[]` | objects | One or more hash family entries (see below). |
-| `evidence[]` | objects | One or more evidence attachments (see below). |
-| `submitter.name` | string | Display name or organization. |
-| `submitter.contact` | string | Email, Matrix handle, or phone; redacted from public dashboards. |
-| `submitter.organization` | string (optional) | Visible in reviewer UI. |
-| `submitter.pgp_fingerprint` | string (optional) | 40-hex uppercase fingerprint. |
-| `duplicates[]` | strings | Optional references to previously submitted proposal IDs. |
+| فیلڈ | قسم | تقاضے |
+| ------- | ------ | ---------------- |
+| `version` | `1` (U16) | `AGENDA_PROPOSAL_VERSION_V1` کے برابر ہونا چاہئے۔ |
+| `proposal_id` | سٹرنگ (`AC-YYYY-###`) | مستحکم شناخت کنندہ ؛ توثیق کے دوران نافذ کیا گیا۔ |
+| `submitted_at_unix_ms` | U64 | یونکس کے عہد کے بعد سے ملی سیکنڈ۔ |
+| `language` | سٹرنگ | بی سی پی - 47 ٹیگ (`"en"` ، `"ja-JP"` ، وغیرہ)۔ |
+| `action` | ENUM (`add-to-denylist` ، `remove-from-denylist` ، `amend-policy`) | وزارت کی کارروائی کی درخواست کی۔ |
+| `summary.title` | سٹرنگ | ≤256 چارس کی سفارش کی گئی۔ |
+| `summary.motivation` | سٹرنگ | کارروائی کی ضرورت کیوں ہے۔ |
+| `summary.expected_impact` | سٹرنگ | نتائج اگر کارروائی قبول کی گئی ہو۔ |
+| `tags[]` | لوئر کیس ڈور | اختیاری ٹریج لیبل۔ اجازت شدہ اقدار: `csam` ، `malware` ، `fraud` ، `harassment` ، `impersonation` ، `policy-escalation` ، `terrorism` ، `spam`۔ |
+| `targets[]` | آبجیکٹ | ایک یا زیادہ ہیش خاندانی اندراجات (نیچے ملاحظہ کریں) |
+| `evidence[]` | آبجیکٹ | ایک یا زیادہ ثبوت منسلکات (نیچے ملاحظہ کریں) |
+| `submitter.name` | سٹرنگ | نام یا تنظیم ڈسپلے کریں۔ |
+| `submitter.contact` | سٹرنگ | ای میل ، میٹرکس ہینڈل ، یا فون ؛ عوامی ڈیش بورڈز سے تیار کیا گیا۔ |
+| `submitter.organization` | سٹرنگ (اختیاری) | جائزہ لینے والے UI میں مرئی۔ |
+| `submitter.pgp_fingerprint` | سٹرنگ (اختیاری) | 40 ہیکس اپر کیس فنگر پرنٹ۔ |
+| `duplicates[]` | تار | پہلے پیش کردہ پروپوزل IDs کے اختیاری حوالہ جات۔ |
 
-### Target entries (`targets[]`)
+### ہدف اندراجات (`targets[]`)
 
-Each target represents a hash family digest referenced by the proposal.
+ہر ہدف ایک ہیش فیملی ڈائجسٹ کی نمائندگی کرتا ہے جس کا حوالہ تجویز کے ذریعہ کیا جاتا ہے۔
 
-| Field | Description | Validation |
-|-------|-------------|------------|
-| `label` | Friendly name for reviewer context. | Non-empty. |
-| `hash_family` | Hash identifier (`blake3-256`, `sha256`, etc.). | ASCII letters/digits/`-_.`, ≤48 chars. |
-| `hash_hex` | Digest encoded in lowercase hex. | ≥16 bytes (32 hex chars) and must be valid hex. |
-| `reason` | Short description of why the digest should be actioned. | Non-empty. |
+| فیلڈ | تفصیل | توثیق |
+| ------- | ------------- | -------------- |
+| `label` | جائزہ لینے والے سیاق و سباق کے لئے دوستانہ نام۔ | غیر خالی |
+| `hash_family` | ہیش شناخت کنندہ (`blake3-256` ، `sha256` ، وغیرہ)۔ | ASCII خطوط/ہندسے/`-_.` ، ≤48 چارس۔ |
+| `hash_hex` | ڈائجسٹ کو لوئر کیس ہیکس میں انکوڈ کیا گیا۔ | ≥16 بائٹس (32 ہیکس چارس) اور لازمی طور پر ہیکس ہونا ضروری ہے۔ |
+| `reason` | ڈائجسٹ پر کیوں عمل کرنا چاہئے اس کی مختصر تفصیل۔ | غیر خالی |
 
-The validator rejects duplicate `hash_family:hash_hex` pairs within the same
-proposal and reports conflicts when the same fingerprint already exists in the
-duplicate registry (see below).
+توثیق کنندہ اسی کے اندر `hash_family:hash_hex` جوڑے کو ڈپلیکیٹ کرتا ہے
+تجویز اور تنازعات کی اطلاع دیتا ہے جب ایک ہی فنگر پرنٹ پہلے ہی موجود ہے
+ڈپلیکیٹ رجسٹری (نیچے ملاحظہ کریں)
 
-### Evidence attachments (`evidence[]`)
+### ثبوت منسلکات (`evidence[]`)
 
-Evidence entries document where reviewers can fetch supporting context.
+شواہد اندراجات کی دستاویز جہاں جائزہ لینے والے معاون سیاق و سباق کو لے سکتے ہیں۔| فیلڈ | قسم | نوٹ |
+| ------- | ------ | ------- |
+| `kind` | ENUM (`url` ، `torii-case` ، `sorafs-cid` ، `attachment`) | ہضم کی ضروریات کا تعین کرتا ہے۔ |
+| `uri` | سٹرنگ | HTTP (S) URL ، Torii کیس ID ، یا SoraFS URI۔ |
+| `digest_blake3_hex` | سٹرنگ | `sorafs-cid` اور `attachment` قسم کے لئے ضروری ہے۔ دوسروں کے لئے اختیاری۔ |
+| `description` | سٹرنگ | جائزہ لینے والوں کے لئے اختیاری فری فارم متن۔ |
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `kind` | enum (`url`, `torii-case`, `sorafs-cid`, `attachment`) | Determines digest requirements. |
-| `uri` | string | HTTP(S) URL, Torii case ID, or SoraFS URI. |
-| `digest_blake3_hex` | string | Required for `sorafs-cid` and `attachment` kinds; optional for others. |
-| `description` | string | Optional free-form text for reviewers. |
+### ڈپلیکیٹ رجسٹری
 
-### Duplicate registry
-
-Operators can maintain a registry of existing fingerprints to prevent duplicate
-cases. The validator accepts a JSON file shaped as:
+آپریٹرز نقل کو روکنے کے لئے موجودہ فنگر پرنٹس کی رجسٹری کو برقرار رکھ سکتے ہیں
+معاملات توثیق کنندہ JSON فائل کو قبول کرتا ہے جس کی شکل میں:
 
 ```json
 {
@@ -88,15 +87,15 @@ cases. The validator accepts a JSON file shaped as:
 }
 ```
 
-When a proposal target matches an entry, the validator aborts unless
-`--allow-registry-conflicts` is specified (warnings are still emitted).
-Use [`cargo xtask ministry-agenda impact`](impact_assessment_tooling.md) to
-generate the referendum-ready summary that cross-references the duplicate
-registry and policy snapshots.
+جب کسی تجویز کا ہدف کسی اندراج سے مماثل ہوتا ہے تو ، توثیق کرنے والا اس وقت تک ختم نہیں ہوتا جب تک
+`--allow-registry-conflicts` کی وضاحت کی گئی ہے (انتباہات اب بھی خارج ہیں)۔
+[`cargo xtask ministry-agenda impact`] (impact_assessment_tooling.md) to استعمال کریں
+ریفرنڈم کے لئے تیار سمری تیار کریں جو نقل کو عبور کرتے ہیں
+رجسٹری اور پالیسی سنیپ شاٹس۔
 
-## CLI usage
+## سی ایل آئی استعمال
 
-Lint a single proposal and check it against a duplicate registry:
+ایک ہی تجویز کو لنٹ کریں اور اسے ڈپلیکیٹ رجسٹری کے خلاف چیک کریں:
 
 ```bash
 cargo xtask ministry-agenda validate \
@@ -104,19 +103,19 @@ cargo xtask ministry-agenda validate \
   --registry docs/examples/ministry/agenda_duplicate_registry.json
 ```
 
-Pass `--allow-registry-conflicts` to downgrade duplicate hits to warnings when
-performing historical audits.
+`--allow-registry-conflicts` کو انتباہات میں ڈپلیکیٹ کامیاب فلموں کو نیچے کرنے کے لئے پاس کریں
+تاریخی آڈٹ انجام دینا۔
 
-The CLI relies on the same Norito schema and validation helpers shipped in
-`iroha_data_model`, so SDKs/portals can reuse the `AgendaProposalV1::validate`
-method for consistent behaviour.
+سی ایل آئی اسی Norito اسکیما اور توثیق کے مددگاروں پر انحصار کرتا ہے
+`iroha_data_model` ، لہذا SDKS/پورٹل `AgendaProposalV1::validate` کو دوبارہ استعمال کرسکتے ہیں
+مستقل سلوک کا طریقہ۔
 
-## Sortition CLI (MINFO-2b)
+## ترتیب CLI (MINFO-2B)
 
-Roadmap reference: **MINFO-2b — Multi-slot sortition & audit log.**
+روڈ میپ کا حوالہ: ** منفو -2 بی-ملٹی سلاٹ ترتیب اور آڈٹ لاگ۔ **
 
-The Agenda Council roster is now managed via deterministic sortition so citizens
-can independently audit every draw. Use the new command:
+ایجنڈا کونسل روسٹر اب عین مطابق ترتیب کے ذریعہ منظم کیا جاتا ہے لہذا شہریوں
+آزادانہ طور پر ہر قرعہ اندازی کا آڈٹ کر سکتے ہیں۔ نیا کمانڈ استعمال کریں:
 
 ```bash
 cargo xtask ministry-agenda sortition \
@@ -126,7 +125,7 @@ cargo xtask ministry-agenda sortition \
   --out artifacts/ministry/agenda_sortition_2026Q1.json
 ```
 
-- `--roster` — JSON file describing every eligible member:
+- `--roster` - JSON فائل ہر اہل ممبر کو بیان کرتی ہے:
 
   ```json
   {
@@ -148,74 +147,70 @@ cargo xtask ministry-agenda sortition \
   }
   ```
 
-  The example file lives at
-  `docs/examples/ministry/agenda_council_roster.json`. Optional fields (role,
-  organization, contact, metadata) are captured in the Merkle leaf so auditors
-  can prove the roster that fed the draw.
+  مثال فائل میں زندہ ہے
+  `docs/examples/ministry/agenda_council_roster.json`۔ اختیاری فیلڈز (کردار ،
+  تنظیم ، رابطہ ، میٹا ڈیٹا) مرکل کے پتے میں پکڑے جاتے ہیں لہذا آڈیٹر
+  ڈرا کو کھلانے والے روسٹر کو ثابت کرسکتے ہیں۔
 
-- `--slots` — number of council seats to fill.
-- `--seed` — 32-byte BLAKE3 seed (64 lowercase hex characters) recorded in the
-  governance minutes for the draw.
-- `--out` — optional output path. When omitted, the JSON summary is printed to
+- `--slots` - کونسل کی نشستوں کی تعداد بھرنے کے لئے۔
+- `--seed`- 32-بائٹ بلیک 3 سیڈ (64 لوئر کیس ہیکس حروف)
+  قرعہ اندازی کے لئے گورننس منٹ۔
+- `--out` - اختیاری آؤٹ پٹ راستہ۔ جب اسے چھوڑ دیا جاتا ہے تو ، JSON کا خلاصہ پرنٹ ہوتا ہے
   stdout.
 
-### Output summary
+### آؤٹ پٹ کا خلاصہ
 
-The command emits a `SortitionSummary` JSON blob. Sample output is stored at
-`docs/examples/ministry/agenda_sortition_summary_example.json`. Key fields:
+کمانڈ ایک `SortitionSummary` JSON BLOB خارج کرتا ہے۔ نمونہ آؤٹ پٹ پر محفوظ ہے
+`docs/examples/ministry/agenda_sortition_summary_example.json`۔ کلیدی فیلڈز:
 
-| Field | Description |
-|-------|-------------|
-| `algorithm` | Sortition label (`agenda-sortition-blake3-v1`). |
-| `roster_digest` | BLAKE3 + SHA-256 digests of the roster file (used to confirm audits operate over the same member list). |
-| `seed_hex` / `slots` | Echo the CLI inputs so auditors can reproduce the draw. |
-| `merkle_root_hex` | Root of the roster Merkle tree (`hash_node`/`hash_leaf` helpers in `xtask/src/ministry_agenda.rs`). |
-| `selected[]` | Entries for each slot, including the canonical member metadata, eligible index, original roster index, deterministic draw entropy, leaf hash, and Merkle proof siblings. |
+| فیلڈ | تفصیل |
+| ------- | --------------- |
+| `algorithm` | ترتیب لیبل (`agenda-sortition-blake3-v1`)۔ |
+| `roster_digest` | بلیک 3 + SHA-256 روسٹر فائل کے ہضم (ایک ہی ممبر کی فہرست میں آڈٹ کی تصدیق کے لئے استعمال کیا جاتا ہے)۔ |
+| `seed_hex` / `slots` | سی ایل آئی ان پٹ کی بازگشت کریں تاکہ آڈیٹر ڈرا کو دوبارہ پیش کرسکیں۔ |
+| `merkle_root_hex` | روسٹر مرکل ٹری کی جڑ (`hash_node`/`hash_leaf` `xtask/src/ministry_agenda.rs` میں مددگار)۔ |
+| `selected[]` | ہر سلاٹ کے لئے اندراجات ، بشمول کیننیکل ممبر میٹا ڈیٹا ، اہل انڈیکس ، اصل روسٹر انڈیکس ، ڈٹرمینسٹک ڈرا اینٹروپی ، پتی ہیش ، اور مرکل پروف بہن بھائی۔ |
 
-### Verifying a draw
+### قرعہ اندازی کی تصدیق کرنا1. `roster_path` کے ذریعہ حوالہ کردہ روسٹر کو بازیافت کریں اور اس کے بلیک 3/SHA-256 کی تصدیق کریں
+   ہضم خلاصہ سے ملتے ہیں۔
+2. اسی بیج/سلاٹ/روسٹر کے ساتھ سی ایل آئی کو دوبارہ چلائیں۔ نتیجہ `selected[].member_id`
+   آرڈر شائع شدہ خلاصہ سے مماثل ہونا چاہئے۔
+3. کسی مخصوص ممبر کے لئے ، سیریلائزڈ ممبر JSON کا استعمال کرتے ہوئے مرکل کے پتے کی گنتی کریں
+   (`norito::json::to_vec(&sortition_member)`) اور ہر پروف ہیش میں فولڈ۔ فائنل
+   ڈائجسٹ کو `merkle_root_hex` کے برابر ہونا چاہئے۔ مثال کے طور پر سمری شوز میں مددگار
+   `eligible_index` ، `leaf_hash_hex` ، اور `merkle_proof[]` کو یکجا کریں۔
 
-1. Fetch the roster referenced by `roster_path` and verify its BLAKE3/SHA-256
-   digests match the summary.
-2. Re-run the CLI with the same seed/slots/roster; the resulting `selected[].member_id`
-   order should match the published summary.
-3. For a specific member, compute the Merkle leaf using the serialized member JSON
-   (`norito::json::to_vec(&sortition_member)`) and fold in each proof hash. The final
-   digest must equal `merkle_root_hex`. The helper in the example summary shows
-   how to combine `eligible_index`, `leaf_hash_hex`, and `merkle_proof[]`.
+یہ نوادرات تصدیق شدہ بے ترتیب پن کے لئے MINFO-2B کی ضرورت کو پورا کرتے ہیں ،
+K-OF-M کا انتخاب ، اور جب تک آن چین API وائرڈ نہیں ہوتا ہے اس وقت تک ضمیمہ آڈٹ لاگ ان ہوتا ہے۔
 
-These artefacts satisfy the MINFO-2b requirement for verifiable randomness,
-k-of-m selection, and append-only audit logs until the on-chain API is wired.
+## توثیق کی غلطی کا حوالہ
 
-## Validation error reference
+`AgendaProposalV1::validate` `AgendaProposalValidationError` مختلف حالتوں کا اخراج کرتا ہے
+جب بھی پے لوڈ لیٹنگ میں ناکام ہوجاتا ہے۔ نیچے دیئے گئے جدول میں سب سے عام کا خلاصہ پیش کیا گیا ہے
+غلطیاں تو پورٹل جائزہ لینے والے CLI آؤٹ پٹ کو قابل عمل رہنمائی میں ترجمہ کرسکتے ہیں۔| غلطی | مطلب | علاج |
+| ------- | --------- | --------------- |
+| `UnsupportedVersion { expected, found }` | پے لوڈ `version` ویلیویٹر کے تعاون یافتہ اسکیما سے مختلف ہے۔ | تازہ ترین اسکیما بنڈل کا استعمال کرتے ہوئے JSON کو دوبارہ تخلیق کریں تاکہ ورژن `expected` سے مماثل ہے۔ |
+| `MissingProposalId` / `InvalidProposalIdFormat { value }` | `proposal_id` خالی ہے یا نہیں `AC-YYYY-###` فارم میں۔ | دوبارہ سبمیٹنگ سے پہلے دستاویزی شکل کے بعد ایک انوکھا شناخت کنندہ آباد کریں۔ |
+| `MissingSubmissionTimestamp` | `submitted_at_unix_ms` صفر یا لاپتہ ہے۔ | یونکس ملی سیکنڈ میں جمع کرانے کے ٹائم اسٹیمپ کو ریکارڈ کریں۔ |
+| `InvalidLanguageTag { value }` | `language` ایک درست BCP - 47 ٹیگ نہیں ہے۔ | ایک معیاری ٹیگ جیسے `en` ، `ja-JP` ، یا BCP - 47 کے ذریعہ تسلیم شدہ دوسرا مقام استعمال کریں۔ |
+| `MissingSummaryField { field }` | `summary.title` میں سے ایک ، `.motivation` ، یا `.expected_impact` خالی ہے۔ | اشارہ کردہ سمری فیلڈ کے لئے غیر خالی متن فراہم کریں۔ |
+| `MissingSubmitterField { field }` | `submitter.name` یا `submitter.contact` غائب ہے۔ | لاپتہ جمع کرانے والے میٹا ڈیٹا کی فراہمی کریں تاکہ جائزہ لینے والے تجویز کنندہ سے رابطہ کرسکیں۔ |
+| `InvalidTag { value }` | `tags[]` اندراج اجازت نہیں ہے۔ | دستاویزی اقدار (`csam` ، `malware` ، وغیرہ) میں سے کسی ایک پر ٹیگ کو ہٹا دیں یا ان کا نام تبدیل کریں۔ |
+| `MissingTargets` | `targets[]` سرنی خالی ہے۔ | کم از کم ایک ہدف ہیش فیملی انٹری فراہم کریں۔ |
+| `MissingTargetLabel { index }` / `MissingTargetReason { index }` | ہدف اندراج `label` یا `reason` فیلڈز سے محروم ہے۔ | دوبارہ شروع کرنے سے پہلے اشاریہ اندراج کے لئے مطلوبہ فیلڈ کو پُر کریں۔ |
+| `InvalidHashFamily { index, value }` | غیر تعاون یافتہ `hash_family` لیبل۔ | ہیش فیملی ناموں کو ASCII الفانومرکس پلس `-_` پر محدود رکھیں۔ |
+| `InvalidHashHex { index, value }` / `TargetDigestTooShort { index }` | ڈائجسٹ درست نہیں ہے یا 16 بائٹس سے کم ہے۔ | انڈیکسڈ ہدف کے لئے ایک لوئر کیس ہیکس ڈائجسٹ (≥32 ہیکس چارس) فراہم کریں۔ |
+| `DuplicateTarget { index, fingerprint }` | ہدف ڈائجسٹ پہلے اندراج یا رجسٹری فنگر پرنٹ کی نقل تیار کرتا ہے۔ | نقول کو ہٹا دیں یا معاون شواہد کو ایک ہی ہدف میں ضم کریں۔ |
+| `MissingEvidence` | کوئی ثبوت منسلک نہیں کیا گیا تھا۔ | کم از کم ایک ثبوت ریکارڈ جو پنروتپادن کے مواد سے منسلک ہے۔ |
+| `MissingEvidenceUri { index }` | ثبوت اندراج `uri` فیلڈ سے محروم ہے۔ | اشاریہ شدہ ثبوت کے اندراج کے ل featetetable URI یا کیس کی شناخت کنندہ فراہم کریں۔ |
+| `MissingEvidenceDigest { index }` / `InvalidEvidenceDigest { index, value }` | ثبوت اندراج جس میں ڈائجسٹ کی ضرورت ہوتی ہے (SoraFS CID یا منسلک) غائب ہے یا `digest_blake3_hex` غلط ہے۔ | اشاریہ اندراج کے لئے 64-کردار لوئر کیس بلیک 3 ڈائجسٹ فراہم کریں۔ |
 
-`AgendaProposalV1::validate` emits `AgendaProposalValidationError` variants
-whenever a payload fails linting. The table below summarises the most common
-errors so portal reviewers can translate CLI output into actionable guidance.
+## مثالیں
 
-| Error | Meaning | Remediation |
-|-------|---------|-------------|
-| `UnsupportedVersion { expected, found }` | Payload `version` differs from the validator’s supported schema. | Regenerate the JSON using the latest schema bundle so the version matches `expected`. |
-| `MissingProposalId` / `InvalidProposalIdFormat { value }` | `proposal_id` is empty or not in `AC-YYYY-###` form. | Populate a unique identifier following the documented format before re-submitting. |
-| `MissingSubmissionTimestamp` | `submitted_at_unix_ms` is zero or missing. | Record the submission timestamp in Unix milliseconds. |
-| `InvalidLanguageTag { value }` | `language` is not a valid BCP‑47 tag. | Use a standard tag such as `en`, `ja-JP`, or another locale recognised by BCP‑47. |
-| `MissingSummaryField { field }` | One of `summary.title`, `.motivation`, or `.expected_impact` is empty. | Provide non-empty text for the indicated summary field. |
-| `MissingSubmitterField { field }` | `submitter.name` or `submitter.contact` missing. | Supply the missing submitter metadata so reviewers can contact the proposer. |
-| `InvalidTag { value }` | `tags[]` entry not on the allowlist. | Remove or rename the tag to one of the documented values (`csam`, `malware`, etc.). |
-| `MissingTargets` | `targets[]` array is empty. | Provide at least one target hash family entry. |
-| `MissingTargetLabel { index }` / `MissingTargetReason { index }` | Target entry missing the `label` or `reason` fields. | Fill in the required field for the indexed entry before resubmitting. |
-| `InvalidHashFamily { index, value }` | Unsupported `hash_family` label. | Restrict hash family names to ASCII alphanumerics plus `-_`. |
-| `InvalidHashHex { index, value }` / `TargetDigestTooShort { index }` | Digest is not valid hex or is shorter than 16 bytes. | Provide a lowercase hex digest (≥32 hex chars) for the indexed target. |
-| `DuplicateTarget { index, fingerprint }` | Target digest duplicates an earlier entry or registry fingerprint. | Remove duplicates or merge the supporting evidence into a single target. |
-| `MissingEvidence` | No evidence attachments were supplied. | Attach at least one evidence record linking to reproduction material. |
-| `MissingEvidenceUri { index }` | Evidence entry missing the `uri` field. | Provide the fetchable URI or case identifier for the indexed evidence entry. |
-| `MissingEvidenceDigest { index }` / `InvalidEvidenceDigest { index, value }` | Evidence entry that requires a digest (SoraFS CID or attachment) is missing or has invalid `digest_blake3_hex`. | Supply a 64-character lowercase BLAKE3 digest for the indexed entry. |
+- `docs/examples/ministry/agenda_proposal_example.json` - کیننیکل ،
+  دو شواہد منسلکات کے ساتھ لنٹ کلین پروپوزل پے لوڈ۔
+- `docs/examples/ministry/agenda_duplicate_registry.json` - اسٹارٹر رجسٹری
+  ایک ہی بلیک 3 فنگر پرنٹ اور عقلی اصول پر مشتمل ہے۔
 
-## Examples
-
-- `docs/examples/ministry/agenda_proposal_example.json` — canonical,
-  lint-clean proposal payload with two evidence attachments.
-- `docs/examples/ministry/agenda_duplicate_registry.json` — starter registry
-  containing a single BLAKE3 fingerprint and rationale.
-
-Reuse these files as templates when integrating portal tooling or writing CI
-checks for automated submissions.
+جب پورٹل ٹولنگ کو مربوط کرتے ہو یا CI لکھتے ہو تو ان فائلوں کو بطور ٹیمپلیٹس دوبارہ استعمال کریں
+خودکار گذارشات کے لئے چیک۔

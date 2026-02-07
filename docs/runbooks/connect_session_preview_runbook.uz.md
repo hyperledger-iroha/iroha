@@ -7,42 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d04af2ad3ae5cc6a9254236f5627850aab7c6517308e9f3a09650cbc1490168
 source_last_modified: "2026-01-05T18:22:23.401292+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Connect Session Preview Runbook (IOS7 / JS4)
+# Seansni oldindan ko'rish kitobini ulash (IOS7 / JS4)
 
-This runbook documents the end-to-end procedure for staging, validating, and
-tearing down Connect preview sessions as required by roadmap milestones **IOS7**
-and **JS4** (`roadmap.md:1340`, `roadmap.md:1656`). Follow these steps whenever
-you demo the Connect strawman (`docs/source/connect_architecture_strawman.md`),
-exercise the queue/telemetry hooks promised in the SDK roadmaps, or collect
-evidence for `status.md`.
+Ushbu runbook bosqichma-bosqich, tekshirish va yakuniy protsedurani hujjatlashtiradi
+**IOS7** yoʻl xaritasi bosqichlarida talab qilinganidek, oldindan koʻrish seanslarini ulash
+va **JS4** (`roadmap.md:1340`, `roadmap.md:1656`). Istalgan vaqtda ushbu amallarni bajaring
+siz Connect strawman (`docs/source/connect_architecture_strawman.md`) ni namoyish qilasiz,
+SDK yo'l xaritalarida va'da qilingan navbat/telemetriya ilgaklarini ishlating yoki to'plang
+`status.md` uchun dalil.
 
-## 1. Preflight Checklist
+## 1. Parvozdan oldingi nazorat ro'yxati
 
-| Item | Details | References |
+| Element | Tafsilotlar | Adabiyotlar |
 |------|---------|------------|
-| Torii endpoint + Connect policy | Confirm the Torii base URL, `chain_id`, and Connect policy (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). Capture the JSON snapshot in the runbook ticket. | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
-| Fixture + bridge versions | Note the Norito fixture hash and bridge build you will use (Swift requires `NoritoBridge.xcframework`, JS requires `@iroha/iroha-js` ≥ the version that shipped `bootstrapConnectPreviewSession`). | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
-| Telemetry dashboards | Ensure the dashboards that chart `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, `swift.connect.session_event`, etc., are reachable (Grafana `Android/Swift Connect` board + exported Prometheus snapshots). | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
-| Evidence folders | Pick a destination such as `docs/source/status/swift_weekly_digest.md` (weekly digest) and `docs/source/sdk/swift/connect_risk_tracker.md` (risk tracker). Store logs, metrics screenshots, and acknowledgements under `docs/source/sdk/swift/readiness/archive/<date>/connect/`. | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
+| Torii oxirgi nuqta + Ulanish siyosati | Torii asosiy URL manzilini, `chain_id` va ulanish siyosatini tasdiqlang (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). Runbook chiptasida JSON snapshotini oling. | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
+| Fikstur + ko'prik versiyalari | Siz foydalanadigan Norito armatura xesh va koʻprik qurilishiga eʼtibor bering (Swift uchun `NoritoBridge.xcframework`, JS uchun `@iroha/iroha-js` ≥ `bootstrapConnectPreviewSession` yetkazib berilgan versiya talab qilinadi). | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
+| Telemetriya asboblar paneli | `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, `swift.connect.session_event` va boshqalar diagrammalariga kirish mumkin bo'lgan asboblar paneliga ishonch hosil qiling (Grafana Norito Prometheus suratlar). | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
+| Dalillar papkalari | `docs/source/status/swift_weekly_digest.md` (haftalik dayjest) va `docs/source/sdk/swift/connect_risk_tracker.md` (xavf kuzatuvchisi) kabi manzilni tanlang. Jurnallar, koʻrsatkichlar skrinshotlari va tasdiqlarni `docs/source/sdk/swift/readiness/archive/<date>/connect/` ostida saqlang. | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
 
-## 2. Bootstrap the Preview Session
+## 2. Ko'rib chiqish seansini yuklash
 
-1. **Validate policy + quotas.** Call:
+1. **Siyosat + kvotalarni tasdiqlash.** Qo‘ng‘iroq qiling:
    ```js
    const status = await torii.getConnectStatus();
    console.log(status.policy.queue_max, status.policy.offline_timeout_ms);
    ```
-   Fail the run if `queue_max` or TTL differs from the config you planned to
-   test.
-2. **Generate deterministic SID/URIs.** The `@iroha/iroha-js`
-   `bootstrapConnectPreviewSession` helper ties SID/URI generation to Torii
-   session registration; use it even when Swift will drive the WebSocket layer.
+   Agar `queue_max` yoki TTL siz rejalashtirgan konfiguratsiyadan farq qilsa, ishga tushirish muvaffaqiyatsiz tugadi.
+   sinov.
+2. **Deterministik SID/URI-larni yarating.** `@iroha/iroha-js`
+   `bootstrapConnectPreviewSession` yordamchisi SID/URI avlodini Torii bilan bog'laydi
+   sessiyani ro'yxatdan o'tkazish; Swift WebSocket qatlamini boshqarganda ham undan foydalaning.
    ```js
    import {
      ToriiClient,
@@ -58,16 +59,14 @@ evidence for `status.md`.
    });
    console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
-   - Set `register: false` to dry-run QR/deep-link scenarios.
-   - Persist the returned `sidBase64Url`, deeplink URLs, and `tokens` blob in the
-     evidence folder; the governance review expects these artefacts.
-3. **Distribute secrets.** Share the deeplink URI with the wallet operator
-   (swift dApp sample, Android wallet, or QA harness). Never paste raw tokens
-   into chat; use the encrypted vault documented in the enablement packet.
+   - `register: false`-ni quruq QR/chuqur ulanish stsenariylariga sozlang.
+   - Qaytarilgan `sidBase64Url`, chuqur havola URL-manzillari va `tokens` blokini saqlang.
+     dalillar papkasi; boshqaruv tekshiruvi ushbu artefaktlarni kutmoqda.
+3. **Sirlarni tarqating.** Deeplink URI-ni hamyon operatori bilan baham ko'ring
+   (tezkor dApp namunasi, Android hamyoni yoki QA jabduqlari). Hech qachon xom tokenlarni joylashtirmang
+   chatda; faollashtirish paketida hujjatlashtirilgan shifrlangan ombordan foydalaning.
 
-## 3. Drive the Session
-
-1. **Open the WebSocket.** Swift clients typically use:
+## 3. Sessiyani boshqaring1. **WebSocket-ni oching.** Swift mijozlari odatda quyidagilardan foydalanadilar:
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
@@ -79,77 +78,75 @@ evidence for `status.md`.
    })
    try client.open()
    ```
-   Reference `docs/connect_swift_integration.md` for additional setup (bridge
-   imports, concurrency adapters).
-2. **Approve + sign flows.** DApps call `ConnectSession.requestSignature(...)`,
-   while wallets respond via `approveSession` / `reject`. Each approval must log
-   the hashed alias + permissions to match the Connect governance charter.
-3. **Exercise queue + resume paths.** Toggle network connectivity or suspend the
-   wallet to ensure the bounded queue and replay hooks log entries. JS/Android
-   SDKs emit `ConnectQueueError.overflow(limit)` /
-   `.expired(ttlMs)` when they drop frames; Swift should observe the same once
-   IOS7 queue scaffolding lands (`docs/source/connect_architecture_strawman.md`).
-   After you record at least one reconnect, run
+   Qo'shimcha sozlash uchun `docs/connect_swift_integration.md` havolasi (ko'prik
+   import, parallel adapterlar).
+2. **Tasdiqlash + belgilar oqimi.** DApps `ConnectSession.requestSignature(...)` raqamiga qo‘ng‘iroq qiladi,
+   hamyonlar esa `approveSession` / `reject` orqali javob beradi. Har bir tasdiqlash jurnalga kirishi kerak
+   xeshlangan taxallus + Connect boshqaruv xartiyasiga mos keladigan ruxsatlar.
+3. **Mashq navbati + davom ettirish yoʻllari.** Tarmoqqa ulanishni oʻchirib qoʻying yoki toʻxtatib qoʻying.
+   chegaralangan navbatni ta'minlash va kancalar jurnali yozuvlarini takrorlash uchun hamyon. JS/Android
+   SDKlar `ConnectQueueError.overflow(limit)` chiqaradi /
+   `.expired(ttlMs)` ular freymlarni tushirganda; Swift bir marta xuddi shunday kuzatishi kerak
+   IOS7 navbatdagi iskala erlari (`docs/source/connect_architecture_strawman.md`).
+   Kamida bitta qayta ulanishni yozganingizdan so'ng, ishga tushiring
    ```bash
    iroha connect queue inspect --sid "$SID" --root ~/.iroha/connect --metrics
    ```
-   (or pass the export directory returned by `ConnectSessionDiagnostics`) and
-   attach the rendered table/JSON to the runbook ticket. The CLI reads the same
-   `state.json` / `metrics.ndjson` pair that `ConnectQueueStateTracker` produces,
-   so governance reviewers can trace drill evidence without bespoke tooling.
+   (yoki `ConnectSessionDiagnostics` tomonidan qaytarilgan eksport katalogidan o'ting) va
+   ko'rsatilgan jadval/JSONni runbook chiptasiga biriktiring. CLI xuddi shunday o'qiydi
+   `ConnectQueueStateTracker` ishlab chiqaradigan `state.json` / `metrics.ndjson` juftligi,
+   shuning uchun boshqaruvni ko'rib chiquvchilar maxsus asboblarsiz burg'ulash dalillarini kuzatishi mumkin.
 
-## 4. Telemetry & Observability
+## 4. Telemetriya va kuzatuvchanlik
 
-- **Metrics to capture:**
-  - `connect.queue_depth{direction}` gauge (should stay below policy cap).
-  - `connect.queue_dropped_total{reason="overflow|ttl"}` counter (non-zero only
-    during fault-injection).
-  - `connect.resume_latency_ms` histogram (record the p95 after forcing a
-    reconnect).
+- **Qo'lga olish uchun ko'rsatkichlar:**
+  - `connect.queue_depth{direction}` o'lchagich (qo'riqnoma chegarasidan past bo'lishi kerak).
+  - `connect.queue_dropped_total{reason="overflow|ttl"}` hisoblagichi (faqat nolga teng
+    noto'g'ri in'ektsiya paytida).
+  - `connect.resume_latency_ms` gistogrammasi (majburlagandan keyin p95 ni yozib oling.
+    qayta ulaning).
   - `connect.replay_success_total` / `connect.replay_error_total`.
-  - Swift-specific `swift.connect.session_event` and
-    `swift.connect.frame_latency` exports (`docs/source/sdk/swift/telemetry_redaction.md`).
-- **Dashboards:** Update the Connect board bookmarks with annotation markers.
-  Attach screenshots (or JSON exports) to the evidence folder alongside the raw
-  OTLP/Prometheus snapshots pulled via the telemetry exporter CLI.
-- **Alerting:** If any Sev 1/2 thresholds trigger (per `docs/source/android_support_playbook.md` §5),
-  page the SDK Program Lead and document the PagerDuty incident ID in the runbook
-  ticket before continuing.
+  - Swift-ga xos `swift.connect.session_event` va
+    `swift.connect.frame_latency` eksporti (`docs/source/sdk/swift/telemetry_redaction.md`).
+- **Boshqaruv paneli:** Annotatsiya belgilari bilan Connect board xatcho‘plarini yangilang.
+  Skrinshotlarni (yoki JSON eksportlarini) raw bilan birga dalillar jildiga biriktiring
+  Telemetriya eksportchisi CLI orqali olingan OTLP/Prometheus suratlari.
+- **Ogohlantirish:** Agar Sev1/2 chegaralari ishga tushsa (`docs/source/android_support_playbook.md` §5 bo'yicha),
+  SDK dasturi rahbari sahifasini oching va PagerDuty hodisasi identifikatorini runbookda hujjatlang
+  davom etishdan oldin chipta.
 
-## 5. Cleanup & Rollback
+## 5. Tozalash va Orqaga qaytarish
 
-1. **Delete staged sessions.** Always delete preview sessions so queue depth
-   alarms remain meaningful:
+1. **Bosqichli seanslarni o‘chirish.** Navbat chuqurligi uchun har doim oldindan ko‘rish seanslarini o‘chirib tashlang
+   signallar mazmunli bo'lib qoladi:
    ```js
    await client.deleteConnectSession(preview.sidBase64Url);
    ```
-   For Swift-only test runs, call the same endpoint through the Rust/CLI helper.
-2. **Purge journals.** Remove any persisted queue journals
-   (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB stores, etc.) so the
-   next run starts clean. Record the file hash before deletion if you need to
-   debug a replay issue.
-3. **File incident notes.** Summarise the run in:
-   - `docs/source/status/swift_weekly_digest.md` (deltas block),
-   - `docs/source/sdk/swift/connect_risk_tracker.md` (clear or downgrade CR-2
-     once telemetry is in place),
-   - the JS SDK changelog or recipe if new behaviour was validated.
-4. **Escalate failures:**
-   - Queue overflow without injected faults ⇒ file a bug against the SDK whose
-     policy diverged from Torii.
-   - Resume errors ⇒ attach `connect.queue_depth` + `connect.resume_latency_ms`
-     snapshots to the incident report.
-   - Governance mismatches (tokens reused, TTL exceeded) ⇒ raise with the SDK
-     Program Lead and annotate `roadmap.md` during the next revision.
+   Faqat Swift sinovlari uchun Rust/CLI yordamchisi orqali bir xil so'nggi nuqtaga qo'ng'iroq qiling.
+2. **Jurnallarni tozalash.** Doimiy navbatdagi jurnallarni olib tashlang
+   (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB do'konlari va boshqalar) shuning uchun
+   keyingi yugurish toza boshlanadi. Agar kerak bo'lsa, o'chirishdan oldin fayl xeshini yozib oling
+   takrorlash muammosini tuzatish.
+3. **Fayl hodisasi qaydlari.** Ishni sarhisob qiling:
+   - `docs/source/status/swift_weekly_digest.md` (deltalar bloki),
+   - `docs/source/sdk/swift/connect_risk_tracker.md` (CR-2 ni tozalash yoki pastga tushirish
+     telemetriya o'rnatilgandan so'ng),
+   - agar yangi xatti-harakatlar tasdiqlangan bo'lsa, JS SDK o'zgarishlar jurnali yoki retsepti.
+4. **Muvaffaqiyatsizliklarni kuchaytirish:**
+   - Inyeksion nosozliklarsiz navbatning to'lib ketishi ⇒ SDK ga qarshi xato xabari
+     siyosat Torii dan ajralib chiqdi.
+   - Davom etish xatolari ⇒ `connect.queue_depth` + `connect.resume_latency_ms` ni biriktiring
+     voqea hisobotiga lavhalar.
+   - Boshqaruvdagi nomuvofiqliklar (tokenlar qayta ishlatilgan, TTL oshib ketgan) ⇒ SDK bilan oshirish
+     Dastur rahbari va keyingi tahrirda `roadmap.md` ga izoh bering.
 
-## 6. Evidence Checklist
-
-| Artefact | Location |
+## 6. Dalillarni tekshirish ro'yxati| Artefakt | Manzil |
 |----------|----------|
 | SID/deeplink/tokens JSON | `docs/source/sdk/swift/readiness/archive/<date>/connect/session.json` |
-| Dashboard exports (`connect.queue_depth`, etc.) | `.../metrics/` subfolder |
-| PagerDuty / incident IDs | `.../notes.md` |
-| Cleanup confirmation (Torii delete, journal wipe) | `.../cleanup.log` |
+| Boshqaruv paneli eksporti (`connect.queue_depth` va boshqalar) | `.../metrics/` pastki papkasi |
+| PagerDuty / voqea identifikatorlari | `.../notes.md` |
+| Tozalashni tasdiqlash (Torii o'chirish, jurnalni tozalash) | `.../cleanup.log` |
 
-Completing this checklist satisfies the “docs/runbooks updated” exit criterion
-for IOS7/JS4 and gives governance reviewers a deterministic trail for every
-Connect preview session.
+Ushbu nazorat roʻyxatini toʻldirish “docs/runbooks yangilangan” chiqish mezoniga javob beradi
+IOS7/JS4 uchun va boshqaruv sharhlovchilariga har biri uchun deterministik iz beradi
+Ko‘rib chiqish seansini ulaning.

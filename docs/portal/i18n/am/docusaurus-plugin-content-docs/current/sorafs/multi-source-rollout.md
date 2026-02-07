@@ -8,38 +8,40 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Multi-Source Client Rollout & Blacklisting Runbook
 sidebar_label: Multi-Source Rollout Runbook
 description: Operational checklist for staged multi-source rollouts and emergency provider blacklisting.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-## Purpose
+#ዓላማ
 
-This runbook guides SRE and on-call engineers through two critical workflows:
+ይህ Runbook SRE እና የጥሪ መሐንዲሶችን በሁለት ወሳኝ የስራ ፍሰቶች ይመራቸዋል፡
 
-1. Rolling out the multi-source orchestrator in controlled waves.
-2. Blacklisting or de-prioritising misbehaving providers without destabilising existing sessions.
+1. የባለብዙ ምንጭ ኦርኬስትራውን በተቆጣጠሩት ሞገዶች ውስጥ ማስወጣት.
+2. ያሉትን ክፍለ-ጊዜዎች ሳያስታውሱ የተሳሳቱ ባህሪ አቅራቢዎችን መጥቀስ ወይም ቅድሚያ መስጠት።
 
-It assumes the orchestration stack delivered under SF-6 is already deployed (`sorafs_orchestrator`, gateway chunk-range API, telemetry exporters).
+በSF-6 ስር የቀረበው የኦርኬስትራ ቁልል አስቀድሞ ተዘርግቷል (`sorafs_orchestrator`፣ ጌትዌይ ቸንክ-ሬንጅ ኤፒአይ፣ የቴሌሜትሪ ላኪዎች) ያስባል።
 
-> **See also:** The [Orchestrator Operations Runbook](./orchestrator-ops.md) dives into per-run procedures (scoreboard capture, staged rollout toggles, rollback). Use both references together during live changes.
+> ** በተጨማሪ ይመልከቱ፡** [የኦርኬስትራ ኦፕሬሽንስ Runbook](./orchestrator-ops.md) በየሩጫ ሂደቶች (የውጤት ሰሌዳ ቀረጻ፣ የታቀዱ ልቀቶች መቀያየር፣ ጥቅልል ​​መመለስ) ውስጥ ዘልቆ ይገባል። በቀጥታ ለውጦች ጊዜ ሁለቱንም ማጣቀሻዎች አንድ ላይ ተጠቀም።
 
-## 1. Pre-flight Validation
+## 1. የቅድመ በረራ ማረጋገጫ
 
-1. **Confirm governance inputs.**
-   - All candidate providers must publish `ProviderAdvertV1` envelopes with range capability payloads and stream budgets. Validate via `/v1/sorafs/providers` and compare against the expected capability fields.
-   - Telemetry snapshots supplying latency/failure rates should be < 15 minutes old before each canary run.
-2. **Stage configuration.**
-   - Persist the orchestrator JSON config in the layered `iroha_config` tree:
+1. **የአስተዳደር ግብአቶችን ያረጋግጡ።**
+   - ሁሉም እጩ አቅራቢዎች የ `ProviderAdvertV1` ፖስታዎችን ከክልል አቅም ሸክሞች እና የዥረት በጀት ጋር ማተም አለባቸው። በI18NI0000008X በኩል ያረጋግጡ እና ከሚጠበቁ የችሎታ መስኮች ጋር ያወዳድሩ።
+   - የቴሌሜትሪ ቅጽበታዊ ገጽ እይታዎች የማዘግየት/የመውደቅ ተመኖችን የሚያቀርቡት ከእያንዳንዱ የካናሪ ሩጫ በፊት <15 ደቂቃ መሆን አለበት።
+2. **የደረጃ ውቅር።**
+   - ኦርኬስትራውን JSON አወቃቀሩን በተነባበረው I18NI0000009X ዛፍ ላይ ያቆዩት፡
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     Update the JSON with rollout-specific limits (`max_providers`, retry budgets). Feed the same file to staging/production so diffs stay small.
-3. **Exercise canonical fixtures.**
-   - Populate the manifest/token environment variables and run the deterministic fetch:
+     በታቀደ-ተኮር ገደቦች (`max_providers`፣ በጀቶችን እንደገና ይሞክሩ) JSONን ያዘምኑ። ልዩነቱ ትንሽ ሆኖ እንዲቆይ ተመሳሳዩን ፋይል ወደ ዝግጅት/ምርት ይመግቡ።
+3. ** ቀኖናዊ ዕቃዎችን የአካል ብቃት እንቅስቃሴ ያድርጉ።
+   - የአንጸባራቂ/የማስመሰያ አካባቢ ተለዋዋጮችን ይሙሉ እና ወሳኙን ማምጣት ያሂዱ፡-
 
      ```bash
      sorafs_cli fetch \
@@ -54,55 +56,55 @@ It assumes the orchestration stack delivered under SF-6 is already deployed (`so
        --json-out artifacts/canary.fetch.json
      ```
 
-     Environment variables should contain the manifest payload digest (hex) and base64-encoded stream tokens for each provider participating in the canary.
-   - Diff `artifacts/canary.scoreboard.json` against the previous release. Any new ineligible provider or weight shift >10 % requires review.
-4. **Verify telemetry is wired.**
-   - Open the Grafana export in `docs/examples/sorafs_fetch_dashboard.json`. Ensure the `sorafs_orchestrator_*` metrics populate in staging before progressing.
+     የአካባቢ ተለዋዋጮች በካናሪ ውስጥ ለሚሳተፈው ለእያንዳንዱ አቅራቢ አንጸባራቂ የክፍያ ዳይጄስት (ሄክስ) እና ቤዝ64-ኢንኮድ የተደረገ ዥረት ቶከን መያዝ አለባቸው።
+   - ከቀዳሚው ልቀት አንፃር I18NI00000011 ልዩነት። ማንኛውም አዲስ ብቁ ያልሆነ አቅራቢ ወይም የክብደት ለውጥ>10% ግምገማ ያስፈልገዋል።
+4. ** ቴሌሜትሪ በሽቦ መያዙን ያረጋግጡ።**
+   - የGrafana ኤክስፖርትን በI18NI0000012X ይክፈቱ። ከሂደቱ በፊት የ`sorafs_orchestrator_*` ሜትሪክስ በዝግጅት ላይ መሞላቱን ያረጋግጡ።
 
-## 2. Emergency Provider Blacklisting
+## 2. የአደጋ ጊዜ አቅራቢ ጥቁር መዝገብ
 
-Follow this procedure when a provider serves corrupt chunks, times out persistently, or fails compliance checks.
+አቅራቢው የተበላሹ ክፍሎችን ሲያገለግል፣ ያለማቋረጥ ጊዜ ሲያልቅ ወይም የተገዢነት ማረጋገጫዎችን ሲያጣ ይህን አሰራር ይከተሉ።
 
-1. **Capture evidence.**
-   - Export the latest fetch summary (`--json-out` output). Record failing chunk indices, provider aliases, and digest mismatches.
-   - Save relevant log excerpts from `telemetry::sorafs.fetch.*` targets.
-2. **Apply an immediate override.**
-   - Mark the provider penalised in the telemetry snapshot distributed to the orchestrator (set `penalty=true` or clamp `token_health` to `0`). The next scoreboard build will exclude the provider automatically.
-   - For ad-hoc smoke tests, pass `--deny-provider gw-alpha` to `sorafs_cli fetch` so the failure path is exercised without waiting for telemetry propagation.
-   - Redeploy the updated telemetry/config bundle to the affected environment (staging → canary → production). Document the change in the incident log.
-3. **Validate the override.**
-   - Re-run the canonical fixture fetch. Confirm the scoreboard marks the provider as ineligible with reason `policy_denied`.
-   - Inspect `sorafs_orchestrator_provider_failures_total` to ensure the counter stops incrementing for the denied provider.
-4. **Escalate long-lived bans.**
-   - If the provider will remain blocked for >24 h, raise a governance ticket to rotate or suspend its advert. Until the vote passes, keep the deny list in place and refresh telemetry snapshots so the provider does not re-enter the scoreboard.
-5. **Rollback protocol.**
-   - To reinstate the provider, remove it from the deny list, redeploy, and capture a fresh scoreboard snapshot. Attach the change to the incident postmortem.
+1. **ማስረጃ ይያዙ።**
+   - የቅርብ ጊዜ ማምጣት ማጠቃለያ (`--json-out` ውፅዓት) ወደ ውጭ ላክ። ያልተሳኩ የትኩረት ኢንዴክሶችን፣ የአቅራቢ ስሞችን ይመዝግቡ እና አለመዛመጃዎችን መፍጨት።
+   - ተዛማጅነት ያላቸውን የምዝግብ ማስታወሻዎች ከ `telemetry::sorafs.fetch.*` ዒላማዎች ያስቀምጡ።
+2. ** ወዲያውኑ መሻርን ይተግብሩ።**
+   - አቅራቢውን ለኦርኬስትራ በተሰራጨው የቴሌሜትሪ ቅጽበታዊ ገጽ እይታ (`penalty=true` ወይም clamp `token_health` to `0`) ላይ ምልክት ያድርጉ። የሚቀጥለው የውጤት ሰሌዳ ግንባታ አቅራቢውን በራስ-ሰር ያስወግዳል።
+   - ለአድሆክ ጭስ ሙከራዎች `--deny-provider gw-alpha` ወደ `sorafs_cli fetch` ያስተላልፉ ስለዚህ የቴሌሜትሪ ስርጭትን ሳይጠብቁ ውድቀት መንገዱ ይከናወናል።
+   - የተዘመነውን የቴሌሜትሪ/የውቅረት ቅርቅብ ለተጎዳው አካባቢ (ማዘጋጀት → ካናሪ → ምርት) እንደገና ማሰማራት። በአደጋው ​​መዝገብ ውስጥ ያለውን ለውጥ ይመዝግቡ።
+3. ** መሻርን ያረጋግጡ።**
+   - ቀኖናዊውን መፈልፈያ እንደገና ያሂዱ። የውጤት ሰሌዳውን ያረጋግጡ አቅራቢውን በምክንያት `policy_denied`።
+   - ቆጣሪው ለተከለከለው አቅራቢ መጨመር መቆሙን ለማረጋገጥ `sorafs_orchestrator_provider_failures_total`ን ይፈትሹ።
+4. ** ለረጅም ጊዜ የሚቆዩ እገዳዎች መጨመር.
+   - አቅራቢው ለ> 24 ሰአት እንደታገደ የሚቆይ ከሆነ፣ ማስታወቂያውን ለማሽከርከር ወይም ለማገድ የአስተዳደር ትኬት ከፍ ያድርጉ። ድምጹ እስኪያልፍ ድረስ፣ አቅራቢው ወደ የውጤት ሰሌዳው እንዳይገባ የክህደት ዝርዝሩን በቦታው ያስቀምጡ እና የቴሌሜትሪ ቅጽበተ-ፎቶዎችን ያድሱ።
+5. **የመመለሻ ፕሮቶኮል**
+   - አቅራቢውን ወደነበረበት ለመመለስ፣ ከተከለከለው ዝርዝር ውስጥ ያስወግዱት፣ እንደገና ያሰራጩ እና አዲስ የውጤት ሰሌዳ ቅጽበተ-ፎቶ ያንሱ። ለውጡን ከድንገተኛ ሞት በኋላ ያያይዙት።
 
-## 3. Staged Rollout Plan
+## 3. የታቀደ ልቀት እቅድ
 
-| Phase | Scope | Required Signals | Go/No-Go Criteria |
-|-------|-------|------------------|-------------------|
-| **Lab** | Dedicated integration cluster | Manual CLI fetch against fixture payloads | All chunks succeed, provider failure counters stay at 0, retry rate < 5 %. |
-| **Staging** | Full control-plane staging | Grafana dashboard connected; alert rules in warning-only mode | `sorafs_orchestrator_active_fetches` returns to zero after each test run; no `warn/critical` alert firings. |
-| **Canary** | ≤10 % of production traffic | Pager muted but telemetry monitored in real time | Retry ratio < 10 %, provider failures isolated to known noisy peers, latency histogram matches staging baseline ±20 %. |
-| **General Availability** | 100 % roll-out | Pager rules active | Zero `NoHealthyProviders` errors for 24 h, retry ratio stable, dashboard SLA panels green. |
+| ደረጃ | ወሰን | አስፈላጊ ምልክቶች | መሄድ/አለመሄድ መስፈርት |
+|-------|--------|
+| ** ላብ *** | የተዋሃደ ስብስብ | በእጅ CLI ከቋሚ ጭነቶች ጋር ማምጣት | ሁሉም ክፍሎች ተሳክተዋል፣ የአቅራቢዎች አለመሳካት ቆጣሪዎች በ0 ይቆያሉ፣ የድጋሚ ሙከራ መጠን <5% |
+| ** መድረክ *** | ሙሉ ቁጥጥር-አይሮፕላን ዝግጅት | Grafana ዳሽቦርድ ተገናኝቷል; የማስጠንቀቂያ ደንቦች በማስጠንቀቂያ-ብቻ ሁነታ | `sorafs_orchestrator_active_fetches` ከእያንዳንዱ ሙከራ በኋላ ወደ ዜሮ ይመለሳል; ምንም `warn/critical` ማንቂያ ተኩስ. |
+| **ካናሪ** | ≤10% የምርት ትራፊክ | ፔጀር ድምጸ-ከል ሆኗል ነገር ግን የቴሌሜትሪ ክትትል በእውነተኛ ሰዓት | ጥምርታ እንደገና ይሞክሩ <10%፣ የአቅራቢዎች ውድቀቶች ከሚታወቁ ጫጫታ እኩዮች ጋር ተነጥለው፣የዘገየ ሂስቶግራም ከመሠረታዊ መስመር ±20% ጋር ይዛመዳል። |
+| ** አጠቃላይ ተገኝነት *** | 100% መልቀቅ | Pager ሕጎች ንቁ | ዜሮ `NoHealthyProviders` ስህተቶች ለ 24h, እንደገና ይሞክሩ ሬሾ የተረጋጋ, ዳሽቦርድ SLA ፓነሎች አረንጓዴ. |
 
-For each phase:
+ለእያንዳንዱ ደረጃ:
 
-1. Update the orchestrator JSON with the intended `max_providers` and retry budgets.
-2. Run `sorafs_cli fetch` or the SDK integration test suite against the canonical fixture and a representative manifest from the environment.
-3. Capture scoreboard + summary artefacts and attach them to the release record.
-4. Review telemetry dashboards with the on-call engineer before promoting to the next phase.
+1. ኦርኬስትራውን JSON በታሰበው `max_providers` ያዘምኑ እና በጀቶችን እንደገና ይሞክሩ።
+2. `sorafs_cli fetch` ወይም የኤስዲኬ ውህደት ሙከራ ስብስብን ከቀኖናዊው አካል እና ከአካባቢው ከሚገለጽ ተወካይ ጋር ያሂዱ።
+3. የውጤት ሰሌዳ + ማጠቃለያ ቅርሶችን ያንሱ እና ከተለቀቀው መዝገብ ጋር አያይዟቸው።
+4. ወደ ቀጣዩ ደረጃ ከማስተዋወቅዎ በፊት የቴሌሜትሪ ዳሽቦርዶችን በጥሪ መሐንዲስ ይከልሱ።
 
-## 4. Observability & Incident Hooks
+## 4. ታዛቢነት እና ክስተት መንጠቆዎች
 
-- **Metrics:** Ensure Alertmanager monitors `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` and `sorafs_orchestrator_retries_total`. A sudden spike typically means a provider is degrading under load.
-- **Logs:** Route the `telemetry::sorafs.fetch.*` targets to the shared log aggregator. Build saved searches for `event=complete status=failed` to speed up triage.
-- **Scoreboards:** Persist every scoreboard artefact to long-term storage. The JSON doubles as the evidence trail for compliance reviews and staged rollbacks.
-- **Dashboards:** Clone the canonical Grafana board (`docs/examples/sorafs_fetch_dashboard.json`) into the production folder with alert rules from `docs/examples/sorafs_fetch_alerts.yaml`.
+- ** መለኪያዎች፡** የአለርትማኔጀር `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` እና `sorafs_orchestrator_retries_total` መከታተላቸውን ያረጋግጡ። ድንገተኛ ስፒል በተለምዶ አቅራቢው በጭነት ውስጥ እያዋረደ ነው ማለት ነው።
+- ** ምዝግብ ማስታወሻዎች፡** የ`telemetry::sorafs.fetch.*` ኢላማዎችን ወደ የተጋራው የምዝግብ ማስታወሻ ሰብሳቢ ያዙሩ። መለያየትን ለማፋጠን ለ`event=complete status=failed` የተቀመጡ ፍለጋዎችን ይገንቡ።
+- ** የውጤት ሰሌዳዎች: *** እያንዳንዱን የውጤት ሰሌዳ አርቲፊኬት ለረጅም ጊዜ ማከማቻ ያቆዩ። JSON ለታዛዥ ግምገማዎች እና የታቀዱ መልሶ ማገገሚያዎች እንደ የማስረጃ መንገድ በእጥፍ ይጨምራል።
+- ** ዳሽቦርዶች: ** ቀኖናዊውን I18NT0000002X ሰሌዳ (`docs/examples/sorafs_fetch_dashboard.json`) ወደ የምርት አቃፊ ከ `docs/examples/sorafs_fetch_alerts.yaml` የማስጠንቀቂያ ደንቦች ጋር ያዙሩ።
 
-## 5. Communication & Documentation
+## 5. ግንኙነት እና ሰነድ
 
-- Log every deny/boost change in the operations changelog with timestamp, operator, reason, and associated incident.
-- Notify SDK teams when provider weights or retry budgets change to align client-side expectations.
-- After GA completes, update `status.md` with the rollout summary and archive this runbook reference in the release notes.
+- በኦፕሬሽኖች ለውጥ ሎግ ውስጥ ያለውን እያንዳንዱን እምቢታ/የማሳደግ ለውጥ በጊዜ ማህተም፣ ከዋኝ፣ በምክንያት እና በተዛመደ ክስተት ይመዝገቡ።
+- የአቅራቢ ክብደቶች ወይም በጀቶች ከደንበኛ-ጎን የሚጠበቁትን ለማጣጣም ሲቀየሩ ለኤስዲኬ ቡድኖች ያሳውቁ።
+- GA ከተጠናቀቀ በኋላ `status.md`ን ከታቀደው ማጠቃለያ ጋር ያዘምኑ እና ይህንን የሩጫ መጽሐፍ ማጣቀሻ በመልቀቂያ ማስታወሻዎች ውስጥ ያስቀምጡ።

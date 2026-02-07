@@ -7,111 +7,104 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6a406b7656a87bb1469444db1cc2d2d5922f16660b53cc7eaef5b838199127e8
 source_last_modified: "2026-01-23T23:46:10.135119+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Global Feature Matrix
+# Ғаламдық мүмкіндік матрицасы
 
-Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially implemented · `△` implementation just started · `✖︎` not started
+Легенда: `◉` толық орындалды · `○` негізінен орындалды · `▲` ішінара орындалды · `△` енгізу енді басталды · `✖︎` іске қосылмады
 
 ## Consensus & Networking
 
-| Feature | Status | Notes | Evidence |
+| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| Multi-collector K/r support & first-commit-certificate-wins | ◉ | Deterministic collector selection, redundant fan-out, on-chain K/r parameters, and first-valid-commit-certificate acceptance shipped with tests. | status.md:255; status.md:314 |
-| Pacemaker backoff, RTT floor, deterministic jitter | ◉ | Configurable timers with jitter band wired through config, telemetry, and docs. | status.md:251 |
-| NEW_VIEW gating & highest QC tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest QC adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
-| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:latest |
-| Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; availability evidence is tracked (advisory) while commit proceeds independently. | status.md:latest |
-| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
-| Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
-| RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
-| Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Permissioned PRF-based rotation | ◉ | Permissioned leader/collector selection uses PRF seed + height/view over the canonical roster; prev-hash rotation remains a legacy helper. | status.md:latest |
+| Көп коллекторлық K/r қолдауы және бірінші орындалатын сертификатты жеңеді | ◉ | Анықтаушы коллекторды таңдау, артық желдеткіш шығару, тізбектегі K/r параметрлері және сынақтармен бірге жіберілген бірінші жарамды сертификатты қабылдау. | status.md:255; status.md:314 |
+| Кардиостимулятордың кері қашуы, RTT қабаты, детерминирленген діріл | ◉ | Конфигурация, телеметрия және құжаттар арқылы жалғанған діріл жолағы бар конфигурацияланатын таймерлер. | status.md:251 |
+| NEW_VIEW gating & highest QC tracking | ◉ | Басқару ағыны NEW_VIEW/Дәлелді береді, ең жоғары QC монотонды түрде қабылдайды, қол алысу есептелген саусақ ізін қорғайды. | status.md:210 |
+| availability evidence tracking (advisory) | ◉ | Availability evidence emitted and tracked; commit does not gate on availability in v1. | status.md:соңғы |
+| Reliable Broadcast (DA payload transport) | ◉ | RBC хабарлама ағыны (Init/Chunk/Ready/Deliver) тасымалдау/қалпына келтіру жолы ретінде `da_enabled=true` болғанда қосылады; қол жетімділік дәлелдері бақыланады (кеңес беру), кірісті орындау тәуелсіз. | status.md:соңғы |
+| QC күй-түбірлік байланыстыруды орындау | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; жеке орындау-QC қақпасы жоқ. | status.md:соңғы |
+| Дәлелдерді тарату және аудиттің соңғы нүктелері | ◉ | ControlFlow::Дәлелдер, Torii дәлелдемелердің соңғы нүктелері және теріс сынақтар қонды. | status.md:176; status.md:760-761 |
+| РБК телеметриясы, дайындық/жеткізу көрсеткіштері | ◉ | `/v1/sumeragi/rbc*` соңғы нүктелері және телеметриялық есептегіштер/гистограмма операторлар үшін қолжетімді. | status.md:283-284; status.md:772 |
+| Консенсус параметрі жарнама және топологияны тексеру | ◉ | Түйіндер `(collectors_k, redundant_send_r)` таратады және құрдастардың теңдігін растайды. | status.md:255 |
+| Рұқсат етілген PRF негізіндегі айналдыру | ◉ | Рұқсат етілген көшбасшы/коллекторды таңдау PRF тұқымын пайдаланады + канондық тізімдегі биіктік/көрініс; prev-хэш айналуы бұрынғы көмекші болып қала береді. | status.md:соңғы |
 
-## Pipeline, Kura & State
-
-| Feature | Status | Notes | Evidence |
+## Құбыр, Кура және мемлекет| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| Quarantine lane caps & telemetry | ◉ | Config knobs, deterministic overflow handling, and telemetry counters implemented. | status.md:263 |
-| Pipeline worker pool knob | ◉ | `[pipeline].workers` threaded through state init with env parsing tests. | status.md:264 |
-| Snapshot query lane (stored/ephemeral cursors) | ◉ | Stored cursor mode with Torii integration and blocking worker pools. | status.md:265; status.md:371; status.md:501 |
-| Static DAG fingerprint recovery sidecars | ◉ | Sidecars stored in Kura, validated on startup, warnings emitted on mismatches. | status.md:106; status.md:349 |
-| Kura block store hash decoding hardening | ◉ | Hash reads switched to raw 32-byte handling with Norito-independent roundtrip tests. | status.md:608; status.md:668 |
-| Norito adaptive telemetry for codecs | ◉ | AoS vs NCB selection metrics added to Norito. | status.md:156 |
-| Snapshot WSV queries via Torii | ◉ | Torii snapshot query lane uses blocking worker pool, deterministic semantics. | status.md:501 |
-| Trigger by-call execution chaining | ◉ | Data triggers chain immediately after by-call execution with deterministic order. | status.md:668 |
+| Карантиндік жолақ қақпақтары және телеметрия | ◉ | Конфигурациялау тұтқалары, детерминирленген толып кетуді өңдеу және телеметрия есептегіштері орындалды. | status.md:263 |
+| Құбыр жұмысшы бассейнінің тұтқасы | ◉ | `[pipeline].workers` env талдау сынақтарымен күйді бастау арқылы ағынды. | status.md:264 |
+| Суретті сұрау жолағы (сақталған/эфемерлі курсорлар) | ◉ | Torii интеграциясы және жұмысшы пулдарын блоктайтын сақталған курсор режимі. | status.md:265; status.md:371; status.md:501 |
+| Статикалық DAG саусақ ізін қалпына келтіру бүйірлері | ◉ | Курада сақталған бүйірлік көліктер, іске қосу кезінде расталған, сәйкессіздіктер туралы ескертулер. | status.md:106; status.md:349 |
+| Kura блок дүкен хэш декодтау шыңдау | ◉ | Хэш оқулары Norito-тәуелсіз айналым сынақтарымен өңделмеген 32 байт өңдеуге ауыстырылды. | status.md:608; status.md:668 |
+| Norito кодектерге арналған адаптивті телеметрия | ◉ | AoS және NCB таңдау көрсеткіштері Norito ішіне қосылды. | status.md:156 |
+| Torii | арқылы Snapshot WSV сұраулары ◉ | Torii суретті сұрау жолағы блоктау жұмысшы пулын, детерминирленген семантиканы пайдаланады. | status.md:501 |
+| Қоңырау арқылы орындау тізбегін іске қосу | ◉ | Деректер тізбекті детерминирленген ретпен шақыру арқылы орындағаннан кейін бірден іске қосады. | status.md:668 |
 
-## Norito Serialization & Tooling
+## Norito Серияландыру және құралдар
 
-| Feature | Status | Notes | Evidence |
+| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| Norito JSON migration (workspace) | ◉ | Serde removed from production; inventory + guardrails keep the workspace Norito-only. | status.md:112; status.md:124 |
-| Serde deny-list & CI guardrails | ◉ | Guard workflows/scripts prevent new direct Serde usage across workspace. | status.md:218 |
-| Norito codec goldens & AoS/NCB tests | ◉ | AoS/NCB goldens, truncation tests, and doc sync added. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
-| Norito feature matrix tooling | ◉ | `scripts/run_norito_feature_matrix.sh` supports downstream smoke tests; CI covers packed-seq/struct combos. | status.md:146; status.md:152 |
-| Norito language bindings (Python/Java) | ◉ | Python and Java Norito codecs maintained with sync scripts. | status.md:74; status.md:81 |
-| Norito Stage-1 SIMD structural classifiers | ◉ | NEON/AVX2 stage-1 classifiers with cross-arch goldens and randomized corpora tests. | status.md:241 |
+| Norito JSON тасымалдауы (жұмыс кеңістігі) | ◉ | Серде өндірістен шығарылды; инвентарь + қоршаулар тек Norito жұмыс кеңістігін сақтайды. | status.md:112; status.md:124 |
+| Serde deny-list & CI қорғағыштары | ◉ | Күзет жұмыс процестері/скрипттері жұмыс кеңістігінде жаңа тікелей Serde пайдалануды болдырмайды. | status.md:218 |
+| Norito алтын кодек және AoS/NCB сынақтары | ◉ | AoS/NCB алтын түстері, қысқарту сынақтары және құжатты синхрондау қосылды. | status.md:140-147; status.md:149-150; status.md:332; status.md:666 |
+| Norito мүмкіндікті матрицалық құралдар | ◉ | `scripts/run_norito_feature_matrix.sh` төменгі ағынды түтін сынақтарын қолдайды; CI пакеттік-сек/құрылымдық комбинацияларды қамтиды. | status.md:146; status.md:152 |
+| Norito тілдік байланыстар (Python/Java) | ◉ | Python және Java Norito кодектері синхрондау сценарийлерімен қамтамасыз етіледі. | status.md:74; status.md:81 |
+| Norito 1-кезең SIMD құрылымдық жіктеуіштері | ◉ | NEON/AVX2 кезең-1 классификаторлары көлденең доғалы алтын түстес және рандомизацияланған корпус сынақтарымен. | status.md:241 |
 
-## Governance & Runtime Upgrades
-
-| Feature | Status | Notes | Evidence |
+## Басқару және орындау уақытын жаңарту| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| Runtime upgrade admission (ABI gating) | ◉ | Active ABI set enforced at admission with structured errors and tests. | status.md:196 |
-| Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; policy/UX still evolving. | status.md:171 |
-| Torii governance read endpoints | ◉ | `/v1/gov/*` read APIs routed with router tests. | status.md:212 |
-| Verifying-key registry lifecycle & events | ◉ | VK register/update/deprecate, events, CLI filters, and retention semantics implemented. | status.md:236-239; status.md:595; status.md:603 |
+| Орындау уақытын жаңартуды қабылдау (ABI шлюзі) | ◉ | Белсенді ABI жинағы құрылымдық қателер мен сынақтармен қабылдау кезінде күшіне енеді. | status.md:196 |
+| Қорғалған аттар кеңістігін орналастыру шлюзі | ▲ | Метадеректерге қойылатын талаптарды және сымды шлюзді орналастыру; саясат/UX әлі де дамып келеді. | status.md:171 |
+| Torii басқару соңғы нүктелерін оқу | ◉ | `/v1/gov/*` маршрутизатор сынақтарымен бағытталатын API интерфейстерін оқиды. | status.md:212 |
+| Тексеру кілті тізілімінің өмірлік циклі және оқиғалары | ◉ | VK тіркелімі/жаңарту/ескіру, оқиғалар, CLI сүзгілері және сақтау семантикасы іске асырылды. | status.md:236-239; status.md:595; status.md:603 |
 
-## Zero-Knowledge Infrastructure
+## Нөлдік білім инфрақұрылымы
 
-| Feature | Status | Notes | Evidence |
+| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| Attachment storage APIs | ◉ | `POST/GET/LIST/DELETE` attachment endpoints with deterministic ids and tests. | status.md:231 |
-| Background prover worker & report TTL | ▲ | Prover stub behind feature flag; TTL GC and config knobs wired; full pipeline pending. | status.md:212; status.md:233 |
-| Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
-| Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
-| ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
-| ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
+| Тіркеме сақтау API интерфейстері | ◉ | Детерминирленген идентификаторлары мен сынақтары бар `POST/GET/LIST/DELETE` тіркеменің соңғы нүктелері. | status.md:231 |
+| Фондық провер жұмысшысы & есеп TTL | ▲ | Функция жалауының артындағы провер stub; TTL GC және конфигурациялау тұтқалары сымды; толық құбыр күтілуде. | status.md:212; status.md:233 |
+| CoreHost | ішінде конверт хэшті байланыстыру ◉ | CoreHost арқылы байланыстырылған және аудит импульстары арқылы ашылған конверт хэштерін тексеріңіз. | status.md:250 |
+| Экрандалған түбірлік тарих қақпасы | ◉ | Шектелген тарихпен және бос түбір конфигурациясымен CoreHost жүйесіне ағынды түбірлік суреттер. | status.md:303 |
+| ZK бюллетенін орындау және басқару құлыптары | ○ | Нөлдендіргіш туындысы, құлып жаңартулары, тексеру қосқыштары іске асырылды; толық дәлелдейтін өмірлік цикл әлі жетілген. | status.md:126-128; status.md:194-195 |
+| Дәлелдеу қосымшасы алдын ала тексеру және жою | ◉ | Backend-тегінің сауаттылығы, депликация және дәлелдеу жазбалары алдын ала орындалды. | status.md:348; status.md:602 |
+| ZK Torii дәлелді алудың соңғы нүктесі | ◉ | `/v1/zk/proof/{backend}/{hash}` дәлелдеу жазбаларын көрсетеді (күй, биіктік, vk_ref/міндеттеме). | status.md:94 |
 
-## IVM & Kotodama Integration
-
-| Feature | Status | Notes | Evidence |
+## IVM & Kotodama интеграциясы| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| CoreHost syscall→ISI bridge | ○ | Pointer TLV decoding and syscall queueing operational; coverage gaps/parity tests planned. | status.md:299-307; status.md:477-486 |
-| Pointer constructors & domain builtins | ◉ | Kotodama builtins emit typed Norito TLVs and SCALLs, with IR/e2e tests and docs. | status.md:299-301 |
-| Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
-| ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
-| Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+| CoreHost жүйесін шақыру→ISI көпірі | ○ | Көрсеткіштің TLV декодтауы және жүйені шақыру кезегі жұмыс істейді; қамту бос жерлері/паритеттік сынақтар жоспарланған. | status.md:299-307; status.md:477-486 |
+| Көрсеткіш конструкторлары және домен құрастырушылары | ◉ | Kotodama қондырғылары терілген Norito TLV және SCALL файлдарын IR/e2e сынақтарымен және құжаттармен шығарады. | status.md:299-301 |
+| Көрсеткіш-ABI қатаң тексеру және құжатты синхрондау | ◉ | TLV саясаты алтын сынақтармен және жасалған құжаттармен хост/IVM арқылы орындалады. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
+| CoreHost | арқылы ZK syscall шлюзі ◉ | Әр операциялық кезек тексерілген конверттерді жабады және ISI орындалу алдында хэш сәйкестігін қамтамасыз етеді. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
+| Kotodama көрсеткіші-ABI құжаттары және грамматикасы | ◉ | Грамматика/құжаттар тікелей конструкторлармен және SCALL салыстыруларымен синхрондалған. | status.md:299-301 |
+| ISO 20022 схемаға негізделген қозғалтқыш және Torii көпірі | ◉ | Канондық ISO 20022 схемалары енгізілген, детерминирленген XML талдауы және `/v1/iso20022/status/{MsgId}` API ашық. | status.md:65-70 |
 
-## Hardware Acceleration
+## Аппараттық жеделдету
 
-| Feature | Status | Notes | Evidence |
+| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| SIMD tail/misalignment parity tests | ◉ | Randomized parity tests ensure SIMD vector ops match scalar semantics for arbitrary alignment. | status.md:243 |
-| Metal/CUDA fallback & self-tests | ◉ | GPU backends run golden self-tests and fall back to scalar/SIMD on mismatch; parity suites cover SHA-256/Keccak/AES. | status.md:244-246 |
+| SIMD құйрық/қателік тепе-теңдігі сынақтары | ◉ | Кездейсоқ теңестіру сынақтары SIMD векторлық операцияларының ерікті теңестіру үшін скалярлық семантикаға сәйкестігін қамтамасыз етеді. | status.md:243 |
+| Металл/CUDA қалпына келтіру және өзін-өзі сынау | ◉ | GPU серверлері алтын өзін-өзі сынауды іске қосады және сәйкес келмегенде скаляр/SIMD күйіне түседі; паритеттік люкс SHA-256/Keccak/AES қамтиды. | status.md:244-246 |
 
-## Network Time & Consensus Modes
+## Желі уақыты және консенсус режимдері
 
-| Feature | Status | Notes | Evidence |
+| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| Network Time Service (NTS) | ✖︎ | Design exists in `new_pipeline.md`; implementation not yet tracked in status updates. | new_pipeline.md |
-| Nominated PoS consensus mode | ✖︎ | Nexus design documents closed-set and NPoS modes; core implementation pending. | new_pipeline.md; nexus.md |
+| Желілік уақыт қызметі (NTS) | ✖︎ | Дизайн `new_pipeline.md` ішінде бар; іске асыру күй жаңартуларында әлі бақыланбаған. | new_pipeline.md |
+| Номинацияланған PoS консенсус режимі | ✖︎ | Nexus конструкторлық құжаттар жабық жиынтық және NPoS режимдері; негізгі іске асыру күтілуде. | new_pipeline.md; nexus.md |
 
-## Nexus Ledger Roadmap
-
-| Feature | Status | Notes | Evidence |
+## Nexus Ledger жол картасы| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| Space Directory contract scaffold | ✖︎ | Global registry contract for DS manifests/governance not implemented yet. | nexus.md |
-| Data Space manifest format & lifecycle | ✖︎ | Norito manifest schema, versioning, and governance flow remain on the roadmap. | nexus.md |
-| DS governance & validator rotation | ✖︎ | On-chain procedures for DS membership/rotation still in design phase. | nexus.md |
-| Cross-DS anchoring & Nexus block composition | ✖︎ | Composition layer and anchoring commitments outlined but unimplemented. | nexus.md |
-| Kura/WSV erasure-coded storage | ✖︎ | Erasure-coded blob/snapshot storage for public/private DS not yet built. | nexus.md |
-| ZK/optimistic proof policy per DS | ✖︎ | Per-DS proof requirements and enforcement not tracked in code. | nexus.md |
-| Fee/quota isolation per Data Space | ✖︎ | DS-specific quotas and fee policy mechanisms remain future work. | nexus.md |
+| Space Directory келісімшарттық тірек | ✖︎ | DS манифесттеріне/басқаруға арналған жаһандық тізілім келісімшарты әлі орындалмаған. | nexus.md |
+| Data Space манифест пішімі және өмірлік цикл | ✖︎ | Norito манифест схемасы, нұсқасы және басқару ағыны жол картасында қалады. | nexus.md |
+| DS басқару және валидатордың ротациясы | ✖︎ | DS мүшелігіне/ротациясына арналған тізбектегі процедуралар әлі жобалау сатысында. | nexus.md |
+| Cross-DS анкерлік & Nexus блок құрамы | ✖︎ | Құрамдық қабат және бекіту міндеттемелері сипатталған, бірақ орындалмаған. | nexus.md |
+| Kura/WSV өшіру коды бар сақтау | ✖︎ | Қоғамдық/жеке DS үшін өшіру коды бар блоб/сурет қоймасы әлі құрастырылмаған. | nexus.md |
+| ZK/ DS бойынша оптимистік дәлелдеу саясаты | ✖︎ | Per-DS дәлелдеу талаптары және орындау кодта бақыланбайды. | nexus.md |
+| Деректер кеңістігіне ақы/квота оқшаулау | ✖︎ | DS-арнайы квоталар мен алым саясатының тетіктері болашақ жұмыс болып қала береді. | nexus.md |
 
-## Chaos & Fault Injection
+## Хаос және ақаулық инъекция
 
-| Feature | Status | Notes | Evidence |
+| Ерекшелігі | Күй | Ескертпелер | Дәлелдер |
 |---------|--------|-------|----------|
-| Izanami chaosnet orchestration | ○ | Izanami workload now drives asset-definition, metadata, NFT, and trigger-repetition recipes with unit coverage for the new paths. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |
+| Izanami хаоснет оркестрі | ○ | Izanami жұмыс жүктемесі енді жаңа жолдар үшін бірлік қамтуы бар актив анықтамасын, метадеректерді, NFT және триггерді қайталау рецептерін басқарады. | crates/izanami/src/instructions.rs; crates/izanami/src/instructions.rs#tests |

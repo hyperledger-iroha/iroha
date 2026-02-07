@@ -6,17 +6,18 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a3158cd70a42104bacaafc520fdcc10e20e3bc347d895be448fcb10da4f668bd
 source_last_modified: "2026-01-03T18:08:01.692664+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha 3 Bench Suite
+# Iroha 3 بینچ سویٹ
 
-The Iroha 3 bench suite times the hot paths we rely on during staking, fee
-charging, proof verification, scheduling, and proof endpoints. It runs as an
-`xtask` command with deterministic fixtures (fixed seeds, fixed key material,
-and stable request payloads) so results are reproducible across hosts.
+Iroha 3 بینچ سویٹ کے اوقات گرم راستوں پر ہم اسٹیکنگ ، فیس کے دوران انحصار کرتے ہیں
+چارجنگ ، پروف کی توثیق ، ​​نظام الاوقات ، اور پروف اختتامی نکات۔ یہ ایک کے طور پر چلتا ہے
+`xtask` کمانڈ ڈٹرمینسٹک فکسچر (فکسڈ بیج ، فکسڈ کلیدی مواد ،
+اور مستحکم درخواست پے لوڈز) لہذا نتائج میزبانوں میں تولیدی ہیں۔
 
-## Running the suite
+## سویٹ چل رہا ہے
 
 ```bash
 cargo xtask i3-bench-suite \
@@ -29,41 +30,41 @@ cargo xtask i3-bench-suite \
   --allow-overwrite
 ```
 
-Flags:
+جھنڈے:
 
-- `--iterations` controls iterations per scenario sample (default: 64).
-- `--sample-count` repeats each scenario to compute the median (default: 5).
-- `--json-out|--csv-out|--markdown-out` choose output artifacts (all optional).
-- `--threshold` compares medians against the baseline bounds (set `--no-threshold`
-  to skip).
-- `--flamegraph-hint` annotates the Markdown report with the `cargo flamegraph`
-  command to profile a scenario.
+- `--iterations` ہر منظر نامے کے نمونے (پہلے سے طے شدہ: 64) تکرار کو کنٹرول کرتا ہے۔
+- `--sample-count` میڈین (پہلے سے طے شدہ: 5) کی گنتی کے لئے ہر منظر کو دہراتا ہے۔
+- `--json-out|--csv-out|--markdown-out` آؤٹ پٹ نمونے (تمام اختیاری) کا انتخاب کریں۔
+- `--threshold` میڈینوں کا موازنہ بیس لائن حد سے زیادہ کرتا ہے (`--no-threshold` سیٹ کریں
+  چھوڑنے کے لئے)۔
+- `--flamegraph-hint` `cargo flamegraph` کے ساتھ مارک ڈاون رپورٹ کی تشریح کرتا ہے
+  کسی منظر نامے کی پروفائل کرنے کا حکم دیں۔
 
-CI glue lives in `ci/i3_bench_suite.sh` and defaults to the paths above; set
-`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` to tune runtime in nightlies.
+CI گلو `ci/i3_bench_suite.sh` میں رہتا ہے اور مذکورہ بالا راستوں سے پہلے سے طے شدہ ہے۔ سیٹ
+`I3_BENCH_ITERATIONS`/`I3_BENCH_SAMPLES` نائٹ لیز میں رن ٹائم ٹیون کرنے کے لئے۔
 
-## Scenarios
+## منظرنامے
 
-- `fee_payer` / `fee_sponsor` / `fee_insufficient` — payer vs sponsor debit
-  and shortfall rejection.
-- `staking_bond` / `staking_slash` — bond/unbond queue with and without
-  slashing.
-- `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` —
-  signature verification over commit certificates, JDG attestations, and bridge
-  proof payloads.
-- `commit_cert_assembly` — digest assembly for commit certificates.
-- `access_scheduler` — conflict-aware access-set scheduling.
-- `torii_proof_endpoint` — Axum proof endpoint parsing + verification round trip.
+- `fee_payer` / `fee_sponsor` / `fee_insufficient` - ادائیگی کرنے والا بمقابلہ اسپانسر ڈیبٹ
+  اور کمی کو مسترد کرنا۔
+- `staking_bond` / `staking_slash` - بانڈ / انبونڈ قطار کے ساتھ اور بغیر
+  سلیشنگ
+- `commit_cert_verify` / `jdg_attestation_verify` / `bridge_proof_verify` -
+  سکیورٹی کی توثیق سرٹیفکیٹ ، جے ڈی جی کی تصدیقوں ، اور پل پر
+  پروف پے لوڈ۔
+- `commit_cert_assembly` - کمٹمنٹ سرٹیفکیٹ کے لئے اسمبلی کو ہضم کریں۔
+-`access_scheduler`-تنازعات سے آگاہ رسائی سیٹ شیڈولنگ۔
+- `torii_proof_endpoint` - AXUM پروف اینڈ پوائنٹ پارسنگ + تصدیقی گول سفر۔
 
-Every scenario records median nanoseconds per iteration, throughput, and a
-deterministic allocation counter for quick regressions. Thresholds live in
-`benchmarks/i3/thresholds.json`; bump bounds there when hardware changes and
-commit the new artifact alongside a report.
+ہر منظر نامے میں میڈین نانو سیکنڈ فی تکرار ، تھروپپٹ ، اور ایک کو ریکارڈ کیا جاتا ہے
+فوری دباؤ کے ل detter تعصب الاٹمنٹ کاؤنٹر۔ دہلیز میں رہتے ہیں
+`benchmarks/i3/thresholds.json` ؛ جب ہارڈ ویئر میں تبدیلی آتی ہے اور
+ایک رپورٹ کے ساتھ ساتھ نئے نمونے کا ارتکاب کریں۔
 
-## Troubleshooting
+## خرابیوں کا سراغ لگانا
 
-- Pin CPU frequency/governor when collecting evidence to avoid noisy regressions.
-- Use `--no-threshold` for exploratory runs, then re-enable once the baseline is
-  refreshed.
-- To profile a single scenario, set `--iterations 1` and re-run under
-  `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`.
+- شور کے دباؤ سے بچنے کے لئے ثبوت اکٹھا کرتے وقت سی پی یو فریکوینسی/گورنر کو پن کریں۔
+- ریسرچ رنز کے لئے `--no-threshold` استعمال کریں ، پھر بیس لائن ہونے کے بعد دوبارہ قابل ہوجائیں
+  تازہ دم
+- ایک ہی منظر نامے کی پروفائل کرنے کے لئے ، `--iterations 1` سیٹ کریں اور اس کے تحت دوبارہ چلائیں
+  `cargo flamegraph -p xtask -- i3-bench-suite --iterations 128 --sample-count 1 --no-threshold --flamegraph-hint`۔

@@ -11,108 +11,109 @@ id: security-hardening
 title: Security hardening & pen-test checklist
 sidebar_label: Security hardening
 description: Harden the developer portal before exposing the Try it sandbox outside the lab.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## Обзор
 
-Roadmap item **DOCS-1b** requires OAuth device-code login, strong content
-security policies, and repeatable penetration tests before the preview portal
-can run on non-lab networks. This appendix explains the threat model, the
-controls implemented in the repo, and the go-live checklist that gate reviews
-must execute.
+Юл картаһы әйбер **DOCS-1b** OAuth ҡоролма-код логин талап итә, көслө йөкмәткеле .
+хәүефһеҙлек сәйәсәте, һәм ҡабатланған үтеп инеү һынауҙары алдынан алдан ҡарау порталы
+лабораториянан тыш селтәрҙәрҙә эшләй ала. Был ҡушымта аңлата хәүеф моделе, был
+контроль репо тормошҡа ашырыла, һәм йөрөү-йәшәү тикшерелгән исемлеге, тип ҡапҡа отзывы .
+башҡарырға тейеш.
 
-- **Scope:** the Try it proxy, embedded Swagger/RapiDoc panels, and the custom
-  Try it console rendered by `docs/portal/src/components/TryItConsole.jsx`.
-- **Out-of-scope:** Torii itself (covered by Torii readiness reviews) and SoraFS
-  publishing (covered by DOCS-3/7).
+- **Соң:** уны прокси, һеңдерелгән Swagger/RapiDoc панелдәре һәм ҡулланыусы .
+  I18NI000000010X тарафынан рендеринг консоль һынап ҡарағыҙ.
+- **Сокоптан тыш:** I18NT000000004X үҙе (I18NT0000000005X әҙерлек тикшерелеүҙәре менән ҡапланған) һәм I18NT0000002X
+  баҫтырыу (DOCS-3/7 менән ҡапланған).
 
-## Threat model
+## Хәүефле модель
 
-| Asset | Risk | Mitigation |
+| Актив | Хәүеф | Йомшартыу |
 | --- | --- | --- |
-| Torii bearer tokens | Theft or reuse outside the docs sandbox | Device-code login (`DOCS_OAUTH_*`) mints short-lived tokens, the proxy redacts headers, and the console auto-expires cached credentials. |
-| Try it proxy | Abuse as an open relay or bypass of Torii rate limits | `scripts/tryit-proxy*.mjs` enforce origin allowlists, rate limiting, health probes, and explicit `X-TryIt-Auth` forwarding; no credentials are persisted. |
-| Portal runtime | Cross-site scripting or malicious embeds | `docusaurus.config.js` injects Content-Security-Policy, Trusted Types, and Permissions-Policy headers; inline scripts are restricted to the Docusaurus runtime. |
-| Observability data | Missing telemetry or tampering | `docs/portal/docs/devportal/observability.md` documents the probes/dashboards; `scripts/portal-probe.mjs` runs in CI before publishing. |
+| I18NT000000006X йөрөтөүсе токендар | Урлашыу йәки ҡабаттан ҡулланыу тыш docs ҡоҫҡо йәшник | Ҡоролма-код логин (I18NI0000011X) мәтрүшкә ҡыҫҡа ғүмерле токендар, прокси-редакттар башлыҡтары, һәм консоль авто-сультатив кэшланған ышаныс ҡағыҙҙары. |
+| Тырышып ҡарағыҙ, уны прокси | Йәберләү асыҡ эстафета йәки шунт I18NT000000007X ставкаһы сиктәре | `scripts/tryit-proxy*.mjs` сығышы өсөн рөхсәт исемлектәрен үтәй, ставкаларҙы сикләү, һаулыҡ зондтары, һәм асыҡ `X-TryIt-Auth` оҙатыу; бер ниндәй ҙә ышаныс ҡағыҙҙары һаҡланмай. |
+| Портал йөрөү ваҡыты | Кросс-сайт сценарийҙары йәки зарарлы встраиваемый | `docusaurus.config.js` инъекция Йөкмәтке-хәүефһеҙлек-сәйәси, ышаныслы типтар, һәм рөхсәт-сәйәси башлыҡ; рәтле сценарийҙар I18NT0000000000000Х йөрөү ваҡыты менән генә сикләнә. |
+| Күҙәтеүсәнлек мәғлүмәттәре | Телеметрия йәки үҙгәртеп ҡороу | `docs/portal/docs/devportal/observability.md` зондтар/приборҙар таҡтаһы документы; `scripts/portal-probe.mjs` X CI-ла баҫылып сыҡҡанға тиклем эшләй. |
 
-Adversaries include curious users viewing the public preview, malicious actors
-testing stolen links, and compromised browsers attempting to scrape stored
-credentials. All controls must work on commodity browsers without trusted
-networks.
+Аксациондар ҡыҙыҡһыныусы ҡулланыусыларҙы йәмәғәтселектең алдан ҡарауын ҡарау, зарарлы актерҙарҙы үҙ эсенә ала
+урланған бәйләнештәрҙе һынау, браузерҙарҙы һаҡларға тырышҡан браузерҙарҙы боҙған
+ышаныс ҡағыҙҙары. Бөтә контроль тауар браузерҙары өҫтөндә эшләргә тейеш, ышаныслы булмаған
+селтәрҙәре.
 
-## Required controls
+## Кәрәкле идара итеү ҡоролмалары
 
-1. **OAuth device-code login**
-   - Configure `DOCS_OAUTH_DEVICE_CODE_URL`, `DOCS_OAUTH_TOKEN_URL`,
-     `DOCS_OAUTH_CLIENT_ID`, and related knobs in the build environment.
-   - The Try it card renders a sign-in widget (`OAuthDeviceLogin.jsx`) that
-     fetches the device code, polls the token endpoint, and auto-clears tokens
-     once they expire. Manual Bearer overrides remain available for emergency
+1. **OOuth ҡоролма-код логин**
+   - `DOCS_OAUTH_DEVICE_CODE_URL` конфигурациялау, I18NI000000018X,
+     `DOCS_OAUTH_CLIENT_ID`, һәм ручкалар менән бәйле төҙөү мөхитендә.
+   - Һынап ҡарағыҙ, карта күрһәтә, виджет виджет (I18NI000000020X) тип.
+     ҡоролма кодын, токендың ос нөктәһен һорау алыу, автоматик рәүештә жетондарҙы ала
+     бер тапҡыр улар тамамлана. Ҡул менән йөрөтөүсе өҫтөнлөктәре ғәҙәттән тыш хәл өсөн ҡала
      fallback.
-   - Builds now fail when the OAuth configuration is missing or when the
-     fallback TTLs drift outside the 300 s–900 s window mandated by DOCS-1b;
-     set `DOCS_OAUTH_ALLOW_INSECURE=1` only for disposable local previews.
-2. **Proxy guardrails**
-   - `scripts/tryit-proxy.mjs` enforces allowed origins, rate limits, request
-     size caps, and upstream timeouts while tagging traffic with
-     `X-TryIt-Client` and redacting tokens from logs.
-   - `scripts/tryit-proxy-probe.mjs` plus `docs/portal/docs/devportal/observability.md`
-     define the liveness probe and dashboard rules; run them before every
-     rollout.
-3. **CSP, Trusted Types, Permissions-Policy**
-   - `docusaurus.config.js` now exports deterministic security headers:
-     `Content-Security-Policy` (default-src self, strict connect/img/script
-     lists, Trusted Types requirements), `Permissions-Policy`, and
+   - Хәҙер төҙөлә, ҡасан OAuth конфигурацияһы юҡ йәки ҡасан
+     300-сө йылдарҙағы TTL-дар DOCS-1b менән мандатланған тәҙрә тәҙрәһенән тыш дрейф;
+     `DOCS_OAUTH_ALLOW_INSECURE=1` тик бер тапҡыр ҡулланыла торған урындағы алдан ҡарау өсөн генә билдәләнгән.
+2. **Прокси ҡоршауҙар**
+   - I18NI000000022X үтәлештәре сығышы, ставкаһы сиктәре, үтенес рөхсәт итте
+     ҙурлыҡтағы ҡапҡастар, һәм өҫкө ағым тайм-ауттары менән трафикты билдәләү менән
+     `X-TryIt-Client` һәм бүрәнәләрҙән жетондарҙы үҙгәртеп ҡороу.
+   - I18NI000000024X плюс I18NI000000025X
+     йәшәүсе зонд һәм приборҙар таҡтаһы ҡағиҙәләрен билдәләү; уларҙы һәр алда йүгертергә
+     йәйелдерелгән.
+3. **CSP, Ышаныслы типтар, Рөхсәт-сәйәси**
+   - `docusaurus.config.js` хәҙер детерминистик хәүефһеҙлек башлыҡтарын экспортлай:
+     I18NI0000000027X (поручка-срк үҙ, ҡәтғи тоташтырыу/img/скрипт
+     исемлеге, ышаныслы типтар талаптары), I18NI000000028X, һәм
      `Referrer-Policy: no-referrer`.
-   - The CSP connect list whitelists the OAuth device-code and token endpoints
-     (HTTPS only unless `DOCS_SECURITY_ALLOW_INSECURE=1`) so device login works
-     without relaxing the sandbox for other origins.
-   - The headers are embedded directly in the generated HTML so static hosts do
-     not need extra configuration. Keep inline scripts limited to the
+   - CSP тоташтырыу исемлеге аҡ исемлектәр OAuth ҡоролма-код һәм токен ос нөктәләре .
+     (HTTPS тик әгәр I18NI00000000030X) шулай ҡоролма логин эшләй
+     башҡа сығыштар өсөн ҡом йәшникен ял итмәйенсә.
+   - Башлыҡтар туранан-тура генерацияланған HTML-ға индерелгән, шуға күрә статик хужалар эшләй
+     өҫтәмә конфигурация кәрәкмәй. Спектаклдарҙы һаҡлау өсөн сикләнгән.
      Docusaurus bootstrap.
-4. **Runbooks, observability, and rollback**
-   - `docs/portal/docs/devportal/observability.md` describes the probes and
-     dashboards that watch login failures, proxy response codes, and request
-     budgets.
-   - `docs/portal/docs/devportal/incident-runbooks.md` covers the escalation
-     path if the sandbox is abused; combine it with
-     `scripts/tryit-proxy-rollback.mjs` to flip endpoints safely.
+4. **Ранбуктар, күҙәтеүсәнлек, һәм кире ҡайтарыу**
+   - `docs/portal/docs/devportal/observability.md` зондтарҙы һүрәтләй һәм
+     приборҙар таҡталары, улар логин етешһеҙлектәрен ҡарай, прокси-яуап кодтары, һәм запрос
+     бюджеттары.
+   - I18NI000000032X эскалацияны ҡаплай
+     юл, әгәр ҡом йәшник йәберләнгән; уны берләштер?
+     `scripts/tryit-proxy-rollback.mjs` имен-аман ос нөктәләрен әйләндереп.
 
-## Pen-test & release checklist
+## Пен-тест & релиз тикшерелгән исемлек
 
-Complete this list for every preview promotion (attach results to the release
-ticket):
+Был исемлекте тултырырға һәр алдан ҡарау өсөн промоушен (релизға беркетергә
+билет):
 
-1. **Verify OAuth wiring**
-   - Run `npm run start` locally with the production `DOCS_OAUTH_*` exports.
-   - From a clean browser profile, open the Try it console and confirm the
-     device-code flow mints a token, counts down the lifetime, and clears the
-     field after expiry or sign-out.
-2. **Probe the proxy**
-   - `npm run tryit-proxy` against staging Torii, then execute
-     `npm run probe:tryit-proxy` with the configured sample path.
-   - Check logs for `authSource=override` entries and confirm rate limiting
-     increments counters when you exceed the window.
-3. **Confirm CSP/Trusted Types**
-   - `npm run build` and open `build/index.html`. Ensure the `<meta
-     http-equiv="Content-Security-Policy">` tag matches the expected directives
-     and that DevTools shows no CSP violations when loading the preview.
-   - Use `npm run probe:portal` (or curl) to fetch the deployed HTML; the probe
-     now fails when the `Content-Security-Policy`, `Permissions-Policy`, or
-     `Referrer-Policy` meta tags are missing or differ from the values declared
-     in `docusaurus.config.js`, so governance reviewers can rely on the exit
-     code instead of eyeballing curl output.
-4. **Review observability**
-   - Verify the Try it proxy dashboard is green (rate limits, error ratios,
-     health probe metrics).
-   - Run the incident drill in `docs/portal/docs/devportal/incident-runbooks.md`
-     if the host changed (new Netlify/SoraFS deployment).
-5. **Document the results**
-   - Attach screenshots/logs to the release ticket.
-   - Capture each finding in the remediation report template
-     ([`docs/examples/pentest_remediation_report_template.md`](../../../examples/pentest_remediation_report_template.md))
-     so owners, SLAs, and retest evidence are easy to audit later.
-   - Link back to this checklist so the DOCS-1b roadmap item stays auditable.
+1. **Оаут проводкаһы ** тикшерергә.
+   - I18NI000000034X Run I18NI000000035X экспорты менән урындағы кимәлдә.
+   - Таҙа браузер профиленән, асырға тырышып, уны консоль һәм раҫлау
+     ҡоролма-код ағымы мәтрүшкә жетон, ғүмер буйы иҫәпләнә, һәм таҙарта
+     яландан һуң йәки теркәүҙән һуң ялан.
+2. **Пробия прокси**
+   - I18NI0000000036X I18NT000000008X стадияһында, һуңынан башҡарылған
+     I18NI000000037X конфигурацияланған өлгө юлы менән.
+   - I18NI0000000038X өсөн журналдарҙы тикшерергә һәм ставка сикләү раҫлау
+     өҫтәүҙәр ҡаршы ҡасан һеҙ тәҙрәнән артып китә.
+3. **Республика CSP/Ышаныс типтары**
+   - I18NI000000039X һәм асыҡ I18NI000000040X. `<мета .
+     http-equiv="Йөкмәтке-Хәүефһеҙлек-сәйәси">` тег көтөлгән директиваларға тап килә
+     һәм тип DevTools күрһәтмәй CSP боҙоуҙар ҡасан тейәп алдан ҡарау.
+   - Ҡулланыу I18NI000000041X (йәки бөҙрә) алыу өсөн таратыу HTML; зонд
+     хәҙер уңышһыҙлыҡҡа осрай, ҡасан I18NI0000000042X, `Permissions-Policy`, йәки
+     I18NI000000044X мета-тегтар юҡ йәки ҡиммәттәрҙән айырыла иғлан ителгән
+     I18NI000000045X-та, шуға күрә идара итеү рецензенттары сығыу урынына таяна ала
+     код урынына күҙ ҡамыр баҫыу бөҙрә сығыш.
+4. **Күҙәтеүсәнлекте тикшерергә**
+   - Тикшерергә Try ул прокси приборҙар таҡтаһы йәшел (рейтинг сиктәре, хата нисбәте,
+     һаулыҡ зонд метрикаһы).
+   - I18NI000000046X-та булған ваҡиға бураһын йүгертегеҙ
+     әгәр хост үҙгәргән (яңы Netlify/I18NT000000003X таратыу).
+5. **Һөҙөмтәһе документы**
+   - скриншоттар/логтар беркетергә релиз билет.
+   - Һәр табышты алыуҙы төҙәтеү тураһында отчет шаблонында
+     ([I18NI000000047X] (../../../examples/pentest_remediation_report_template.mdX))
+     тимәк, хужалар, SLAs, һәм ҡабаттан һынау дәлилдәре еңел аудит һуңыраҡ.
+   - Был тикшерелгән исемлеккә һылтанма ҡайтып, шулай итеп, DOCS-1b юл картаһы әйбер аудит ҡала.
 
-If any step fails, halt the promotion, file a blocking issue, and note the
-remediation plan in `status.md`.
+Әгәр ниндәй ҙә булһа аҙым уңышһыҙлыҡҡа осраһа, акцияны туҡтатығыҙ, блокировка мәсьәләһен бирегеҙ һәм иғтибар итегеҙ.
+`status.md`-та тергеҙеү планы.

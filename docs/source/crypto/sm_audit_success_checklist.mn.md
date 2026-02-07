@@ -7,66 +7,67 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2025-12-29T18:16:35.940844+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
+% SM2/SM3/SM4 Аудитын амжилтын шалгуур
+% Iroha Crypto Ажлын хэсэг
 % 2026-01-30
 
-# Purpose
+#Зорилго
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+Энэхүү хяналтын хуудас нь амжилтанд хүрэхэд шаардагдах тодорхой шалгууруудыг багтаасан болно
+SM2/SM3/SM4 хөндлөнгийн аудитыг хийж дуусгах. Энэ хугацаанд хянаж үзэх хэрэгтэй
+эхлэх, статус шалгах цэг бүр дээр дахин үзэж, гарцыг баталгаажуулахад ашигладаг
+үйлдвэрлэлийн баталгаажуулагчдад SM гарын үсэг зурахыг идэвхжүүлэхийн өмнөх нөхцөл.
 
-# Pre-Engagement Readiness
+# Сүйрлийн өмнөх бэлэн байдал
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] Гэрээнд гарын үсэг зурсан, үүнд хамрах хүрээ, хүргэх боломж, нууцлал, болон
+      засч залруулахад туслах хэл.
+- [ ] Аудитын баг агуулахын толин тусгал хандалт, CI олдворын хувин болон
+      `docs/source/crypto/sm_audit_brief.md`-д жагсаасан баримт бичгийн багц.
+- [ ] Холбоо барих цэгүүдийг үүрэг тус бүрийн нөөцөөр баталгаажуулсан
+      (крипто, IVM, платформ үйлдлийн систем, аюулгүй байдал, баримт бичиг).
+- [ ] Дотоод сонирхогч талууд зорилтот хувилбарын огноог тохируулж, цонхыг царцаана.
+- [ ] SBOM экспорт (`cargo auditable` + CycloneDX) үүсгэж, хуваалцсан.
+- [ ] OpenSSL/Tongsuo үүслийн багцыг бэлтгэсэн
+      (эх сурвалж tarball хэш, бүтээх скрипт, хуулбарлах тэмдэглэл).
+- [ ] Хамгийн сүүлийн үеийн детерминистик туршилтын гаралтыг авсан:
+      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, болон
+      Norito хоёр талын аялалын хэрэгсэл.
+- [ ] Torii `/v1/node/capabilities` зар (`iroha runtime capabilities`-ээр) бүртгэгдэж, `crypto.sm` манифест талбарууд болон хурдатгалын бодлогын агшин зургийг баталгаажуулж байна.
 
-# Engagement Execution
+# Орой гүйцэтгэл
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] Эхлэх семинар нь зорилгынхоо талаар харилцан ойлголцож дууссан,
+      цаг хугацаа, харилцааны хэмнэл.
+- [ ] Долоо хоногийн төлөв байдлын тайланг хүлээн авч, шалгасан; эрсдэлийн бүртгэл шинэчлэгдсэн.
+- [ ] Судалгааны үр дүнг илрүүлснээс хойш ажлын нэг өдрийн дотор ноцтой байдлын үед мэдээлсэн
+      өндөр эсвэл чухал байна.
+- [ ] Аудитын баг ≥2 CPU архитектур (x86_64,) дээр детерминизмын замыг баталгаажуулдаг.
+      aarch64) тохирох гаралттай.
+- [ ] Хажуугийн сувгийн тоймд тогтмол хугацааны нотолгоо эсвэл эмпирик туршилт орно
+      Rust болон FFI замуудын аль алиных нь нотолгоо.
+- [ ] Дагаж мөрдөх болон баримт бичгийг шалгах нь операторын зааварчилгааг баталгаажуулдаг
+      зохицуулалтын үүрэг.
+- [ ] Лавлагааны хэрэгжилтийн эсрэг ялгах туршилт (RustCrypto,
+      OpenSSL/Tongsuo) аудиторын хяналтан дор хийгдсэн.
+- [ ] Fuzz морины оосорыг үнэлэв; цоорхой байгаа газруудад шинэ үрийн корпус.
 
-# Remediation & Exit
+# Засварлах & Гарах
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [ ] Бүх олдворуудыг ноцтой байдал, нөлөөлөл, ашиглагдах чадвар, болон
+      санал болгож буй засварын алхамууд.
+- [ ] Өндөр/Эх чухал асуудлууд нь аудиторын зөвшөөрлөөр нөхөөс эсвэл бууруулах арга хэмжээ авдаг
+      баталгаажуулалт; үлдэгдэл эрсдэлийг баримтжуулсан.
+- [ ] Аудитор тогтсон асуудлуудыг нотлох дахин туршилтын баталгаажуулалтыг нийлүүлдэг (ялгаа, тест
+      гүйлт, эсвэл гарын үсэг зурсан гэрчилгээ).
+- [ ] Эцсийн тайланг хүргүүлсэн: гүйцэтгэлийн хураангуй, нарийвчилсан дүгнэлт, арга зүй,
+      детерминизмын шийдвэр, нийцлийн шийдвэр.
+- [ ] Дотоод гарын үсэг зурах хурал нь дараагийн алхмууд, хувилбарын тохируулга,
+      болон баримт бичгийн шинэчлэлтүүд.
+- [ ] `status.md`-г аудитын үр дүн болон засаж залруулсны дагуу шинэчилсэн
+      дагаж мөрдөх.
+- [ ] `docs/source/crypto/sm_program.md` (хичээл)-д авсан үхлийн дараах
+      сурсан, ирээдүйн хатууруулах даалгавар).

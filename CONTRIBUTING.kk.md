@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 71baf5d038cbe6518fd294fcc1b279dff8aaf092e4a83f6159b699a378e51467
 source_last_modified: "2025-12-29T18:16:34.772429+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributing Guide
+# Үлес қосуға арналған нұсқаулық
 
-Thank you for taking the time to contribute to Iroha 2!
+Iroha 2-ге үлес қосуға уақыт бөлгеніңіз үшін рахмет!
 
-Please read this guide to learn how you can contribute and which guidelines we expect you to follow. This includes the guidelines about code and documentation as well as our conventions regarding git workflow.
+Қалай үлес қосуға болатынын және сізден қандай нұсқауларды ұстанатыныңызды білу үшін осы нұсқаулықты оқып шығыңыз. Бұл код пен құжаттамаға қатысты нұсқауларды, сондай-ақ git жұмыс процесіне қатысты конвенцияларды қамтиды.
 
-Reading these guidelines will save you time later.
+Осы нұсқауларды оқу кейінірек уақытыңызды үнемдейді.
 
-## How Can I Contribute?
+## Мен қалай үлес қоса аламын?
 
-There are a lot of ways you could contribute to our project:
+Біздің жобаға үлес қосудың көптеген жолдары бар:
 
-- Report [bugs](#reporting-bugs) and [vulnerabilities](#reporting-vulnerabilities)
-- [Suggest improvements](#suggesting-improvements) and implement them
-- [Ask questions](#asking-questions) and engage with the community
+- [Қателер](#reporting-bugs) және [осалдықтар](#reporting-vulnerabilities) есеп беру
+- [Жақсартуларды ұсыну](#suggesting-improvements) және оларды енгізіңіз
+- [Сұрақтар қойыңыз](#asking-questions) және қауымдастықпен араласыңыз
 
-New to our project? [Make your first contribution](#your-first-code-contribution)!
+Біздің жобаға жаңадан кіресіз бе? [Бірінші үлесіңізді қосыңыз](#your-first-code-contribution)!
 
 ### TL;DR
 
-- Find [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
-- Fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Fix your issue of choice.
-- Ensure you follow our [style guides](#style-guides) for code and documentation.
-- Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
-  - Note: Tests that exercise the IVM executor will automatically synthesize a minimal, deterministic executor bytecode if `defaults/executor.to` is not present. No pre-step is required to run tests. To generate the canonical bytecode for parity, you can run:
+- [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240) табыңыз.
+- Шанышқы [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
+- Таңдау мәселесін шешіңіз.
+- Код пен құжаттама үшін [стиль нұсқаулығымызды](#style-guides) орындағаныңызға көз жеткізіңіз.
+- [тесттер](https://doc.rust-lang.org/cargo/commands/cargo-test.html) жазыңыз. Олардың барлығы өткеніне көз жеткізіңіз (`cargo test --workspace`). SM криптографиялық стекін түртсеңіз, қосымша айқындық/сипат белгішесін орындау үшін `cargo test -p iroha_crypto --features "sm sm_proptest"` іске қосыңыз.
+  - Ескертпе: IVM орындаушысын орындайтын сынақтар `defaults/executor.to` болмаса, минималды, детерминирленген орындаушы байт кодын автоматты түрде синтездейді. Сынақтарды орындау үшін алдын ала қадам қажет емес. Тепе-теңдік үшін канондық байт кодын жасау үшін келесі әрекеттерді орындауға болады:
     - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
-- If you change derive/proc-macro crates, run the trybuild UI suites via
-  `make check-proc-macro-ui` (or
-  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh
-  `.stderr` fixtures when diagnostics change to keep messages stable.
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute fmt/clippy/build/test with `--locked` plus `swift test`; expect `cargo test --workspace` to take hours and use `--skip-tests` only for quick local loops. See `docs/source/dev_workflow.md` for the full runbook.
-- Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs on touched crates, or new public items without doc comments (the guard refreshes `docs/source/agents/missing_docs_inventory.{json,md}` via `scripts/inventory_missing_docs.py`). Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and metrics/dashboards. Keep TODO enforcement via `make check-todo-guard` so TODO markers are not dropped without accompanying docs/tests. `make check-env-config-surface` regenerates the env-toggle inventory and now fails when new **production** env shims appear relative to `AGENTS_BASE_REF`; set `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional additions in the migration tracker. `make check-serde-guard` refreshes the serde inventory and fails on stale snapshots or new production `serde`/`serde_json` hits; set `SERDE_GUARD_ALLOW=1` only with an approved migration plan. Keep large deferrals visible via TODO breadcrumbs and follow-up tickets instead of deferring silently. Run `make check-std-only` to catch `no_std`/`wasm32` cfgs and `make check-status-sync` to ensure `roadmap.md` open items remain open-only and that roadmap/status changes land together; set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`. For a single invocation, use `make agents-preflight` to run all guardrails together.
-- Run local serialization guards before pushing: `make guards`.
-  - This denies direct `serde_json` in production code, disallows new direct serde deps outside allowlist, and prevents ad‑hoc AoS/NCB helpers outside `crates/norito`.
-- Optionally dry-run Norito feature matrix locally: `make norito-matrix` (uses a fast subset).
-  - For full coverage, run `scripts/run_norito_feature_matrix.sh` without `--fast`.
-  - To include a downstream smoke per combo (default crate `iroha_data_model`): `make norito-matrix-downstream` or `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
-- For proc-macro crates, add a `trybuild` UI harness (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) and commit `.stderr` diagnostics for the failing cases. Keep diagnostics stable and non-panicking; refresh fixtures with `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` and guard them with `cfg(all(feature = "trybuild-tests", not(coverage)))`.
-- Perform pre-commit routine like formatting & artifacts regeneration (see [`pre-commit.sample`](./hooks/pre-commit.sample))
-- With the `upstream` set to track [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git push <your-fork>`, and [create a pull request](https://github.com/hyperledger-iroha/iroha/compare) to the `main` branch. Ensure it follows the [pull request guidelines](#pull-request-etiquette).
+- Егер туынды/proc-макрос жәшіктерін өзгертсеңіз, trybuild UI жиынтықтарын арқылы іске қосыңыз
+  `make check-proc-macro-ui` (немесе
+  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) және жаңартыңыз
+  `.stderr` хабарларды тұрақты ұстау үшін диагностика өзгерген кездегі құрылғылар.
+- `--locked` плюс `swift test` көмегімен fmt/clippy/Build/test орындау үшін `make dev-workflow` (`scripts/dev_workflow.sh` айналасындағы орауыш) іске қосыңыз; `cargo test --workspace` бірнеше сағат алады деп күтіңіз және `--skip-tests` тек жылдам жергілікті циклдар үшін пайдаланыңыз. Толық runbook үшін `docs/source/dev_workflow.md` қараңыз.
+- `Cargo.lock` өңдеулерін және жаңа жұмыс кеңістігінің жәшіктерін блоктау үшін `make check-agents-guardrails` қоршауларын, егер нақты рұқсат болмаса, жаңа тәуелділіктерде сәтсіздікке ұшырау үшін `make check-dependency-discipline` және `make check-missing-docs` жаңа шиеленістерді болдырмау үшін бекітіңіз, түртілген жәшіктердегі құжаттар немесе құжат түсініктемелері жоқ жаңа жалпыға ортақ элементтер (күзетші `docs/source/agents/missing_docs_inventory.{json,md}` `scripts/inventory_missing_docs.py` арқылы жаңартады). `make check-tests-guard` қосу, сондықтан бірлік сынақтары оларға сілтеме жасамайынша (кіріктірілген `#[cfg(test)]`/I18NI0000139X блоктары немесе `tests/` жәшігі; бар қамту сандары) және `make check-docs-tests-metrics` жол кескіні өзгерістері және соған ұқсас өзгерістер болмаса, өзгертілген функциялар сәтсіз болады, көрсеткіштер/бақылау тақталары. `make check-todo-guard` арқылы TODO талаптарын орындауды сақтаңыз, осылайша TODO маркерлері ілеспе құжаттар/сынақтарсыз жойылмайды. `make check-env-config-surface` env ауыстырып-қосқыш түгендеуді қалпына келтіреді және `AGENTS_BASE_REF` қатысты жаңа **өндіріс** орта блоктары пайда болған кезде істен шығады; `ENV_CONFIG_GUARD_ALLOW=1` параметрін тасымалдау трекерінде әдейі қосуларды құжаттағаннан кейін ғана орнатыңыз. `make check-serde-guard` серде инвентаризациясын жаңартады және ескірген суреттерде немесе жаңа өнім `serde`/`serde_json` соққыларында сәтсіздікке ұшырайды; `SERDE_GUARD_ALLOW=1` параметрін тек бекітілген тасымалдау жоспарымен орнатыңыз. Үнсіз кейінге қалдырудың орнына TODO нан үгінділері және кейінгі билеттер арқылы үлкен кейінге қалдыруларды көрінетін етіп сақтаңыз. `make check-std-only` іске қосыңыз, `no_std`/`wasm32` cfgs және `make check-status-sync` `roadmap.md` ашық элементтердің ашық күйінде қалуын және жол картасы/күйдің жерді бірге өзгертетінін қамтамасыз ету үшін; `STATUS_SYNC_ALLOW_UNPAIRED=1` параметрін `AGENTS_BASE_REF` бекіткеннен кейін сирек күйдегі қателерді түзету үшін ғана орнатыңыз. Бір шақыру үшін барлық қоршауларды бірге іске қосу үшін `make agents-preflight` пайдаланыңыз.
+- Баспас бұрын жергілікті сериялау қорғаушыларын іске қосыңыз: `make guards`.
+  - Бұл өндіріс кодындағы тікелей `serde_json` жоққа шығарылады, рұқсат етілген тізімнен тыс жаңа тікелей деректерге рұқсат бермейді және `crates/norito` тыс арнайы AoS/NCB көмекшілеріне жол бермейді.
+- Қосымша құрғақ іске қосу Norito мүмкіндік матрицасы жергілікті: `make norito-matrix` (жылдам ішкі жиынды пайдаланады).
+  - Толық қамту үшін `scripts/run_norito_feature_matrix.sh` іске қосыңыз `--fast`.
+  - Бір құрамаға төменгі ағынды түтінді қосу үшін (әдепкі жәшік `iroha_data_model`): `make norito-matrix-downstream` немесе `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
+- Proc-makro жәшіктері үшін `trybuild` UI қосқышын (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) қосыңыз және сәтсіз жағдайлар үшін `.stderr` диагностикасын орындаңыз. Диагностиканы тұрақты және дүрбелеңсіз ұстаңыз; арматураларды `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` көмегімен жаңартыңыз және оларды `cfg(all(feature = "trybuild-tests", not(coverage)))` арқылы қорғаңыз.
+- Пішімдеу және артефактілерді қалпына келтіру сияқты алдын ала орындау тәртібін орындаңыз ([`pre-commit.sample`](./hooks/pre-commit.sample) қараңыз)
+- `upstream` бақылауға орнатылған [Hyperledger Iroha репозиторий](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git commit -s`, I108cre, a сұрау](https://github.com/hyperledger-iroha/iroha/compare) `main` филиалына. Оның [тарту сұрау нұсқауларына] (#pull-request-etiquette) сәйкес келетініне көз жеткізіңіз.
 
-### AGENTS workflow quickstart
+### AGENTS жұмыс процесінің жылдам басталуы
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `docs/source/dev_workflow.md`). It wraps `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (tests can take several hours), and `swift test`.
-- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations; rerun the full sequence before opening a pull request.
-- Guardrails: avoid touching `Cargo.lock`, adding new workspace members, introducing new dependencies, adding new `#[allow(missing_docs)]` shims, omitting crate-level docs, skipping tests when changing functions, dropping TODO markers without docs/tests, or reintroducing `no_std`/`wasm32` cfgs without approval. Run `make check-agents-guardrails` (or `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) plus `make check-dependency-discipline`, `make check-missing-docs` (refreshes `docs/source/agents/missing_docs_inventory.{json,md}`), `make check-tests-guard` (fails when production functions change without unit-test evidence—either tests change in the diff or existing tests must reference the function), `make check-docs-tests-metrics` (fails when roadmap changes lack docs/tests/metrics updates), `make check-todo-guard`, `make check-env-config-surface` (fails on stale inventories or new production env toggles; override with `ENV_CONFIG_GUARD_ALLOW=1` only after updating docs), and `make check-serde-guard` (fails on stale serde inventories or new production serde hits; override with `SERDE_GUARD_ALLOW=1` only with an approved migration plan) locally for early signal, `make check-std-only` for the std-only guard, and keep `roadmap.md`/`status.md` in sync with `make check-status-sync` (set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`). Use `make agents-preflight` if you want a single command to run all guards before opening a PR.
+- `make dev-workflow` (`scripts/dev_workflow.sh` айналасындағы орауыш, `docs/source/dev_workflow.md` құжатында құжатталған) іске қосыңыз. Ол `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (тесттерге бірнеше сағат кетуі мүмкін) және `swift test` орады.
+- Жылдамырақ итерациялар үшін `scripts/dev_workflow.sh --skip-tests` немесе `--skip-swift` пайдаланыңыз; тарту сұрауын ашпас бұрын толық ретті қайта іске қосыңыз.
+- Қорғаулар: `Cargo.lock`-ке қол тигізбеңіз, жаңа жұмыс кеңістігі мүшелерін қосыңыз, жаңа тәуелділіктерді енгізіңіз, жаңа `#[allow(missing_docs)]` тақтайшаларын қосыңыз, жәшік деңгейіндегі құжаттарды өткізбеңіз, функцияларды өзгерткен кезде сынақтарды өткізіп жібермеңіз, TODO маркерлерін құжаттар/тестілеулерсіз тастаңыз, `no_std`/`wasm32` cfg рұқсатсыз. `make check-agents-guardrails` (немесе `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) плюс `make check-dependency-discipline`, `make check-missing-docs` (`docs/source/agents/missing_docs_inventory.{json,md}` жаңартады), `make check-tests-guard` (өндіріс функцияларын өзгертусіз сынақтар орындалмаған кезде сәтсіздікке ұшырайды) іске қосыңыз. немесе бұрыннан бар сынақтар функцияға сілтеме жасауы керек), `make check-docs-tests-metrics` (жол картасына өзгерістер құжаттар/тесттер/метрика жаңартулары болмаған кезде орындалмайды), `make check-todo-guard`, `make check-env-config-surface` (ескірген қорларда немесе жаңа өндірістік қоршау ауыстырып-қосқыштарында сәтсіздікке ұшырайды; тек I18000-дан кейін қайта анықтау docs) және `make check-serde-guard` (ескірген қорлар немесе жаңа өндіріс серделері бойынша сәтсіздікке ұшырайды; `SERDE_GUARD_ALLOW=1` арқылы тек бекітілген тасымалдау жоспарымен қайта анықтау) ерте сигнал үшін жергілікті, `make check-std-only` тек std қорғаушысы үшін және сақтау `roadmap.md`/`status.md` `make check-status-sync` көмегімен синхрондалған (`STATUS_SYNC_ALLOW_UNPAIRED=1` параметрін `AGENTS_BASE_REF` бекіткеннен кейін сирек кездесетін қателерді түзету үшін ғана орнатыңыз). PR ашар алдында барлық қорғаушыларды бір пәрменмен іске қосуды қаласаңыз, `make agents-preflight` пайдаланыңыз.
 
-### Reporting Bugs
+### Қателерді хабарлау
 
-A *bug* is an error, design flaw, failure or fault in Iroha that causes it to produce an incorrect, unexpected, or unintended result or behaviour.
+*Қате* — қате, күтпеген немесе күтпеген нәтиже немесе әрекетті тудыратын Iroha қатесі, дизайн ақауы, сәтсіздік немесе ақау.
 
-We track Iroha bugs via [GitHub Issues](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) labeled with the `Bug` tag.
+Iroha қателерін `Bug` тегімен белгіленген [GitHub мәселелері](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) арқылы бақылаймыз.
 
-When you create a new issue, there is a template for you to fill in. Here's the checklist of what you should do when you are reporting bugs:
-- [ ] Add the `Bug` tag
-- [ ] Explain the issue
-- [ ] Provide a minimum working example
-- [ ] Attach a screenshot
+Жаңа шығарылым жасаған кезде толтыру үшін үлгі болады. Қателер туралы хабарлағанда не істеу керектігінің бақылау тізімі мынада:
+- [ ] `Bug` тегін қосыңыз
+- [ ] Мәселені түсіндіріңіз
+- [ ] Ең аз жұмыс үлгісін көрсетіңіз
+- [ ] Скриншотты тіркеңіз
 
-<details> <summary>Minimum working example</summary>
+<details> <summary>Ең аз жұмыс мысалы</summary>
 
-For each bug, you should provide a [minimum working example](https://en.wikipedia.org/wiki/Minimal_working_example). For example:
+Әрбір қате үшін [ең аз жұмыс мысалы] (https://en.wikipedia.org/wiki/Minimal_working_example) беруіңіз керек. Мысалы:
 
 ```
 # Minting negative Assets with value spec `Numeric`.
@@ -98,30 +99,30 @@ not to be able to mint negative values
 </details>
 
 ---
-**Note:** Issues such as outdated documentation, insufficient documentation, or feature requests should use the `Documentation` or `Enhancement` labels. They are not bugs.
+**Ескертпе:** Ескірген құжаттама, жеткіліксіз құжаттама немесе мүмкіндік сұраулары сияқты мәселелер `Documentation` немесе `Enhancement` белгілерін пайдалануы керек. Олар қателер емес.
 
 ---
 
-### Reporting Vulnerabilities
+### Осалдықтарды хабарлау
 
-While we are proactive in preventing security problems, it is possible that you might come across a security vulnerability before we do.
+Қауіпсіздік мәселелерінің алдын алуда белсенділік танытқанымызға қарамастан, сіз бізден бұрын қауіпсіздік осалдығына тап болуыңыз мүмкін.
 
-- Before the First Major Release (2.0) all vulnerabilities are considered bugs, so feel free to submit them as bugs [following the instructions above](#reporting-bugs).
-- After the First Major Release, use our [bug bounty program](https://hackerone.com/hyperledger) to submit vulnerabilities and get your reward.
+- Бірінші негізгі шығарылым (2.0) алдында барлық осалдықтар қателер болып саналады, сондықтан оларды қателер ретінде [жоғарыдағы нұсқауларды орындай отырып] жіберіңіз (#reporting-bugs).
+- Бірінші негізгі шығарылымнан кейін осалдықтарды жіберу және сыйақы алу үшін [bug bounty program](https://hackerone.com/hyperledger) пайдаланыңыз.
 
-:exclamation: To minimize the damage caused by an unpatched security vulnerability, you should disclose the vulnerability directly to Hyperledger as soon as possible and **avoid disclosing the same vulnerability publicly** for a reasonable period of time.
+:cclamation: Қауіпсіздіктің түзетілмеген осалдығынан туындаған зиянды азайту үшін мүмкіндігінше тезірек Hyperledger осалдықты ашып көрсетуіңіз керек және **бір осалдықты ақылға қонымды уақыт аралығында жарияламауыңыз керек**.
 
-If you have any questions regarding our handling of security vulnerabilities, please feel free to contact any of the currently active maintainers in Rocket.Chat private messages.
+Қауіпсіздіктің осал тұстарын өңдеуге қатысты сұрақтарыңыз болса, Rocket.Chat жеке хабарламаларында қазіргі уақытта белсенді қызмет көрсетушілердің кез келгеніне хабарласыңыз.
 
-### Suggesting Improvements
+### Жақсартуларды ұсыну
 
-Create [an issue](https://github.com/hyperledger-iroha/iroha/issues/new) on GitHub with the appropriate tags (`Optimization`, `Enhancement`) and describe the improvement you are suggesting. You may leave this idea for us or someone else to develop, or you may implement it yourself.
+GitHub жүйесінде сәйкес тегтермен (`Optimization`, `Enhancement`) [мәселені](https://github.com/hyperledger-iroha/iroha/issues/new) жасаңыз және сіз ұсынып отырған жақсартуды сипаттаңыз. Сіз бұл идеяны бізге немесе басқа біреуге дамыту үшін қалдыра аласыз немесе оны өзіңіз жүзеге асыра аласыз.
 
-If you intend to implement the suggestion yourself, do the following:
+Ұсынысты өзіңіз жүзеге асырғыңыз келсе, келесі әрекеттерді орындаңыз:
 
-1. Assign the issue you created to yourself **before** you start working on it.
-2. Work on the feature you suggested and follow our [guidelines for code and documentation](#style-guides).
-3. When you are ready to open a pull request, make sure you follow the [pull request guidelines](#pull-request-etiquette) and mark it as implementing the previously created issue:
+1. Өзіңіз жасаған мәселені **бастар алдында** өзіңізге тағайындаңыз.
+2. Сіз ұсынған мүмкіндікпен жұмыс істеп, [код пен құжаттамаға арналған нұсқаулықтарды](#style-guides) орындаңыз.
+3. Тарту сұрауын ашуға дайын болғаныңызда, [тарту сұрауының нұсқауларын](#pull-request-etiquette) орындағаныңызға көз жеткізіңіз және оны бұрын жасалған мәселені жүзеге асыру ретінде белгілеңіз:
 
    ```
    feat: Description of the feature
@@ -131,157 +132,153 @@ If you intend to implement the suggestion yourself, do the following:
    Closes #1234
    ```
 
-4. If your change requires an API change, use the `api-changes` tag.
+4. Егер өзгерту API өзгертуін қажет етсе, `api-changes` тегін пайдаланыңыз.
 
-   **Note:** features that require API changes may take longer to implement and approve as they require Iroha library makers to update their code.
+   **Ескертпе:** API өзгертулерін қажет ететін мүмкіндіктерді енгізу және бекіту ұзағырақ уақыт алуы мүмкін, себебі олар Iroha кітапхана жасаушыларынан кодтарын жаңартуды талап етеді.### Сұрақтар қою
 
-### Asking Questions
+Сұрақ – қате де, мүмкіндік немесе оңтайландыру сұрауы да емес кез келген талқылау.
 
-A question is any discussion that is neither a bug nor a feature or optimization request.
+<толығырақ> <жиынтық> Мен сұрақты қалай қоямын? </summary>
 
-<details> <summary> How do I ask a question? </summary>
+Қызметкерлер мен қауымдастық мүшелері сізге дер кезінде көмектесуі үшін сұрақтарыңызды [біздің жедел хабар алмасу платформаларымыздың бірі](#contact) мекенжайына жіберіңіз.
 
-Please post your questions to [one of our instant messaging platforms](#contact) so that the staff and members of the community could help you in a timely manner.
-
-You, as part of the aforementioned community, should consider helping others too. If you decide to help, please do so in a [respectful manner](CODE_OF_CONDUCT.md).
+Сіз, жоғарыда аталған қауымдастықтың бір бөлігі ретінде, басқаларға да көмектесу туралы ойлануыңыз керек. Егер сіз көмектесуді шешсеңіз, мұны [құрметпен](CODE_OF_CONDUCT.md) жасаңыз.
 
 </details>
 
-## Your First Code Contribution
+## Сіздің алғашқы код үлесіңіз
 
-1. Find a beginner-friendly issue among issues with the [good-first-issue](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) label.
-2. Make sure that no one else is working on the issues you have chosen by checking that it is not assigned to anybody.
-3. Assign the issue to yourself so that others can see that someone is working on it.
-4. Read our [Rust Style Guide](#rust-style-guide) before you start writing code.
-5. When you are ready to commit your changes, read the [pull request guidelines](#pull-request-etiquette).
+1. [Жақсы-бірінші шығарылым](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) белгісі бар мәселелердің арасынан бастаушыға ыңғайлы мәселені табыңыз.
+2. Сіз таңдаған мәселелермен ешкім жұмыс істемейтініне көз жеткізіңіз, ол ешкімге тағайындалмағанын тексеріңіз.
+3. Басқалар біреудің онымен жұмыс істеп жатқанын көруі үшін мәселені өзіңізге тағайындаңыз.
+4. Код жазуды бастамас бұрын [Rust Style Guide](#rust-style-guide) бөлімін оқыңыз.
+5. Өзгерістерді енгізуге дайын болғанда, [сұрауды тарту нұсқауларын] (#pull-request-etiquette) оқыңыз.
 
-## Pull Request Etiquette
+## Сұраныс этикеті
 
-Please [fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions. When working with **PRs from forks**, check [this manual](https://help.github.com/articles/checking-out-pull-requests-locally).
+Жарналарыңыз үшін [репозиторийді](https://github.com/hyperledger-iroha/iroha/tree/main) [айырбастаңыз](https://docs.github.com/en/get-started/quickstart/fork-a-repo) және [функция тармағын жасаңыз](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository). **Шанышқылардағы PR-мен** жұмыс істегенде, [осы нұсқаулықты](https://help.github.com/articles/checking-out-pull-requests-locally) тексеріңіз.
 
-#### Working on code contribution:
-- Follow the [Rust Style Guide](#rust-style-guide) and the [Documentation Style Guide](#documentation-style-guide).
-- Ensure that the code you've written is covered by tests. If you fixed a bug, please turn the minimum working example that reproduces the bug into a test.
-- When touching derive/proc-macro crates, run `make check-proc-macro-ui` (or
-  filter with `PROC_MACRO_UI_CRATES="crate1 crate2"`) so trybuild UI fixtures
-  stay in sync and diagnostics remain stable.
-- Document new public APIs (crate-level `//!` and `///` on new items), and run
-  `make check-missing-docs` to verify the guardrail. Call out the docs/tests you
-  added in your pull request description.
+#### Код үлесінде жұмыс істеу:
+- [Rust Style Guide](#rust-style-guide) және [Documentation Style Guide](#documentation-style-guide) нұсқауларын орындаңыз.
+- Сіз жазған код сынақтармен қамтылғанына көз жеткізіңіз. Қатені түзетсеңіз, қатені шығаратын ең аз жұмыс үлгісін сынаққа айналдырыңыз.
+- Алынған/прок-макрос жәшіктерін түрткен кезде `make check-proc-macro-ui` іске қосыңыз (немесе
+  `PROC_MACRO_UI_CRATES="crate1 crate2"` бар сүзгі) сондықтан UI құрылғыларын жасап көріңіз
+  синхронда және диагностика тұрақты болып қалады.
+- Жаңа жалпыға қолжетімді API интерфейстерін (жаңа элементтерде `//!` жәшік деңгейінде және `///`) құжаттаңыз және іске қосыңыз
+  Қорғауды тексеру үшін `make check-missing-docs`. Құжаттарды/сынақтарды шақырыңыз
+  тарту сұрау сипаттамасына қосылды.
 
-#### Committing your work:
-- Follow the [Git Style Guide](#git-workflow).
-- Squash your commits [either before](https://www.git-tower.com/learn/git/faq/git-squash/) or [during the merge](https://rietta.com/blog/github-merge-types/).
-- If during the preparation of your pull request your branch got out of date, rebase it locally with `git pull --rebase upstream main`. Alternatively, you may use the drop-down menu for the `Update branch` button and choose the `Update with rebase` option.
+#### Жұмысыңызды орындау:
+- [Git Style Guide](#git-workflow) орындаңыз.
+- Міндеттемелеріңізді [бұрын](https://www.git-tower.com/learn/git/faq/git-squash/) немесе [біріктіру кезінде](https://rietta.com/blog/github-merge-types/) кесіңіз.
+- Егер тарту сұрауыңызды дайындау кезінде филиалыңыз ескірсе, оны `git pull --rebase upstream main` арқылы жергілікті түрде қайта негіздеңіз. Немесе, `Update branch` түймесі үшін ашылмалы мәзірді пайдаланып, `Update with rebase` опциясын таңдауыңызға болады.
 
-  In the interest of making this process easier for everyone, try not to have more than a handful of commits for a pull request, and avoid re-using feature branches.
+  Бұл процесті барлығына жеңілдету үшін тарту сұрауы үшін бірнеше міндеттемеге ие болмауға тырысыңыз және мүмкіндік тармақтарын қайта пайдаланудан аулақ болыңыз.
 
-#### Creating a pull request:
-- Use an appropriate pull request description by following the guidance in the [Pull Request Etiquette](#pull-request-etiquette) section. Avoid deviating from these guidelines if possible.
-- Add an appropriately formatted [pull request title](#pull-request-titles).
-- If you feel like your code isn't ready to merge, but you want the maintainers to look through it, create a draft pull request.
+#### Тарту сұрауын жасау:
+- [Сұраныс тарту этикеті](#pull-request-etiquette) бөліміндегі нұсқауларды орындау арқылы сәйкес тарту сұрауының сипаттамасын пайдаланыңыз. Мүмкін болса, осы нұсқаулардан ауытқудан аулақ болыңыз.
+- Сәйкес пішімделген [сұраныс тақырыбын тарту](#pull-request-titles) қосыңыз.
+- Егер кодыңыз біріктіруге дайын емес деп ойласаңыз, бірақ қолдаушылар оны қарап шығуын қаласаңыз, жобаны тарту сұрауын жасаңыз.
 
-#### Merging your work:
-- A pull request must pass all automated checks before being merged. At a minimum, the code must be formatted, passing all tests, as well as having no outstanding `clippy` lints.
-- A pull request cannot be merged without two approving reviews from the active maintainers.
-- Each pull request will automatically notify the code owners. An up to date list of current maintainers can be found in [MAINTAINERS.md](MAINTAINERS.md).
+#### Жұмысыңызды біріктіру:
+- Тарту сұрауы біріктірілмес бұрын барлық автоматтандырылған тексерулерден өтуі керек. Кем дегенде, код барлық сынақтардан өтіп, сонымен қатар `clippy` линттері жоқ пішімделуі керек.
+- Белсенді қолдаушылардың екі мақұлдау шолуынсыз тарту сұрауын біріктіру мүмкін емес.
+- Әрбір тарту сұрауы код иелеріне автоматты түрде хабарлайды. Ағымдағы техникалық қызмет көрсетушілердің жаңартылған тізімін [MAINTAINERS.md](MAINTAINERS.md) ішінен табуға болады.
 
-#### Review etiquette:
-- Do not resolve a conversation on your own. Let the reviewer make a decision.
-- Acknowledge review comments and engage with the reviewer (agree, disagree, clarify, explain, etc.). Do not ignore comments.
-- For simple code change suggestions, if you apply them directly, you can resolve the conversation.
-- Avoid overwriting your previous commits when pushing new changes. It obfuscates what changed since the last review and forces the reviewer to start from scratch. Commits are squashed before merging automatically.
+#### Этикетті қайталау:
+- Әңгімені өз бетіңізше шешпеңіз. Сарапшы шешім қабылдасын.
+- Қарау пікірлерін мойындаңыз және рецензентпен байланысыңыз (келісемін, келіспеймін, нақтылаңыз, түсіндіріңіз және т.б.). Пікірлерді назардан тыс қалдырмаңыз.
+- Қарапайым кодты өзгерту ұсыныстары үшін, егер сіз оларды тікелей қолдансаңыз, сөйлесуді шеше аласыз.
+- Жаңа өзгертулерді енгізу кезінде алдыңғы міндеттемелерді қайта жазудан аулақ болыңыз. Ол соңғы шолудан кейін не өзгергенін жасырады және шолушыны нөлден бастауға мәжбүр етеді. Тапсырмалар автоматты түрде біріктірілмес бұрын қысқартылады.
 
-### Pull Request Titles
+### Сұраныс тақырыптарын тартыңыз
 
-We parse the titles of all the merged pull requests to generate changelogs. We also check that the title follows the convention via the *`check-PR-title`* check.
+Біз өзгерістер журналдарын жасау үшін барлық біріктірілген тарту сұрауларының тақырыптарын талдаймыз. Сондай-ақ тақырыптың конвенцияға сәйкес келетінін *`check-PR-title`* тексеру арқылы тексереміз.
 
-To pass the *`check-PR-title`* check, the pull request title must adhere to the following guidelines:
+*`check-PR-title`* тексеруінен өту үшін тарту сұрауының тақырыбы келесі нұсқауларға сай болуы керек:
 
-<details> <summary> Expand to read the detailed title guidelines</summary>
+<details> <summary> Егжей-тегжейлі тақырып нұсқауларын оқу үшін кеңейтіңіз</summary>
 
-1. Follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) format.
+1. [Кәдімгі тапсырмалар](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) пішімін орындаңыз.
 
-2. If the pull request has a single commit, the PR title should be the same as the commit message.
-
-</details>
-
-### Git Workflow
-
-- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions.
-- [Configure the remote](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) to sync your fork with the [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Use the [Git Rebase Workflow](https://git-rebase.io/). Avoid using `git pull`. Use `git pull --rebase` instead.
-- Use the provided [git hooks](./hooks/) to ease the development process.
-
-Follow these commit guidelines:
-
-- **Sign-off every commit**. If you don't, [DCO](https://github.com/apps/dco) will not let you merge.
-
-  Use `git commit -s` to automatically add `Signed-off-by: $NAME <$EMAIL>` as the final line of your commit message. Your name and email should be the same as specified in your GitHub account.
-
-  We also encourage you to sign your commits with GPG key using `git commit -sS` ([learn more](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)).
-
-  You may use [the `commit-msg` hook](./hooks/) to automatically sign-off your commits.
-
-- Commit messages must follow [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) and the same naming schema as for [pull request titles](#pull-request-titles). This means:
-  - **Use present tense** ("Add feature", not "Added feature")
-  - **Use imperative mood** ("Deploy to docker..." not "Deploys to docker...")
-- Write a meaningful commit message.
-- Try keeping a commit message short.
-- If you need to have a longer commit message:
-  - Limit the first line of your commit message to 50 characters or less.
-  - The first line of your commit message should contain the summary of the work you've done. If you need more than one line, leave a blank line between each paragraph and describe your changes in the middle. The last line must be the sign-off.
-- If you modify the Schema (check by generating the schema with `kagami schema` and diff), you should make all changes to the schema in a separate commit with the message `[schema]`.
-- Try to stick to one commit per meaningful change.
-  - If you fixed several issues in one PR, give them separate commits.
-  - As mentioned previously, changes to the `schema` and the API should be done in appropriate commits separate from the rest of your work.
-  - Add tests for functionality in the same commit as that functionality.
-
-## Tests and Benchmarks
-
-- To run the source-code based tests, execute [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) in the Iroha root. Note that this is a long process.
-- To run benchmarks, execute [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) from the Iroha root. To help debug benchmark outputs, set the `debug_assertions` environment variable like so: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
-- If you are working on a particular component, be mindful that when you run `cargo test` in a [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html), it will only run the tests for that workspace, which usually doesn't include any [integration tests](https://www.testingxperts.com/blog/what-is-integration-testing).
-- If you want to test your changes on a minimal network, the provided [`docker-compose.yml`](defaults/docker-compose.yml) creates a network of 4 Iroha peers in docker containers that can be used to test consensus and asset propagation-related logic. We recommend interacting with that network using either [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python), or the included Iroha client CLI.
-- Do not remove failing tests. Even tests that are ignored will be run in our pipeline eventually.
-- If possible, please benchmark your code both before and after making your changes, as a significant performance regression can break existing users' installations.
-
-### Serialization guard checks
-
-Run `make guards` to validate repository policies locally:
-
-- Deny-list direct `serde_json` in production sources (prefer `norito::json`).
-- Forbid direct `serde`/`serde_json` dependencies/imports outside the allowlist.
-- Prevent reintroduction of ad‑hoc AoS/NCB helpers outside `crates/norito`.
-
-### Debugging tests
-
-<details> <summary> Expand to learn how to change the log level or write logs to a JSON.</summary>
-
-If one of your tests is failing, you may want to decrease the maximum logging level. By default, Iroha only logs `INFO` level messages, but retains the ability to produce both `DEBUG` and `TRACE` level logs. This setting can be changed either using the `LOG_LEVEL` environment variable for code-based tests, or using the `/configuration` endpoint on one of the peers in a deployed network.
-
-While logs printed in the `stdout` are sufficient, you may find it more convenient to produce `json`-formatted logs into a separate file and parse them using either [node-bunyan](https://www.npmjs.com/package/bunyan) or [rust-bunyan](https://crates.io/crates/bunyan).
-
-Set the `LOG_FILE_PATH` environment variable to an appropriate location to store the logs and parse them using the above packages.
+2. Егер тарту сұрауында жалғыз міндеттеме болса, PR тақырыбы растау хабарымен бірдей болуы керек.
 
 </details>
 
-### Debugging using tokio console
+### Git жұмыс процесі
 
-<details> <summary> Expand to learn how to compile Iroha with tokio console support.</summary>
+- Жарналарыңыз үшін [Шанышқы](https://docs.github.com/en/get-started/quickstart/fork-a-repo) [репозиторий](https://github.com/hyperledger-iroha/iroha/tree/main) және [мүмкіндік тармағын жасаңыз](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository).
+- [Қашықтан басқару құралын конфигурациялаңыз](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) шанышқыны [Hyperledger Iroha репозиторийімен](https://github.com/hyperledger-iroha/iroha/tree/main) синхрондау үшін.
+- [Git Rebase Workflow](https://git-rebase.io/) пайдаланыңыз. `git pull` пайдаланудан аулақ болыңыз. Оның орнына `git pull --rebase` пайдаланыңыз.
+- Әзірлеу процесін жеңілдету үшін берілген [git hooks](./hooks/) пайдаланыңыз.
 
-Sometimes it might be helpful for debugging to analyze tokio tasks using [tokio-console](https://github.com/tokio-rs/console).
+Мына міндеттеме нұсқауларын орындаңыз:
 
-In this case you should compile Iroha with support of tokio console like that:
+- **Әрбір міндеттемеге қол қою**. Олай етпесеңіз, [DCO](https://github.com/apps/dco) біріктіруге рұқсат бермейді.
+
+  `git commit -s` параметрін `Signed-off-by: $NAME <$EMAIL>` келісімді хабарыңыздың соңғы жолы ретінде автоматты түрде қосу үшін пайдаланыңыз. Сіздің атыңыз бен электрондық поштаңыз GitHub тіркелгіңізде көрсетілгенмен бірдей болуы керек.
+
+  Сондай-ақ `git commit -sS` ([толығырақ](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)) арқылы GPG кілтімен міндеттемелерге қол қоюды ұсынамыз.
+
+  Міндеттемелеріңізге автоматты түрде қол қою үшін [`commit-msg` ілмегін](./hooks/) пайдалануға болады.
+
+- Орындау хабарлары [әдеттегі тапсырмалар](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) және [сұраныс тақырыптарын тарту](#pull-request-titles) сияқты бірдей атау схемасына сәйкес келуі керек. Бұл мынаны білдіреді:
+  - **Осы шақты қолдану** («Қосылған мүмкіндік» емес, «Мүмкіндік қосу»)
+  - **Иперативті көңіл-күйді пайдаланыңыз** («Докерге орналастыру...» емес, «Докерге орналастыру...»)
+- Мағыналы міндеттеме хабарламасын жазыңыз.
+- Міндеттеме туралы хабарламаны қысқа етіп жазып көріңіз.
+- Егер сізге ұзағырақ хабарлама қажет болса:
+  - Міндеттеме хабарыңыздың бірінші жолын 50 немесе одан аз таңбамен шектеңіз.
+  - Сіздің міндеттеме хабарламаңыздың бірінші жолында сіз жасаған жұмыстың қысқаша мазмұны болуы керек. Егер сізге бірнеше жол қажет болса, әр абзац арасында бос жол қалдырыңыз және ортасында өзгерістеріңізді сипаттаңыз. Соңғы жолдан шығу болуы керек.
+- Схеманы өзгертсеңіз (сызбаны `kagami schema` және diff арқылы жасау арқылы тексеріңіз), `[schema]` хабары бар бөлек тапсырмада схемаға барлық өзгертулер енгізуіңіз керек.
+- Әр маңызды өзгеріс үшін бір міндеттемені орындауға тырысыңыз.
+  - Бір PR-да бірнеше мәселені шешсеңіз, оларға бөлек міндеттеме беріңіз.
+  - Бұрын айтылғандай, `schema` және API өзгертулері жұмысыңыздың қалған бөлігінен бөлек тиісті тапсырмаларда орындалуы керек.
+  - Функционалдық сынақтарды сол функционалдылықпен бірдей тапсырмаға қосыңыз.
+
+## Тесттер мен салыстырулар
+
+- Бастапқы кодқа негізделген сынақтарды іске қосу үшін Iroha түбірінде [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) орындаңыз. Бұл ұзақ процесс екенін ескеріңіз.
+- Көрсеткіштерді іске қосу үшін Iroha түбірінен [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) орындаңыз. Эталондық нәтижелерді түзетуге көмектесу үшін `debug_assertions` ортасының айнымалы мәнін келесідей орнатыңыз: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
+- Белгілі бір құрамдаспен жұмыс істеп жатсаңыз, `cargo test` нұсқасын [жұмыс кеңістігінде](https://doc.rust-lang.org/cargo/reference/workspaces.html) іске қосқанда, ол әдетте ешбір [интеграция сынақтарын](https://www.testingxperts.com/blog/what-is-integration-testing) қамтымайтын сол жұмыс кеңістігіне арналған сынақтарды ғана орындайтынын есте сақтаңыз.
+- Өзгерістерді минималды желіде тексергіңіз келсе, берілген [`docker-compose.yml`](defaults/docker-compose.yml) консенсус пен активтердің таралуына қатысты логиканы тексеру үшін пайдаланылуы мүмкін докер контейнерлерінде 4 Iroha тең желісін жасайды. Бұл желімен [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python) немесе қосылған Iroha клиенті CLI арқылы әрекеттесуді ұсынамыз.
+- Сәтсіз сынақтарды алып тастамаңыз. Тіпті еленбейтін сынақтар да біздің құбырымызда орындалады.
+- Мүмкін болса, кодты өзгертулерді енгізер алдында және одан кейін салыстырыңыз, себебі айтарлықтай өнімділік регрессиясы бар пайдаланушылардың орнатуларын бұзуы мүмкін.
+
+### Серияландыруды қорғауды тексереді
+
+Репозиторий саясаттарын жергілікті түрде тексеру үшін `make guards` іске қосыңыз:
+
+- Өндіріс көздеріндегі тікелей `serde_json` тізімін жоққа шығару (`norito::json` таңдау).
+- Рұқсат етілген тізімнен тыс тікелей `serde`/`serde_json` тәуелділіктеріне/импорттарына тыйым салу.
+- `crates/norito` тыс арнайы AoS/NCB көмекшілерін қайта енгізуді болдырмау.
+
+### Түзету сынақтары
+
+<details> <summary> Журнал деңгейін өзгерту немесе журналдарды JSON файлына жазу жолын үйрену үшін кеңейтіңіз.</summary>
+
+Егер сынақтарыңыздың бірі сәтсіз болса, ең жоғары тіркеу деңгейін төмендетқіңіз келуі мүмкін. Әдепкі бойынша, Iroha `INFO` деңгейіндегі хабарларды ғана журналға жазады, бірақ `DEBUG` және `TRACE` деңгей журналдарын жасау мүмкіндігін сақтайды. Бұл параметрді кодқа негізделген сынақтар үшін `LOG_LEVEL` ортасының айнымалы мәнін пайдалану арқылы немесе орналастырылған желідегі әріптестердің бірінде `/configuration` соңғы нүктесін пайдалану арқылы өзгертуге болады.`stdout` жүйесінде басып шығарылған журналдар жеткілікті болғанымен, `json` пішіміндегі журналдарды бөлек файлға жасап, оларды [node-bunyan](https://www.npmjs.com/package/bunyan) немесе [rust-bunyan](I1010000) көмегімен талдау ыңғайлырақ болуы мүмкін.
+
+Журналдарды сақтау және оларды жоғарыдағы бумаларды пайдаланып талдау үшін `LOG_FILE_PATH` ортасының айнымалы мәнін сәйкес орынға орнатыңыз.
+
+</details>
+
+### tokio консолі арқылы жөндеу
+
+<details> <summary> tokio консолінің қолдауымен Iroha компиляциясын үйрену үшін кеңейтіңіз.</summary>
+
+Кейде [tokio-console](https://github.com/tokio-rs/console) арқылы tokio тапсырмаларын талдау үшін жөндеуге пайдалы болуы мүмкін.
+
+Бұл жағдайда tokio консолінің қолдауымен Iroha құрастыру керек:
 
 ```bash
 RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
 ```
 
-Port for tokio console can by configured through `LOG_TOKIO_CONSOLE_ADDR` configuration parameter (or environment variable).
-Using tokio console require log level to be `TRACE`, can be enabled through configuration parameter or environment variable `LOG_LEVEL`.
+Tokio консоліне арналған портты `LOG_TOKIO_CONSOLE_ADDR` конфигурация параметрі (немесе орта айнымалысы) арқылы конфигурациялауға болады.
+Tokio консолін пайдалану журнал деңгейінің `TRACE` болуын талап етеді, конфигурация параметрі немесе `LOG_LEVEL` орта айнымалысы арқылы қосуға болады.
 
-Example of running Iroha with tokio console support using `scripts/test_env.sh`:
+`scripts/test_env.sh` көмегімен tokio консолінің қолдауымен Iroha іске қосу мысалы:
 
 ```bash
 # 1. Compile Iroha
@@ -294,27 +291,27 @@ tokio-console http://127.0.0.1:5555
 
 </details>
 
-### Profiling
+### Профильдеу
 
-<details> <summary> Expand to learn how to profile Iroha. </summary>
+<толығырақ> <жиынтық> Iroha профилін білу үшін кеңейтіңіз. </summary>
 
-To optimize performance it's useful to profile Iroha.
+Өнімділікті оңтайландыру үшін Iroha профилін жасау пайдалы.
 
-Profiling builds currently require a nightly toolchain. To prepare one, compile Iroha with the `profiling` profile and feature using `cargo +nightly`:
+Профильдеу құрастырулары қазіргі уақытта түнгі құралдар тізбегін қажет етеді. Біреуін дайындау үшін Iroha `profiling` профилімен және `cargo +nightly` көмегімен Iroha құрастырыңыз:
 
 ```bash
 RUSTFLAGS="-C force-frame-pointers=on" cargo +nightly -Z build-std build --target your-desired-target --profile profiling --features profiling
 ```
 
-Then start Iroha and attach profiler of your choice to the Iroha pid.
+Содан кейін Iroha іске қосыңыз және Iroha пидіне өзіңіз таңдаған профильді тіркеңіз.
 
-Alternatively it's possible to build Iroha inside docker with profiler support and profile Iroha this way.
+Сонымен қатар, Iroha докердің ішінде профильді қолдау және Iroha профилін осылай құруға болады.
 
 ```bash
 docker build -f Dockerfile.glibc --build-arg="PROFILE=profiling" --build-arg='RUSTFLAGS=-C force-frame-pointers=on' --build-arg='FEATURES=profiling' --build-arg='CARGOFLAGS=-Z build-std' -t iroha:profiling .
 ```
 
-E.g. using perf (available only on linux):
+Мысалы, perf пайдалану (тек Linux жүйесінде қол жетімді):
 
 ```bash
 # to capture profile
@@ -323,15 +320,15 @@ sudo perf record -g -p <PID>
 sudo perf report
 ```
 
-To be able to observe profile of the executor during Iroha profiling, executor should be compiled without stripping symbols.
-It can be done by running:
+Iroha профилін жасау кезінде орындаушының профилін бақылау мүмкіндігін алу үшін орындаушыны белгілерді ажыратпай құрастыру керек.
+Оны іске қосу арқылы жасауға болады:
 
 ```bash
 # compile executor without optimizations
 cargo run --bin kagami -- ivm build ./path/to/executor --out-file executor.to
 ```
 
-With profiling feature enabled Iroha exposes endpoint to scrap pprof profiles:
+Профильдеу мүмкіндігі қосылған кезде Iroha соңғы нүктені pprof профильдерін қалдырады:
 
 ```bash
 # profile Iroha for 30 seconds and download the profile data
@@ -342,92 +339,92 @@ go tool pprof -web profile.pb
 
 </details>
 
-## Style Guides
+## Стильдік нұсқаулықтар
 
-Please follow these guidelines when you make code contributions to our project:
+Біздің жобаға кодтық үлес қосқанда мына нұсқауларды орындаңыз:
 
-### Git Style Guide
+### Git стильінің нұсқаулығы
 
-:book: [Read git guidelines](#git-workflow)
+:book: [Git нұсқауларын оқыңыз](#git-workflow)
 
-### Rust Style Guide
+### Rust стилі нұсқаулығы
 
-<details> <summary> :book: Read code guidelines</summary>
+<details> <summary> :book: Код нұсқауларын оқу</summary>
 
-- Use `cargo fmt --all` (edition 2024) to format code.
+- Кодты пішімдеу үшін `cargo fmt --all` (2024 басылым) пайдаланыңыз.
 
-Code guidelines:
+Кодтық нұсқаулар:
 
-- Unless otherwise specified, refer to [Rust best practices](https://github.com/mre/idiomatic-rust).
-- Use the `mod.rs` style. [Self-named modules](https://rust-lang.github.io/rust-clippy/master/) will not pass static analysis, except as [`trybuild`](https://crates.io/crates/trybuild) tests.
-- Use a domain-first modules structure.
+- Басқаша көрсетілмесе, [Rust үздік тәжірибелері](https://github.com/mre/idiomatic-rust) бөлімін қараңыз.
+- `mod.rs` стилін пайдаланыңыз. [Өздігінен аталатын модульдер](https://rust-lang.github.io/rust-clippy/master/) [`trybuild`](https://crates.io/crates/trybuild) сынақтарын қоспағанда, статикалық талдаудан өтпейді.
+- Бірінші домендік модульдер құрылымын пайдаланыңыз.
 
-  Example: don't do `constants::logger`. Instead, invert the hierarchy, putting the object for which it is used first: `iroha_logger::constants`.
-- Use [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) with an explicit error message or proof of infallibility instead of `unwrap`.
-- Never ignore an error. If you can't `panic` and can't recover, it at least needs to be recorded in the log.
-- Prefer to return a `Result` instead of `panic!`.
-- Group related functionality spatially, preferably inside appropriate modules.
+  Мысал: `constants::logger` жасамаңыз. Оның орнына бірінші пайдаланылатын нысанды қойып, иерархияны төңкеріңіз: `iroha_logger::constants`.
+- [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) `unwrap` орнына анық қате хабары немесе қатесіздіктің дәлелі бар пайдаланыңыз.
+- Қатені ешқашан елемеңіз. `panic` және қалпына келтіру мүмкін болмаса, ол кем дегенде журналға жазылуы керек.
+- `panic!` орнына `Result` қайтаруды ұнатыңыз.
+- Қатысты функционалдылықты кеңістікте, жақсырақ сәйкес модульдер ішінде топтаңыз.
 
-  For example, instead of having a block with `struct` definitions and then `impl`s for each individual struct, it is better to have the `impl`s related to that `struct` next to it.
-- Declare before implementation: `use` statements and constants at the top, unit tests at the bottom.
-- Try to avoid `use` statements if the imported name is used only once. This makes moving your code into a different file easier.
-- Do not silence `clippy` lints indiscriminately. If you do, explain your reasoning with a comment (or `expect` message).
-- Prefer  `#[outer_attribute]` to `#![inner_attribute]` if either is available.
-- If your function doesn't mutate any of its inputs (and it shouldn't mutate anything else), mark it as `#[must_use]`.
-- Avoid `Box<dyn Error>` if possible (we prefer strong typing).
-- If your function is a getter/setter, mark it `#[inline]`.
-- If your function is a constructor (i.e., it's creating a new value from the input parameters and calls `default()`), mark it `#[inline]`.
-- Avoid tying your code to concrete data structures; `rustc` is smart enough to turn a `Vec<InstructionExpr>` into `impl IntoIterator<Item = InstructionExpr>` and vice versa when it needs to.
+  Мысалы, әрбір жеке құрылым үшін `struct` анықтамалары, содан кейін `impl`s бар блоктың орнына оның жанында `impl`s сол `struct` болғаны дұрыс.
+- Орындау алдында хабарлаңыз: `use` мәлімдемелері және тұрақтылар жоғарғы жағында, бірлік сынақтары төменгі жағында.
+- Импортталған атау тек бір рет пайдаланылса, `use` мәлімдемелерінен аулақ болуға тырысыңыз. Бұл кодты басқа файлға жылжытуды жеңілдетеді.
+- `clippy` линттерін таңдаусыз өшірмеңіз. Егер солай етсеңіз, пікіріңізді түсіндіріңіз (немесе `expect` хабарламасы).
+- Егер біреуі бар болса, `#[outer_attribute]` орнына `#![inner_attribute]` таңдаңыз.
+- Егер функция кірістерінің ешқайсысын өзгертпесе (және ол басқа ешнәрсені өзгертпеуі керек), оны `#[must_use]` ретінде белгілеңіз.
+- Мүмкіндігінше `Box<dyn Error>` қолданбаңыз (біз күшті теруді қалаймыз).
+- Функцияңыз қабылдаушы/орнатқыш болса, оны `#[inline]` деп белгілеңіз.
+- Егер функция конструктор болса (яғни, ол кіріс параметрлерінен жаңа мән жасап, `default()` шақырса), оны `#[inline]` деп белгілеңіз.
+- Кодыңызды нақты деректер құрылымдарына байланыстырмаңыз; `rustc` `Vec<InstructionExpr>` құрылғысын қажет кезде `impl IntoIterator<Item = InstructionExpr>` түріне және керісінше айналдыруға жеткілікті ақылды.
 
-Naming guidelines:
-- Use only full words in *public* structure, variable, method, trait, constant, and module names. However, abbreviations are allowed if:
-  - The name is local (e.g. closure arguments).
-  - The name is abbreviated by Rust convention (e.g. `len`, `typ`).
-  - The name is an accepted abbreviation (e.g. `tx`, `wsv` etc); see the [project glossary](https://docs.iroha.tech/reference/glossary.html) for canonical abbreviations.
-  - The full name would have been shadowed by a local variable (e.g. `msg <- message`).
-  - The full name would have made the code cumbersome with more than 5-6 words in it (e.g. `WorldStateViewReceiverTrait -> WSVRecvTrait`).
-- If you change naming conventions, make sure that the new name that you've chosen is _much_ clearer than what we had before.
+Атау бойынша нұсқаулар:
+- *public* құрылымында, айнымалы, әдіс, белгі, тұрақты және модуль атауларында тек толық сөздерді пайдаланыңыз. Алайда, қысқартуларға рұқсат етіледі, егер:
+  - Атауы жергілікті (мысалы, жабу аргументтері).
+  - Бұл атау Rust конвенциясымен қысқартылған (мысалы, `len`, `typ`).
+  - Аты қабылданған аббревиатура (мысалы, `tx`, `wsv` және т.б.); канондық аббревиатуралар үшін [жоба глоссарийі](https://docs.iroha.tech/reference/glossary.html) қараңыз.
+  - Толық атау жергілікті айнымалымен көлеңкеленген болар еді (мысалы, `msg <- message`).
+  - Толық атау 5-6 сөзден көп кодты ауырлататын еді (мысалы, `WorldStateViewReceiverTrait -> WSVRecvTrait`).
+- Егер атау конвенцияларын өзгертсеңіз, сіз таңдаған жаңа атау бұрынғыдан әлдеқайда түсінікті екеніне көз жеткізіңіз.
 
-Comment guidelines:
-- When writing non-doc comments, instead of describing *what* your function does, try to explain *why* it does something in a particular way. This will save you and the reviewer time.
-- You may leave `TODO` markers in code as long as you reference an issue that you created for it. Not creating an issue means it doesn't get merged.
+Түсініктеме нұсқаулары:
+- Құжатқа жатпайтын түсініктемелерді жазғанда, функцияңыздың *не істейтінін* сипаттаудың орнына, оның *неліктен бірдеңені белгілі бір жолмен жасайтынын* түсіндіруге тырысыңыз. Бұл сіздің және шолушының уақытын үнемдейді.
+- `TODO` маркерлерін кодта қалдыра аласыз, себебі ол үшін жасаған мәселеге сілтеме жасайсыз. Мәселені жасамау оның біріктірілмейтінін білдіреді.
 
-We use pinned dependencies. Follow these guidelines for versioning:
+Біз бекітілген тәуелділіктерді қолданамыз. Нұсқа жасау үшін мына нұсқауларды орындаңыз:
 
-- If your work depends on a particular crate, see if it wasn't already installed using [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (use `bat` or `grep`), and try to use that version, instead of the latest version.
-- Use the full version "X.Y.Z" in `Cargo.toml`.
-- Provide version bumps in a separate PR.
-
-</details>
-
-### Documentation Style Guide
-
-<details> <summary> :book: Read documentation guidelines</summary>
-
-
-- Use the [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) format.
-- Prefer the single-line comment syntax. Use `///` above inline modules and `//!` for file-based modules.
-- If you can link to a structure/module/function's docs, do it.
-- If you can provide an example of usage, do it. This [is also a test](https://doc.rust-lang.org/rustdoc/documentation-tests.html).
-- If a function can error or panic, avoid modal verbs. Example: `Fails if disk IO fails` instead of `Can possibly fail, if disk IO happens to fail`.
-- If a function can error or panic for more than one reason, use a bulleted list of failure conditions, with the appropriate `Error` variants (if any).
-- Functions *do* things. Use imperative mood.
-- Structures *are* things. Get to the point. For example `Log level for reloading from the environment` is better than `This struct encapsulates the idea of logging levels, and is used for reloading from the environment`.
-- Structures have fields, which also *are* things.
-- Modules *contain* things, and we know that. Get to the point. Example: use `Logger-related traits.` instead of `Module which contains logger-related logic`.
-
+- Жұмысыңыз белгілі бір жәшікке байланысты болса, оның [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) арқылы орнатылмағанын (`bat` немесе `grep` пайдаланыңыз) қараңыз және соңғы нұсқаның орнына сол нұсқаны пайдаланып көріңіз.
+- `Cargo.toml` ішіндегі "X.Y.Z" толық нұсқасын пайдаланыңыз.
+- Бөлек PR-да нұсқалардың соққыларын қамтамасыз етіңіз.
 
 </details>
 
-## Contact
+### Құжаттама стилі нұсқаулығы
 
-Our community members are active at:
+<details> <summary> :book: Құжаттама нұсқауларын оқыңыз</summary>
 
-| Service       | Link                                                               |
-|---------------|--------------------------------------------------------------------|
-| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha       |
-| Mailing List  | https://lists.lfdecentralizedtrust.org/g/iroha                     |
-| Telegram      | https://t.me/hyperledgeriroha                                      |
-| Discord       | https://discord.com/channels/905194001349627914/905205848547155968 |
+
+- [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) пішімін пайдаланыңыз.
+- Бір жолды түсініктеме синтаксисіне артықшылық беріңіз. Кірістірілген модульдердің үстіндегі `///` және файлға негізделген модульдер үшін `//!` пайдаланыңыз.
+- Егер құрылым/модуль/функция құжаттарына сілтеме жасай алсаңыз, оны орындаңыз.
+- Қолдану үлгісін бере алсаңыз, оны орындаңыз. Бұл [ақ сынақ](https://doc.rust-lang.org/rustdoc/documentation-tests.html).
+- Егер функция қателесуі немесе дүрбелең тудыруы мүмкін болса, модальды етістіктерден аулақ болыңыз. Мысал: `Can possibly fail, if disk IO happens to fail` орнына `Fails if disk IO fails`.
+- Егер функция бірнеше себептер бойынша қателесуі немесе дүрбелең тудыруы мүмкін болса, сәйкес `Error` нұсқаларымен (бар болса) сәтсіздік жағдайларының таңбаланған тізімін пайдаланыңыз.
+- Функциялар *істейді*. Императивті көңіл-күйді қолданыңыз.
+- Құрылымдар * заттар. Нүктеге келіңіз. Мысалы, `Log level for reloading from the environment` `This struct encapsulates the idea of logging levels, and is used for reloading from the environment` қарағанда жақсы.
+- Құрылымдарда өрістер бар, олар да * заттар.
+- Модульдер *заттарды қамтиды* және біз мұны білеміз. Нүктеге келіңіз. Мысал: `Module which contains logger-related logic` орнына `Logger-related traits.` пайдаланыңыз.
+
+
+</details>
+
+## Байланыс
+
+Біздің қауымдастық мүшелері белсенді:
+
+| Қызмет | Сілтеме |
+|-----------------------|--------------------------------------------------------------------|
+| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha |
+| Пошталық тізім | https://lists.lfdecentralizedtrust.org/g/iroha |
+| Telegram | https://t.me/hyperledgeriroha |
+| Дискорд | https://discord.com/channels/905194001349627914/905205848547155968 |
 
 ---

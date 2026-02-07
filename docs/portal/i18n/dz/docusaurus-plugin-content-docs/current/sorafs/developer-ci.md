@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# CI Recipes
+# CI བླངས།
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS ཆུ་མཛོད་འདི་ གཏན་འབེབས་ཀྱི་ཆ་ཤས་དང་ གསལ་སྟོན་མིང་རྟགས་བཀོད་ནི་ལས་ ཁེ་ཕན་ཡོདཔ་ཨིན།
+བདེན་ཁུངས་བདེན་དཔྱད། I18NI000000007X བརྡ་བཀོད་ཁ་ཐོག་འདི་གིས་ གོམ་པ་དེ་ཚུ་ འབག་བཏུབ་སྦེ་བཞགཔ་ཨིན།
+CI བྱིན་མི་ཚུ་ལུ། ཤོག་ལེབ་འདི་གིས་ ཀེ་ནོ་ནིཀ་བཟོ་ཐངས་ཚུ་དང་ ས་ཚིགས་ཚུ་ ལུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+གྲ་སྒྲིག་-ལག་ལེན་ཊེམ་པེལེཊི་ཚུ།
 
-## GitHub Actions (keyless)
+## གིཏ་ཧབ་བྱ་བ་ (ལྡེ་མིག་མེད་པ།)
 
 ```yaml
 name: sorafs-artifacts
@@ -93,13 +95,13 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+གཙོ་བོའི་དོན་ཚན་ཚུ།
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- རྟག་བརྟན་མིང་རྟགས་བཀོད་ནིའི་ལྡེ་མིག་ཚུ་ གསོག་འཇོག་འབད་མི་བཏུབ། OIDC ཊོ་ཀེན་ཚུ་ དགོ་འདོད་ཐོག་ལུ་ ལེན་ཡོདཔ་ཨིན།
+- བསྐྱར་ཞིབ་འབད་ནིའི་དོན་ལུ་ ཅ་རྙིང་ (CAR, གསལ་སྟོན་, བང་རིམ་, སྒྲུབ་བྱེད་བཅུད་བསྡུས་) ཚུ་ སྐྱེལ་བཙུགས་འབདཝ་ཨིན།
+- ལཱ་གཡོག་འདི་གིས་ ཐོན་སྐྱེད་བསྐོར་བའི་ནང་ལུ་ལག་ལེན་འཐབ་མི་ Norito གི་ལས་རིམ་ཚུ་ ལོག་ལག་ལེན་འཐབ་ཨིན།
 
-## GitLab CI
+## གིཏ་ལབ་སིའི།
 
 ```yaml
 stages:
@@ -133,15 +135,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- GitLab གི་ལཱ་གི་འབོར་ཚད་ངོ་རྟགས་ཚོགས་སྡེ་བརྒྱུད་དེ་ དགོངས་དོན་ `SIGSTORE_ID_TOKEN`
+  དཔེ་སྐྲུན་གྱི་གནས་རིམ་འདི་ ལག་ལེན་འཐབ་པའི་ཧེ་མ་ གསང་བ་འབད་ཡོདཔ།
+- སི་ཨེལ་ཨའི་ གོ་རིམ་གང་རུང་ཅིག་གིས་ འཐུས་ཤོར་བྱུང་མི་འདི་གིས་ རིམ་མཐུན་ཉམས་སྲུང་འབདཝ་ཨིན།
+  ཅ་རྙིང་།
 
-## Additional resources
+## ཐོན་ཁུངས་ཁ་སྐོང་།
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- མཇུག་ལས་མཇུག་ཚུན་ཚོད་ ཊེམ་པེལེཊི་ཚུ་ (བཱཤ་གྲོགས་རམ་པ་ སྤྱི་མཐུན་ངོ་རྟགས་རིམ་སྒྲིག་ཚུ་ཚུདཔ་ཨིན།
+  དང་ གཙང་མ་གི་གོམ་པ་): I18NI0000009X
+- གདམ་ཁ་ག་ར་ཁྱབ་པའི་ CLI གཞི་བསྟུན་འབད་མི་ CLI: `docs/source/sorafs_cli.md`
+- ཕུལ་མ་ཚར་བའི་ཧེ་མ་ གཞུང་སྐྱོང་/མིང་གཞན་དགོས་མཁོ་ཚུ་།
   `docs/source/sorafs/provider_admission_policy.md`

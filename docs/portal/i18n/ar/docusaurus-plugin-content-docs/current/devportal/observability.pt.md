@@ -4,41 +4,43 @@ direction: rtl
 source: docs/portal/docs/devportal/observability.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Observabilidade e analytics do portal
+# بوابة المراقبة والتحليلات
 
-O roadmap DOCS-SORA exige analytics, probes sinteticos e automacao de links quebrados
-para cada build de preview. Esta nota documenta a infraestrutura que agora acompanha o portal
-para que operadores conectem monitoramento sem vazar dados de visitantes.
+تتطلب خريطة الطريق DOCS-SORA تحليلات ومسبارات مزامنة وارتباطات آلية
+لكل بناء المعاينة. تشير هذه الوثيقة إلى البنية التحتية التي ترافقها البوابة الآن
+لكي يقوم المشغلون بتوصيل المراقبة دون متابعة بيانات الزوار.
 
-## Tagging de release
+## وضع العلامات على الإصدار
 
-- Defina `DOCS_RELEASE_TAG=<identifier>` (fallback para `GIT_COMMIT` ou `dev`) ao
-  buildar o portal. O valor e injetado em `<meta name="sora-release">`
-  para que probes e dashboards distingam deployments.
-- `npm run build` emite `build/release.json` (escrito por
-  `scripts/write-checksums.mjs`) descrevendo o tag, timestamp e o
-  `DOCS_RELEASE_SOURCE` opcional. O mesmo arquivo e empacotado nos artefatos de preview e
-  referenciado pelo relatorio do link checker.
+- تعريف `DOCS_RELEASE_TAG=<identifier>` (احتياطي لـ `GIT_COMMIT` أو `dev`)
+  بناء يا بوابة. يا لها من بسالة وقوة في `<meta name="sora-release">`
+  من أجل إجراء تحقيقات ولوحات المعلومات وعمليات النشر المختلفة.
+- `npm run build` تنبعث `build/release.json` (الكاتب
+  `scripts/write-checksums.mjs`) يقوم بفك العلامة والطابع الزمني والملف
+  `DOCS_RELEASE_SOURCE` اختياري. نفس الملف وتحمل أعمال المعاينة الخاصة بنا
+  Rereenciado pelo relatorio قم بمدقق الارتباط.
 
-## Analytics com preservacao de privacidade
+## التحليلات مع الحفاظ على الخصوصية
 
-- Configure `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` para
-  habilitar o tracker leve. Payloads contem `{ event, path, locale, release, ts }`
-  sem metadata de referrer ou IP, e `navigator.sendBeacon` e usado sempre que possivel
-  para evitar bloquear navegacoes.
-- Controle o sampling com `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). O tracker armazena
-  o ultimo path enviado e nunca emite eventos duplicados para a mesma navegacao.
-- A implementacao fica em `src/components/AnalyticsTracker.jsx` e e montada
-  globalmente via `src/theme/Root.js`.
+- تكوين `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` الفقرة
+  تأهيل مستوى التعقب. الحمولات النافعة `{ event, path, locale, release, ts }`
+  مجرد بيانات وصفية للإحالة أو IP، و`navigator.sendBeacon` واستخدامها دائمًا ما يكون ممكنًا
+  لتجنب انسداد الملاحة.
+- التحكم في أخذ العينات عبر `DOCS_ANALYTICS_SAMPLE_RATE` (0-1). يا متتبع أرمازينا
+  تم إرسال المسار الأخير ولن يتم إصدار أحداث مكررة إلا أثناء التنقل.
+- تم التنفيذ في `src/components/AnalyticsTracker.jsx` و في المنتدى
+  عالمي عبر `src/theme/Root.js`.
 
-## Probes sinteticos
+## مجسات سينتيتيكوس
 
-- `npm run probe:portal` dispara requests GET contra rotas comuns
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) e verifica se o
-  meta tag `sora-release` corresponde a `--expect-release` (ou `DOCS_RELEASE_TAG`).
-  Exemplo:
+- `npm run probe:portal` تطلب dispara GET contra rotas comuns
+  (`/`، `/norito/overview`، `/reference/torii-swagger`، وما إلى ذلك) والتحقق من ذلك
+  العلامة الوصفية `sora-release` تتوافق مع `--expect-release` (ou `DOCS_RELEASE_TAG`).
+  مثال:
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -46,58 +48,58 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Falhas sao reportadas por path, facilitando gatear o CD pelo sucesso dos probes.
+Falhas ao Reportadas por path, facilitando getar o CD from the subscesso dos probes.
 
-## Automacao de links quebrados
+## الروابط التلقائية المهمة
 
-- `npm run check:links` varre `build/sitemap.xml`, garante que cada entrada mapeia para
-  um arquivo local (checando fallbacks `index.html`), e escreve
-  `build/link-report.json` contendo metadata de release, totais, falhas e a impressao
-  SHA-256 de `checksums.sha256` (exposta como `manifest.id`) para que cada relatorio possa
-  ser ligado ao manifesto do artefato.
-- O script termina com codigo nao-zero quando falta uma pagina, assim a CI pode bloquear
-  releases em rotas antigas ou quebradas. Os relatorios citam os caminhos candidatos tentados,
-  o que ajuda a rastrear regressoes de roteamento de volta para a arvore de docs.
+- `npm run check:links` varre `build/sitemap.xml`، لضمان دخول كل خريطة إلى
+  قم بإنشاء ملف محلي (اختيار العناصر الاحتياطية `index.html`)، ثم قم بالخروج
+  `build/link-report.json` يتنافس على البيانات الوصفية للإصدار والإجمالي والخطأ والطباعة
+  SHA-256 de `checksums.sha256` (عرض مثل `manifest.id`) لكل ما يمكن من العلاقة
+  إنه مرتبط ببيان العمل الفني.
+- عند انتهاء البرنامج النصي مع كوديغو ناو صفر عند فشل صفحة ما، يمكن حظر CI
+  يتم إطلاقها في دوارات مضادة أو quebradas. يستشهد العلاقات بالمرشحين المرشحين،
+  o ما يساعد على تراجعات الدوران النقطية لفتح المستندات.
 
-## Dashboard Grafana e alertas
+## لوحة المعلومات Grafana والتنبيهات
 
-- `dashboards/grafana/docs_portal.json` publica o board Grafana **Docs Portal Publishing**.
-  Ele inclui os seguintes paineis:
-  - *Gateway Refusals (5m)* usa `torii_sorafs_gateway_refusals_total` com escopo
-    `profile`/`reason` para que SREs detectem pushes de politica ruins ou falhas de tokens.
-  - *Alias Cache Refresh Outcomes* e *Alias Proof Age p90* acompanham
-    `torii_sorafs_alias_cache_*` para provar que proofs recentes existem antes de um cut
-    over de DNS.
-  - *Pin Registry Manifest Counts* e a estatistica *Active Alias Count* espelham o
-    backlog do pin-registry e o total de aliases para que a governanca possa auditar
-    cada release.
-  - *Gateway TLS Expiry (hours)* destaca quando o cert TLS do gateway de publishing
-    se aproxima do vencimento (limiar de alerta em 72 h).
-  - *Replication SLA Outcomes* e *Replication Backlog* acompanham a telemetria
-    `torii_sorafs_replication_*` para garantir que todas as replicas atendam o
+- `dashboards/grafana/docs_portal.json` نشر اللوحة Grafana **نشر بوابة المستندات**.
+  تتضمن الخطوات التالية:
+  - *رفض البوابة (5 م)* usa `torii_sorafs_gateway_refusals_total` com escopo
+    `profile`/`reason` حتى تتمكن SREs من اكتشاف عمليات التشويه السياسي أو أخطاء الرموز المميزة.
+  - *نتائج تحديث ذاكرة التخزين المؤقت للاسم المستعار* e *الاسم المستعار إثبات العمر صفحة 90* مرافق
+    `torii_sorafs_alias_cache_*` لإثبات وجود البراهين الحديثة قبل القطع
+    عبر دي DNS.
+  - *عدد بيانات بيان التسجيل* وإحصائيات *عدد الأسماء المستعارة النشطة* على سبيل المثال
+    backlog do pin-registry ومجموع الأسماء المستعارة حتى تتمكن الإدارة من التدقيق
+    الافراج عن كادا.
+  - *انتهاء صلاحية بوابة TLS (ساعات)* عند بوابة النشر لشهادة TLS
+    إذا اقتربت من عملية البيع (انتهى التنبيه لمدة 72 ساعة).
+  - *نتائج النسخ المتماثل لاتفاقية مستوى الخدمة* e *تراكم النسخ المتماثل* مصاحب للقياس عن بعد
+    `torii_sorafs_replication_*` لضمان أن جميع النسخ المتماثلة حاضرة
     patamar GA apos a publicacao.
-- Use as variaveis de template embutidas (`profile`, `reason`) para focar no perfil
-  de publishing `docs.sora` ou investigar picos em todos os gateways.
-- O routing do PagerDuty usa os paineis do dashboard como evidencia: alertas
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache` e `DocsPortal/TLSExpiry`
-  disparam quando a serie correspondente ultrapassa seus limiares. Ligue o runbook
-  do alerta a esta pagina para que o on-call consiga repetir as queries exatas do Prometheus.
+- استخدم كنماذج متنوعة للقوالب (`profile`، `reason`) للتركيز على الملف الشخصي
+  لنشر `docs.sora` أو استكشاف الصور في جميع البوابات.
+- يتم استخدام توجيه PagerDuty من خلال لوحة المعلومات كدليل: التنبيهات
+  `DocsPortal/GatewayRefusals`، `DocsPortal/AliasCache` و`DocsPortal/TLSExpiry`
+  Disparam quando a serie مراسل Ultrapassa Seus Limiares. الدوري الفرنسي أو كتاب التشغيل
+  قم بتنبيه هذه الصفحة حتى تكرر النصائح عند الطلب مثل الاستعلامات الواردة في Prometheus.
 
-## Juntando tudo
+## جونتاندو تودو
 
-1. Durante `npm run build`, defina as variaveis de ambiente de release/analytics e
-   deixe o pos-build emitir `checksums.sha256`, `release.json` e
+1. Durante `npm run build`، تم تعريفه على أنه بيئة الإصدار/التحليلات المتنوعة
+   هذا هو مصدر بناء نقطة البيع `checksums.sha256`، `release.json` e
    `link-report.json`.
-2. Rode `npm run probe:portal` contra o hostname de preview com
-   `--expect-release` conectado ao mesmo tag. Salve o stdout para a checklist de publishing.
-3. Rode `npm run check:links` para falhar rapido em entradas quebradas do sitemap e arquive
-   o relatorio JSON gerado junto com os artefatos de preview. A CI deposita o
-   ultimo relatorio em `artifacts/docs_portal/link-report.json` para que a governanca
-   baixe o bundle de evidencias direto dos logs de build.
-4. Encaminhe o endpoint de analytics para seu coletor com preservacao de privacidade (Plausible,
-   OTEL ingest self-hosted, etc.) e garanta que as taxas de amostragem estejam documentadas por
-   release para que os dashboards interpretem os volumes corretamente.
-5. A CI ja conecta esses passos nos workflows de preview/deploy
-   (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), entao os dry runs locais so precisam
-   cobrir comportamento especifico de segredos.
+2.Rode `npm run probe:portal` ضد اسم المضيف للمعاينة com
+   `--expect-release` متصل بالعلامة نفسها. قم بحفظ النموذج القياسي لقائمة مرجعية للنشر.
+3. ركب `npm run check:links` للسرعة في الدخول إلى خريطة الموقع والأرشفة
+   يتم إنشاء علاقة JSON جنبًا إلى جنب مع عناصر المعاينة. إيداع CI o
+   آخر علاقة بـ `artifacts/docs_portal/link-report.json` للحكم
+   قم بإضافة حزمة من الأدلة مباشرة إلى سجلات الإنشاء.
+4. قم بإجراء نقطة نهاية التحليلات لجامعتك مع الحفاظ على الخصوصية (معقول،
+   تستوعب OTEL استضافة ذاتية، وما إلى ذلك) وتضمن أن ضرائب هذه الخدمة موثقة من قبل
+   حرر حتى تفسر لوحات المعلومات وحدات التخزين بشكل صحيح.
+5. سيتمكن CI من الاتصال بسير عمل المعاينة/النشر
+   (`.github/workflows/docs-portal-preview.yml`،
+   `.github/workflows/docs-portal-deploy.yml`)، قم بتشغيل التشغيل الجاف في مكانه بدقة شديدة
+   كوبرير سلوك خاص بالعزلة.

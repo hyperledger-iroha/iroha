@@ -9,19 +9,20 @@ source_last_modified: "2025-12-29T18:16:35.983094+00:00"
 translation_last_reviewed: 2026-02-07
 title: Review Panel Summary Workflow (MINFO-4a)
 summary: Generate the neutral referendum summary with balanced citations, AI manifest references, and volunteer brief coverage.
+translator: machine-google-reviewed
 ---
 
-# Review Panel Summary (MINFO-4a)
+# 審查小組摘要 (MINFO-4a)
 
-Roadmap item **MINFO-4a — Neutral summary generator** requires a reproducible workflow that turns an accepted agenda proposal, the volunteer brief corpus, and the attested AI moderation manifest into a neutral referendum summary. The deliverable must:
+路線圖項目 **MINFO-4a — 中立摘要生成器** 需要一個可重複的工作流程，將已接受的議程提案、志願者簡報語料庫和經過驗證的 AI 審核清單轉換為中立的公投摘要。可交付成果必須：
 
-- Record the output as a Norito structure (`ReviewPanelSummaryV1`) so governance can archive it alongside manifests and ballots.
-- Lint the source material, failing fast when the review panel does not have balanced support/oppose coverage or when facts are missing citations.
-- Reference the AI manifest and the proposal evidence bundle in every highlight, ensuring the policy jury sees both automated and human context before voting.
+- 將輸出記錄為 Norito 結構 (`ReviewPanelSummaryV1`)，以便治理可以將其與清單和選票一起存檔。
+- 整理源材料，當審查小組沒有平衡的支持/反對覆蓋範圍或事實缺少引用時，會快速失敗。
+- 在每個亮點中參考人工智能清單和提案證據包，確保政策陪審團在投票前看到自動化和人類背景。
 
-## CLI usage
+## CLI 用法
 
-The workflow ships as part of `cargo xtask`:
+該工作流程作為 `cargo xtask` 的一部分提供：
 
 ```bash
 cargo xtask ministry-panel synthesize \
@@ -32,23 +33,23 @@ cargo xtask ministry-panel synthesize \
 --output artifacts/review_panel/AC-2026-001-RP-2026-05.json
 ```
 
-Required inputs:
+所需輸入：
 
-1. `--proposal` – JSON payload adhering to `AgendaProposalV1`. The helper validates the schema before generating the summary.
-2. `--volunteer` – JSON array of volunteer briefs that follow `docs/source/ministry/volunteer_brief_template.md`. Off-topic entries are ignored automatically.
-3. `--ai-manifest` – Governance-signed `ModerationReproManifestV1` describing the AI committee that screened the content.
-4. `--panel-round` – Identifier for the current review round (`RP-YYYY-##`).
-5. `--output` – Destination file or `-` to stream to stdout. Use `--language` to override the proposal language and `--generated-at` to supply a deterministic Unix timestamp (milliseconds) when backfilling history.
+1. `--proposal` – 遵循 `AgendaProposalV1` 的 JSON 有效負載。幫助程序在生成摘要之前驗證架構。
+2. `--volunteer` – `docs/source/ministry/volunteer_brief_template.md` 後面的志願者簡介的 JSON 數組。偏離主題的條目將被自動忽略。
+3. `--ai-manifest` – 治理簽名的 `ModerationReproManifestV1` 描述了篩選內容的 AI 委員會。
+4. `--panel-round` – 當前審核輪次的標識符 (`RP-YYYY-##`)。
+5. `--output` – 目標文件或 `-` 以流式傳輸到標準輸出。使用 `--language` 覆蓋提案語言，並使用 `--generated-at` 在回填歷史記錄時提供確定性 Unix 時間戳（毫秒）。
 
-Once the standalone summary is generated, run the
-[`cargo xtask ministry-panel packet`](referendum_packet.md) helper to assemble
-the complete referendum dossier (`ReferendumPacketV1`). Supplying
-`--summary-out` to the packet command will persist the same summary file while
-embedding it inside the packet object for downstream consumers.
+生成獨立摘要後，運行
+[`cargo xtask ministry-panel packet`](referendum_packet.md) 組裝助手
+完整的公投檔案 (`ReferendumPacketV1`)。供應
+`--summary-out` 到數據包命令將保留相同的摘要文件，同時
+將其嵌入到下游消費者的數據包對像中。
 
-### Automation via `ministry-transparency ingest`
+### 通過 `ministry-transparency ingest` 實現自動化
 
-Teams that already run `cargo xtask ministry-transparency ingest` for quarterly evidence bundles can now stitch the review panel summary into the same pipeline:
+已經為季度證據包運行 `cargo xtask ministry-transparency ingest` 的團隊現在可以將審核小組摘要拼接到同一管道中：
 
 ```bash
 cargo xtask ministry-transparency ingest \
@@ -65,31 +66,29 @@ cargo xtask ministry-transparency ingest \
   --output artifacts/ministry/ingest.json
 ```
 
-All four `--panel-*` flags must be supplied together (and require `--volunteer`). The command emits the review panel summary to `--panel-summary-out`, embeds the parsed payload inside the ingest snapshot, and records a checksum so downstream tooling can attest to the evidence.
+所有四個 `--panel-*` 標誌必須一起提供（並且需要 `--volunteer`）。該命令將審查小組摘要發送到 `--panel-summary-out`，將解析後的有效負載嵌入到攝取快照中，並記錄校驗和，以便下游工具可以證明證據。
 
-## Linting and failure modes
+## Linting 和故障模式
 
-`cargo xtask ministry-panel synthesize` enforces the following invariants before writing the summary:
+`cargo xtask ministry-panel synthesize` 在編寫摘要之前強制執行以下不變量：
 
-- **Balanced stances:** at least one support brief and one oppose brief must be present. Missing coverage terminates the run with a descriptive error.
-- **Citation coverage:** highlights are only produced from fact rows that include citations. Missing citations never block the build, but each affected brief is listed under `warnings[]` in the output.
-- **Per-highlight references:** every highlight includes references to (a) the volunteer fact row(s), (b) the AI manifest ID, and (c) the first evidence attachment from the proposal so the packet always links back to the signed artefacts.
+- **平衡立場：** 必須至少提供一份支持簡報和一份反對簡報。缺少覆蓋率會終止運行並出現​​描述性錯誤。
+- **引文覆蓋率：**亮點僅由包含引文的事實行生成。缺失的引文永遠不會阻止構建，但每個受影響的摘要都會在輸出中的 `warnings[]` 下列出。
+- **每個突出顯示引用：** 每個突出顯示都包含對 (a) 志願者事實行、(b) AI 清單 ID 和 (c) 提案中的第一個證據附件的引用，因此數據包始終鏈接回已簽名的工件。如果任何檢查失敗，該命令將以非零狀態退出並指向有問題的記錄。成功運行會寫入與 `ReviewPanelSummaryV1` 架構匹配的 JSON 文件，並且可以嵌入到治理清單中。
 
-If any check fails, the command exits with a non-zero status and points at the problematic record. Successful runs write a JSON file that matches the `ReviewPanelSummaryV1` schema and can be embedded in governance manifests.
+## 輸出結構
 
-## Output structure
+`ReviewPanelSummaryV1` 存在於 `crates/iroha_data_model/src/ministry/mod.rs` 中，每個消費者都可以通過 `iroha_data_model` 箱使用。關鍵部分包括：
 
-`ReviewPanelSummaryV1` lives in `crates/iroha_data_model/src/ministry/mod.rs` and is available to every consumer via the `iroha_data_model` crate. Key sections include:
+- `overview` – 政策陪審團數據包的標題、中性總結句和決策上下文。
+- `stance_distribution` – 每個立場的摘要和事實行計數。下游儀表板在發布之前會讀取此內容以確認覆蓋範圍。
+- `highlights` – 每個立場最多兩個事實摘要以及完全合格的引文。
+- `ai_manifest` – 從再現性清單中提取元數據（清單 UUID、運行程序版本、閾值）。
+- `volunteer_references` – 用於審核的每個簡要統計數據（語言、立場、行、引用行）。
+- `warnings` – 描述跳過項目的自由格式 lint 消息（例如，缺少引用的事實行）。
 
-- `overview` – Title, neutral summary sentence, and decision context for the policy jury packet.
-- `stance_distribution` – Count of briefs and fact rows per stance. Downstream dashboards read this to confirm coverage before publishing.
-- `highlights` – Up to two fact summaries per stance with fully qualified citations.
-- `ai_manifest` – Extracted metadata from the reproducibility manifest (manifest UUID, runner version, thresholds).
-- `volunteer_references` – Per-brief statistics (language, stance, rows, cited rows) for audit.
-- `warnings` – Free-form lint messages describing skipped items (e.g., fact rows with missing citations).
+## 示例
 
-## Example
+`docs/examples/ministry/review_panel_summary_example.json` 包含使用幫助程序生成的完整示例。它展示了平衡的支持/反對覆蓋率、引文連接、清單參考文獻以及無法提升為亮點的事實行的警告字符串。在擴展需要使用中性摘要的儀表板、治理清單或 SDK 工具時使用它。
 
-`docs/examples/ministry/review_panel_summary_example.json` contains a full sample produced with the helper. It demonstrates balanced support/oppose coverage, citation wiring, manifest references, and warning strings for fact rows that could not be promoted to highlights. Use it when extending dashboards, governance manifests, or SDK tooling that need to consume the neutral summary.
-
-> **Tip:** include the generated summary alongside the signed AI manifest and volunteer brief digest in the referendum evidence bundle so policy juries can verify every artifact referenced by the review panel.
+> **提示：** 將生成的摘要與已簽名的人工智能清單和志願者摘要一起包含在公投證據包中，以便政策陪審團可以驗證審查小組引用的每個工件。

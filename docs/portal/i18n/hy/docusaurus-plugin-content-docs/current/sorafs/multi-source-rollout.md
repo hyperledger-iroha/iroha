@@ -8,38 +8,40 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Multi-Source Client Rollout & Blacklisting Runbook
 sidebar_label: Multi-Source Rollout Runbook
 description: Operational checklist for staged multi-source rollouts and emergency provider blacklisting.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-## Purpose
+## Նպատակը
 
-This runbook guides SRE and on-call engineers through two critical workflows:
+Այս վազքագիրքը ուղղորդում է SRE-ին և հերթապահ ինժեներին երկու կարևոր աշխատանքային հոսքերի միջոցով.
 
-1. Rolling out the multi-source orchestrator in controlled waves.
-2. Blacklisting or de-prioritising misbehaving providers without destabilising existing sessions.
+1. Բազմաղբյուր նվագախումբը կառավարվող ալիքներով գլորում:
+2. Սև ցուցակում ներառել կամ չառաջնահերթություն տալ վատ պահվածքով մատակարարներին՝ առանց գոյություն ունեցող նիստերի ապակայունացման:
 
-It assumes the orchestration stack delivered under SF-6 is already deployed (`sorafs_orchestrator`, gateway chunk-range API, telemetry exporters).
+Այն ենթադրում է, որ SF-6-ի ներքո մատուցվող նվագախմբային փաթեթն արդեն տեղակայված է (`sorafs_orchestrator`, gateway chunk-range API, հեռաչափության արտահանողներ):
 
-> **See also:** The [Orchestrator Operations Runbook](./orchestrator-ops.md) dives into per-run procedures (scoreboard capture, staged rollout toggles, rollback). Use both references together during live changes.
+> **Տես նաև.** [Orchestrator Operations Runbook] (./orchestrator-ops.md) սուզվում է յուրաքանչյուր վազքի ընթացակարգերի մեջ (ցուցատախտակի նկարահանում, փուլային տեղադրման անջատումներ, հետադարձ շրջադարձ): Օգտագործեք երկու հղումները միասին կենդանի փոփոխությունների ժամանակ:
 
-## 1. Pre-flight Validation
+## 1. Թռիչքից առաջ վավերացում
 
-1. **Confirm governance inputs.**
-   - All candidate providers must publish `ProviderAdvertV1` envelopes with range capability payloads and stream budgets. Validate via `/v1/sorafs/providers` and compare against the expected capability fields.
-   - Telemetry snapshots supplying latency/failure rates should be < 15 minutes old before each canary run.
-2. **Stage configuration.**
-   - Persist the orchestrator JSON config in the layered `iroha_config` tree:
+1. **Հաստատեք կառավարման տվյալները։**
+   - Բոլոր թեկնածու մատակարարները պետք է հրապարակեն `ProviderAdvertV1` ծրարներ՝ տիրույթի հնարավորության օգտակար բեռներով և հոսքային բյուջեներով: Վավերացրեք `/v1/sorafs/providers`-ի միջոցով և համեմատեք ակնկալվող կարողությունների դաշտերի հետ:
+   - Հեռուստաչափական պատկերները, որոնք ապահովում են հետաձգման/խափանման ցուցանիշները, պետք է լինեն < 15 րոպե առաջ ամեն դեղձանիկ վազքից առաջ:
+2. **Փուլային կոնֆիգուրացիա.**
+   - Պահպանեք նվագախմբի JSON կազմաձևը շերտավոր `iroha_config` ծառում.
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     Update the JSON with rollout-specific limits (`max_providers`, retry budgets). Feed the same file to staging/production so diffs stay small.
-3. **Exercise canonical fixtures.**
-   - Populate the manifest/token environment variables and run the deterministic fetch:
+     Թարմացրեք JSON-ը ներդրման համար հատուկ սահմանափակումներով (`max_providers`, նորից փորձեք բյուջեները): Նույն ֆայլը փոխանցեք բեմադրության/արտադրությանը, որպեսզի տարբերությունները փոքր մնան:
+3. **Կատարեք կանոնական հարմարանքներ։**
+   - Լրացրեք մանիֆեստի/նշանային միջավայրի փոփոխականները և գործարկեք դետերմինիստական բեռնումը.
 
      ```bash
      sorafs_cli fetch \
@@ -54,55 +56,55 @@ It assumes the orchestration stack delivered under SF-6 is already deployed (`so
        --json-out artifacts/canary.fetch.json
      ```
 
-     Environment variables should contain the manifest payload digest (hex) and base64-encoded stream tokens for each provider participating in the canary.
-   - Diff `artifacts/canary.scoreboard.json` against the previous release. Any new ineligible provider or weight shift >10 % requires review.
-4. **Verify telemetry is wired.**
-   - Open the Grafana export in `docs/examples/sorafs_fetch_dashboard.json`. Ensure the `sorafs_orchestrator_*` metrics populate in staging before progressing.
+     Շրջակա միջավայրի փոփոխականները պետք է պարունակեն մանիֆեստի օգտակար բեռի ամփոփում (վեցանկյուն) և base64 կոդավորված հոսքային նշաններ՝ դեղձանիկին մասնակցող յուրաքանչյուր մատակարարի համար:
+   - Տարբերել `artifacts/canary.scoreboard.json`-ը նախորդ թողարկման հետ: Ցանկացած նոր անթույլատրելի մատակարար կամ քաշի փոփոխություն >10% պահանջում է վերանայում:
+4. **Ստուգեք, որ հեռաչափությունը միացված է:**
+   - Բացեք Grafana արտահանումը `docs/examples/sorafs_fetch_dashboard.json`-ում: Համոզվեք, որ `sorafs_orchestrator_*` չափիչները լրացված են բեմականացումից առաջ:
 
-## 2. Emergency Provider Blacklisting
+## 2. Արտակարգ իրավիճակների մատակարարի սև ցուցակում
 
-Follow this procedure when a provider serves corrupt chunks, times out persistently, or fails compliance checks.
+Հետևեք այս ընթացակարգին, երբ մատակարարը սպասարկում է կոռումպացված հատվածներ, ժամանակի վերջնաժամկետը համառորեն սպառվում է կամ չի կատարում համապատասխանության ստուգում:
 
-1. **Capture evidence.**
-   - Export the latest fetch summary (`--json-out` output). Record failing chunk indices, provider aliases, and digest mismatches.
-   - Save relevant log excerpts from `telemetry::sorafs.fetch.*` targets.
-2. **Apply an immediate override.**
-   - Mark the provider penalised in the telemetry snapshot distributed to the orchestrator (set `penalty=true` or clamp `token_health` to `0`). The next scoreboard build will exclude the provider automatically.
-   - For ad-hoc smoke tests, pass `--deny-provider gw-alpha` to `sorafs_cli fetch` so the failure path is exercised without waiting for telemetry propagation.
-   - Redeploy the updated telemetry/config bundle to the affected environment (staging → canary → production). Document the change in the incident log.
-3. **Validate the override.**
-   - Re-run the canonical fixture fetch. Confirm the scoreboard marks the provider as ineligible with reason `policy_denied`.
-   - Inspect `sorafs_orchestrator_provider_failures_total` to ensure the counter stops incrementing for the denied provider.
-4. **Escalate long-lived bans.**
-   - If the provider will remain blocked for >24 h, raise a governance ticket to rotate or suspend its advert. Until the vote passes, keep the deny list in place and refresh telemetry snapshots so the provider does not re-enter the scoreboard.
-5. **Rollback protocol.**
-   - To reinstate the provider, remove it from the deny list, redeploy, and capture a fresh scoreboard snapshot. Attach the change to the incident postmortem.
+1. **Ձեռք բերեք ապացույցներ**
+   - Արտահանեք բեռնման վերջին ամփոփագիրը (`--json-out` ելք): Գրանցեք ձախողված մասերի ինդեքսները, մատակարարի անունները և ներածության անհամապատասխանությունները:
+   - Պահպանեք համապատասխան մատյանների քաղվածքներ `telemetry::sorafs.fetch.*` թիրախներից:
+2. **Կիրառել անհապաղ փոխարինում:**
+   - Նվագախմբին տրամադրված հեռաչափության լուսանկարում նշեք տուգանված մատակարարին (կոմպլեկտ `penalty=true` կամ սեղմեք `token_health` դեպի `0`): Հաջորդ ցուցատախտակի կառուցումը ավտոմատ կերպով կբացառի մատակարարին:
+   - Ծխի ժամանակավոր փորձարկումների համար անցեք `--deny-provider gw-alpha`-ը `sorafs_cli fetch`-ին, որպեսզի ձախողման ուղին իրականացվի՝ չսպասելով հեռաչափության տարածմանը:
+   - Վերաբաշխել թարմացված հեռաչափության/կազմաձևման փաթեթը տուժած միջավայրում (բեմականացում → դեղձանիկ → արտադրություն): Փաստաթղթերի փոփոխությունը միջադեպերի գրանցամատյանում:
+3. **Վավերացրեք վերագրանցումը։**
+   - Կրկին գործարկեք կանոնական հարմարանքների բեռնումը: Հաստատեք, որ ցուցատախտակը նշում է մատակարարին որպես անհամապատասխան՝ պատճառաբանելով `policy_denied`:
+   - Ստուգեք `sorafs_orchestrator_provider_failures_total`-ը, որպեսզի համոզվեք, որ հաշվիչը դադարում է աճել մերժված մատակարարի համար:
+4. **Ավելացրե՛ք երկարատև արգելքները։**
+   - Եթե մատակարարը կմնա արգելափակված ավելի քան 24 ժամ, բարձրացրեք կառավարման տոմս՝ պտտեցնելու կամ կասեցնելու իր գովազդը: Մինչև քվեարկությունը չանցնի, պահեք հերքման ցուցակը և թարմացրեք հեռաչափության պատկերները, որպեսզի մատակարարը նորից չմտնի ցուցատախտակ:
+5. **Վերադարձի արձանագրություն**
+   - Մատակարարին վերականգնելու համար հեռացրեք այն մերժման ցուցակից, վերաբաշխեք և նկարահանեք ցուցատախտակի թարմ նկարը: Փոփոխությունը կցեք դեպքի հետմահու։
 
-## 3. Staged Rollout Plan
+## 3. Փուլային տարածման պլան
 
-| Phase | Scope | Required Signals | Go/No-Go Criteria |
-|-------|-------|------------------|-------------------|
-| **Lab** | Dedicated integration cluster | Manual CLI fetch against fixture payloads | All chunks succeed, provider failure counters stay at 0, retry rate < 5 %. |
-| **Staging** | Full control-plane staging | Grafana dashboard connected; alert rules in warning-only mode | `sorafs_orchestrator_active_fetches` returns to zero after each test run; no `warn/critical` alert firings. |
-| **Canary** | ≤10 % of production traffic | Pager muted but telemetry monitored in real time | Retry ratio < 10 %, provider failures isolated to known noisy peers, latency histogram matches staging baseline ±20 %. |
-| **General Availability** | 100 % roll-out | Pager rules active | Zero `NoHealthyProviders` errors for 24 h, retry ratio stable, dashboard SLA panels green. |
+| Փուլ | Շրջանակ | Պահանջվող ազդանշաններ | Go/No-Go չափանիշներ |
+|-------|-------|---------------------------------------|
+| **Լաբորատորիա** | Նվիրված ինտեգրացիոն կլաստեր | Ձեռնարկ CLI բեռնում հարմարանքների օգտակար բեռների դեմ | Բոլոր կտորները հաջողվում են, մատակարարի ձախողման հաշվիչները մնում են 0-ի վրա, կրկնակի փորձի տոկոսադրույքը <5% է: |
+| **Բեմադրում** | Ամբողջական կառավարման հարթության բեմականացում | Grafana վահանակը միացված է; զգուշացման կանոնները միայն նախազգուշացման ռեժիմում | `sorafs_orchestrator_active_fetches`-ը վերադառնում է զրոյի յուրաքանչյուր փորձարկումից հետո; ոչ `warn/critical` ազդանշանային կրակոցներ: |
+| **Կանարին** | Արտադրական տրաֆիկի ≤10% | Փեյջերն անջատված է, բայց հեռաչափությունը վերահսկվում է իրական ժամանակում | Կրկին փորձերի հարաբերակցությունը < 10%, մատակարարի ձախողումները մեկուսացված են հայտնի աղմկոտ գործընկերներից, հապաղման հիստոգրամը համընկնում է բեմականացման ելակետային ±20%: |
+| **Ընդհանուր հասանելիություն** | 100% roll-out | Պեյջերի կանոնները ակտիվ | Զրո `NoHealthyProviders` սխալներ 24 ժամվա ընթացքում, կրկին փորձելու գործակիցը կայուն, վահանակի SLA վահանակները կանաչ: |
 
-For each phase:
+Յուրաքանչյուր փուլի համար.
 
-1. Update the orchestrator JSON with the intended `max_providers` and retry budgets.
-2. Run `sorafs_cli fetch` or the SDK integration test suite against the canonical fixture and a representative manifest from the environment.
-3. Capture scoreboard + summary artefacts and attach them to the release record.
-4. Review telemetry dashboards with the on-call engineer before promoting to the next phase.
+1. Թարմացրեք նվագախմբի JSON-ը նախատեսված `max_providers`-ով և նորից փորձեք բյուջեները:
+2. Գործարկեք `sorafs_cli fetch`-ը կամ SDK ինտեգրման թեստային փաթեթը կանոնական սարքի և շրջակա միջավայրի ներկայացուցչական ցուցիչի դեմ:
+3. Գրավել ցուցատախտակը + ամփոփ արտեֆակտները և կցել դրանք թողարկման գրառմանը:
+4. Վերանայեք հեռաչափության վահանակները հերթապահ ինժեների հետ՝ նախքան հաջորդ փուլ անցնելը:
 
-## 4. Observability & Incident Hooks
+## 4. Դիտարկման հնարավորություն և միջադեպի կեռիկներ
 
-- **Metrics:** Ensure Alertmanager monitors `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` and `sorafs_orchestrator_retries_total`. A sudden spike typically means a provider is degrading under load.
-- **Logs:** Route the `telemetry::sorafs.fetch.*` targets to the shared log aggregator. Build saved searches for `event=complete status=failed` to speed up triage.
-- **Scoreboards:** Persist every scoreboard artefact to long-term storage. The JSON doubles as the evidence trail for compliance reviews and staged rollbacks.
-- **Dashboards:** Clone the canonical Grafana board (`docs/examples/sorafs_fetch_dashboard.json`) into the production folder with alert rules from `docs/examples/sorafs_fetch_alerts.yaml`.
+- ** Չափումներ. ** Ապահովեք Alertmanager մոնիտորները `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` և `sorafs_orchestrator_retries_total`: Հանկարծակի աճը սովորաբար նշանակում է, որ մատակարարը նվաստացնում է ծանրաբեռնվածության տակ:
+- **Գրանցամատյաններ.** Ուղղորդեք `telemetry::sorafs.fetch.*` թիրախները դեպի ընդհանուր տեղեկամատյանների ագրեգատոր: Կառուցեք պահված որոնումներ `event=complete status=failed`-ի համար՝ տրաժն արագացնելու համար:
+- ** Ցուցատախտակներ. ** Պահպանեք արդյունքների յուրաքանչյուր արտեֆակտ երկարաժամկետ պահպանման համար: JSON-ը կրկնապատկվում է որպես համապատասխանության ստուգումների և փուլային հետադարձումների ապացույց:
+- **Վահանակներ.** Կլոնավորեք կանոնական Grafana տախտակը (`docs/examples/sorafs_fetch_dashboard.json`) արտադրության թղթապանակում՝ զգուշացման կանոններով `docs/examples/sorafs_fetch_alerts.yaml`-ից:
 
-## 5. Communication & Documentation
+## 5. Հաղորդակցություն և փաստաթղթավորում
 
-- Log every deny/boost change in the operations changelog with timestamp, operator, reason, and associated incident.
-- Notify SDK teams when provider weights or retry budgets change to align client-side expectations.
-- After GA completes, update `status.md` with the rollout summary and archive this runbook reference in the release notes.
+- Մուտքագրեք գործողությունների փոփոխության գրանցամատյանում ժխտման/խթանման յուրաքանչյուր փոփոխություն՝ ժամանակացույցի, օպերատորի, պատճառի և հարակից միջադեպի միջոցով:
+- Տեղեկացրեք SDK թիմերին, երբ մատակարարի կշիռները կամ նորից փորձելու բյուջեները փոխվում են՝ հաճախորդի կողմից սպասելիքները համապատասխանեցնելու համար:
+- GA-ի ավարտից հետո թարմացրեք `status.md`-ը թողարկման ամփոփագրով և արխիվացրեք այս runbook հղումը թողարկման նշումներում:

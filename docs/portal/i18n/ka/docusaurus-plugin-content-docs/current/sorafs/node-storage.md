@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Node Storage Design
 sidebar_label: Node Storage Design
 description: Storage architecture, quotas, and lifecycle hooks for Torii nodes hosting SoraFS data.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-## SoraFS Node Storage Design (Draft)
+## SoraFS კვანძის შენახვის დიზაინი (დრაფტი)
 
-This note refines how an Iroha (Torii) node can opt-in to the SoraFS data
-availability layer and dedicate a slice of local disk for storing and serving
-chunks. It complements the `sorafs_node_client_protocol.md` discovery spec and
-the SF-1b fixture work by outlining the storage-side architecture, resource
-controls, and configuration plumbing that must land in the node and gateway
-code paths. Practical operator drills live in the
-[Node Operations Runbook](./node-operations).
+ეს შენიშვნა აზუსტებს, თუ როგორ შეუძლია Iroha (Torii) კვანძს SoraFS მონაცემების ჩართვა
+ხელმისაწვდომობის ფენა და დაუთმეთ ლოკალური დისკის ნაჭერი შესანახად და მომსახურებას
+ნაჭრები. ის ავსებს `sorafs_node_client_protocol.md` აღმოჩენის სპეციფიკას და
+SF-1b მოწყობილობები მუშაობს შენახვის მხარის არქიტექტურის, რესურსის ასახვით
+კონტროლი და კონფიგურაციის სანტექნიკა, რომელიც უნდა დაეშვას კვანძსა და კარიბჭეს
+კოდის ბილიკები. პრაქტიკული ოპერატორის წვრთნები ცხოვრობს
+[Node Operations Runbook] (./node-operations).
 
-### Goals
+### გოლები
 
-- Allow any validator or auxiliary Iroha process to expose spare disk as a
-  SoraFS provider without affecting the core ledger responsibilities.
-- Keep the storage module deterministic and Norito-driven: manifests,
-  chunk plans, Proof-of-Retrievability (PoR) roots, and provider adverts are the
-  source of truth.
-- Enforce operator-defined quotas so a node cannot exhaust its own resources by
-  accepting too many pin or fetch requests.
-- Surface health/telemetry (PoR sampling, chunk fetch latency, disk pressure)
-  back to governance and clients.
+- მიეცით საშუალება ნებისმიერ ვალიდატორს ან დამხმარე Iroha პროცესს, გამოავლინოს სათადარიგო დისკი, როგორც
+  SoraFS პროვაიდერი ძირითადი წიგნის პასუხისმგებლობებზე გავლენის გარეშე.
+- შეინახეთ შენახვის მოდული განმსაზღვრელი და Norito-ზე ორიენტირებული: მანიფესტი,
+  ნაწილის გეგმები, მტკიცებულების მოძიების (PoR) ფესვები და პროვაიდერის რეკლამები არის
+  სიმართლის წყარო.
+- განახორციელეთ ოპერატორის მიერ განსაზღვრული კვოტები, რათა კვანძმა ვერ ამოწუროს საკუთარი რესურსები
+  ძალიან ბევრი პინის ან მოთხოვნის მიღება.
+- ზედაპირის სიჯანსაღე/ტელემეტრია (PoR სინჯის აღება, ნაჭრის ამოღების შეყოვნება, დისკის წნევა)
+  დაუბრუნდით მმართველობას და კლიენტებს.
 
-### High-level Architecture
+### მაღალი დონის არქიტექტურა
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -64,28 +66,28 @@ code paths. Practical operator drills live in the
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Key modules:
+ძირითადი მოდულები:
 
-- **Gateway**: exposes Norito HTTP endpoints for pin proposals, chunk fetch
-  requests, PoR sampling, and telemetry. It validates Norito payloads and
-  marshals requests into the chunk store. Reuses the existing Torii HTTP stack
-  to avoid a new daemon.
-- **Pin Registry**: the manifest pin state tracked in `iroha_data_model::sorafs`
-  and `iroha_core`. When a manifest is accepted the registry records the
-  manifest digest, chunk plan digest, PoR root, and provider capability flags.
-- **Chunk Storage**: disk-backed `ChunkStore` implementation that ingests
-  signed manifests, materialises chunk plans using `ChunkProfile::DEFAULT`, and
-  persists chunks under a deterministic layout. Each chunk is associated with a
-  content fingerprint and PoR metadata so sampling can re-validate without
-  re-reading the entire file.
-- **Quota/Scheduler**: enforces operator-configured limits (maximum disk bytes,
-  maximum outstanding pins, maximum parallel fetches, chunk TTL) and coordinates
-  IO so the node's ledger duties are not starved. The scheduler is also
-  responsible for serving PoR proofs and sampling requests with bounded CPU.
+- **კარიბჭე**: ასახავს Norito HTTP ბოლო წერტილებს პინის წინადადებებისთვის, ნაჭრის ამოღება
+  მოთხოვნები, PoR ნიმუშის აღება და ტელემეტრია. ის ამოწმებს Norito დატვირთვას და
+  მარშლები ითხოვენ ბლოკის მაღაზიაში. ხელახლა იყენებს არსებულ Torii HTTP დასტას
+  ახალი დემონის თავიდან ასაცილებლად.
+- **Pin Registry**: მანიფესტის პინის მდგომარეობა, რომელიც თვალყურს ადევნებს `iroha_data_model::sorafs`-ში
+  და `iroha_core`. როდესაც მანიფესტი მიიღება, რეესტრი აღრიცხავს
+  მანიფესტის დაიჯესტი, ნაწილის გეგმის დაიჯესტი, PoR root და პროვაიდერის შესაძლებლობების დროშები.
+- **Chunk Storage**: დისკზე მხარდაჭერილი `ChunkStore` იმპლემენტაცია, რომელიც შთანთქავს
+  ხელმოწერილი მანიფესტები, მატერიალიზდება ცალი გეგმები `ChunkProfile::DEFAULT`-ის გამოყენებით და
+  აგრძელებს ნაწილებს დეტერმინისტული განლაგების ქვეშ. თითოეული ნაჭერი ასოცირდება ა
+  შიგთავსის თითის ანაბეჭდი და PoR მეტამონაცემები, ასე რომ, ნიმუშის ხელახალი ვალიდაცია შესაძლებელია ამის გარეშე
+  მთელი ფაილის ხელახლა წაკითხვა.
+- **Quota/Scheduler**: ახორციელებს ოპერატორის მიერ კონფიგურირებულ ლიმიტებს (დისკის მაქსიმალური ბაიტი,
+  მაქსიმალური გამორჩეული ქინძისთავები, მაქსიმალური პარალელური მოხვედრა, TTL ნაწილი) და კოორდინატები
+  IO ასე რომ კვანძის ledger მოვალეობები არ არის შიმშილი. გრაფიკი ასევე არის
+  პასუხისმგებელი PoR მტკიცებულებებისა და შერჩევის მოთხოვნების მომსახურებაზე შეზღუდული CPU-ით.
 
-### Configuration
+### კონფიგურაცია
 
-Add a new section to `iroha_config`:
+დაამატეთ ახალი სექცია `iroha_config`-ს:
 
 ```toml
 [sorafs.storage]
@@ -103,39 +105,39 @@ adverts:
   topics = ["sorafs.sf1.primary:global"]
 ```
 
-- `enabled`: participation toggle. When false the gateway returns a 503 for
-  storage endpoints and the node does not advertise in discovery.
-- `data_dir`: root directory for chunk data, PoR trees, and fetch telemetry.
-  Defaults to `<iroha.data_dir>/sorafs`.
-- `max_capacity_bytes`: hard limit for pinned chunk data. A background task
-  rejects new pins when the limit is reached.
-- `max_parallel_fetches`: concurrency cap enforced by the scheduler to balance
-  bandwidth/disk IO against validator workload.
-- `max_pins`: maximum number of manifest pins the node accepts before applying
-  eviction/back pressure.
-- `por_sample_interval_secs`: cadence for automatic PoR sampling jobs. Each job
-  samples `N` leaves (configurable per manifest) and emits telemetry events.
-  Governance can scale `N` deterministically by setting the capacity metadata
-  key `profile.sample_multiplier` (integer `1-4`). The value may be a single
-  number/string or an object with per-profile overrides, e.g.
+- `enabled`: მონაწილეობის გადართვა. როდესაც false, კარიბჭე აბრუნებს 503 for
+  შენახვის ბოლო წერტილები და კვანძი არ რეკლამირებს აღმოჩენაში.
+- `data_dir`: ძირეული დირექტორია ნაწილაკების მონაცემებისთვის, PoR ხეებისთვის და ტელემეტრიის მისაღებად.
+  ნაგულისხმევია `<iroha.data_dir>/sorafs`.
+- `max_capacity_bytes`: მყარი ლიმიტი დამაგრებული ნაწილის მონაცემებისთვის. ფონური დავალება
+  უარყოფს ახალ ქინძისთავებს, როდესაც ლიმიტი მიიღწევა.
+- `max_parallel_fetches`: კონკურენტულობის ლიმიტი, რომელიც დაწესებულია განრიგის მიერ დასაბალანსებლად
+  გამტარობა/დისკის IO ვალიდატორის დატვირთვის საწინააღმდეგოდ.
+- `max_pins`: მანიფესტ-პინების მაქსიმალური რაოდენობა, რომელსაც კვანძი იღებს გამოყენებამდე
+  გამოსახლება/უკან წნევა.
+- `por_sample_interval_secs`: კადენსი ავტომატური PoR შერჩევის სამუშაოებისთვის. თითოეული სამუშაო
+  ნიმუშები `N` ტოვებს (კონფიგურირებადი მანიფესტზე) და ასხივებს ტელემეტრიულ მოვლენებს.
+  მმართველობას შეუძლია `N` განმსაზღვრელი მასშტაბი მოახდინოს სიმძლავრის მეტამონაცემების დაყენებით
+  გასაღები `profile.sample_multiplier` (მთლიანი `1-4`). ღირებულება შეიძლება იყოს ერთი
+  ნომერი/სტრიქონი ან ობიექტი თითო პროფილის გადაფარვით, მაგ.
   `{"default":2,"sorafs.sf2@1.0.0":3}`.
-- `adverts`: structure used by the provider advert generator to fill
-  `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
-  node uses defaults from the governance registry.
+- `adverts`: სტრუქტურა, რომელსაც იყენებს პროვაიდერის რეკლამის გენერატორი შესავსებად
+  `ProviderAdvertV1` ველები (ფსონის მაჩვენებელი, QoS მინიშნებები, თემები). თუ გამოტოვებულია
+  კვანძი იყენებს ნაგულისხმევს მმართველობის რეესტრიდან.
 
-Config plumbing:
+სანტექნიკის კონფიგურაცია:
 
-- `[sorafs.storage]` is defined in `iroha_config` as `SorafsStorage` and is
-  loaded from the node config file.
-- `iroha_core` and `iroha_torii` thread the storage config into the gateway
-  builder and chunk store at startup.
-- Dev/test env overrides exist (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), but
-  production deployments should rely on the config file.
+- `[sorafs.storage]` განსაზღვრულია `iroha_config`-ში, როგორც `SorafsStorage` და არის
+  ჩატვირთულია კვანძის კონფიგურაციის ფაილიდან.
+- `iroha_core` და `iroha_torii` გადააქვთ შენახვის კონფიგურაცია კარიბჭეში
+  მშენებელი და ბლოკის მაღაზია გაშვებისას.
+- Dev/Test env overrides არსებობს (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), მაგრამ
+  წარმოების განლაგება უნდა ეყრდნობოდეს კონფიგურაციის ფაილს.
 
 ### CLI Utilities
 
-While Torii’s HTTP surface is still being wired, the `sorafs_node` crate ships a
-thin CLI so operators can script ingestion/export drills against the persistent
+სანამ Torii-ის HTTP ზედაპირი ჯერ კიდევ გაყვანილია, `sorafs_node` კრატი იგზავნება
+თხელი CLI, რათა ოპერატორებს შეეძლოთ ინსტალაციის/ექსპორტის სავარჯიშოების სკრიპტი მუდმივი წინააღმდეგ
 backend.【crates/sorafs_node/src/bin/sorafs-node.rs:1】
 
 ```bash
@@ -146,106 +148,104 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` expects a Norito-encoded manifest `.to` file plus the matching payload
-  bytes. It reconstructs the chunk plan from the manifest’s chunking profile,
-  enforces digest parity, persists chunk files, and optionally emits a
-  `chunk_fetch_specs` JSON blob so downstream tooling can sanity-check the
-  layout.
-- `export` accepts a manifest ID and writes the stored manifest/payload to disk
-  (with optional plan JSON) so fixtures remain reproducible across environments.
+- `ingest` მოელის Norito-ში დაშიფრული მანიფესტის `.to` ფაილს პლუს შესატყვისი დატვირთვა
+  ბაიტები. ის აღადგენს მოცულობის გეგმას მანიფესტის დანაწევრების პროფილიდან,
+  აიძულებს დაიჯესტის პარიტეტს, აგრძელებს ფაილების ნაწილს და სურვილისამებრ გამოსცემს a
+  `chunk_fetch_specs` JSON blob, ასე რომ, ქვედა დინების ინსტრუმენტების გამოყენებამ შეძლოს საღი აზრის შემოწმება
+  განლაგება.
+- `export` იღებს მანიფესტის ID-ს და წერს შენახულ მანიფესტს/გადატვირთვას დისკზე
+  (არასავალდებულო გეგმით JSON) ასე რომ, მოწყობილობები რჩება რეპროდუცირებადი გარემოში.
 
-Both commands print a Norito JSON summary to stdout, making it easy to pipe into
-scripts. The CLI is covered by an integration test to ensure manifests and
-payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tests/cli.rs:1】
+ორივე ბრძანება ბეჭდავს Norito JSON რეზიუმეს stdout-ზე, რაც აადვილებს მის შეყვანას
+სკრიპტები. CLI დაფარულია ინტეგრაციის ტესტით, რათა უზრუნველყოს მანიფესტები და
+იტვირთება ორმხრივი მგზავრობა სუფთად Torii API-ების დაშვებამდე.【crates/sorafs_node/tests/cli.rs:1】
 
-> HTTP parity
+> HTTP პარიტეტი
 >
-> The Torii gateway now exposes read-only helpers backed by the same
+> Torii კარიბჭე ახლა ამჟღავნებს მხოლოდ წაკითხვის დამხმარეებს, რომლებსაც მხარს უჭერს იგივე
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
->   Norito manifest (base64) alongside digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
->   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — აბრუნებს შენახულს
+> Norito მანიფესტი (base64) დაიჯესტთან/მეტამონაცემებთან ერთად.【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — აბრუნებს დეტერმინისტს
+> ცალი გეგმა JSON (`chunk_fetch_specs`) ქვედა დინების ინსტრუმენტებისთვის.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
-> These endpoints mirror the CLI output so pipelines can switch from local
-> scripts to HTTP probes without changing parsers.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
+> ეს ბოლო წერტილები ასახავს CLI-ის გამომავალს, რათა მილსადენებმა გადაერთონ ლოკალურიდან
+> სკრიპტები HTTP ზონდებზე პარსერის შეცვლის გარეშე.【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
-### Node Lifecycle
+### კვანძის სასიცოცხლო ციკლი
 
-1. **Startup**:
-   - If storage is enabled the node initialises the chunk store with the
-     configured directory and capacity. This includes verifying or creating the
-     PoR manifest database and replaying pinned manifests to warm caches.
-   - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
-     fetch, PoR sample, telemetry).
-   - Spawn the PoR sampling worker and quota monitor.
-2. **Discovery / Adverts**:
-   - Generate `ProviderAdvertV1` documents using current capacity/health, sign
-     them with the council-approved key, and publish via the discovery channel.
-     available.
-3. **Pin Workflow**:
-   - Gateway receives a signed manifest (including chunk plan, PoR root, council
-     signatures). Validate the alias list (`sorafs.sf1@1.0.0` required) and
-     ensure the chunk plan matches the manifest metadata.
-   - Check quotas. If capacity/pin limits would be exceeded respond with a
-     policy error (Norito structured).
-   - Stream chunk data into the `ChunkStore`, verifying digests as we ingest.
-     Update PoR trees and store manifest metadata in the registry.
-4. **Fetch Workflow**:
-   - Serve chunk range requests from disk. Scheduler enforces
-     `max_parallel_fetches` and returns `429` when saturated.
-   - Emit structured telemetry (Norito JSON) with latency, bytes served, and
-     error counts for downstream monitoring.
+1. ** გაშვება **:
+   - თუ შენახვა ჩართულია, კვანძი ახდენს ბლოკის შენახვის ინიციალიზებას
+     კონფიგურირებული დირექტორია და მოცულობა. ეს მოიცავს გადამოწმებას ან შექმნას
+     PoR მანიფესტის მონაცემთა ბაზა და ჩამაგრებული მანიფესტების ხელახლა დაკვრა თბილ ქეშებში.
+   - დაარეგისტრირეთ SoraFS კარიბჭის მარშრუტები (Norito JSON POST/GET ბოლო წერტილები pin-ისთვის,
+     Fetch, PoR ნიმუში, ტელემეტრია).
+   - შექმენით PoR შერჩევის მუშაკი და კვოტის მონიტორი.
+2. **აღმოჩენა / რეკლამა **:
+   - გენერირება `ProviderAdvertV1` დოკუმენტები არსებული სიმძლავრის/ჯანმრთელობის გამოყენებით, ნიშანი
+     მათ საბჭოს მიერ დამტკიცებული გასაღებით და გამოაქვეყნეთ აღმოჩენის არხის მეშვეობით.
+     ხელმისაწვდომი.
+3. **Pin Workflow **:
+   - Gateway იღებს ხელმოწერილ მანიფესტს (მათ შორის ბლოკ გეგმა, PoR root, საბჭო
+     ხელმოწერები). გადაამოწმეთ მეტსახელების სია (საჭიროა `sorafs.sf1@1.0.0`) და
+     დარწმუნდით, რომ ნაწილის გეგმა ემთხვევა მანიფესტის მეტამონაცემებს.
+   - შეამოწმეთ კვოტები. თუ სიმძლავრის/პინის ლიმიტების გადაჭარბება მოხდება, უპასუხეთ a
+     პოლიტიკის შეცდომა (Norito სტრუქტურირებული).
+   - გადაიტანეთ ცალი მონაცემები `ChunkStore`-ში, გადაამოწმეთ დაიჯესტები, როგორც ჩვენ ვიღებთ.
+     განაახლეთ PoR ხეები და შეინახეთ მანიფესტის მეტამონაცემები რეესტრში.
+4. ** სამუშაო ნაკადის მიღება **:
+   - დისკიდან მოთხოვნილების მიწოდება. განრიგი ახორციელებს
+     `max_parallel_fetches` და აბრუნებს `429`-ს გაჯერებისას.
+   - გამოუშვით სტრუქტურირებული ტელემეტრია (Norito JSON) შეყოვნებით, ბაიტით და
+     შეცდომების დათვლა ქვედა დინების მონიტორინგისთვის.
 5. **PoR Sampling**:
-   - Worker selects manifests proportional to weight (e.g., bytes stored) and
-     runs deterministic sampling using the chunk store's PoR tree.
-   - Persist results for governance audits and include summaries in provider
-     adverts / telemetry endpoints.
-6. **Eviction / Quota Enforcement**:
-   - When capacity is reached the node rejects new pins by default. Optionally,
-     operators may configure eviction policies (e.g., TTL-based, LRU) once the
-     governance model is agreed; for now the design assumes strict quotas and
-     operator-initiated unpin operations.
+   - მუშაკი ირჩევს მანიფესტებს წონის პროპორციულად (მაგ., შენახული ბაიტები) და
+     აწარმოებს დეტერმინისტულ შერჩევას chunk store-ის PoR ხის გამოყენებით.
+   - შენარჩუნდეს შედეგები მმართველობის აუდიტებისთვის და შეიცავდეს შეჯამებებს პროვაიდერში
+     რეკლამები / ტელემეტრიის ბოლო წერტილები.
+6. **გამოსახლება / კვოტის აღსრულება **:
+   - სიმძლავრის მიღწევისას კვანძი ნაგულისხმევად უარყოფს ახალ პინებს. სურვილისამებრ,
+     ოპერატორებს შეუძლიათ გამოსახლების პოლიტიკის კონფიგურაცია (მაგ., TTL-ზე დაფუძნებული, LRU) ერთხელ
+     შეთანხმებულია მმართველობის მოდელი; ამჟამად დიზაინი ითვალისწინებს მკაცრ კვოტებს და
+     ოპერატორის მიერ ინიცირებული მოხსნის ოპერაციები.
 
-### Capacity Declaration & Scheduling Integration
+### სიმძლავრის დეკლარაცია და განრიგის ინტეგრაცია- Torii ახლა გადასცემს `CapacityDeclarationRecord` განახლებებს `/v1/sorafs/capacity/declare`-დან
+  ჩაშენებულ `CapacityManager`-ზე, ასე რომ, თითოეული კვანძი ქმნის მეხსიერებაში მის ხედს
+  ჩადენილი ჩუნკერისა და ზოლის გამოყოფა. მენეჯერი ასახავს მხოლოდ წასაკითხად კადრებს
+  ტელემეტრიისთვის (`GET /v1/sorafs/capacity/state`) და აიძულებს პროფილს ან ზოლს
+  დაჯავშნა ახალი შეკვეთების მიღებამდე.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- `/v1/sorafs/capacity/schedule` საბოლოო წერტილი იღებს მმართველობით გაცემულ `ReplicationOrderV1`-ს
+  ტვირთამწეობა. როდესაც შეკვეთა მიზნად ისახავს ადგილობრივ პროვაიდერს, მენეჯერი ამოწმებს
+  განრიგის დუბლიკატი, ამოწმებს ცუნკერის/ზოლის სიმძლავრეს, ინახავს ნაჭერს და
+  აბრუნებს `ReplicationPlan`-ს, რომელიც აღწერს დარჩენილ სიმძლავრეს, ასე რომ, ორკესტრირების ხელსაწყოებს
+  შეუძლია გააგრძელოს მიღება. შეკვეთები სხვა პროვაიდერებისთვის აღიარებულია ა
+  `ignored` პასუხი მრავალ ოპერატორის მუშაობის პროცესის გასაადვილებლად.【crates/iroha_torii/src/routing.rs:4845】
+- დასრულებული კაკვები (მაგ., გააქტიურებული მას შემდეგ, რაც გადაყლაპვა წარმატებულია) მოხვდა
+  `POST /v1/sorafs/capacity/complete` გაათავისუფლოს ჯავშნები მეშვეობით
+  `CapacityManager::complete_order`. პასუხი მოიცავს `ReplicationRelease`
+  სნეპშოტი (დარჩენილი ჯამები, ცუნკერი/ზოლის ნარჩენები) ასე რომ, ორკესტრირების ინსტრუმენტები შეიძლება
+  რიგით შემდეგი შეკვეთა გამოკითხვის გარეშე. შემდგომი სამუშაო ამ ნაწილზე გადაიყვანს
+  შენახვის მილსადენი, როგორც კი გადაყლაპვის ლოგიკა დაეშვება.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- ჩაშენებული `TelemetryAccumulator` შეიძლება მოხდეს მუტაციის გზით
+  `NodeHandle::update_telemetry`, რომელიც საშუალებას აძლევს ფონურ მუშაკებს ჩაწერონ PoR/uptime ნიმუშები
+  და საბოლოოდ მიიღება კანონიკური `CapacityTelemetryV1` ტვირთამწეობა შეხების გარეშე
+  დაგეგმვის შიდა ნაწილები.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
-- Torii now relays `CapacityDeclarationRecord` updates from `/v1/sorafs/capacity/declare`
-  to the embedded `CapacityManager`, so each node builds an in-memory view of its
-  committed chunker and lane allocations. The manager exposes read-only snapshots
-  for telemetry (`GET /v1/sorafs/capacity/state`) and enforces per-profile or per-lane
-  reservations before new orders are accepted.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- The `/v1/sorafs/capacity/schedule` endpoint accepts governance-issued `ReplicationOrderV1`
-  payloads. When the order targets the local provider the manager checks for
-  duplicate scheduling, verifies chunker/lane capacity, reserves the slice, and
-  returns a `ReplicationPlan` describing remaining capacity so orchestration tools
-  can proceed with ingestion. Orders for other providers are acknowledged with an
-  `ignored` response to ease multi-operator workflows.【crates/iroha_torii/src/routing.rs:4845】
-- Completion hooks (e.g., triggered after ingestion succeeds) hit
-  `POST /v1/sorafs/capacity/complete` to release reservations via
-  `CapacityManager::complete_order`. The response includes a `ReplicationRelease`
-  snapshot (remaining totals, chunker/lane residuals) so orchestration tooling can
-  queue the next order without polling. Follow-up work will wire this into the chunk
-  store pipeline once ingestion logic lands.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
-- The embedded `TelemetryAccumulator` can be mutated through
-  `NodeHandle::update_telemetry`, letting background workers record PoR/uptime samples
-  and eventually derive canonical `CapacityTelemetryV1` payloads without touching the
-  scheduler internals.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
+### ინტეგრაციები და მომავალი სამუშაო
 
-### Integrations & Future Work
+- **მმართველობა**: გააფართოვეთ `sorafs_pin_registry_tracker.md` შენახვის ტელემეტრიით
+  (PoR წარმატების მაჩვენებელი, დისკის გამოყენება). მისაღები პოლიტიკა შეიძლება მოითხოვდეს მინიმუმს
+  მოცულობა ან მინიმალური PoR წარმატების მაჩვენებელი რეკლამის მიღებამდე.
+- **კლიენტის SDK-ები**: გამოავლინეთ მეხსიერების ახალი კონფიგურაცია (დისკის ლიმიტები, მეტსახელი) ასე
+  მართვის ინსტრუმენტს შეუძლია კვანძების პროგრამულად ჩატვირთვა.
+- **ტელემეტრია**: ინტეგრირება არსებულ მეტრიკის დასტასთან (Prometheus /
+  OpenTelemetry) ასე რომ შენახვის მეტრიკა გამოჩნდება დაკვირვებადობის საინფორმაციო დაფებში.
+- **უსაფრთხოება**: გაუშვით შენახვის მოდული გამოყოფილი ასინქრონული ამოცანების აუზში
+  უკანა ზეწოლა და განიხილოს sandboxing chunk წაკითხული მეშვეობით io_uring ან tokio's
+  შეზღუდული აუზები, რათა თავიდან აიცილონ მავნე კლიენტები რესურსების ამოწურვისგან.
 
-- **Governance**: extend `sorafs_pin_registry_tracker.md` with storage telemetry
-  (PoR success rate, disk utilisation). Admission policies can require minimum
-  capacity or minimum PoR success rate before adverts are accepted.
-- **Client SDKs**: expose the new storage config (disk limits, alias) so
-  management tooling can bootstrap nodes programmatically.
-- **Telemetry**: integrate with the existing metrics stack (Prometheus /
-  OpenTelemetry) so storage metrics appear in observability dashboards.
-- **Security**: run the storage module inside a dedicated async task pool with
-  back-pressure and consider sandboxing chunk reads via io_uring or tokio's
-  bounded pools to prevent malicious clients from exhausting resources.
-
-This design keeps the storage module optional and deterministic while giving
-operators the knobs they need to participate in the SoraFS data availability
-layer. Implementing it will involve changes across `iroha_config`, `iroha_core`,
-`iroha_torii`, and the Norito gateway, plus the provider advert tooling.
+ეს დიზაინი ინარჩუნებს შენახვის მოდულს სურვილისამებრ და განმსაზღვრელად მიცემისას
+ოპერატორებს კლავიშები სჭირდებათ SoraFS მონაცემთა ხელმისაწვდომობაში მონაწილეობის მისაღებად
+ფენა. მისი განხორციელება მოიცავს ცვლილებებს `iroha_config`, `iroha_core`,
+`iroha_torii` და Norito კარიბჭე, პლუს პროვაიდერის რეკლამის ხელსაწყოები.

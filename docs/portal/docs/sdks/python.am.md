@@ -7,28 +7,29 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1f2dd6b790ce0252c355db5218b64ca9a15f4200879fe874499df079ae168872
 source_last_modified: "2026-01-30T18:06:01.646084+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Python SDK Quickstart
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+የ Python ኤስዲኬ (`iroha-python`) የ Rust ደንበኛ ረዳቶችን ያንጸባርቃል ስለዚህ እንዲችሉ
+ከስክሪፕቶች፣ ከማስታወሻ ደብተሮች ወይም ከድር ጀርባዎች ከ Torii ጋር መስተጋብር መፍጠር። ይህ ፈጣን ጅምር
+ጭነትን፣ የግብይት ግቤትን እና የክስተት ዥረትን ይሸፍናል። ለበለጠ
+ሽፋን በማከማቻው ውስጥ `python/iroha_python/README.md` ይመልከቱ።
 
-## 1. Install
+## 1. ጫን
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+አማራጭ ተጨማሪዎች፡-
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- `pip install aiohttp` ያልተመሳሰሉ ልዩነቶችን ለማሄድ ካቀዱ
+  የዥረት ረዳቶች.
+- ከኤስዲኬ ውጭ የ Ed25519 ቁልፍ መውጣቱ ሲፈልጉ `pip install pynacl`።
 
-## 2. Create a client and signers
+## 2. ደንበኛ እና ፈራሚዎችን ይፍጠሩ
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` እንደ `timeout_ms` ያሉ ተጨማሪ የቁልፍ ቃል ነጋሪ እሴቶችን ይቀበላል።
+`max_retries`፣ እና `tls_config`። ረዳት `resolve_torii_client_config`
+ከ Rust CLI ጋር መመሳሰል ከፈለጉ የJSON ውቅር ክፍያን ይተነትናል።
 
-## 3. Submit a transaction
+## 3. ግብይት አስገባ
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+ኤስዲኬ የማስተማሪያ ግንበኞችን እና የግብይት አጋሮችን ይልካል።
+Norito የሚጫኑ ጭነቶች በእጅ፡
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
-JSON-centric `submit_transaction_json`.
+`build_and_submit_transaction` የተፈረመውን እና የመጨረሻውን ሁለቱንም ይመልሳል
+የታየበት ሁኔታ (ለምሳሌ፣ `Committed`፣ `Rejected`)። አስቀድሞ የተፈረመ ከሆነ
+የግብይት ኤንቨሎፕ `client.submit_transaction_envelope(envelope)` ወይም የ ይጠቀሙ
+JSON-centric I18NI0000032X.
 
-## 4. Query state
+## 4. የመጠይቅ ሁኔታ
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+ሁሉም የ REST የመጨረሻ ነጥቦች JSON አጋዥዎች አሏቸው እና ብዙዎቹ የተተየቡ የመረጃ ክፍሎችን አጋልጠዋል። ለ
+ለምሳሌ፣ ጎራዎችን መዘርዘር፡-
 
 ```python
 domains = client.list_domains_typed()
@@ -88,11 +89,11 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+በገጽ የሚያውቁ ረዳቶች (ለምሳሌ፡ `list_accounts_typed`) ዕቃውን የሚመልሱ
+ሁለቱንም `items` እና I18NI0000035X ይዟል።
 
-Account inventory helpers accept an optional `asset_id` filter when you only
-care about a specific asset:
+የመለያ ቆጠራ ረዳቶች እርስዎ ብቻ ሲሆኑ አማራጭ `asset_id` ማጣሪያ ይቀበላሉ።
+ለአንድ የተወሰነ ንብረት ትኩረት ይስጡ;
 
 ```python
 asset_id = "rose#wonderland#alice@test"
@@ -102,11 +103,11 @@ holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=
 print(assets, txs, holders)
 ```
 
-## 5. Offline allowances
+## 5. ከመስመር ውጭ አበል
 
-Use the offline allowance endpoints to issue wallet certificates and register
-them on-ledger. `top_up_offline_allowance` chains the issue + register steps
-(there is no single top-up endpoint):
+የኪስ ቦርሳ የምስክር ወረቀቶችን ለመስጠት እና ለመመዝገብ ከመስመር ውጭ አበል የመጨረሻ ነጥቦችን ይጠቀሙ
+በእነሱ ላይ-መሪ. `top_up_offline_allowance` ጉዳዩን በሰንሰለት ይይዛል + ደረጃዎችን ይመዝግቡ
+(ምንም ነጠላ የመጨመሪያ ነጥብ የለም)
 
 ```python
 from iroha_python import ToriiClient
@@ -132,7 +133,7 @@ top_up = client.top_up_offline_allowance(
 print("registered", top_up.registration.certificate_id_hex)
 ```
 
-For renewals, call `top_up_offline_allowance_renewal` with the current certificate id:
+ለማደስ፣ አሁን ካለው የምስክር ወረቀት መታወቂያ ጋር I18NI0000038X ይደውሉ፡
 
 ```python
 renewed = client.top_up_offline_allowance_renewal(
@@ -144,14 +145,14 @@ renewed = client.top_up_offline_allowance_renewal(
 print("renewed", renewed.registration.certificate_id_hex)
 ```
 
-If you need to split the flow, call `issue_offline_certificate` (or
-`issue_offline_certificate_renewal`) followed by `register_offline_allowance`
-or `renew_offline_allowance`.
+ፍሰቱን መከፋፈል ከፈለጉ `issue_offline_certificate` ይደውሉ (ወይም
+`issue_offline_certificate_renewal`) ተከትሎ I18NI0000041X
+ወይም `renew_offline_allowance`.
 
-## 6. Stream events
+## 6. የዥረት ክስተቶች
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii SSE የመጨረሻ ነጥቦች በጄነሬተሮች በኩል ይጋለጣሉ። ኤስዲኬ በራስ-ሰር ከቆመበት ይቀጥላል
+`resume=True` እና `EventCursor` ሲያቀርቡ።
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -167,28 +168,28 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+ሌሎች የምቾት ዘዴዎች `stream_pipeline_transactions`፣
+`stream_events` (ከተተየቡ የማጣሪያ ግንበኞች ጋር) እና `stream_verifying_key_events`።
 
-## 7. Next steps
+## 7. ቀጣይ ደረጃዎች
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- ምሳሌዎችን በ `python/iroha_python/src/iroha_python/examples/` ስር ያስሱ
+  አስተዳደርን ለሚሸፍኑ ከጫፍ እስከ ጫፍ ፍሰቶች፣ የ ISO ድልድይ አጋዥ እና ኮኔክሽን።
+- ሲፈልጉ `create_torii_client` / `resolve_torii_client_config` ይጠቀሙ
+  ደንበኛውን ከ I18NI0000051X JSON ፋይል ወይም አካባቢ ማስነሳት።
+- ለNorito RPC ወይም Connect-specific APIs እንደ ልዩ ሞጁሎችን ይመልከቱ።
+  `iroha_python.norito_rpc` እና `iroha_python.connect`።
 
-## Related Norito examples
+## ተዛማጅ Norito ምሳሌዎች
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — mirrors the compile/run
-  workflow from this quickstart so you can deploy the same starter contract from Python.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — matches the domain +
-  asset flows above and is useful when you want the ledger-side implementation instead of SDK builders.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — showcases the `transfer_asset`
-  syscall so you can compare contract-driven transfers with the Python helper methods.
+- [የሀጂማሪ መግቢያ ነጥብ አጽም](../norito/examples/hajimari-entrypoint) - ማጠናቀር/ሩጡን ያንጸባርቃል
+  የስራ ፍሰት ከዚህ ፈጣን ጅምር ስለዚህ ተመሳሳዩን የማስጀመሪያ ውል ከ Python ማሰማራት ይችላሉ።
+- [ጎራ እና ሚንት ንብረቶችን ይመዝገቡ](../norito/examples/register-and-mint) - ከጎራው ጋር ይዛመዳል +
+  ንብረቱ ከላይ ይፈስሳል እና ከኤስዲኬ ግንበኞች ይልቅ የሒሳብ-ጎን ትግበራ ሲፈልጉ ጠቃሚ ነው።
+- [ንብረቱን በመለያዎች መካከል ያስተላልፉ](../norito/examples/transfer-asset) - `transfer_asset` ያሳያል
+  syscall ስለዚህ በኮንትራት የሚመሩ ዝውውሮችን ከ Python አጋዥ ዘዴዎች ጋር ማወዳደር ይችላሉ።
 
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+በእነዚህ የግንባታ ብሎኮች Torii ከ Python ሳይጽፉ ልምምድ ማድረግ ይችላሉ።
+የራስዎን የኤችቲቲፒ ሙጫ ወይም I18NT0000003X ኮዴኮች። ኤስዲኬ ሲያድግ፣ ተጨማሪ ከፍተኛ-ደረጃ
+ግንበኞች ይጨምራሉ; በ I18NI0000055X ውስጥ README ን ያማክሩ
+የቅርብ ጊዜ ሁኔታ እና የስደት ማስታወሻዎች ማውጫ።

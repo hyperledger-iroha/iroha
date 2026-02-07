@@ -4,15 +4,17 @@ direction: rtl
 source: docs/portal/docs/sorafs/migration-ledger.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Razao de migracao SoraFS
-description: Log canonico de mudancas que acompanha cada marco de migracao, responsaveis e follow-ups necessarios.
+عنوان: ہجرت کی وجہ SoraFS
+تفصیل: تبدیلیوں کا کیننیکل لاگ جو ہر منتقلی کے سنگ میل ، ذمہ دار جماعتوں اور ضروری فالو اپس کو ٹریک کرتا ہے۔
 ---
 
-> Adaptado de [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+> [`docs/source/sorafs/migration_ledger.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) سے موافقت پذیر۔
 
-# Razao de migracao SoraFS
+# ہجرت کی وجہ SoraFS
 
-Este documento nao se aplica a primeira release. Nao ha migracoes pendentes; fica reservado para futuras atualizacoes.
+یہ دستاویز پہلی ریلیز پر لاگو نہیں ہوتی ہے۔ ہجرت کا کوئی زیر التوا نہیں ہے۔ مستقبل کی تازہ کاریوں کے لئے مخصوص ہے۔

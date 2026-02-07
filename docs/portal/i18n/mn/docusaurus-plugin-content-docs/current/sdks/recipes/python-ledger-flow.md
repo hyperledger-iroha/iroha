@@ -7,21 +7,23 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Python ledger flow recipe
 description: Reproduce the register → mint → transfer flow against the dev network using `iroha-python`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-г '@site/src/components/SampleDownload'-аас импортлох;
 
-This Python snippet mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-and the [Rust recipe](./rust-ledger-flow.md). It uses the default Docker
-compose network plus the demo credentials bundled in `defaults/client.toml`.
+Энэхүү Python хэсэг нь [CLI дэвтэрийн дэлгэрэнгүй танилцуулгыг](../../norito/ledger-walkthrough.md) толилуулж байна.
+болон [Зэвний жор](./rust-ledger-flow.md). Энэ нь анхдагч Docker-г ашигладаг
+сүлжээг үүсгэх, мөн `defaults/client.toml`-д багцлагдсан демо итгэмжлэлүүд.
 
-<SampleDownload
+<Жишээ татаж авах
   href="/sdk-recipes/python/ledger_flow.py"
-  filename="ledger_flow.py"
-  description="Download the script showcased in this recipe to run it without copying code by hand."
+  файлын нэр = "ledger_flow.py"
+  description="Кодыг гараар хуулахгүйгээр ажиллуулахын тулд энэ жоронд үзүүлсэн скриптийг татаж авна уу."
 />
 
-## Prerequisites
+## Урьдчилсан нөхцөл
 
 ```bash
 pip install iroha-python
@@ -30,7 +32,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## Жишээ скрипт
 
 ```python title="ledger_flow.py"
 import os
@@ -100,12 +102,12 @@ for asset in result.items:
         print("Receiver holds", asset.value, "units of", asset.id.definition)
 ```
 
-Run with `python ledger_flow.py`. The output should report the transaction hash
-(from the receipt payload) followed by the new receiver balance. If the asset definition already exists,
-the register instruction is rejected while the mint/transfer continue to succeed.
+`python ledger_flow.py` ашиглан ажиллуулна уу. Гаралт нь гүйлгээний хэшийг мэдээлэх ёстой
+(хүлээн авалтын ачааллаас) дараа нь хүлээн авагчийн шинэ үлдэгдэл. Хэрэв хөрөнгийн тодорхойлолт аль хэдийн байгаа бол,
+гаа/шилжилт амжилттай үргэлжилж байхад бүртгэлийн заавар татгалзсан байна.
 
-## Verify parity
+## Паритетийг баталгаажуулна уу
 
-Use the same CLI commands from the Norito walkthrough to cross-check hashes and
-balances. When you run the JavaScript and Rust recipes, all three SDKs should
-agree on transaction hashes and Norito payloads for the shared flow.
+Norito гарын авлагын ижил CLI тушаалуудыг ашиглан хэш болон хөндлөн шалгах
+тэнцэл. Та JavaScript болон Rust жоруудыг ажиллуулахад гурван SDK бүгд ажиллах ёстой
+хуваалцсан урсгалын хувьд гүйлгээний хэш болон Norito ачааллын талаар тохиролцоно.

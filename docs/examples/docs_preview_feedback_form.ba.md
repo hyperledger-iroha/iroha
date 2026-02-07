@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-12-29T18:16:35.071058+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs preview feedback form (W1 partner wave)
+# Docs алдан ҡарау кире бәйләнеш формаһы (W1 партнер тулҡын)
 
-Use this template when collecting feedback from W1 reviewers. Duplicate it per
-partner, fill the metadata, and store the completed copy under
+Был шаблон ҡулланыу ҡасан йыйыу кире бәйләнеш W1 рецензенттар. Уны ҡабатлағыҙ.
+партнер, метамағлүмәттәр тултырырға, һәм тултырылған күсермәһен һаҡлау буйынса 1990 й.
 `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
 
-## Reviewer metadata
+## Рецензент метамағлүмәттәр
 
-- **Partner ID:** `partner-w1-XX`
-- **Request ticket:** `DOCS-SORA-Preview-REQ-PXX`
-- **Invite sent (UTC):** `YYYY-MM-DD hh:mm`
-- **Acknowledged checksum (UTC):** `YYYY-MM-DD hh:mm`
-- **Primary focus areas:** (for example _SoraFS orchestrator docs_, _Torii ISO flows_)
+- **Партнер ID:** I18NI000000003X
+- **Яуап билеты:** `DOCS-SORA-Preview-REQ-PXX`
+- **Саҡырыу ебәрелгән (UTC):** `YYYY-MM-DD hh:mm`
+- **Таныслы чек суммаһы (UTC):** I18NI0000006X XX
+- **Тәүге фокус йүнәлештәре:** (мәҫәлән, _SoraFS оркестры docs_, _Тории ISO ағымдары_)
 
-## Telemetry & artefact confirmations
+## Телеметрия & артефакт раҫлауҙары
 
-| Checklist item | Result | Evidence |
+| Тикшереү исемлеге пункты | Һөҙөмтә | Дәлилдәр |
 | --- | --- | --- |
-| Checksum verification | ✅ / ⚠️ | Path to log (e.g., `build/checksums.sha256`) |
-| Try it proxy smoke test | ✅ / ⚠️ | `npm run manage:tryit-proxy …` transcript snippet |
-| Grafana dashboard review | ✅ / ⚠️ | Screenshot path(s) |
-| Portal probe report review | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
+| Чек-сюм тикшерелгән | ✅ / ⚠️ | Юл лог (мәҫәлән, `build/checksums.sha256`) |
+| Һынап ҡарағыҙ, уны прокси төтөн һынау | ✅ / ⚠️ | `npm run manage:tryit-proxy …` стенограмма өҙөк |
+| Grafana приборҙар таҡтаһы обзор | ✅ / ⚠️ | Скриншот юл(ы) |
+| Портал зонд отчет тикшерергә | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
 
-Add rows for any additional SLOs a reviewer inspects.
+Өҫтәү өсөн рәттәр өсөн теләһә ниндәй өҫтәмә SLOs рецензент тикшерелгән.
 
-## Feedback log
+## Кире бәйләнеш журналы
 
-| Area | Severity (info/minor/major/blocker) | Description | Suggested fix or question | Tracker issue |
+| Район | Ауырлыҡ (инфо/бәләкәй/төп/блокада) | Тасуирлама | Тәҡдим ителгән төҙәтеү йәки һорау | Трекер мәсьәләһе |
 | --- | --- | --- | --- | --- |
 | | | | | |
 
-Reference the GitHub issue or internal ticket in the last column so the preview
-tracker can tie remediation items back to this form.
+Һылтанма GitHub мәсьәләһе йәки эске билет һуңғы бағана шулай алдан ҡарау
+трекер был формаға кире ҡайтарыу әйберҙәрен бәйләй ала.
 
-## Survey summary
+## Тикшеренеүҙең резюмеһы
 
-1. **How confident are you in the checksum guidance and invite process?** (1–5)
-2. **Which docs were the most/least helpful?** (short answer)
-3. **Were there any blockers accessing the Try it proxy or telemetry dashboards?**
-4. **Is additional localisation or accessibility content required?**
-5. **Any other comments before GA?**
+1. **Һеҙ ни тиклем ышаныслы һеҙ тикшерелгән һәм саҡырыу процесын саҡыра?** (1–5)
+2. **Ҡайһы docs иң күп/иң аҙ ярҙам иткән?** (ҡыҫҡа яуап)
+3. **Блокерҙар бар ине, уны прокси йәки телеметрия панелдәрен һынап ҡарау?**
+4. **Өҫтәмә локализация йәки ҡулланыу мөмкинлеге кәрәкме?**
+5. **ГА-ға тиклем башҡа ниндәй ҙә булһа комментарийҙар?
 
-Capture short answers and attach raw survey exports if you use an external form.
+Ҡыҫҡа яуаптарҙы тотоу һәм сеймал тикшерелгән экспорт беркетергә, әгәр һеҙ тышҡы форма ҡулланыу.
 
-## Knowledge check
+## Белем чек
 
-- Score: `__/10`
-- Incorrect questions (if any): `[#1, #4, …]`
-- Follow-up actions (if score < 9/10): remediation call scheduled? y/n
+- Һал: `__/10`
+- Дөрөҫ булмаған һорауҙар (әгәр бар икән): `[#1, #4, …]`
+- Һуңынан ғәмәлдәр (әгәр балл < 9/10): rememaration шылтыратыу планлаштырылған? y/n
 
-## Sign-off
+##
 
-- Reviewer name & timestamp:
-- Docs/DevRel reviewer & timestamp:
+- Рецензент исеме & ваҡыт тамғаһы:
+- Док/ДевРель рецензент & ваҡыт тамғаһы:
 
-Store the signed copy with the associated artefacts so auditors can replay the
-wave without additional context.
+Һаҡлау өсөн ҡул ҡуйылған күсермәһе менән бәйле артефакттар шулай аудиторҙар реплей мөмкин
+өҫтәмә контекстһыҙ тулҡын.

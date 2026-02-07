@@ -6,44 +6,45 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: ba5f4fdc9221210a793fd0c2120d8cfb68487d7ddcbe67c208976798446ca5db
 source_last_modified: "2026-01-03T18:07:57.078074+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! SM program risk register for SM2/SM3/SM4 enablement.
+//! سجل مخاطر برنامج SM لتمكين SM2/SM3/SM4.
 
-# SM Program Risk Register
+# سجل مخاطر برنامج SM
 
-Last updated: 2025-03-12.
+آخر تحديث: 2025-03-12.
 
-This register expands on the summary in `sm_program.md`, pairing each risk with
-ownership, monitoring triggers, and the current mitigation state. The Crypto WG
-and Core Platform leads review this register at the weekly SM cadence; changes
-are reflected both here and in the public roadmap.
+يتوسع هذا السجل في الملخص في `sm_program.md`، مع إقران كل خطر مع
+الملكية ومشغلات المراقبة وحالة التخفيف الحالية. مجموعة عمل التشفير
+ويراجع قادة المنصة الأساسية هذا السجل في إيقاع SM الأسبوعي؛ التغييرات
+تنعكس هنا وفي خريطة الطريق العامة.
 
-## Risk Summary
+## ملخص المخاطر
 
-| ID | Risk | Category | Probability | Impact | Severity | Owner | Mitigation | Status | Triggers |
-|----|------|----------|-------------|--------|----------|-------|------------|--------|----------|
-| R1 | External audit for RustCrypto SM crates not executed before validator signing GA | Supply chain | Medium | High | High | Crypto WG | Contract Trail of Bits/NCC Group, keep verify-only posture until report accepted | Mitigation in progress | Audit SOW unsigned by 2025-04-15 or audit report delayed past 2025-06-01 |
-| R2 | Deterministic nonce regressions across SDKs | Implementation | Medium | High | High | SDK Program Leads | Share fixtures across SDK CI, enforce canonical r∥s encoding, add cross-SDK tamper tests | Monitoring | Fixture drift detected in CI or SDK release without SM fixtures |
-| R3 | ISA-specific bugs in intrinsics (NEON/SIMD) | Performance | Low | Medium | Medium | Performance WG | Gate intrinsics behind feature flags, require CI coverage on ARM, maintain scalar fallback | Mitigation in progress | NEON benches fail or hardware regression uncovered in SM perf matrix |
-| R4 | Compliance ambiguity delaying SM adoption | Governance | Medium | Medium | Medium | Docs & Legal Liaison | Publish compliance brief, operator checklist, liaison with legal counsel prior to GA | Mitigation in progress | Legal review outstanding after 2025-05-01 or missing checklist updates |
-| R5 | FFI backend drift with provider updates | Integration | Medium | Medium | Medium | Platform Ops | Pin provider versions, add parity tests, keep OpenSSL/Tongsuo preview opt-in | Monitoring | Package update merged without parity run or preview enabled outside pilot scope |
+| معرف | خطر | الفئة | الاحتمال | التأثير | شدة | المالك | التخفيف | الحالة | المشغلات |
+|----|------|----------|-----------|-------|-----------|--------|----------|---------|--------|--|
+| ر1 | لم يتم تنفيذ التدقيق الخارجي لصناديق RustCrypto SM قبل توقيع المدقق على GA | سلسلة التوريد | متوسطة | عالية | عالية | مجموعة عمل التشفير | مسار العقد لشركة Bits/NCC Group، احتفظ بوضعية التحقق فقط حتى يتم قبول التقرير | التخفيف قيد التنفيذ | تدقيق بيان العمل غير الموقع بحلول 15-04-2025 أو تأخر تقرير التدقيق بعد 01-06-2025 |
+| ر2 | انحدارات nonce الحتمية عبر SDKs | التنفيذ | متوسطة | عالية | عالية | يؤدي برنامج SDK | مشاركة التركيبات عبر SDK CI، وفرض تشفير r∥s الأساسي، وإضافة اختبارات العبث عبر SDK | الرصد | تم اكتشاف انجراف التركيبات في إصدار CI أو SDK بدون تركيبات SM |
+| ر3 | الأخطاء الخاصة بـ ISA في الجوهريات (NEON/SIMD) | الأداء | منخفض | متوسطة | متوسطة | مجموعة العمل للأداء | تتطلب جوهرية البوابة خلف أعلام الميزات تغطية CI على ARM، وتحافظ على التراجع العددي | التخفيف قيد التنفيذ | تفشل مقاعد NEON أو يتم الكشف عن انحدار الأجهزة في مصفوفة أداء SM |
+| آر 4 | غموض الامتثال يؤخر اعتماد SM | الحكم | متوسطة | متوسطة | متوسطة | المستندات والاتصال القانوني | نشر ملخص الامتثال وقائمة مراجعة المشغل والاتصال بالمستشار القانوني قبل GA | التخفيف قيد التنفيذ | المراجعة القانونية معلقة بعد 01-05-2025 أو تحديثات قائمة المراجعة مفقودة |
+| ر5 | الانجراف الخلفي لـ FFI مع تحديثات الموفر | التكامل | متوسطة | متوسطة | متوسطة | منصة العمليات | تثبيت إصدارات الموفر، وإضافة اختبارات التكافؤ، والحفاظ على الاشتراك في معاينة OpenSSL/Tongsuo | الرصد | تم دمج تحديث الحزمة بدون تشغيل التكافؤ أو تمكين المعاينة خارج النطاق التجريبي |
 
-## Review Cadence
+## مراجعة الإيقاع
 
-- Weekly Crypto WG sync (standing agenda item).
-- Monthly joint review with Platform Ops and Docs to confirm compliance posture.
-- Pre-release checkpoint: risk register freeze and attestation bundled with GA
-  artefacts.
+- مزامنة Crypto WG الأسبوعية (بند جدول الأعمال الدائم).
+- مراجعة شهرية مشتركة مع Platform Ops وDocs لتأكيد وضع الامتثال.
+- نقطة تفتيش ما قبل الإصدار: تجميد سجل المخاطر والشهادة المجمعة مع GA
+  التحف.
 
-## Sign-off
+## تسجيل الخروج
 
-| Role | Representative | Date | Notes |
-|------|----------------|------|-------|
-| Crypto WG Lead | (signature on file) | 2025-03-12 | Approved for publication and shared with WG backlog. |
-| Core Platform Lead | (signature on file) | 2025-03-12 | Accepted mitigations and monitoring cadence. |
+| الدور | ممثل | التاريخ | ملاحظات |
+|------|----------------|------|------|
+| قائد مجموعة عمل التشفير | (التوقيع في الملف) | 2025-03-12 | تمت الموافقة على النشر ومشاركتها مع مجموعة العمل المتراكمة. |
+| قائد المنصة الأساسية | (التوقيع في الملف) | 2025-03-12 | عمليات التخفيف المقبولة وإيقاع المراقبة. |
 
-For historic approvals and meeting minutes, see `docs/source/crypto/sm_program.md`
-(`Communication Plan`) and the SM agenda archive linked from the Crypto WG
-workspace.
+للحصول على الموافقات التاريخية ومحاضر الاجتماعات، راجع `docs/source/crypto/sm_program.md`
+(`Communication Plan`) وأرشيف جدول أعمال SM المرتبط من Crypto WG
+مساحة العمل.

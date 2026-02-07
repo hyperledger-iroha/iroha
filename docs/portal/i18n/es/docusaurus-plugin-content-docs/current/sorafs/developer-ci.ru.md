@@ -4,25 +4,27 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: Рецепты CI для SoraFS
-sidebar_label: Рецепты CI
-description: Запускайте CLI SoraFS в пайплайнах GitHub и GitLab с бесключевой подписью.
+ID: desarrollador-ci
+título: Рецепты CI для SoraFS
+sidebar_label: Representantes CI
+descripción: Introduzca CLI SoraFS en el navegador GitHub y GitLab con un soporte gratuito.
 ---
 
-:::note Канонический источник
+:::nota Канонический источник
 :::
 
 # Рецепты CI
 
-Пайплайны SoraFS выигрывают от детерминированного chunking, подписи manifest и проверки proofs.
-Поверхность команд `sorafs_cli` делает эти шаги переносимыми между CI провайдерами. Эта страница
-подчеркивает канонические рецепты и указывает на готовые к использованию шаблоны.
+Los mensajes SoraFS incluyen fragmentos determinados, pruebas de manifiesto y pruebas.
+El comando `sorafs_cli` elimina estos datos permanentes de la configuración CI. Esta página
+подчеркивает канонические рецепты у указывает на готовые к использованию шаблоны.
 
-## GitHub Actions (keyless)
+## Acciones de GitHub (sin clave)
 
 ```yaml
 name: sorafs-artifacts
@@ -95,10 +97,10 @@ jobs:
           path: artifacts/
 ```
 
-Ключевые моменты:
+Momentos clave:
 
-- Статические ключи подписи не хранятся; токены OIDC запрашиваются по требованию.
-- Артефакты (CAR, manifest, bundle, сводки proofs) загружаются для ревью.
+- Статические ключи подписи не хранятся; Los tokens OIDC se han eliminado por tres veces.
+- Артефакты (CAR, manifiesto, paquete, pruebas de сводки) загружаются для ревью.
 - Job повторно использует те же схемы Norito, что и в продакшен-роллаутах.
 
 ## GitLab CI
@@ -135,12 +137,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Подготовьте `SIGSTORE_ID_TOKEN` через workload identity federation GitLab или sealed secret до запуска стадии publish.
-- Сбой любого шага CLI останавливает pipeline, сохраняя согласованные артефакты.
+- Puede publicar `SIGSTORE_ID_TOKEN` en la federación de identidad de carga de trabajo GitLab o en un secreto sellado para publicar estaciones de trabajo.
+- Сбой любого шага CLI останавливает pipe, сохраняя согласованные артефакты.
 
-## Дополнительные ресурсы
+## Recursos adicionales
 
-- End-to-end шаблоны (включают Bash helpers, конфигурацию федеративной идентичности и шаги очистки): `docs/examples/sorafs_ci.md`
-- Справочник CLI, покрывающий все опции: `docs/source/sorafs_cli.md`
-- Требования governance/alias перед отправкой:
+- шаблоны de un extremo a otro (включают Bash helpers, конфигурацию федеративной идентичности и шаги очистки): `docs/examples/sorafs_ci.md`
+- Pantalla CLI, lista de opciones: `docs/source/sorafs_cli.md`
+- Требования gobernanza/alias перед отправкой:
   `docs/source/sorafs/provider_admission_policy.md`

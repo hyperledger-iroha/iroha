@@ -4,46 +4,48 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w2/plan.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-plan
-title: Plan d'intake communautaire W2
-sidebar_label: Plan W2
-description: Intake, approbations et checklist de preuve pour la cohorte preview communautaire.
+id: プレビュー-フィードバック-w2-plan
+タイトル: 摂取計画 W2
+サイドバーラベル: プラン W2
+説明: 摂取、承認、および事前準備のチェックリスト プレビュー コミュナウテール。
 ---
 
-| Element | Details |
+|要素 |詳細 |
 | --- | --- |
-| Vague | W2 - Reviewers communautaires |
-| Fenetre cible | Q3 2025 semaine 1 (tentatif) |
-| Tag d'artefact (planifie) | `preview-2025-06-15` |
-| Issue tracker | `DOCS-SORA-Preview-W2` |
+|あいまい | W2 - 査読者コミュニティ |
+|フェネトレ・シブル | 2025 年第 3 四半期 セメイン 1 (テンタティフ) |
+|タグダルティファクト (planifie) | `preview-2025-06-15` |
+|問題追跡ツール | `DOCS-SORA-Preview-W2` |
 
-## Objectifs
+## 目的
 
-1. Definir les criteres d'intake communautaire et le workflow de vetting.
-2. Obtenir l'approbation governance pour le roster propose et l'addendum d'usage acceptable.
-3. Rafraichir l'artefact preview verifie par checksum et le bundle de telemetrie pour la nouvelle fenetre.
-4. Preparer le proxy Try it et les dashboards avant l'envoi des invitations.
+1. 受け入れコミュニケーションと審査のワークフローの基準を定義します。
+2. 名簿の承認ガバナンスおよび承認可能な使用法に関する追加事項を取得します。
+3. アーティファクト プレビューは、チェックサムとテレメトリーのバンドルを検証し、新しいフェネトルを生成します。
+4. プロキシを準備して、招待状の前にダッシュボードなどを試してみてください。
 
-## Decoupage des taches
+## デコパージュ デ タッシュ
 
-| ID | Tache | Responsable | Echeance | Statut | Notes |
+| ID |タチェ |責任者 |エシャンス |法令 |メモ |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Rediger les criteres d'intake communautaire (eligibilite, max slots, exigences CoC) et les diffuser a governance | Docs/DevRel lead | 2025-05-15 | Termine | La politique d'intake a ete mergee dans `DOCS-SORA-Preview-W2` et endossee lors de la reunion du conseil 2025-05-20. |
-| W2-P2 | Mettre a jour le template de demande avec des questions communautaires (motivation, disponibilite, besoins de localisation) | Docs-core-01 | 2025-05-18 | Termine | `docs/examples/docs_preview_request_template.md` inclut maintenant la section Community, referencee dans le formulaire intake. |
-| W2-P3 | Obtenir l'approbation governance pour le plan intake (vote en reunion + minutes enregistrees) | Governance liaison | 2025-05-22 | Termine | Vote adopte a l'unanimite le 2025-05-20; minutes + roll call lies dans `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Planifier le staging du proxy Try it + capture telemetrie pour la fenetre W2 (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | Termine | Ticket de changement `OPS-TRYIT-188` approuve et execute 2025-06-09 02:00-04:00 UTC; screenshots Grafana archives avec le ticket. |
-| W2-P5 | Construire/verifier le nouveau tag d'artefact preview (`preview-2025-06-15`) et archiver descriptor/checksum/probe logs | Portal TL | 2025-06-07 | Termine | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` execute 2025-06-10; outputs stockes sous `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Assembler le roster d'invitations communautaires (<=25 reviewers, lots echelonn es) avec les contacts approuves par governance | Community manager | 2025-06-10 | Termine | Premiere cohorte de 8 reviewers communautaires approuvee; IDs de requete `DOCS-SORA-Preview-REQ-C01...C08` logges dans le tracker. |
+| W2-P1 |コミュニティの受け入れ基準 (適格性、最大スロット、要件 CoC) とガバナンスを拡散するためのガイドラインを作成する |ドキュメント/DevRel リード | 2025-05-15 |ターミナル | La politique d'intake a ete mergee dans `DOCS-SORA-Preview-W2` et endossee lors de la Congress du conseil 2025-05-20. |
+| W2-P2 |質問に関するコミュニケーション (モチベーション、ディスポニビライト、ローカリゼーションの必要性) |ドキュメントコア-01 | 2025-05-18 |ターミナル | `docs/examples/docs_preview_request_template.md` には、コミュニティのセクションのメンテナンス、公式の参照が含まれます。 |
+| W2-P3 |計画の承認を得るガバナンスを取得する (同窓会で投票 + 登録議事録) |ガバナンス連絡窓口 | 2025-05-22 |ターミナル | 2025 年 5 月 20 日、全員一致で採択するよう投票する。分 + 点呼は `DOCS-SORA-Preview-W2` によって決まります。 |
+| W2-P4 | Planifier le staging du proxy お試しください + ラ フェネートル W2 によるテレメトリのキャプチャ (`preview-2025-06-15`) |ドキュメント/DevRel + オペレーション | 2025-06-05 |ターミナル |チケット変更 `OPS-TRYIT-188` 承認および実行 2025-06-09 02:00-04:00 UTC;スクリーンショット Grafana アーカイブの平均チケット。 |
+| W2-P5 |新しいタグのアーティファクト プレビュー (`preview-2025-06-15`) およびアーカイバ記述子/チェックサム/プローブ ログの構築/検証者 |ポータルTL | 2025-06-07 |ターミナル | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` 2025-06-10 を実行します。出力は在庫数 `artifacts/docs_preview/W2/preview-2025-06-15/` です。 |
+| W2-P6 |コミュニティへの招待者名簿の作成者 (<= 25 人のレビュー担当者、多数の階層) の連絡先がガバナンスに基づいて承認されています。コミュニティマネージャー | 2025-06-10 |ターミナル | 8 人のレビュー担当者のプレミア共同体が承認します。トラッカーの要求 ID `DOCS-SORA-Preview-REQ-C01...C08` ログ。 |
 
-## Checklist de preuve
+## 事前チェックリスト
 
-- [x] Enregistrement d'approbation governance (notes de reunion + lien de vote) attache a `DOCS-SORA-Preview-W2`.
-- [x] Template de demande mis a jour commite sous `docs/examples/`.
-- [x] Descriptor `preview-2025-06-15`, log checksum, probe output, link report et transcript proxy Try it stockes sous `artifacts/docs_preview/W2/`.
-- [x] Screenshots Grafana (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) captures pour la fenetre preflight W2.
-- [x] Tableau roster d'invitations avec IDs reviewers, tickets de demande et timestamps d'approbation remplis avant l'envoi (voir section W2 du tracker).
+- [x] 承認ガバナンスの登録 (再会のメモ + 投票の先取特権) `DOCS-SORA-Preview-W2` を添付します。
+- [x] `docs/examples/` のような、定期的な委員会に対する要求のテンプレート。
+- [x] 記述子 `preview-2025-06-15`、ログ チェックサム、プローブ出力、リンク レポートおよびトランスクリプト プロキシ `artifacts/docs_preview/W2/` をストックしてみます。
+- [x] スクリーンショット Grafana (`docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals`) は、ラ フェネトルのプリフライト W2 をキャプチャします。
+- [x] Tableau 名簿の招待状、アベック ID レビュー担当者、チケット要求およびタイムスタンプ、承認の確認 (セクション W2 デュ トラッカー)。
 
-Garder ce plan a jour; le tracker le reference pour que le roadmap DOCS-SORA voie exactement ce qu'il reste avant l'envoi des invitations W2.
+Garder ce は 1 時間の計画を立てます。トラッカーは、ロードマップ DOCS-SORA を参照して、W2 の招待状を事前に確認してください。

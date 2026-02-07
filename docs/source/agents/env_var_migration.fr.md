@@ -6,96 +6,94 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c9ce6010594e495116c1397b984000d1ee5d45d064294eca046f8dc762fa73b6
 source_last_modified: "2026-01-04T10:50:53.607349+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Env → Config Migration Tracker
+# Env → Suivi des migrations de configuration
 
-This tracker summarizes production-facing environment-variable toggles surfaced
-by `docs/source/agents/env_var_inventory.{json,md}` and the intended migration
-path into `iroha_config` (or explicit dev/test-only scoping).
+Ce tracker résume les bascules de variables d'environnement liées à la production qui ont fait surface
+par `docs/source/agents/env_var_inventory.{json,md}` et la migration prévue
+chemin vers `iroha_config` (ou portée explicite de développement/test uniquement).
 
 
-Note: `ci/check_env_config_surface.sh` now fails when new **production** env
-shims appear relative to `AGENTS_BASE_REF` unless `ENV_CONFIG_GUARD_ALLOW=1` is
-set; document intentional additions here before using the override.
+Remarque : `ci/check_env_config_surface.sh` échoue désormais lorsqu'un nouvel environnement de **production**
+les cales apparaissent par rapport à `AGENTS_BASE_REF` sauf si `ENV_CONFIG_GUARD_ALLOW=1` est
+ensemble; documentez ici les ajouts intentionnels avant d’utiliser le remplacement.
 
-## Completed migrations
-
-- **IVM ABI opt-out** — Removed `IVM_ALLOW_NON_V1_ABI`; the compiler now rejects
-  non-v1 ABIs unconditionally with a unit test guarding the error path.
-- **IVM debug banner env shim** — Dropped the `IVM_SUPPRESS_BANNER` env opt-out;
-  banner suppression remains available via the programmatic setter.
-- **IVM cache/sizing** — Threaded cache/prover/GPU sizing through
+## Migrations terminées- **IVM Désactivation ABI** — `IVM_ALLOW_NON_V1_ABI` supprimé ; le compilateur rejette maintenant
+  ABI non v1 sans condition avec un test unitaire gardant le chemin d'erreur.
+- **Calme d'environnement de bannière de débogage IVM** — Suppression de la désactivation de l'environnement `IVM_SUPPRESS_BANNER` ;
+  la suppression des bannières reste disponible via le programme de configuration programmatique.
+- **Cache/dimensionnement IVM** — Dimensionnement du cache/prover/GPU threadé via
   `iroha_config` (`pipeline.{cache_size,ivm_cache_max_decoded_ops,ivm_cache_max_bytes,ivm_prover_threads}`,
-  `accel.max_gpus`) and removed runtime env shims. Hosts now call
-  `ivm::ivm_cache::configure_limits` and `ivm::zk::set_prover_threads`, tests use
-  `CacheLimitsGuard` instead of env overrides.
-- **Connect queue root** — Added `connect.queue.root` (default:
-  `~/.iroha/connect`) to the client config and threaded it through the CLI and
-  JS diagnostics. JS helpers resolve the config (or an explicit `rootDir`) and
-  only honour `IROHA_CONNECT_QUEUE_ROOT` in dev/test via `allowEnvOverride`;
-  templates document the knob so operators no longer need env overrides.
-- **Izanami network opt-in** — Added an explicit `allow_net` CLI/config flag for
-  the Izanami chaos tool; runs now require `allow_net=true`/`--allow-net` and
-- **IVM banner beep** — Replaced the `IROHA_BEEP` env shim with config-driven
-  `ivm.banner.{show,beep}` toggles (default: true/true). Startup banner/beep
-  wiring now reads configuration only in production; dev/test builds still honour
-  the env override for manual toggles.
-- **DA spool override (tests only)** — The `IROHA_DA_SPOOL_DIR` override is now
-  fenced behind `cfg(test)` helpers; production code always sources the spool
-  path from configuration.
-- **Crypto intrinsics** — Replaced `IROHA_DISABLE_SM_INTRINSICS` /
-  `IROHA_ENABLE_SM_INTRINSICS` with the config-driven
-  `crypto.sm_intrinsics` policy (`auto`/`force-enable`/`force-disable`) and
-  removed the `IROHA_SM_OPENSSL_PREVIEW` guard. Hosts apply the policy at
-  startup, benches/tests may opt in via `CRYPTO_SM_INTRINSICS`, and the OpenSSL
-  preview now respects only the config flag.
-  Izanami already requires `--allow-net`/persisted config, and tests now rely on
-  that knob rather than ambient env toggles.
-- **FastPQ GPU tuning** — Added `fastpq.metal.{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum,metal_debug_fused}`
-  config knobs (defaults: `None`/`None`/`false`/`false`/`false`) and thread them through CLI parsing
-  `FASTPQ_METAL_*` / `FASTPQ_DEBUG_*` shims now behave as dev/test fallbacks and
-  are ignored once configuration loads (even when the config leaves them unset); docs/inventory were
-  refreshed to flag the migration.【crates/irohad/src/main.rs:2609】【crates/iroha_core/src/fastpq/lane.rs:109】【crates/fastpq_prover/src/overrides.rs:11】
+  `accel.max_gpus`) et suppression des cales d'environnement d'exécution. Les hôtes appellent maintenant
+  `ivm::ivm_cache::configure_limits` et `ivm::zk::set_prover_threads`, utilisation des tests
+  `CacheLimitsGuard` au lieu des remplacements d'environnement.
+- **Connecter la racine de la file d'attente** — Ajout de `connect.queue.root` (par défaut :
+  `~/.iroha/connect`) à la configuration client et l'a transmis via la CLI et
+  Diagnostic JS. Les assistants JS résolvent la configuration (ou un `rootDir` explicite) et
+  Honorez uniquement `IROHA_CONNECT_QUEUE_ROOT` en développement/test via `allowEnvOverride` ;
+  les modèles documentent le bouton afin que les opérateurs n'aient plus besoin de remplacements d'environnement.
+- **Izanami opt-in réseau** — Ajout d'un indicateur CLI/config `allow_net` explicite pour
+  l'outil de chaos Izanami ; les exécutions nécessitent désormais `allow_net=true`/`--allow-net` et
+- **Bip de bannière IVM** — Remplacement de la cale d'environnement `IROHA_BEEP` par une configuration pilotée
+  `ivm.banner.{show,beep}` bascule (par défaut : vrai/vrai). Bannière/bip de démarrage
+  le câblage lit désormais la configuration uniquement en production ; les versions de développement/test honorent toujours
+  le remplacement d'environnement pour les bascules manuelles.
+- **Remplacement du spool DA (tests uniquement)** — Le remplacement `IROHA_DA_SPOOL_DIR` est désormais
+  clôturé derrière les aides `cfg(test)` ; le code de production s'approvisionne toujours en bobine
+  chemin de la configuration.
+- **Intrinsèques de la crypto** — Remplacement de `IROHA_DISABLE_SM_INTRINSICS` /
+  `IROHA_ENABLE_SM_INTRINSICS` avec la configuration
+  Politique `crypto.sm_intrinsics` (`auto`/`force-enable`/`force-disable`) et
+  retiré la garde `IROHA_SM_OPENSSL_PREVIEW`. Les hôtes appliquent la politique à
+  démarrage, les bancs/tests peuvent s'inscrire via `CRYPTO_SM_INTRINSICS` et OpenSSL
+  l'aperçu ne respecte désormais que l'indicateur de configuration.
+  Izanami nécessite déjà `--allow-net`/configuration persistante, et les tests reposent désormais sur
+  ce bouton plutôt que les bascules d'environnement ambiant.
+- **Réglage GPU FastPQ** — Ajout de `fastpq.metal.{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum,metal_debug_fused}`
+  boutons de configuration (par défaut : `None`/`None`/`false`/`false`/`false`) et les transmettre via l'analyse CLI
+  Les cales `FASTPQ_METAL_*` / `FASTPQ_DEBUG_*` se comportent désormais comme des solutions de secours de développement/test et
+  sont ignorés une fois la configuration chargée (même lorsque la configuration les laisse non définis) ; les documents/inventaires étaient
+  actualisé pour signaler la migration.【crates/irohad/src/main.rs:2609】【crates/iroha_core/src/fastpq/lane.rs:109】【crates/fastpq_prover/src/overrides.rs:11】
   (`IVM_DECODE_TRACE`, `IVM_DEBUG_WSV`, `IVM_DEBUG_COMPACT`, `IVM_DEBUG_INVALID`,
   `IVM_DEBUG_REGALLOC`, `IVM_DEBUG_METAL_ENUM`, `IVM_DEBUG_METAL_SELFTEST`,
   `IVM_FORCE_METAL_ENUM`, `IVM_FORCE_METAL_SELFTEST_FAIL`, `IVM_FORCE_CUDA_SELFTEST_FAIL`,
-  `IVM_DISABLE_METAL`, `IVM_DISABLE_CUDA`) are now gated behind debug/test builds via a shared
-  helper so production binaries ignore them while preserving the knobs for local diagnostics. Env
-  inventory was regenerated to reflect the dev/test-only scope.
-- **FASTPQ fixture updates** — `FASTPQ_UPDATE_FIXTURES` now appears only in FASTPQ integration
-  tests; production sources no longer read the env toggle and the inventory reflects the test-only
-  scope.
-- **Inventory refresh + scope detection** — The env inventory tooling now tags `build.rs` files as
-  build scope and tracks `#[cfg(test)]`/integration harness modules so test-only toggles (e.g.,
-  `IROHA_TEST_*`, `IROHA_RUN_IGNORED`) and CUDA build flags show up outside the production count.
-  Inventory regenerated Dec 07, 2025 (518 refs / 144 vars) to keep the env-config guard diff green.
-- **P2P topology env shim release guard** — `IROHA_P2P_TOPOLOGY_UPDATE_MS` now triggers a deterministic
-  startup error in release builds (warn-only in debug/test) so production nodes rely solely on
-  `network.peer_gossip_period_ms`. The env inventory was regenerated to reflect the guard and the
-  updated classifier now scopes `cfg!`-guarded toggles as debug/test.
+  `IVM_DISABLE_METAL`, `IVM_DISABLE_CUDA`) sont désormais protégés derrière les versions de débogage/test via un partage
+  helper afin que les binaires de production les ignorent tout en préservant les boutons pour les diagnostics locaux. Env.
+  l'inventaire a été régénéré pour refléter la portée de développement/test uniquement.- **Mises à jour des appareils FASTPQ** — `FASTPQ_UPDATE_FIXTURES` apparaît désormais uniquement dans l'intégration FASTPQ
+  tests; les sources de production ne lisent plus la bascule d'environnement et l'inventaire reflète uniquement le test
+  portée.
+- **Actualisation de l'inventaire + détection de la portée** — Les outils d'inventaire env marquent désormais les fichiers `build.rs` comme
+  construire la portée et suivre les modules de faisceau `#[cfg(test)]`/intégration afin de basculer uniquement en test (par exemple,
+  `IROHA_TEST_*`, `IROHA_RUN_IGNORED`) et les indicateurs de build CUDA apparaissent en dehors du décompte de production.
+  Inventaire régénéré le 7 décembre 2025 (518 références / 144 variables) pour garder le diff de garde env-config vert.
+- **Protection de libération de cale d'environnement de topologie P2P** — `IROHA_P2P_TOPOLOGY_UPDATE_MS` déclenche désormais un
+  erreur de démarrage dans les versions de version (avertissement uniquement dans le débogage/test) afin que les nœuds de production s'appuient uniquement sur
+  `network.peer_gossip_period_ms`. L'inventaire env a été régénéré pour refléter le garde et le
+  le classificateur mis à jour étend désormais les bascules protégées par `cfg!` en tant que débogage/test.
 
-## High-priority migrations (production paths)
+## Migrations hautement prioritaires (chemins de production)
 
-- _None (inventory refreshed with cfg!/debug detection; env-config guard green after P2P shim hardening)._
+- _Aucun (inventaire actualisé avec détection cfg!/debug ; vert de garde env-config après le durcissement de la cale P2P)._
 
-## Dev/test-only toggles to fence
+## Dév/test uniquement bascule vers fence
 
-- Current sweep (Dec 07, 2025): build-only CUDA flags (`IVM_CUDA_*`) are scoped as `build` and the
-  harness toggles (`IROHA_TEST_*`, `IROHA_RUN_IGNORED`, `IROHA_SKIP_BIND_CHECKS`) now register as
-  `test`/`debug` in the inventory (including `cfg!`-guarded shims). No additional fencing is required;
-  keep future additions behind `cfg(test)`/bench-only helpers with TODO markers when shims are temporary.
+- Balayage actuel (7 décembre 2025) : les indicateurs CUDA de construction uniquement (`IVM_CUDA_*`) sont définis comme `build` et le
+  les bascules de harnais (`IROHA_TEST_*`, `IROHA_RUN_IGNORED`, `IROHA_SKIP_BIND_CHECKS`) s'enregistrent désormais en tant que
+  `test`/`debug` en inventaire (y compris cales protégées `cfg!`). Aucune clôture supplémentaire n'est requise ;
+  conservez les ajouts futurs derrière les aides `cfg(test)`/banc uniquement avec les marqueurs TODO lorsque les cales sont temporaires.
 
-## Build-time envs (leave as-is)
+## Environnements au moment de la construction (laisser tels quels)
 
-- Cargo/feature envs (`CARGO_*`, `OUT_DIR`, `DOCS_RS`, `PROFILE`, `CUDA_HOME`,
-  `CUDA_PATH`, `JSONSTAGE1_CUDA_ARCH`, `FASTPQ_SKIP_GPU_BUILD`, etc.) remain
-  build-script concerns and are out-of-scope for runtime config migration.
+- Environnements cargo/fonctionnalité (`CARGO_*`, `OUT_DIR`, `DOCS_RS`, `PROFILE`, `CUDA_HOME`,
+  `CUDA_PATH`, `JSONSTAGE1_CUDA_ARCH`, `FASTPQ_SKIP_GPU_BUILD`, etc.) restent
+  problèmes de script de construction et sont hors de portée pour la migration de la configuration d'exécution.
 
-## Next actions
+## Actions suivantes
 
-1) Run `make check-env-config-surface` after config-surface updates to catch new production env shims
-   early and assign subsystem owners/ETAs.  
-2) Refresh the inventory (`make check-env-config-surface`) after each sweep so
-   the tracker stays aligned with new guardrails and the env-config guard diff stays noise-free.
+1) Exécutez `make check-env-config-surface` après les mises à jour de la surface de configuration pour détecter les nouvelles cales d'environnement de production
+   tôt et attribuer des propriétaires de sous-systèmes/ETA.  
+2) Actualisez l'inventaire (`make check-env-config-surface`) après chaque balayage afin
+   le tracker reste aligné avec les nouveaux garde-corps et le diff de garde env-config reste sans bruit.

@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Getting Started
+# Norito Жұмысты бастау
 
-This quick guide shows the minimal workflow for compiling a Kotodama contract,
-inspecting the generated Norito bytecode, running it locally, and deploying it
-to an Iroha node.
+Бұл жылдам нұсқаулық Kotodama келісімшартын құрастыру үшін ең аз жұмыс процесін көрсетеді,
+жасалған Norito байт кодын тексеру, оны жергілікті іске қосу және оны орналастыру
+Iroha түйініне.
 
-## Prerequisites
+## Алғышарттар
 
-1. Install the Rust toolchain (1.76 or newer) and check out this repository.
-2. Build or download the supporting binaries:
-   - `koto_compile` – Kotodama compiler that emits IVM/Norito bytecode
-   - `ivm_run` and `ivm_tool` – local execution and inspection utilities
-   - `iroha_cli` – used for contract deployment via Torii
+1. Rust құралдар тізбегін (1.76 немесе одан жаңа) орнатыңыз және осы репозиторийді тексеріңіз.
+2. Қолдау көрсететін екілік файлдарды құрастырыңыз немесе жүктеңіз:
+   - `koto_compile` – Kotodama компиляторы, IVM/Norito байт кодын шығаратын
+   - `ivm_run` және `ivm_tool` – жергілікті орындау және тексеру утилиталары
+   - `iroha_cli` – Torii арқылы келісім-шартты орналастыру үшін пайдаланылады
 
-   The repository Makefile expects these binaries on `PATH`. You can either
-   download prebuilt artifacts or build them from source. If you compile the
-   toolchain locally, point the Makefile helpers at the binaries:
+   Makefile репозиторийі бұл екілік файлдарды `PATH` жүйесінде күтеді. Сіз де аласыз
+   алдын ала құрастырылған артефактілерді жүктеп алыңыз немесе оларды көзден жасаңыз. Егер сіз құрастырсаңыз
+   жергілікті құралдар тізбегі үшін Makefile көмекшілерін екілік файлдарға бағыттаңыз:
 
    ```sh
    KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
    ```
 
-3. Ensure an Iroha node is running when you reach the deployment step. The
-   examples below assume Torii is reachable at the URL configured in your
-   `iroha_cli` profile (`~/.config/iroha/cli.toml`).
+3. Орналастыру қадамына жеткенде Iroha түйінінің жұмыс істеп тұрғанына көз жеткізіңіз. The
+   Төмендегі мысалдар Torii мекенжайында конфигурацияланған URL мекенжайында қол жеткізуге болады деп болжайды.
+   `iroha_cli` профилі (`~/.config/iroha/cli.toml`).
 
-## 1. Compile a Kotodama contract
+## 1. Kotodama келісімшартын құрастырыңыз
 
-The repository ships a minimal “hello world” contract in
-`examples/hello/hello.ko`. Compile it to Norito/IVM bytecode (`.to`):
+Репозиторий ең аз «сәлем әлем» келісімшартын жібереді
+`examples/hello/hello.ko`. Оны Norito/IVM байт кодына (`.to`) құрастырыңыз:
 
 ```sh
 mkdir -p target/examples
@@ -45,42 +47,42 @@ koto_compile examples/hello/hello.ko \
   -o target/examples/hello.to
 ```
 
-Key flags:
+Негізгі жалаушалар:
 
-- `--abi 1` locks the contract to ABI version 1 (the only supported version at
-  the time of writing).
-- `--max-cycles 0` requests unbounded execution; set a positive number to bound
-  cycle padding for zero-knowledge proofs.
+- `--abi 1` келісім-шартты ABI 1 нұсқасына құлыптайды (жалғыз қолдау көрсетілетін нұсқа:
+  жазу уақыты).
+- `--max-cycles 0` шектеусіз орындауды сұрайды; шектелетін оң санды орнатыңыз
+  нөлдік білім дәлелдемелері үшін цикл толтыру.
 
-## 2. Inspect the Norito artifact (optional)
+## 2. Norito артефактін тексеріңіз (қосымша)
 
-Use `ivm_tool` to verify the header and embedded metadata:
+Тақырыпты және ендірілген метадеректерді тексеру үшін `ivm_tool` пайдаланыңыз:
 
 ```sh
 ivm_tool inspect target/examples/hello.to
 ```
 
-You should see the ABI version, enabled feature flags, and the exported entry
-points. This is a quick sanity check before deployment.
+ABI нұсқасын, қосылған мүмкіндік жалауларын және экспортталған жазбаны көруіңіз керек
+ұпай. Бұл орналастыру алдында жылдам сауатты тексеру.
 
-## 3. Run the contract locally
+## 3. Келісімшартты жергілікті түрде орындаңыз
 
-Execute the bytecode with `ivm_run` to confirm behaviour without touching a
-node:
+Тәртіпті ұстамай растау үшін `ivm_run` арқылы байт кодты орындаңыз.
+түйін:
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-The `hello` example logs a greeting and issues a `SET_ACCOUNT_DETAIL` syscall.
-Running locally is useful while iterating on contract logic before publishing
-it on-chain.
+`hello` мысалы сәлемдесу журналын жазады және `SET_ACCOUNT_DETAIL` жүйелік шақыруын шығарады.
+Жариялау алдында келісім логикасы бойынша қайталау кезінде жергілікті түрде іске қосу пайдалы
+ол тізбекте.
 
-## 4. Deploy via `iroha_cli`
+## 4. `iroha_cli` арқылы орналастыру
 
-When you are satisfied with the contract, deploy it to a node using the CLI.
-Provide an authority account, its signing key, and either a `.to` file or
-Base64 payload:
+Келісімшартқа қанағаттанған кезде, оны CLI арқылы түйінге орналастырыңыз.
+Авторлық есептік жазбаны, оның қол қою кілтін және `.to` файлын немесе
+Base64 пайдалы жүктемесі:
 
 ```sh
 iroha_cli app contracts deploy \
@@ -89,37 +91,37 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-The command submits a Norito manifest + bytecode bundle over Torii and prints
-the resulting transaction status. Once the transaction is committed, the code
-hash shown in the response can be used to retrieve manifests or list instances:
+Пәрмен Norito манифест + байт код бумасын Torii арқылы жібереді және басып шығарады
+алынған транзакция күйі. Транзакция жасалғаннан кейін код
+Жауапта көрсетілген хэш манифесттерді немесе тізім даналарын алу үшін пайдаланылуы мүмкін:
 
 ```sh
 iroha_cli app contracts manifest get --code-hash 0x<hash>
 iroha_cli app contracts instances --namespace apps --table
 ```
 
-## 5. Run against Torii
+## 5. Torii қарсы орындаңыз
 
-With the bytecode registered, you can invoke it by submitting an instruction
-that references the stored code (e.g., through `iroha_cli ledger transaction submit`
-or your application client). Ensure the account permissions allow the desired
-syscalls (`set_account_detail`, `transfer_asset`, etc.).
+Тіркелген байт кодымен нұсқаулықты жіберу арқылы оны шақыруға болады
+ол сақталған кодқа сілтеме жасайды (мысалы, `iroha_cli ledger transaction submit` арқылы
+немесе қолданба клиенті). Тіркелгі рұқсаттары қалағаныңызға мүмкіндік беретініне көз жеткізіңіз
+жүйе қоңыраулары (`set_account_detail`, `transfer_asset`, т.б.).
 
-## Tips & troubleshooting
+## Кеңестер және ақауларды жою
 
-- Use `make examples-run` to compile and execute the provided examples in one
-  shot. Override `KOTO`/`IVM` environment variables if the binaries are not on
+- Берілген мысалдарды құрастыру және орындау үшін `make examples-run` пайдаланыңыз.
+  ату. Екілік файлдар қосулы болмаса, `KOTO`/`IVM` ортасының айнымалы мәндерін қайта анықтау
   `PATH`.
-- If `koto_compile` rejects the ABI version, verify that the compiler and node
-  both target ABI v1 (run `koto_compile --abi` without arguments to list
-  support).
-- The CLI accepts either hex or Base64 signing keys. For testing, you can use
-  keys emitted by `iroha_cli tools crypto keypair`.
-- When debugging Norito payloads, the `ivm_tool disassemble` subcommand helps
-  correlate instructions with Kotodama source.
+- `koto_compile` ABI нұсқасын қабылдамаса, компилятор мен түйін
+  екеуі де мақсатты ABI v1 (тізімде аргументсіз `koto_compile --abi` іске қосыңыз
+  қолдау).
+- CLI он алтылық немесе Base64 қол қою кілттерін қабылдайды. Тестілеу үшін пайдалануға болады
+  `iroha_cli tools crypto keypair` шығаратын кілттер.
+- Norito пайдалы жүктемелерін жөндеу кезінде `ivm_tool disassemble` ішкі пәрмені көмектеседі
+  нұсқауларды Kotodama көзімен салыстырыңыз.
 
-This flow mirrors the steps used in CI and the integration tests. For a deeper
-dive into Kotodama grammar, syscall mappings, and Norito internals, see:
+Бұл ағын CI және интеграция сынақтарында қолданылатын қадамдарды көрсетеді. Тереңірек үшін
+Kotodama грамматикасына, жүйенің салыстыруларына және Norito ішкі бөліктеріне еніңіз, қараңыз:
 
 - `docs/source/kotodama_grammar.md`
 - `docs/source/kotodama_examples.md`

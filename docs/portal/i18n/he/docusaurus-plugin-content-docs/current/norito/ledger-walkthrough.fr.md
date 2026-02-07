@@ -4,35 +4,37 @@ direction: rtl
 source: docs/portal/docs/norito/ledger-walkthrough.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Parcours du registre
-description: Reproduisez un flux deterministe register -> mint -> transfer avec le CLI `iroha` et verifiez l'etat du ledger resultant.
+כותרת: Parcours du registre
+תיאור: Reproduisez un flux deterministe register -> מנטה -> העברה עם CLI `iroha` ואימות תוצאות החשבונות.
 slug: /norito/ledger-walkthrough
 ---
 
-Ce parcours complete le [quickstart Norito](./quickstart.md) en montrant comment modifier et inspecter l'etat du ledger avec le CLI `iroha`. Vous enregistrerez une nouvelle definition d'actif, minterez des unites sur le compte operateur par defaut, transfererez une partie du solde vers un autre compte et verifierez les transactions et avoirs resultants. Chaque etape reflete les flux couverts par les quickstarts SDK Rust/Python/JavaScript afin de confirmer la parite entre le CLI et le comportement des SDK.
+Ce parcours complete le [Quickstart Norito](./quickstart.md) en montrant comment modifier et inspecter l'etat du Ledger avec le CLI `iroha`. Vous enregistrerez une nouvelle definition d'actif, minterez des unites sur le compte operationur par defaut, transfererez une partie du solde vers un autre compte et verifierez les transactions and avoirs resultants. Chaque etape reflete les flux couverts par les quickstarts SDK Rust/Python/JavaScript efin de confirmer la parite entre le CLI et le comportement des SDK.
 
-## Prerequis
+## תנאי מוקדם
 
-- Suivez le [quickstart](./quickstart.md) pour demarrer le reseau mono-pair via
+- Suivez le [Quickstart](./quickstart.md) pour demarrer le reseau mono-pair via
   `docker compose -f defaults/docker-compose.single.yml up --build`.
 - Assurez-vous que `iroha` (le CLI) est construit ou telecharge et que vous pouvez
   joindre le peer avec `defaults/client.toml`.
-- Outils optionnels : `jq` (formatage des reponses JSON) et un shell POSIX pour les
-  snippets de variables d'environnement ci-dessous.
+- כולל אפשרויות אופציות: `jq` (פורמט של תגובות JSON) et un shell POSIX pour les
+  קטעי משתנים של הסביבה ci-dessous.
 
 Tout au long du guide, remplacez `$ADMIN_ACCOUNT` et `$RECEIVER_ACCOUNT` par les
-IDs de compte que vous comptez utiliser. Le bundle par defaut inclut deja deux comptes
-issus des cles de demo :
+תעודות זהות שמשמשות למשתמשים. Le bundle par defaut inclut deja deux comptes
+issus des cles demo :
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirmez les valeurs en listant les premiers comptes :
+אשרת את הבחירה ב-listant les premiers מתחרה:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
@@ -40,7 +42,7 @@ iroha --config defaults/client.toml account list all --limit 5 --table
 
 ## 1. Inspecter l'etat genesis
 
-Commencez par explorer le ledger cible par le CLI :
+התחלת לחקור את ה- Ledger Cible עבור CLI:
 
 ```sh
 # Domains enregistres en genesis
@@ -55,7 +57,7 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-Ces commandes reposent sur des reponses Norito, donc le filtrage et la pagination sont
+Ces commandes reposent sur des reponses Norito, donc le filtrage et la pagetion sont
  deterministes et correspondent a ce que recoivent les SDK.
 
 ## 2. Enregistrer une definition d'actif
@@ -68,13 +70,13 @@ iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-Le CLI affiche le hash de transaction soumis (par exemple, `0x5f...`). Conservez-le
+Le CLI affiche le hash de transaction soumis (לדוגמה, `0x5f...`). קונסרבז-לה
 pour consulter le statut plus tard.
 
 ## 3. Minter des unites sur le compte operateur
 
 Les quantites d'actifs vivent sous la paire `(asset definition, account)`. Mintez 250
-unites de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
+מאחד את `coffee#wonderland` ב-`$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -82,8 +84,8 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Encore une fois, recuperez le hash de transaction (`$MINT_HASH`) depuis la sortie du CLI. Pour
-verifier le solde, executez :
+הדרן une fois, recuperez le hash de transaction (`$MINT_HASH`) depuis la sortie du CLI. יוצקים
+מאמת le solde, executez:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
@@ -97,9 +99,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transferer une partie du solde vers un autre compte
+## 4. מעביר une partie du solde vers un autre compte
 
-Deplacez 50 unites du compte operateur vers `$RECEIVER_ACCOUNT` :
+Deplacez 50 מאחד את מפעילי החברה לעומת `$RECEIVER_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -109,7 +111,7 @@ iroha --config defaults/client.toml asset transfer \
 ```
 
 Sauvegardez le hash de transaction comme `$TRANSFER_HASH`. Interrogez les avoirs des deux comptes
-pour verifier les nouveaux soldes :
+pour Verifier Les Nouveaux Soldes:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -121,33 +123,31 @@ iroha --config defaults/client.toml asset list filter \
 
 ## 5. Verifier les preuves du ledger
 
-Utilisez les hashes sauvegardes pour confirmer que les deux transactions ont ete committees :
+Utilisez les hashes sauvegardes pour confirmer que les deux עסקאות על ועדות:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-Vous pouvez aussi streamer les blocs recents pour voir quel bloc a inclus le transfert :
+Vous pouvez aussi streamer les blocks האחרונים pour voir quel bloc a inclusive the transfert :
 
 ```sh
 # Stream depuis le dernier bloc et arretez apres ~5 secondes
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
-```
-
-Toutes les commandes ci-dessus utilisent les memes payloads Norito que les SDK. Si vous
+```Toutes les commandes ci-dessus utilisent les memes payloads Norito que les SDK. אני בטוח
 reproduisez ce flux via du code (voir les quickstarts SDK ci-dessous), les hashes et
-soldes seront alignes tant que vous ciblez le meme reseau et les memes defaults.
+Soldes Seront מיישר את ברירת המחדל של tant que vous ciblez le meme reseau et les memes.
 
 ## Liens de parite SDK
 
-- [Rust SDK quickstart](../sdks/rust) - montre l'enregistrement d'instructions,
-  la soumission de transactions et le polling de statut depuis Rust.
-- [Python SDK quickstart](../sdks/python) - montre les memes operations register/mint
-  avec des helpers JSON adosses a Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) - couvre les requetes Torii,
-  les helpers de gouvernance et les wrappers de requetes typees.
+- [התחלה מהירה של SDK של חלודה](../sdks/rust) - הוראות הרשמה לרישום,
+  la soumission de transaktions et le polling de statut depuis Rust.
+- [התחלה מהירה של Python SDK](../sdks/python) - montre les memes operation register/mint
+  avec des helpers JSON משתמש ב-Norito.
+- [התחלה מהירה של JavaScript SDK](../sdks/javascript) - couvre les requetes Torii,
+  les helpers de gouvernance et les wrappers de requetes typeses.
 
-Executez d'abord le walkthrough CLI, puis repetez le scenario avec votre SDK
+בצע את ההליכה של CLI, תרחיש חוזר עם ה-SDK
 prefere pour vous assurer que les deux surfaces s'accordent sur les hashes de
-transactions, les soldes et les resultats de requetes.
+עסקאות, les soldes et les resultats de requetes.

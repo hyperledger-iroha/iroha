@@ -7,49 +7,50 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c389a2121f577bcf8893a0d5c0b898ec2ff5330f2f1727de3387da98f8369915
 source_last_modified: "2025-12-29T18:16:35.904297+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Try It sandbox
+# 嘗試一下沙盒
 
-The developer portal ships an optional “Try it” console so you can call Torii
-endpoints without leaving the documentation. The console relays requests
-through the bundled proxy so browsers can bypass CORS limits while still
-enforcing rate limits and authentication.
+開發者門戶提供了一個可選的“Try it”控制台，因此您可以調用 Torii
+端點無需離開文檔。控制台轉發請求
+通過捆綁代理，瀏覽器可以繞過 CORS 限制，同時仍然
+實施速率限制和身份驗證。
 
-## Prerequisites
+## 先決條件
 
-- Node.js 18.18 or newer (matches the portal build requirements)
-- Network access to a Torii staging environment
-- A bearer token that can call the Torii routes you plan to exercise
+- Node.js 18.18 或更高版本（符合門戶構建要求）
+- 對 Torii 暫存環境的網絡訪問
+- 不記名令牌，可以調用您計劃行使的 Torii 路線
 
-All proxy configuration is done through environment variables. The table below
-lists the most important knobs:
+所有代理配置都是通過環境變量完成的。下表
+列出了最重要的旋鈕：
 
-| Variable | Purpose | Default |
+|變量|目的|默認 |
 | --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | Base Torii URL that the proxy forwards requests to | **Required** |
-| `TRYIT_PROXY_LISTEN` | Listen address for local development (format `host:port` or `[ipv6]:port`) | `127.0.0.1:8787` |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins that may call the proxy | `http://localhost:3000` |
-| `TRYIT_PROXY_BEARER` | Default bearer token forwarded to Torii | _empty_ |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Allow end users to supply their own token via `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request body size (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout in milliseconds | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | Requests allowed per rate window per client IP | `60` |
-| `TRYIT_PROXY_RATE_WINDOW_MS` | Sliding window for rate limiting (ms) | `60000` |
+| `TRYIT_PROXY_TARGET` |代理將請求轉發到的基本 Torii URL | **必填** |
+| `TRYIT_PROXY_LISTEN` |本地開發監聽地址（格式`host:port`或`[ipv6]:port`）| `127.0.0.1:8787` |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` |可能調用代理的來源的逗號分隔列表 | `http://localhost:3000` |
+| `TRYIT_PROXY_BEARER` |默認不記名令牌轉發至 Torii | _空_ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` |允許最終用戶通過 `X-TryIt-Auth` 提供自己的代幣 | `0` |
+| `TRYIT_PROXY_MAX_BODY` |最大請求正文大小（字節）| `1048576` |
+| `TRYIT_PROXY_TIMEOUT_MS` |上行超時（以毫秒為單位）| `10000` |
+| `TRYIT_PROXY_RATE_LIMIT` |每個客戶端 IP 每個速率窗口允許的請求數 | `60` |
+| `TRYIT_PROXY_RATE_WINDOW_MS` |速率限制滑動窗口（毫秒）| `60000` |
 
-The proxy also exposes `GET /healthz`, returns structured JSON errors, and
-redacts bearer tokens from log output.
+該代理還公開 `GET /healthz`，返回結構化 JSON 錯誤，並且
+從日誌輸出中編輯不記名令牌。
 
-## Start the proxy locally
+## 本地啟動代理
 
-Install dependencies the first time you set up the portal:
+首次設置門戶時安裝依賴項：
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-Run the proxy and point it at your Torii instance:
+運行代理並將其指向您的 Torii 實例：
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -59,13 +60,13 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-The script logs the bound address and forwards requests from `/proxy/*` to the
-configured Torii origin.
+該腳本記錄綁定地址並將來自 `/proxy/*` 的請求轉發到
+配置了 Torii 原點。
 
-## Wire the portal widgets
+## 連接門戶小部件
 
-When you build or serve the developer portal, set the URL that the widgets
-should use for the proxy:
+當您構建或提供開發人員門戶時，請設置小部件所使用的 URL
+應該用於代理：
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -73,29 +74,27 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-The following components read these values from `docusaurus.config.js`:
+以下組件從 `docusaurus.config.js` 讀取這些值：
 
-- **Swagger UI** — rendered at `/reference/torii-swagger`; uses a request
-  interceptor to attach bearer tokens automatically.
-- **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field
-  and supports try-it requests against the proxy.
-- **Try it console** — embedded on the API overview page; lets you send custom
-  requests, view headers, and inspect response bodies.
+- **Swagger UI** — 在 `/reference/torii-swagger` 處渲染；使用請求
+  攔截器自動附加不記名令牌。
+- **RapiDoc** — 在 `/reference/torii-rapidoc` 處呈現；鏡像 token 字段
+  並支持針對代理的嘗試請求。
+- **嘗試控制台** — 嵌入 API 概述頁面；讓您發送自定義
+  請求、查看標頭並檢查響應正文。
 
-Changing the token in any widget only affects the current browser session; the
-proxy never persists or logs the supplied token.
+更改任何小部件中的令牌只會影響當前瀏覽器會話；的
+代理永遠不會保留或記錄提供的令牌。
 
-## Observability & operations
+## 可觀察性和操作
 
-Every request is logged once with method, path, origin, upstream status, and the
-authentication source (`override`, `default`, or `client`). Tokens are never
-stored—both bearer headers and `X-TryIt-Auth` values are redacted before
-logging—so you can forward stdout to a central collector without worrying about
-secrets leaking.
+每個請求都會記錄一次，其中包括方法、路徑、來源、上游狀態和
+身份驗證源（`override`、`default` 或 `client`）。代幣從來都不是
+存儲 — 承載標頭和 `X-TryIt-Auth` 值均在之前經過編輯
+日誌記錄——這樣你就可以將標準輸出轉發到中央收集器，而不必擔心
+秘密洩露。
 
-### Health probes & alerting
-
-Run the bundled probe during deployments or on a schedule:
+### 健康探測和警報在部署期間或按計劃運行捆綁探針：
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
@@ -104,18 +103,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+環境旋鈕：
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — optional Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — 可選的 Torii 路線（無 `/proxy`）進行鍛煉。
+- `TRYIT_PROXY_SAMPLE_METHOD` — 默認為 `GET`；設置為 `POST` 用於寫入路由。
+- `TRYIT_PROXY_PROBE_TOKEN` — 為示例調用注入臨時承載令牌。
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — 覆蓋默認的 5 秒超時。
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — `probe_success`/`probe_duration_seconds` 的可選 Prometheus 文本文件目標。
+- `TRYIT_PROXY_PROBE_LABELS` — 附加到指標的以逗號分隔的 `key=value` 對（默認為 `job=tryit-proxy` 和 `instance=<proxy URL>`）。
 
-Feed the results into a textfile collector by pointing the probe at a writable
-path (for example, `/var/lib/node_exporter/textfile_collector/tryit.prom`) and
-adding any custom labels:
+通過將探針指向可寫的位置，將結果輸入到文本文件收集器中
+路徑（例如，`/var/lib/node_exporter/textfile_collector/tryit.prom`）和
+添加任何自定義標籤：
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -124,11 +123,11 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" \
 npm run probe:tryit-proxy
 ```
 
-The script rewrites the metrics file atomically so your collector always reads a
-complete payload.
+該腳本自動重寫指標文件，以便您的收集器始終讀取
+完整的有效負載。
 
-For lightweight alerting, wire the probe into your monitoring stack. A Prometheus
-example that pages after two consecutive failures:
+對於輕量級警報，請將探測器連接到監控堆棧。 Prometheus
+連續兩次失敗後進行分頁的示例：
 
 ```yaml
 groups:
@@ -145,11 +144,11 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### Rollback automation
+### 回滾自動化
 
-Use the management helper to update or restore the target Torii URL. The script
-stores the previous configuration in `.env.tryit-proxy.bak` so rollbacks are a
-single command.
+使用管理幫助程序更新或恢復目標 Torii URL。劇本
+將以前的配置存儲在 `.env.tryit-proxy.bak` 中，因此回滾是
+單個命令。
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -159,5 +158,5 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-Override the env file path with `--env` or `TRYIT_PROXY_ENV` if your deployment
-stores configuration elsewhere.
+如果您的部署使用 `--env` 或 `TRYIT_PROXY_ENV` 覆蓋 env 文件路徑
+將配置存儲在其他地方。

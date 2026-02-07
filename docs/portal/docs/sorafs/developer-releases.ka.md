@@ -9,99 +9,100 @@ source_last_modified: "2026-01-05T09:28:11.867590+00:00"
 translation_last_reviewed: 2026-02-07
 title: Release Process
 summary: Run the CLI/SDK release gate, apply the shared versioning policy, and publish canonical release notes.
+translator: machine-google-reviewed
 ---
 
-# Release Process
+# გამოშვების პროცესი
 
-SoraFS binaries (`sorafs_cli`, `sorafs_fetch`, helpers) and SDK crates
-(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) ship together. The release
-pipeline keeps the CLI and libraries aligned, ensures lint/test coverage, and
-captures artefacts for downstream consumers. Run the checklist below for every
-candidate tag.
+SoraFS ბინარები (`sorafs_cli`, `sorafs_fetch`, დამხმარეები) და SDK ყუთები
+(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) გაგზავნით ერთად. გათავისუფლება
+მილსადენი ინახავს CLI-ს და ბიბლიოთეკებს გასწორებულად, უზრუნველყოფს ლინტ/ტესტი დაფარვას და
+იჭერს არტეფაქტებს ქვედა დინების მომხმარებლებისთვის. გაუშვით ქვემოთ მოცემული ჩამონათვალი თითოეულისთვის
+კანდიდატის ტეგი.
 
-## 0. Confirm security review sign-off
+## 0. დაადასტურეთ უსაფრთხოების მიმოხილვის ხელმოწერა
 
-Before executing the technical release gate, capture the latest security review
-artefacts:
+ტექნიკური გამოშვების კარიბჭის შესრულებამდე, გადაიღეთ უსაფრთხოების უახლესი მიმოხილვა
+არტეფაქტები:
 
-- Download the most recent SF-6 security review memo ([reports/sf6-security-review](./reports/sf6-security-review.md))
-  and record its SHA256 hash in the release ticket.
-- Attach the remediation ticket link (e.g., `governance/tickets/SF6-SR-2026.md`) and note the sign-off
-  approvers from Security Engineering and the Tooling Working Group.
-- Verify that the remediation checklist in the memo is closed; unresolved items block the release.
-- Prepare to upload parity harness logs (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
-  alongside the manifest bundle.
-- Confirm the signing command you plan to run includes both `--identity-token-provider` and an explicit
-  `--identity-token-audience=<aud>` so Fulcio scope is captured in the release evidence.
+- ჩამოტვირთეთ უახლესი SF-6 უსაფრთხოების მიმოხილვის მემორანდუმი ([reports/sf6-security-review](./reports/sf6-security-review.md))
+  და ჩაწერეთ მისი SHA256 ჰეში გამოშვების ბილეთში.
+- მიამაგრეთ გამოსასწორებელი ბილეთის ბმული (მაგ., `governance/tickets/SF6-SR-2026.md`) და გაითვალისწინეთ გაფორმება
+  დამმტკიცებლები უსაფრთხოების საინჟინრო და Tooling სამუშაო ჯგუფიდან.
+- გადაამოწმეთ, რომ მემორანდუმის გამოსწორების საკონტროლო სია დახურულია; გადაუჭრელი ელემენტები ბლოკავს გათავისუფლებას.
+- მოემზადეთ პარიტეტული აღკაზმულობის ჟურნალების ასატვირთად (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+  მანიფესტის პაკეტთან ერთად.
+- დაადასტურეთ ხელმოწერის ბრძანება, რომლის შესრულებასაც აპირებთ, მოიცავს როგორც `--identity-token-provider`, ასევე აშკარა
+  `--identity-token-audience=<aud>` ასე რომ, Fulcio-ს ფარგლები აღბეჭდილია გამოშვების მტკიცებულებებში.
 
-Include these artefacts when notifying governance and publishing the release.
+ჩართეთ ეს არტეფაქტები მმართველობის შეტყობინებისა და გამოქვეყნებისას.
 
-## 1. Execute the release/test gate
+## 1. შეასრულეთ გამოშვების/ტესტის კარიბჭე
 
-The `ci/check_sorafs_cli_release.sh` helper runs formatting, Clippy, and tests
-across the CLI and SDK crates with a workspace-local target directory (`.target`)
-to avoid permission conflicts when executing inside CI containers.
+`ci/check_sorafs_cli_release.sh` დამხმარე აწარმოებს ფორმატირებას, Clippy-ს და ტესტებს
+CLI და SDK ყუთებში სამუშაო სივრცის ლოკალური სამიზნე დირექტორია (`.target`)
+CI კონტეინერების შიგნით შესრულებისას ნებართვების კონფლიქტების თავიდან ასაცილებლად.
 
 ```bash
 CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ```
 
-The script performs the following assertions:
+სკრიპტი ასრულებს შემდეგ მტკიცებულებებს:
 
-- `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` for `sorafs_car` (with the `cli` feature),
-  `sorafs_manifest`, and `sorafs_chunker`
-- `cargo test --locked --all-targets` for those same crates
+- `cargo fmt --all -- --check` (სამუშაო სივრცე)
+- `cargo clippy --locked --all-targets` `sorafs_car`-ისთვის (`cli` ფუნქციით),
+  `sorafs_manifest` და `sorafs_chunker`
+- `cargo test --locked --all-targets` იმავე ყუთებისთვის
 
-If any step fails, fix the regression before tagging. Release builds must be
-continuous with main; do not cherry-pick fixes into release branches. The gate
-also checks that keyless signing flags (`--identity-token-issuer`, `--identity-token-audience`)
-are provided where applicable; missing arguments fail the run.
+თუ რომელიმე ნაბიჯი ვერ მოხერხდა, დააფიქსირეთ რეგრესია მონიშვნამდე. გამოშვების კონსტრუქციები უნდა იყოს
+უწყვეტი მთავართან; არ აკრიფოთ ჩიპები გამოშვების ტოტებში. კარიბჭე
+ასევე ამოწმებს, რომ კლავიშის ხელმოწერის დროშები (`--identity-token-issuer`, `--identity-token-audience`)
+უზრუნველყოფილია საჭიროების შემთხვევაში; დაკარგული არგუმენტები ვერ ხერხდება.
 
-## 2. Apply the versioning policy
+## 2. გამოიყენეთ ვერსიების პოლიტიკა
 
-All SoraFS CLI/SDK crates use SemVer:
+ყველა SoraFS CLI/SDK ყუთი იყენებს SemVer-ს:
 
-- `MAJOR`: Introduced for the first 1.0 release. Before 1.0 the `0.y` minor bump
-  **indicates breaking changes** in the CLI surface or Norito schemas.
-  fields gated behind optional policy, telemetry additions).
-- `PATCH`: Bug fixes, documentation-only releases, and dependency updates that
-  do not change observable behaviour.
+- `MAJOR`: წარმოდგენილია პირველი 1.0 გამოშვებისთვის. 1.0-მდე `0.y` მცირე დარტყმა
+  **მიუთითებს ცვლილებებს** CLI ზედაპირზე ან Norito სქემებში.
+  არჩევითი პოლიტიკის უკან დახურული ველები, ტელემეტრიის დამატებები).
+- `PATCH`: შეცდომების აღმოფხვრა, მხოლოდ დოკუმენტაციის გამოშვებები და დამოკიდებულების განახლებები, რომლებიც
+  არ შეცვალოთ შესამჩნევი ქცევა.
 
-Always keep `sorafs_car`, `sorafs_manifest`, and `sorafs_chunker` on the same
-version so downstream SDK consumers can depend on a single aligned version
-string. When bumping versions:
+ყოველთვის შეინახეთ `sorafs_car`, `sorafs_manifest` და `sorafs_chunker` ერთსა და იმავეზე
+ვერსია, ასე რომ SDK-ის მომხმარებლებმა შეიძლება დამოკიდებული იყოს ერთ გასწორებულ ვერსიაზე
+სიმებიანი. ვერსიების შეჯახებისას:
 
-1. Update `version =` fields in each crate’s `Cargo.toml`.
-2. Regenerate the `Cargo.lock` via `cargo update -p <crate>@<new-version>` (the
-   workspace enforces explicit versions).
-3. Run the release gate again to ensure no stale artefacts remain.
+1. განაახლეთ `version =` ველები თითოეული კრატის `Cargo.toml`-ში.
+2. აღადგინეთ `Cargo.lock` `cargo update -p <crate>@<new-version>`-ის მეშვეობით (
+   სამუშაო სივრცე ახორციელებს აშკარა ვერსიებს).
+3. ხელახლა გაუშვით გამოშვების კარიბჭე, რათა დარწმუნდეთ, რომ ძველი არტეფაქტები არ დარჩება.
 
-## 3. Prepare release notes
+## 3. მოამზადეთ გამოშვების ნოტები
 
-Every release must publish a markdown changelog that highlights CLI, SDK, and
-governance-impacting changes. Use the template in
-`docs/examples/sorafs_release_notes.md` (copy it to your release artifacts
-directory and fill in the sections with concrete details).
+ყველა გამოშვებამ უნდა გამოაქვეყნოს მარკირების ცვლილებების ჟურნალი, რომელიც ხაზს უსვამს CLI, SDK და
+მმართველობის ზეგავლენის მქონე ცვლილებები. გამოიყენეთ შაბლონი
+`docs/examples/sorafs_release_notes.md` (დააკოპირეთ იგი თქვენს გამოშვების არტეფაქტებზე
+დირექტორია და შეავსეთ სექციები კონკრეტული დეტალებით).
 
-Minimum content:
+მინიმალური შინაარსი:
 
-- **Highlights**: feature headlines for CLI and SDK consumers.
-  requirements.
-- **Upgrade steps**: TL;DR commands for bumping cargo dependencies and rerunning
-  deterministic fixtures.
-- **Verification**: command output hashes or envelopes and the exact
-  `ci/check_sorafs_cli_release.sh` revision executed.
+- **მონიშვნები **: გამოსახულია სათაურები CLI და SDK მომხმარებლებისთვის.
+  მოთხოვნები.
+- **განახლების ნაბიჯები**: TL;DR ბრძანებები ტვირთის დამოკიდებულების შესამცირებლად და ხელახლა გასაშვებად
+  დეტერმინისტული მოწყობილობები.
+- **შემოწმება**: ბრძანების გამომავალი ჰეშები ან კონვერტები და ზუსტი
+  `ci/check_sorafs_cli_release.sh` რევიზია შესრულებულია.
 
-Attach the filled release notes to the tag (e.g., GitHub release body) and store
-them alongside deterministically generated artefacts.
+მიამაგრეთ შევსებული გამოშვების შენიშვნები ტეგზე (მაგ., GitHub გამოშვების ორგანო) და შეინახეთ
+ისინი დეტერმინისტულად წარმოქმნილ არტეფაქტებთან ერთად.
 
-## 4. Execute release hooks
+## 4. შეასრულეთ გამოშვების კაკვები
 
-Run `scripts/release_sorafs_cli.sh` to generate the signature bundle and
-verification summary that ship with every release. The wrapper builds the CLI
-when necessary, calls `sorafs_cli manifest sign`, and immediately replays
-`manifest verify-signature` so failures surface before tagging. Example:
+გაუშვით `scripts/release_sorafs_cli.sh` ხელმოწერის ნაკრების გენერირებისთვის და
+გადამოწმების შეჯამება, რომელიც გემი ყოველ გამოშვებასთან ერთად. შეფუთვა აშენებს CLI-ს
+საჭიროების შემთხვევაში, დაურეკავს `sorafs_cli manifest sign` და დაუყოვნებლივ იმეორებს
+`manifest verify-signature` ასე რომ, წარუმატებლობა ჩნდება მონიშვნამდე. მაგალითი:
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -115,31 +116,31 @@ scripts/release_sorafs_cli.sh \
   --expect-token-hash "$(cat .release/token.hash)"
 ```
 
-Tips:
+რჩევები:
 
-- Track release inputs (payload, plans, summaries, expected token hash) in your
-  repo or deployment config so the script remains reproducible. The CI fixture
-  bundle under `fixtures/sorafs_manifest/ci_sample/` shows the canonical layout.
-- Base CI automation on `.github/workflows/sorafs-cli-release.yml`; it runs the
-  release gate, invokes the script above, and archives bundles/signatures as
-  workflow artefacts. Mirror the same command order (release gate → sign →
-  verify) in other CI systems so audit logs line up with the generated hashes.
-- Keep the generated `manifest.bundle.json`, `manifest.sig`,
-  `manifest.sign.summary.json`, and `manifest.verify.summary.json` together—they
-  form the packet referenced in the governance notification.
-- When the release updates canonical fixtures, copy the refreshed manifest,
-  chunk plan, and summaries into `fixtures/sorafs_manifest/ci_sample/` (and update
-  `docs/examples/sorafs_ci_sample/manifest.template.json`) before tagging.
-  Downstream operators depend on the committed fixtures to reproduce the release
-  bundle.
-- Capture the run log for `sorafs_cli proof stream` bounded-channel verification and attach it to the
-  release packet to demonstrate proof streaming safeguards remain active.
-- Record the exact `--identity-token-audience` used during signing in the release notes; governance
-  cross-checks the audience against Fulcio policy before approving publication.
+- თვალყური ადევნეთ გამოშვების მონაცემებს (გადატვირთვა, გეგმები, შეჯამებები, მოსალოდნელი ტოკენის ჰეში).
+  რეპო ან განლაგების კონფიგურაცია, რათა სკრიპტი დარჩეს რეპროდუცირებადი. CI მოწყობილობა
+  პაკეტი `fixtures/sorafs_manifest/ci_sample/`-ის ქვეშ აჩვენებს კანონიკურ განლაგებას.
+- ბაზის CI ავტომატიზაცია `.github/workflows/sorafs-cli-release.yml`-ზე; ის მართავს
+  გამოშვების კარიბჭე, გამოიძახებს ზემოთ მოცემულ სკრიპტს და დაარქივებს პაკეტებს/ხელმოწერებს როგორც
+  სამუშაო პროცესის არტეფაქტები. ასახეთ იგივე ბრძანების ბრძანება (გათავისუფლების კარიბჭე → ნიშანი →
+  შეამოწმეთ) სხვა CI სისტემებში, ასე რომ, აუდიტის ჟურნალები შეესაბამება გენერირებულ ჰეშებს.
+- შეინახეთ გენერირებული `manifest.bundle.json`, `manifest.sig`,
+  `manifest.sign.summary.json` და `manifest.verify.summary.json` ერთად — ისინი
+  შექმენით პაკეტი, რომელიც მითითებულია მმართველობის შეტყობინებაში.
+- როდესაც გამოშვება განაახლებს კანონიკურ მოწყობილობებს, დააკოპირეთ განახლებული მანიფესტი,
+  ნაწილის გეგმა და შეჯამება `fixtures/sorafs_manifest/ci_sample/`-ში (და განახლდება
+  `docs/examples/sorafs_ci_sample/manifest.template.json`) მონიშვნამდე.
+  ქვედა დინების ოპერატორები დამოკიდებულნი არიან ჩადებულ მოწყობილობებზე, რათა გაამრავლონ გამოშვება
+  შეკვრა.
+- გადაიღეთ გაშვების ჟურნალი `sorafs_cli proof stream` შეზღუდული არხის გადამოწმებისთვის და მიამაგრეთ იგი
+  გაათავისუფლეთ პაკეტი, რათა აჩვენოთ, რომ სტრიმინგის მტკიცებულება დაცულია აქტიური რჩება.
+- ჩაწერეთ ზუსტი `--identity-token-audience`, რომელიც გამოიყენება ხელმოწერის დროს გამოშვების შენიშვნებში; მმართველობა
+  ამოწმებს აუდიტორიას Fulcio-ს პოლიტიკის მიხედვით პუბლიკაციის დამტკიცებამდე.
 
-Use `scripts/sorafs_gateway_self_cert.sh` when the release also carries a
-gateway rollout. Point it at the same manifest bundle to prove the attestation
-matches the candidate artefact:
+გამოიყენეთ `scripts/sorafs_gateway_self_cert.sh`, როდესაც გამოშვება ასევე შეიცავს ა
+კარიბჭის გაშვება. მიუთითეთ იგი იმავე მანიფესტის პაკეტზე ატესტაციის დასადასტურებლად
+ემთხვევა კანდიდატის არტეფაქტს:
 
 ```bash
 scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_cert.conf \
@@ -147,42 +148,42 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
   --manifest-bundle artifacts/release/manifest.bundle.json
 ```
 
-## 5. Tag and publish
+## 5. მონიშნეთ და გამოაქვეყნეთ
 
-After the checks pass and hooks complete:
+შემოწმების გავლისა და კაკვების დასრულების შემდეგ:
 
-1. Run `sorafs_cli --version` and `sorafs_fetch --version` to confirm binaries
-   report the new version.
-2. Prepare the release configuration in a checked-in `sorafs_release.toml`
-   (preferred) or another config file tracked by your deployment repo. Avoid
-   relying on ad-hoc environment variables; pass paths to the CLI with
-   `--config` (or equivalent) so the release inputs are explicit and
-   reproducible.
-3. Create a signed tag (preferred) or annotated tag:
+1. გაუშვით `sorafs_cli --version` და `sorafs_fetch --version` ბინარების დასადასტურებლად
+   შეატყობინეთ ახალ ვერსიას.
+2. მოამზადეთ გამოშვების კონფიგურაცია შემოწმებულ `sorafs_release.toml`-ში
+   (სასურველია) ან სხვა კონფიგურაციის ფაილი, რომელსაც თვალყურს ადევნებს თქვენი განლაგების რეპო. მოერიდეთ
+   ad-hoc გარემოს ცვლადებზე დაყრდნობა; გაიარეთ CLI-სკენ მიმავალი გზები
+   `--config` (ან ექვივალენტი), ასე რომ გამოშვების შეყვანები აშკარაა და
+   გამრავლებადი.
+3. შექმენით ხელმოწერილი ტეგი (სასურველია) ან ანოტირებული ტეგი:
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
    git push origin sorafs-vX.Y.Z
    ```
-4. Upload artefacts (CAR bundles, manifests, proof summaries, release notes,
-   attestation outputs) to the project registry following the governance
-   checklist in [deployment guide](./developer-deployment.md). If the release
-   minted new fixtures, push them to the shared fixture repo or object store so
-   audit automation can diff the published bundle against source control.
-5. Notify the governance channel with links to the signed tag, release notes,
-   manifest bundle/signature hashes, the archived `manifest.sign/verify` summaries,
-   and any attestation envelopes. Include the CI job URL (or log archive) that
-   ran `ci/check_sorafs_cli_release.sh` and `scripts/release_sorafs_cli.sh`. Update
-   the governance ticket so auditors can trace approvals to artefacts; when the
-   `.github/workflows/sorafs-cli-release.yml` job posts notifications, link the
-   recorded hash outputs rather than pasting ad-hoc summaries.
+4. ატვირთეთ არტეფაქტები (CAR პაკეტები, მანიფესტები, მტკიცებულებების შეჯამებები, გამოშვების შენიშვნები,
+   ატესტაციის შედეგები) მმართველობის შემდგომ პროექტის რეესტრში
+   საკონტროლო სიაში [განლაგების სახელმძღვანელო] (./developer-deployment.md). თუ გათავისუფლება
+   მოამზადეთ ახალი მოწყობილობები, მიიტანეთ ისინი საერთო მოწყობილობების რეპოში ან ობიექტების მაღაზიაში
+   აუდიტის ავტომატიზაციამ შეიძლება განასხვავოს გამოქვეყნებული პაკეტი წყაროს კონტროლისგან.
+5. შეატყობინეთ მმართველ არხს ხელმოწერილი ტეგის ბმულებით, გამოშვების შენიშვნებით,
+   მანიფესტის ნაკრები/ხელმოწერის ჰეშები, დაარქივებული `manifest.sign/verify` შეჯამებები,
+   და ნებისმიერი საატესტაციო კონვერტი. ჩართეთ CI სამუშაოს URL (ან ჟურნალის არქივი).
+   გაუშვა `ci/check_sorafs_cli_release.sh` და `scripts/release_sorafs_cli.sh`. განახლება
+   მმართველობის ბილეთი, რათა აუდიტორებმა შეძლონ არტეფაქტების დამტკიცების კვალი; როდესაც
+   `.github/workflows/sorafs-cli-release.yml` ვაკანსიების შეტყობინებები, ბმული
+   ჩაწერილი ჰეშის შედეგები, ვიდრე ad-hoc შეჯამებების ჩასმა.
 
-## 6. Post-release follow-up
+## 6. გამოშვების შემდგომი დაკვირვება
 
-- Ensure documentation pointing at the new version (quickstarts, CI templates)
-  is updated or confirm no changes are required.
-- File roadmap entries if follow-on work (e.g., migration flags, deprecation of
-- Archive the release gate output logs for auditors—store them beside the signed
-  artefacts.
+- დარწმუნდით, რომ დოკუმენტაცია მიუთითებს ახალ ვერსიაზე (სწრაფი დაწყება, CI შაბლონები)
+  განახლებულია ან დაადასტურეთ ცვლილებები არ არის საჭირო.
+- შეიყვანეთ საგზაო რუქის ჩანაწერები შემდგომი მუშაობის შემთხვევაში (მაგ., მიგრაციის დროშები, გაუქმება
+- დაარქივეთ გამოშვების კარიბჭის გამომავალი ჟურნალები აუდიტორებისთვის - შეინახეთ ისინი ხელმოწერილის გვერდით
+  არტეფაქტები.
 
-Following this pipeline keeps the CLI, SDK crates, and governance collateral in
-lock-step for each release cycle.
+ამ მილსადენის შემდეგ ინახავს CLI, SDK ყუთებს და მმართველობით უზრუნველყოფას
+დაბლოკვის ნაბიჯი თითოეული გამოშვების ციკლისთვის.

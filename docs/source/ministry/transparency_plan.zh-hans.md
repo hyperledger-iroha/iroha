@@ -9,119 +9,113 @@ source_last_modified: "2025-12-29T18:16:35.983537+00:00"
 translation_last_reviewed: 2026-02-07
 title: Ministry Transparency & Audit Plan
 summary: Implementation plan for roadmap item MINFO-8 covering quarterly transparency reports, privacy guardrails, dashboards, and automation.
+translator: machine-google-reviewed
 ---
 
-# Transparency & Audit Reports (MINFO-8)
+# 透明度和审计报告 (MINFO-8)
 
-Roadmap reference: **MINFO-8 — Transparency & audit reports** and **MINFO-8a — Privacy-preserving release process**
+路线图参考：**MINFO-8 — 透明度和审计报告** 和 **MINFO-8a — 隐私保护发布流程**
 
-The Ministry of Information must publish deterministic transparency artefacts so the community can audit moderation efficacy, appeal handling, and blacklist churn. This document defines the scope, artefacts, privacy controls, and operational workflow required to close MINFO-8 before the Q3 2026 target.
+信息部必须发布确定性透明度制品，以便社区能够审核审核效率、申诉处理和黑名单流失情况。本文档定义了在 2026 年第 3 季度目标之前关闭 MINFO-8 所需的范围、工件、隐私控制和操作工作流程。
 
-## Goals & Deliverables
+## 目标和可交付成果
 
-- Produce quarterly transparency packets that summarise AI moderation accuracy, appeal outcomes, denylist churn, volunteer panel activity, and treasury movements tied to MINFO budgets.
-- Ship accompanying raw-data bundles (Norito JSON + CSV) plus dashboards so citizens can slice metrics without waiting for static PDFs.
-- Enforce privacy guarantees (differential privacy + minimum-count rules) and signed attestations before any dataset is published.
-- Record each publication in the governance DAG and SoraFS so historical artefacts remain immutable and independently verifiable.
+- 制作季度透明度数据包，总结 AI 审核准确性、上诉结果、拒绝名单流失、志愿者小组活动以及与 MINFO 预算相关的财务变动。
+- 发送随附的原始数据包 (Norito JSON + CSV) 以及仪表板，以便公民无需等待静态 PDF 即可对指标进行切片。
+- 在发布任何数据集之前强制执行隐私保证（差异隐私+最小计数规则）和签名证明。
+- 在治理 DAG 和 SoraFS 中记录每个出版物，以便历史文物保持不可变且可独立验证。
 
-### Artefact Matrix
+### 人工制品矩阵
 
-| Artefact | Description | Format | Storage |
+|文物 |描述 |格式|存储|
 |----------|-------------|--------|---------|
-| Transparency summary | Human-readable report with executive summary, highlights, risk items | Markdown → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → `artifacts/ministry/transparency/<YYYY-Q>/summary.pdf` |
-| Data appendix | Canonical Norito bundle with sanitized tables (`ModerationLedgerBlockV1`, appeals, blacklist deltas) | `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data` (mirrored to SoraFS CID) |
-| Metrics CSVs | Convenience CSV exports for dashboards (AI FP/FN, appeal SLA, denylist churn) | `.csv` | Same directory, hashed & signed |
-| Dashboard snapshot | Grafana JSON export of `ministry_transparency_overview` panels + alert rules | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
-| Provenance manifest | Norito manifest tying digests, SoraFS CID, signatures, release timestamp | `.json` + detached signature | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)` (also attached to governance vote) |
+|透明度摘要|人类可读的报告，包含执行摘要、要点、风险项目 |降价 → PDF | `docs/source/ministry/reports/<YYYY-Q>.md` → `artifacts/ministry/transparency/<YYYY-Q>/summary.pdf` |
+|数据附录| Canonical Norito 捆绑包，包含已清理的表（`ModerationLedgerBlockV1`、上诉、黑名单增量）| `.norito` + `.json` | `artifacts/ministry/transparency/<YYYY-Q>/data`（镜像到 SoraFS CID）|
+|指标 CSV |仪表板的便捷 CSV 导出（AI FP/FN、上诉 SLA、拒绝名单流失）| `.csv` |相同的目录，散列和签名 |
+|仪表板快照 | `ministry_transparency_overview` 面板的 Grafana JSON 导出 + 警报规则 | `.json` | `dashboards/grafana/ministry_transparency_overview.json` / `dashboards/alerts/ministry_transparency_rules.yml` |
+|出处清单 | Norito 清单绑定摘要、SoraFS CID、签名、发布时间戳 | `.json` + 独立签名 | `artifacts/ministry/transparency/<YYYY-Q>/manifest.json(.sig)`（还附有治理投票）|
 
-## Data Sources & Pipeline
+## 数据源和管道
 
-| Source | Feed | Notes |
-|--------|------|-------|
-| Moderation ledger (`docs/source/sorafs_transparency_plan.md`) | Hourly `ModerationLedgerBlockV1` exports stored in CAR files | Already live for SFM-4c; reused for quarterly aggregation. |
-| AI calibration + false-positive rates | `docs/source/sorafs_ai_moderation_plan.md` fixtures + calibration manifests (`docs/examples/ai_moderation_calibration_*.json`) | Metrics aggregated per policy, region, and model profile. |
-| Appeal register | Norito `AppealCaseV1` events emitted by MINFO-7 treasury tooling | Contains stake transfers, panel roster, SLA timers. |
-| Denylist churn | `MinistryDenylistChangeV1` events from the Merkle registry (MINFO-6) | Includes hash families, TTL, emergency canon flags. |
-| Treasury flows | `MinistryTreasuryTransferV1` events (appeal deposits, panel rewards) | Balanced against `finance/mminfo_gl.csv`. |
+|来源 |饲料|笔记|
+|--------|------|--------|
+|审核分类账 (`docs/source/sorafs_transparency_plan.md`) |每小时 `ModerationLedgerBlockV1` 导出存储在 CAR 文件中 | SFM-4c 已经上线；重新用于季度汇总。 |
+| AI标定+误报率| `docs/source/sorafs_ai_moderation_plan.md` 夹具 + 校准清单 (`docs/examples/ai_moderation_calibration_*.json`) |按策略、区域和模型配置文件聚合的指标。 |
+|上诉登记册 | MINFO-7 金库工具发出的 Norito `AppealCaseV1` 事件 |包含权益转让、小组名册、SLA 计时器。 |
+|拒绝者流失 |来自 Merkle 注册表 (MINFO-6) 的 `MinistryDenylistChangeV1` 事件 |包括哈希族、TTL、紧急规范标志。 |
+|国库流动| `MinistryTreasuryTransferV1` 事件（申诉存款、小组奖励）|与 `finance/mminfo_gl.csv` 平衡。 |紧急规范治理、TTL 限制和审查要求现已生效
+[`docs/source/ministry/emergency_canon_policy.md`](emergency_canon_policy.md)，确保
+流失指标捕获层（`standard`、`emergency`、`permanent`）、canon id、
+并审查 Torii 在加载时强制执行的截止日期。
 
-Emergency canon governance, TTL limits, and review requirements now live in
-[`docs/source/ministry/emergency_canon_policy.md`](emergency_canon_policy.md), ensuring
-that the churn metrics capture the tier (`standard`, `emergency`, `permanent`), canon id,
-and review deadlines that Torii enforces at load time.
+处理阶段：
+1. **将**原始事件摄取到 `ministry_transparency_ingest`（Rust 服务镜像透明账本摄取器）。每晚运行，幂等。
+2. **每季度总计** `ministry_transparency_builder`。在隐私过滤器之前输出 Norito 数据附录以及每个指标的表。
+3. 通过 `cargo xtask ministry-transparency sanitize`（或 `scripts/ministry/dp_sanitizer.py`）**清理**指标，并发出带有元数据的 CSV/JSON 切片。
+4. **打包**工件，使用 `ministry_release_signer` 对其进行签名，并上传到 SoraFS + 治理 DAG。
 
-Processing stages:
-1. **Ingest** raw events into `ministry_transparency_ingest` (Rust service mirroring the transparency ledger ingestor). Runs nightly, idempotent.
-2. **Aggregate** per quarter with `ministry_transparency_builder`. Outputs the Norito data appendix plus per-metric tables before privacy filters.
-3. **Sanitize** metrics via `cargo xtask ministry-transparency sanitize` (or `scripts/ministry/dp_sanitizer.py`) and emit CSV/JSON slices with metadata.
-4. **Package** artefacts, sign them with `ministry_release_signer`, and upload to SoraFS + governance DAG.
+## 2026 年第 3 季度参考版本
 
-## 2026-Q3 Reference Release
+- 首个治理门控捆绑包（2026-Q3）于 2026-10-07 通过 `make check-ministry-transparency` 生成。工件位于 `artifacts/ministry/transparency/2026-Q3/`（包括 `sanitized_metrics.json`、`dp_report.json`、`summary.md`、`checksums.sha256`、`transparency_manifest.json` 和 `transparency_release_action.json`）中，并被镜像到SoraFS CID `7f4c2d81a6b13579ccddeeff00112233`。
+- `docs/source/ministry/reports/2026-Q3.md` 中捕获了出版物详细信息、指标表和批准​​，该文件现在作为审核员审查第三季度窗口的规范参考。
+- CI 在版本离开暂存之前应用 `ci/check_ministry_transparency.sh` / `make check-ministry-transparency`，验证工件摘要、Grafana/警报哈希和清单元数据，以便未来每个季度都遵循相同的证据线索。
 
-- The inaugural governance-gated bundle (2026-Q3) was produced on 2026‑10‑07 via `make check-ministry-transparency`. Artefacts live in `artifacts/ministry/transparency/2026-Q3/`—including `sanitized_metrics.json`, `dp_report.json`, `summary.md`, `checksums.sha256`, `transparency_manifest.json`, and `transparency_release_action.json`—and were mirrored to SoraFS CID `7f4c2d81a6b13579ccddeeff00112233`.
-- Publication details, metrics tables, and approvals are captured in `docs/source/ministry/reports/2026-Q3.md`, which now serves as the canonical reference for auditors reviewing the Q3 window.
-- CI applies `ci/check_ministry_transparency.sh` / `make check-ministry-transparency` before releases leave staging, verifying the artefact digests, Grafana/alert hashes, and manifest metadata so every future quarter follows the same evidence trail.
+## 指标和仪表板
 
-## Metrics & Dashboards
+Grafana 仪表板 (`dashboards/grafana/ministry_transparency_overview.json`) 显示以下面板：
 
-The Grafana dashboard (`dashboards/grafana/ministry_transparency_overview.json`) exposes the following panels:
+- AI 调节精度：每个模型的 FP/FN 速率、漂移与校准目标以及与 `docs/source/sorafs/reports/ai_moderation_calibration_*.md` 相关的警报阈值。
+- 申诉生命周期：提交、SLA 合规性、撤销、债券销毁、每层积压。
+- 拒绝列表流失：每个哈希系列的添加/删除、TTL 过期、紧急规范调用。
+- 志愿者简介和小组多样性：每种语言的提交内容、利益冲突披露、发布滞后。 `docs/source/ministry/volunteer_brief_template.md` 中指定了平衡的简要字段，确保事实表和审核标签是机器可读的。
+- 国库余额：存款、支出、未偿债务（提供给 MINFO-7）。
 
-- AI moderation accuracy: per-model FP/FN rate, drift vs calibration target, and alert thresholds tied to `docs/source/sorafs/reports/ai_moderation_calibration_*.md`.
-- Appeal lifecycle: submissions, SLA compliance, reversals, bond burns, per-tier backlog.
-- Denylist churn: additions/removals per hash family, TTL expirations, emergency canon invocations.
-- Volunteer briefs & panel diversity: submissions per language, conflict-of-interest disclosures, publication lag. Balanced brief fields are specified in `docs/source/ministry/volunteer_brief_template.md`, ensuring fact tables and moderation tags are machine readable.
-- Treasury balances: deposits, payouts, outstanding liability (feeds MINFO-7).
+警报规则（编入 `dashboards/alerts/ministry_transparency_rules.yml`）涵盖：
+- FP/FN 相对于校准基线的偏差 >25%。
+- 上诉 SLA 错过率每季度 >5%。
+- 紧急规范 TTL 早于政策。
+- 发布滞后于季度结束后 >14 天。
 
-Alert rules (codified in `dashboards/alerts/ministry_transparency_rules.yml`) cover:
-- FP/FN deviation >25% versus calibration baseline.
-- Appeal SLA miss rate >5% per quarter.
-- Emergency canon TTLs older than policy.
-- Publication lag >14 days after quarter close.
+## 隐私和发布护栏 (MINFO-8a)|公制类别 |机制|参数|额外的警卫|
+|--------------|-----------|------------|--------------------|
+|计数（上诉、黑名单变更、志愿者简介）|拉普拉斯噪声 | ε=0.75 每季度，δ=1e-6 |抑制后置噪声值<5的桶；每季度每个演员的剪辑贡献为 1。 |
+|人工智能准确度 |分子/分母上的高斯噪声 | ε=0.5，δ=1e-6 |仅当净化样本数≥50（`min_accuracy_samples` 下限）时才发布并发布置信区间。 |
+|国库流动|无噪音（已在链上公开）| — |屏蔽账户名称（资金库 ID 除外）；包括默克尔证明。 |
 
-## Privacy & Release Guardrails (MINFO-8a)
+发布要求：
+- 差异化隐私报告包括 epsilon/delta 账本和 RNG 种子承诺 (`blake3(seed)`)。
+- 敏感示例（证据哈希）已被编辑，除非已在公开 Merkle 收据中。
+- 修订日志附加到描述所有已删除字段和理由的摘要中。
 
-| Metric class | Mechanism | Parameters | Additional guards |
-|--------------|-----------|------------|-------------------|
-| Counts (appeals, blacklist changes, volunteer briefs) | Laplace noise | ε = 0.75 per quarter, δ = 1e-6 | Suppress buckets with post-noise value <5; clip contributions to 1 per actor per quarter. |
-| AI accuracy | Gaussian noise on numerator/denominator | ε = 0.5, δ = 1e-6 | Release only when sanitized sample count ≥ 50 (the `min_accuracy_samples` floor) and publish the confidence interval. |
-| Treasury flows | No noise (already public on-chain) | — | Mask account names except treasury IDs; include Merkle proofs. |
+## 发布工作流程和时间表
 
-Release requirements:
-- Differential privacy reports include the epsilon/delta ledger and RNG seed commitment (`blake3(seed)`).
-- Sensitive examples (evidence hashes) redacted unless already in public Merkle receipts.
-- Redaction log appended to the summary describing all removed fields and justification.
-
-## Publishing Workflow & Timeline
-
-| T‑Window | Task | Owner(s) | Evidence |
+| T 型窗 |任务|所有者 |证据|
 |----------|------|----------|----------|
-| T + 3 d after quarter close | Freeze raw exports, trigger aggregation job | Ministry Observability TL | `ministry_transparency_ingest.log`, pipeline job ID |
-| T + 7 d | Review raw metrics, run DP sanitizer dry run | Data Trust team | Sanitizer report (`artifacts/.../dp_report.json`) |
-| T + 10 d | Draft summary + data appendix | Docs/DevRel + Policy analyst | `docs/source/ministry/reports/<YYYY-Q>.md` |
-| T + 12 d | Sign artefacts, produce manifest, upload to SoraFS | Ops / Governance Secretariat | `manifest.json(.sig)`, SoraFS CID |
-| T + 14 d | Publish dashboards + alerts, post governance announcement | Observability + Comms | Grafana export, alert rule hash, governance vote link |
+|季度收盘后 T+3d |冻结原始导出，触发聚合作业 |部委可观察性 TL | `ministry_transparency_ingest.log`，管道作业 ID |
+| T+7 天 |查看原始指标，进行 DP 消毒剂试运行 |数据信任团队 |消毒剂报告 (`artifacts/.../dp_report.json`) |
+| T+10 天 |摘要草案+数据附录|文档/DevRel + 政策分析师 | `docs/source/ministry/reports/<YYYY-Q>.md` |
+| T+12 天 |签署文物，制作清单，上传至 SoraFS |运营/治理秘书处| `manifest.json(.sig)`、SoraFS CID |
+| T+14 天 |发布仪表板+警报，发布治理公告|可观察性 + 通讯 | Grafana 导出、警报规则哈希、治理投票链接 |
 
-Each release must be approved by:
-1. Ministry Observability TL (data integrity)
-2. Governance Council liaison (policy)
-3. Docs/Comms lead (public wording)
+每个版本必须经过以下人员的批准：
+1. 部可观测性TL（数据完整性）
+2. 治理委员会联络（政策）
+3. 文档/通讯主管（公开措辞）
 
-## Automation & Evidence Storage
+## 自动化和证据存储- 使用 `cargo xtask ministry-transparency ingest` 从原始源（分类账、上诉、拒绝名单、财务、志愿者）构建季度快照。跟进 `cargo xtask ministry-transparency build`，在发布之前发出仪表板指标 JSON 以及签名的清单。
+- 红队链接：将一个或多个 `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` 文件传递​​到摄取步骤，以便透明度快照和清理后的指标携带钻探 ID、场景类、证据包路径和仪表板 SHA 以及分类帐/上诉/拒绝列表数据。这使得 MINFO-9 演练节奏反映在每个透明数据包中，无需手动编辑。
+- 志愿者提交的材料必须遵循 `docs/source/ministry/volunteer_brief_template.md`（例如：`docs/examples/ministry/volunteer_brief_template.json`）。摄取步骤需要这些对象的 JSON 数组，自动过滤 `moderation.off_topic` 条目，强制披露证明，并记录事实表覆盖范围，以便仪表板可以突出显示缺失的引用。
+- 额外的自动化位于 `scripts/ministry/` 下。 `dp_sanitizer.py` 包装 `cargo xtask ministry-transparency sanitize` 命令，而 `transparency_release.py`（与出处工具一起添加）现在打包工件，从 `sorafs_cli car pack|proof verify` 摘要（或显式 `--sorafs-cid`）派生 SoraFS CID，并写入`transparency_manifest.json` 和 `transparency_release_action.json`（捕获清单摘要、SoraFS CID 和仪表板 git SHA 的 `TransparencyReleaseV1` 治理负载）。将 `--governance-dir <path>` 传递到 `transparency_release.py`（或运行 `cargo xtask ministry-transparency anchor --action artifacts/.../transparency_release_action.json --governance-dir <path>`）以对 Norito 负载进行编码，并在发布之前将其（加上 JSON 摘要）放入治理 DAG 目录中。同一标志还在 `<governance-dir>/publisher/head_requests/ministry_transparency/` 下发出 `MinistryTransparencyHeadUpdateV1` 请求，引用季度、SoraFS CID、清单路径和 IPNS 密钥别名（可通过 `--ipns-key` 覆盖）。提供 `--auto-head-update` 以通过 `publisher_head_updater.py` 立即处理该请求，当需要同时发布 IPNS 时，可以选择传递 `--head-update-ipns-template '/usr/local/bin/ipfs name publish --key {ipns_key} /ipfs/{cid}'`。否则，稍后运行 `scripts/ministry/publisher_head_updater.py --governance-dir <path>`（如果需要，使用相同的模板）以排空队列，追加 `publisher/head_updates.log`，更新 `publisher/ipns_heads/<key>.json`，并将处理后的 JSON 存档在 `head_requests/ministry_transparency/processed/` 下。
+- 工件存储在 `artifacts/ministry/transparency/<YYYY-Q>/` 下，带有由发布密钥签名的 `checksums.sha256` 文件。该树现在在 `artifacts/ministry/transparency/2026-Q3/` 上带有参考包（经过清理的指标、DP 报告、摘要、清单、治理操作），以便工程师可以离线测试工具，`scripts/ministry/check_transparency_release.py` 在本地验证摘要/季度元数据，而 `ci/check_ministry_transparency.sh` 在上传证据之前在 CI 中运行相同的验证。检查器现在强制执行记录的 DP 预算（对于计数，ε≤0.75，对于精度，ε≤0.5，δ≤1e−6），并且每当 `min_accuracy_samples` 或抑制阈值漂移时，或者当存储桶泄漏低于这些下限的值而不被抑制时，构建都会失败。将脚本视为路线图 (MINFO-8) 和 CI 之间的契约：如果隐私参数发生变化，请一起调整上表和检查器。- 治理锚点：创建引用清单摘要、SoraFS CID 和仪表板 git SHA 的 `TransparencyReleaseV1` 操作（`iroha_data_model::ministry::TransparencyReleaseV1` 定义规范有效负载）。
 
-- Use `cargo xtask ministry-transparency ingest` to build the quarterly snapshot from the raw feeds (ledger, appeals, denylist, treasury, volunteer). Follow up with `cargo xtask ministry-transparency build` to emit the dashboard metrics JSON plus the signed manifest before publishing.
-- Red-team linkage: pass one or more `--red-team-report docs/source/ministry/reports/<YYYY-MM>-mod-red-team-<scenario>.md` files to the ingest step so the transparency snapshot and sanitized metrics carry drill IDs, scenario classes, evidence bundle paths, and dashboard SHAs alongside the ledger/appeal/denylist data. This keeps MINFO-9 drill cadence reflected in every transparency packet without manual edits.
-- Volunteer submissions must follow `docs/source/ministry/volunteer_brief_template.md` (example: `docs/examples/ministry/volunteer_brief_template.json`). The ingest step expects a JSON array of those objects, automatically filters `moderation.off_topic` entries, enforces disclosure attestations, and records fact-table coverage so dashboards can highlight missing citations.
-- Additional automation lives under `scripts/ministry/`. `dp_sanitizer.py` wraps the `cargo xtask ministry-transparency sanitize` command, while `transparency_release.py` (added alongside the provenance tooling) now packages artefacts, derives the SoraFS CID from the `sorafs_cli car pack|proof verify` summary (or an explicit `--sorafs-cid`), and writes both `transparency_manifest.json` and `transparency_release_action.json` (a `TransparencyReleaseV1` governance payload capturing the manifest digest, SoraFS CID, and dashboards git SHA). Pass `--governance-dir <path>` to `transparency_release.py` (or run `cargo xtask ministry-transparency anchor --action artifacts/.../transparency_release_action.json --governance-dir <path>`) to encode the Norito payload and drop it (plus the JSON summary) into the governance DAG directory before publishing. The same flag also emits a `MinistryTransparencyHeadUpdateV1` request under `<governance-dir>/publisher/head_requests/ministry_transparency/`, referencing the quarter, SoraFS CID, manifest paths, and IPNS key alias (overridable via `--ipns-key`). Provide `--auto-head-update` to process that request immediately via `publisher_head_updater.py`, optionally passing `--head-update-ipns-template '/usr/local/bin/ipfs name publish --key {ipns_key} /ipfs/{cid}'` when IPNS needs to be published at the same time. Otherwise, run `scripts/ministry/publisher_head_updater.py --governance-dir <path>` later (with the same template if needed) to drain the queue, append `publisher/head_updates.log`, update `publisher/ipns_heads/<key>.json`, and archive the processed JSON under `head_requests/ministry_transparency/processed/`.
-- Artefacts stored under `artifacts/ministry/transparency/<YYYY-Q>/` with a `checksums.sha256` file signed by the release key. The tree now carries a reference bundle at `artifacts/ministry/transparency/2026-Q3/` (sanitized metrics, DP report, summary, manifest, governance action) so engineers can test the tooling offline, and `scripts/ministry/check_transparency_release.py` verifies the digests/quarter metadata locally while `ci/check_ministry_transparency.sh` runs the same validation in CI before evidence is uploaded. The checker now enforces the documented DP budgets (ε≤0.75 for counts, ε≤0.5 for accuracy, δ≤1e−6) and fails the build whenever `min_accuracy_samples` or the suppression threshold drift, or when a bucket leaks a value below those floors without being suppressed. Treat the script as the contract between the roadmap (MINFO‑8) and CI: adjust both the table above and the checker together if the privacy parameters ever change.
-- Governance anchor: create `TransparencyReleaseV1` action referencing the manifest digest, SoraFS CID, and dashboard git SHA (`iroha_data_model::ministry::TransparencyReleaseV1` defines the canonical payload).
+## 未完成的任务和后续步骤
 
-## Open Tasks & Next Steps
+|任务|状态 |笔记|
+|------|--------|--------|
+|实施 `ministry_transparency_ingest` + 构建器作业 | 🈺 进行中 | `cargo xtask ministry-transparency ingest|build` 现在缝合账本/上诉/拒绝名单/财务提要；剩下的工作连接 DP sanitizer + 发布脚本管道。 |
+|发布 Grafana 仪表板 + 警报包 | 🈴已完成 |仪表板 + 警报文件位于 `dashboards/grafana/ministry_transparency_overview.json` 和 `dashboards/alerts/ministry_transparency_rules.yml` 下；在推出期间将它们连接到 PagerDuty `ministry-transparency`。 |
+|自动化 DP 消毒剂 + 来源清单 | 🈴已完成 | `cargo xtask ministry-transparency sanitize`（包装器：`scripts/ministry/dp_sanitizer.py`）发出经过清理的指标 + DP 报告，`scripts/ministry/transparency_release.py` 现在写入 `checksums.sha256` 加上 `transparency_manifest.json` 以获取来源。 |
+|创建季度报告模板(`reports/<YYYY-Q>.md`) | 🈴已完成 |模板添加于 `docs/source/ministry/reports/2026-Q3-template.md`；每季度复制/重命名并在发布前替换 `{{...}}` 令牌。 |
+|线治理 DAG 锚定 | 🈴已完成 | `TransparencyReleaseV1` 位于 `iroha_data_model::ministry` 中，`scripts/ministry/transparency_release.py` 发出 JSON 有效负载，`cargo xtask ministry-transparency anchor` 将 `.to` 工件编码到配置的治理 DAG 目录中，以便发布者可以自动获取版本。 |
 
-| Task | Status | Notes |
-|------|--------|-------|
-| Implement `ministry_transparency_ingest` + builder jobs | 🈺 In Progress | `cargo xtask ministry-transparency ingest|build` now stitches ledger/appeal/denylist/treasury feeds; remaining work wires the DP sanitizer + release script pipeline. |
-| Publish Grafana dashboard + alert pack | 🈴 Completed | Dashboard + alert files live under `dashboards/grafana/ministry_transparency_overview.json` and `dashboards/alerts/ministry_transparency_rules.yml`; wire them into PagerDuty `ministry-transparency` during rollout. |
-| Automate DP sanitizer + provenance manifest | 🈴 Completed | `cargo xtask ministry-transparency sanitize` (wrapper: `scripts/ministry/dp_sanitizer.py`) emits the sanitized metrics + DP report, and `scripts/ministry/transparency_release.py` now writes `checksums.sha256` plus `transparency_manifest.json` for provenance. |
-| Create quarterly report template (`reports/<YYYY-Q>.md`) | 🈴 Completed | Template added at `docs/source/ministry/reports/2026-Q3-template.md`; copy/rename per quarter and replace the `{{...}}` tokens before publishing. |
-| Wire governance DAG anchoring | 🈴 Completed | `TransparencyReleaseV1` lives in `iroha_data_model::ministry`, `scripts/ministry/transparency_release.py` emits the JSON payload, and `cargo xtask ministry-transparency anchor` encodes the `.to` artefact into the configured governance DAG directory so the publisher can ingest releases automatically. |
-
-Delivering the document, dashboard spec, and workflow moves MINFO-8 from 🈳 to 🈺. Remaining engineering tasks (jobs, scripts, alert wiring) are tracked in the table above and should close before the first Q3 2026 publication.
+交付文档、仪表板规范和工作流程将 MINFO-8 从 🈳 移动到 🈺。剩余的工程任务（作业、脚本、警报接线）在上表中进行跟踪，并应在第一个 Q32026 发布之前完成。

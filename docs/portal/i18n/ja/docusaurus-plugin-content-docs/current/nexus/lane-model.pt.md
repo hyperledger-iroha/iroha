@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/nexus/lane-model.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-lane-model
-title: Modelo de lanes do Nexus
-description: Taxonomia logica de lanes, geometria de configuracao e regras de merge de world-state para Sora Nexus.
+ID: ネクサスレーンモデル
+タイトル: レーンのモデル Nexus
+説明: レーンの論理分類、Sora Nexus の世界状態の構成と登録の登録。
 ---
 
-# Modelo de lanes do Nexus e particionamento de WSV
+# WSV で Nexus を実行するモデル
 
-> **Status:** entregavel NX-1 - taxonomia de lanes, geometria de configuracao e layout de storage prontos para implementacao.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Referencia de roadmap:** NX-1 em `roadmap.md`
+> **ステータス:** NX-1 のエントリ - レーンの分類、構成、実装時のストレージのレイアウトの設定。  
+> **所有者:** Nexus コア WG、ガバナンス WG  
+> **ロードマップの参照:** NX-1 em `roadmap.md`
 
-Esta pagina do portal espelha o brief canonico `docs/source/nexus_lanes.md` para que operadores do Sora Nexus, owners de SDK e revisores possam ler a guia de lanes sem entrar na arvore mono-repo. A arquitetura alvo mantem o world state determinista enquanto permite que data spaces (lanes) individuais executem conjuntos de validadores publicos ou privados com workloads isolados.
+ポータル エスペルと簡単なカノニコ `docs/source/nexus_lanes.md` パラケ オペラドール、Sora Nexus のページを表示し、SDK および改訂版の所有者がモノリポジトリにアクセスできるようにします。世界の状態を決定するためのアーキテクチャは、データ スペース (レーン) を個別に実行し、有効性を確認するために、パブリックおよびプライベート コム ワークロードを許可します。
 
-## Conceitos
+## コンセイトス
 
-- **Lane:** shard logico do ledger do Nexus com seu proprio set de validadores e backlog de execucao. Identificado por um `LaneId` estavel.
-- **Data Space:** bucket de governanca que agrupa uma ou mais lanes que compartilham politicas de compliance, routing e settlement.
-- **Lane Manifest:** metadata controlada pela governanca que descreve validadores, politica de DA, token de gas, regras de settlement e permissoes de routing.
-- **Global Commitment:** proof emitida por uma lane que resume novos roots de estado, dados de settlement e transferencias cross-lane opcionais. O anel NPoS global ordena commitments.
+- **レーン:** シャード ロジックの台帳 Nexus は、有効性の設定とバックログの実行を独自に実行します。 `LaneId` estavel の識別情報。
+- **データ スペース:** 政府の政策コンプライアンス、ルーティング、および決済を管理するためのバケット。
+- **レーンマニフェスト:** メタデータは、検証、DA の政治、ガスのトークン、決済の記録、およびルーティングの許可を管理するために管理されます。
+- **グローバル コミットメント:** レーン間での活動再開、居住地への移動、レーン間の履歴書の提出を証明します。 O anel NPoS の世界規模の取り組み。
 
-## Taxonomia de lanes
+## レーンの分類法
 
-Os tipos de lane descrevem de forma canonica sua visibilidade, superficie de governanca e hooks de settlement. A geometria de configuracao (`LaneConfig`) captura esses atributos para que nos, SDKs e tooling possam raciocinar sobre o layout sem logica bespoke.
+和解のフックとなる政府の管理に関する情報を、合法的な形式で公開します。構成ジオメトリ (`LaneConfig`) は、パラメータ、SDK、ツール、カスタマイズされた論理的なレイアウトをキャプチャします。
 
-| Tipo de lane | Visibilidade | Membresia de validadores | Exposicao WSV | Governanca por default | Politica de settlement | Uso tipico |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Replica de estado completa | SORA Parliament | `xor_global` | Ledger publico base |
-| `public_custom` | public | Permissionless ou stake-gated | Replica de estado completa | Modulo ponderado por stake | `xor_lane_weighted` | Aplicacoes publicas de alto throughput |
-| `private_permissioned` | restricted | Set fixo de validadores (aprovado pela governanca) | Commitments e proofs | Federated council | `xor_hosted_custody` | CBDC, workloads de consorcio |
-| `hybrid_confidential` | restricted | Membresia mista; envolve ZK proofs | Commitments + disclosure seletiva | Modulo de dinheiro programavel | `xor_dual_fund` | Dinheiro programavel com preservacao de privacidade |
+|ティーポ・デ・レーン |ビジビリダデ |バリドーレス会員 |エクスポシカオ WSV |デフォルトのガバナンカ |和解の政治 |ウソ・ティピコ |
+|----------|-----------|---------------|--------------|---------|--------|-------------|
+| `default_public` |パブリック |パーミッションレス (グローバルステーク) |完成したレプリカ | SORA 議会 | `xor_global` |台帳公開ベース |
+| `public_custom` |パブリック |パーミッションレスまたはステークゲート |完成したレプリカ |モドゥロ ポンデラード ポー ステーク | `xor_lane_weighted` |主要なスループットを公開するアプリケーション |
+| `private_permissioned` |制限付き |セット fixo de validadores (アプロバド ペラ ガバナンカ) |コミットメントと証明 |連邦評議会 | `xor_hosted_custody` | CBDC、コンソーシアムのワークロード |
+| `hybrid_confidential` |制限付き |メンブレシア ミスタ。 ZK 証明を巻き込む |コミットメント + 開示モジュール・デ・ディンヘイロ・プログラム | `xor_dual_fund` | Dinheiro プログラムはプライバシーを保護します |
 
-Todos os tipos de lane devem declarar:
+Todos ostipos de LANE 開発宣言:
 
-- Alias de dataspace - agrupamento legivel por humanos que vincula politicas de compliance.
-- Handle de governanca - identificador resolvido via `Nexus.governance.modules`.
-- Handle de settlement - identificador consumido pelo settlement router para debitar buffers XOR.
-- Metadata opcional de telemetria (descricao, contato, dominio de negocio) exposta via `/status` e dashboards.
+- データスペースのエイリアス - コンプライアンスの遵守のための法律の制定。
+- 統治のハンドル - `Nexus.governance.modules` 経由の識別解決。
+- 決済処理 - 借方バッファ XOR による consumido pelo 決済ルーターの識別。
+- `/status` ダッシュボード経由でテレメトリアのメタデータ (記述、管理、交渉) を追加。
 
-## Geometria de configuracao de lanes (`LaneConfig`)
+## レーンの構成ジオメトリ (`LaneConfig`)
 
-`LaneConfig` e a geometria runtime derivada do catalogo de lanes validado. Ele nao substitui os manifests de governanca; em vez disso fornece identificadores de storage deterministas e dicas de telemetria para cada lane configurada.
+`LaneConfig` は、レーンの有効なカタログを作成するジオメトリア ランタイムの派生です。代わりに政府を表明する必要があります。レーン構成に基づいて、ストレージの識別情報やテレメトリの管理を行うことができます。
 
 ```text
 LaneConfigEntry {
@@ -64,61 +66,57 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` recalcula a geometria quando a configuracao e carregada (`State::set_nexus`).
-- Aliases sao sanitizados em slugs minusculos; caracteres nao alfanumericos consecutivos colapsam em `_`. Se o alias produzir um slug vazio, usamos `lane{id}`.
-- `shard_id` e derivado da key de metadata `da_shard_id` (default `lane_id`) e dirige o journal de cursor de shard persistido para manter o replay de DA determinista entre restarts/resharding.
-- Prefixos de chave garantem que o WSV mantenha ranges de chave por lane disjuntos mesmo quando o mesmo backend e compartilhado.
-- Nomes de segmentos Kura sao deterministas entre hosts; auditores podem verificar diretorios de segmento e manifests sem tooling bespoke.
-- Segmentos de merge (`lane_{id:03}_merge`) guardam as ultimas roots de merge-hint e commitments de estado global para aquela lane.
+- `LaneConfig::from_catalog` ジオメトリを再計算し、構成を実行します (`State::set_nexus`)。
+- 別名 sao sanitizados em slugs minusculos。キャラクテレス ナオ アルファヌメリコス コンセクティボス コラプサム エム `_`。別名は、slug vazio、usamos `lane{id}` です。
+- `shard_id` メタデータのキーの導出 `da_shard_id` (デフォルト `lane_id`) ジャーナルのカーソルのシャード永続化パラメータの再起動/リシャーディングの DA 決定のリプレイを実行します。
+- WSV のマンテンハ範囲の接頭辞は、管理画面または管理バックエンドとコンパートメントを区別するために使用されます。
+- ホストを決定するためのセグメント名。オーディトレス・ポデム検証ディレトリオス・デ・セグメンテーションは、オーダーメイドのSEMツールをマニフェストします。
+- マージ セグメント (`lane_{id:03}_merge`) は、グローバル パラ アクエラ レーンのマージ ヒント コミットメントのアルティマス ルートとしてガードされます。
 
-## Particionamento de world-state
+## 世界国家の党- 世界国家の論理は Nexus を通過します。レーンは完全な情報を永続的に公開します。レーン プライベート/機密輸出ルート マークル/マージ元帳に関するコミットメント。
+- `LaneConfigEntry::key_prefix` の 4 バイトのプレフィックス、`[00 00 00 01] ++ PackedKey` のジェランド チャベスを備えた MV プレフィックス。
+- コンパルティリハーダ (アカウント、資産、トリガー、政府登録) のプレフィックス デ レーンのアルマゼナム エントリ アグルパダ、マンテンドの OS 範囲スキャンの決定。
+- メタデータは、マージ元帳を参照し、メッセージ レイアウトを実行します: マージ ヒントのルートをグローバルに管理するためのルートを確認し、`lane_{id:03}_merge` で、削除の指示を許可します。
+- クロスレーンのインデックス (アカウントエイリアス、資産レジストリ、ガバナンスマニフェスト) は、レーンエクスプリシトスパラケオペラドールのアルマゼナムプレフィックスは、迅速な関係を調整します。
+- **政治情報** - 完全な情報を保存するレーンを公開します。レーン アペナス デ コミットメント ポデム コンパクタル コーポス アンティゴス アポス チェックポイント ポルケ コミットメント SAO autoritativos。レーンの機密ガーダム ジャーナルは、ワークロードの詳細を記録します。
+- **ツール** - 管理ユーティリティ (`kagami`、CLI 管理コマンド) 開発参照、名前空間、スラッグ、エクスポート メトリクス、ラベル Prometheus および検索セグメント クラ。
 
-- O world state logico do Nexus e a uniao de espacos de estado por lane. Lanes publicas persistem estado completo; lanes privadas/confidential exportam roots Merkle/commitment para o merge ledger.
-- O armazenamento MV prefixa cada chave com o prefixo de 4 bytes de `LaneConfigEntry::key_prefix`, gerando chaves como `[00 00 00 01] ++ PackedKey`.
-- Tabelas compartilhadas (accounts, assets, triggers, registros de governanca) armazenam entradas agrupadas por prefixo de lane, mantendo os range scans deterministas.
-- A metadata do merge-ledger reflete o mesmo layout: cada lane escreve roots de merge-hint e roots de estado global reduzido em `lane_{id:03}_merge`, permitindo retencao ou eviction direcionada quando uma lane se retira.
-- Indices cross-lane (account aliases, asset registries, governance manifests) armazenam prefixos de lane explicitos para que operadores reconciliem entradas rapidamente.
-- **Politica de retencao** - lanes publicas retencem corpos de bloco completos; lanes apenas de commitments podem compactar corpos antigos apos checkpoints porque commitments sao autoritativos. Lanes confidential guardam journals cifrados em segmentos dedicados para nao bloquear outros workloads.
-- **Tooling** - utilitarios de manutencao (`kagami`, comandos admin de CLI) devem referenciar o namespace com slug ao expor metricas, labels Prometheus ou ao arquivar segmentos Kura.
+## ルーティング API
 
-## Routing e APIs
+- エンドポイント Torii REST/gRPC 認証 `lane_id` オプション。オーセンシア インプリカ `lane_default`。
+- SDK は、`LaneId` パラメータのレーンとマップのエイリアスを説明し、レーンのカタログを作成します。
+- ルーティング オペレーションやカタログ、データスペースの有効性を確認します。 `LaneConfig` のエイリアスは、テレメトリやダッシュボードのログに使用されます。
 
-- Endpoints Torii REST/gRPC aceitam um `lane_id` opcional; ausencia implica `lane_default`.
-- SDKs expoem seletores de lane e mapeiam aliases amigaveis para `LaneId` usando o catalogo de lanes.
-- Regras de routing operam sobre o catalogo validado e podem escolher lane e dataspace. `LaneConfig` fornece aliases amigaveis para telemetria em dashboards e logs.
+## 決済手数料
 
-## Settlement e fees
+- カダレーンパガ手数料XOR aoセットグローバルデバリドーレス。レーンは、国内ガスのコレタール トークン、同等の XOR ジュント コム コミットメントのエスクローを開発します。
+- 和解の手続きには、モンタンテ、会話のメタデータ、およびエスクローの手続きが含まれます (例として、手数料のグローバル パラオ ボールトの転送)。
+- 決済ルータユニフィカド (NX-3) デビタバッファは、レーンのメモリプレフィックスを使用し、ストレージのジオメトリアコムの決済セリングテレメトリアを割り当てます。
 
-- Cada lane paga fees XOR ao set global de validadores. Lanes podem coletar tokens de gas nativos, mas devem fazer escrow de equivalentes XOR junto com commitments.
-- Provas de settlement incluem montante, metadata de conversao e prova de escrow (por exemplo, transferencia para o vault global de fees).
-- O settlement router unificado (NX-3) debita buffers usando os mesmos prefixos de lane, assim a telemetria de settlement se alinha com a geometria de storage.
+## ガバナンス
 
-## Governance
+- レーンはカタログを介して統治法を宣言します。 `LaneConfigEntry` カレガ、エイリアス、スラッグの起源は、遠隔測定および監査証跡の合法性です。
+- レジストリは、`LaneId`、データスペースのバインディング、統治のハンドル、決済およびメタデータのハンドルを含む、レーン マニフェストの配布 Nexus を実行します。
+- 継続的なランタイム アップグレードのフックは、政府の政治適用 (`gov_upgrade_id` またはデフォルト)、テレメトリ ブリッジ経由のレジストラムの差分 (イベント `nexus.config.diff`)。
 
-- Lanes declaram seu modulo de governanca via catalogo. `LaneConfigEntry` carrega o alias e o slug originais para manter telemetria e audit trails legiveis.
-- O registry do Nexus distribui lane manifests assinados que incluem `LaneId`, binding de dataspace, handle de governanca, handle de settlement e metadata.
-- Hooks de runtime-upgrade continuam aplicando politicas de governanca (`gov_upgrade_id` por default) e registram diffs via telemetry bridge (eventos `nexus.config.diff`).
+## テレメトリアのステータス
 
-## Telemetria e status
+- `/status` レーンのエイリアス、データスペースのバインディング、決済権限の管理、カタログのデリバドを公開します `LaneConfig`。
+- スケジューラのメトリクス (`nexus_scheduler_lane_teu_*`) は、オペラドールのマップエイム バックログと TEU の迅速な処理に関するエイリアス/スラッグを表示します。
+- `nexus_lane_configured_total` には、レーンの導関数の数と再計算、構成が含まれています。テレメトリアは、さまざまな差分を生成し、ジオメトリア デ レーンス ムダを生成します。
+- データスペースのバックログゲージには、アジュダルオペラのエイリアス/説明、ソシアープレスオデフィラ、ドミニオスデネゴシオのメタデータが含まれます。
 
-- `/status` expoe aliases de lane, bindings de dataspace, handles de governanca e perfis de settlement, derivados do catalogo e do `LaneConfig`.
-- Metricas do scheduler (`nexus_scheduler_lane_teu_*`) exibem aliases/slugs para que operadores mapeiem backlog e pressao de TEU rapidamente.
-- `nexus_lane_configured_total` conta o numero de entradas de lane derivadas e e recalculado quando a configuracao muda. A telemetria emite diffs assinados quando a geometria de lanes muda.
-- Gauges de backlog de dataspace incluem metadata de alias/descricao para ajudar operadores a associar pressao de fila a dominios de negocio.
+## ヒント Norito を構成します
 
-## Configuracao e tipos Norito
+- `LaneCatalog`、`LaneConfig`、`DataSpaceCatalog` は、`iroha_data_model::nexus` および Norito パラメタ マニフェストの互換性を維持します。
+- `LaneConfig` ライブ `iroha_config::parameters::actual::Nexus` カタログを自動的に作成します。 nao は、エンコーディング Norito のヘルパー内部ランタイムを要求します。
+- データスペースを宣言するための継続的な記述 (`iroha_config::parameters::user::Nexus`)。 o 幾何学的な派生と重複したレーンの ID を無効にするエイリアスを解析します。
 
-- `LaneCatalog`, `LaneConfig`, e `DataSpaceCatalog` vivem em `iroha_data_model::nexus` e fornecem estruturas compativeis com Norito para manifests e SDKs.
-- `LaneConfig` vive em `iroha_config::parameters::actual::Nexus` e e derivado automaticamente do catalogo; nao requer encoding Norito porque e um helper interno runtime.
-- A configuracao voltada ao usuario (`iroha_config::parameters::user::Nexus`) continua aceitando descritores declarativos de lane e dataspace; o parsing agora deriva a geometria e rejeita aliases invalidos ou IDs de lane duplicados.
-
-## Trabalho pendente
-
-- Integrar updates do settlement router (NX-3) com a nova geometria para que debitos e recibos de buffer XOR sejam etiquetados por slug de lane.
-- Estender tooling admin para listar column families, compactar lanes aposentadas e inspecionar logs de blocos por lane usando o namespace com slug.
-- Finalizar o algoritmo de merge (ordering, pruning, conflict detection) e anexar fixtures de regressao para replay cross-lane.
-- Adicionar hooks de compliance para whitelists/blacklists e politicas de dinheiro programavel (acompanhado sob NX-12).
+## トラバーリョ・ペンデンテ- 統合アップデートは、決済ルータ (NX-3) の nova geometria パラケ デビトスとバッファ XOR のスラッグ デ レーンを実行します。
+- Estender ツールは、listar 列ファミリー、コンパクト レーン、ブロック レーン、名前空間 com スラッグの検査ログを管理します。
+- マージアルゴリズム (順序付け、プルーニング、競合検出) とクロスレーンリプレイパラレルリグレッションの付属フィクスチャの最終化。
+- ホワイトリスト/ブラックリストおよび政治政策のコンプライアンスに関する追加フ​​ック (acompanhado sob NX-12)。
 
 ---
 
-*Esta pagina continuara rastreando follow-ups de NX-1 conforme NX-2 ate NX-18 aterrissarem. Por favor traga perguntas em aberto para `roadmap.md` ou o tracker de governanca para que o portal fique alinhado com os docs canonicos.*
+*NX-1 に準拠し、NX-2 が NX-18 に準拠した状態で継続的にフォローアップを続けます。 `roadmap.md` のアベルト トラガをご利用ください。ポータル サイトの管理者トラッカーをご利用ください。*

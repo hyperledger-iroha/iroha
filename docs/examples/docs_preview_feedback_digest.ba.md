@@ -7,17 +7,18 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4b1191d3475126df594d0f9f81d91f8ebbcd002c74a1f4d4176f2f42a59ca885
 source_last_modified: "2025-12-29T18:16:35.070397+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Feedback Digest (Template)
+# Докс порталы алдан ҡарау кире бәйләнеш дайджест (Ҡалып)
 
-Use this template when summarising a preview wave for governance, release
-reviews, or `status.md`. Copy the Markdown into the tracking ticket, replace
-placeholders with real data, and attach the JSON summary exported via
-`npm run --prefix docs/portal preview:log -- --summary --summary-json`. The
-`preview:digest` helper (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
-generates the metrics section shown below so you only need to fill in the
-highlights/actions/artefacts rows.
+Был шаблон ҡулланыу ҡасан дөйөмләштереү өсөн алдан ҡарау тулҡыны идара итеү, релиз
+тикшерелгән, йәки `status.md`. Күсермә Маркдаун күҙәтеү билет, алмаштырыу
+ысын мәғлүмәттәр менән урын хужалары, һәм JSON йомғаҡлау аша беркетелгән экспорт аша
+`npm run --prefix docs/portal preview:log -- --summary --summary-json`. 1990 й.
+I18NI000000003X ярҙамсыһы (`npm run --prefix docs/portal preview:digest -- --wave <label>`)
+генерациялай метрика бүлеге түбәндә күрһәтелгән, шулай итеп, һеҙгә тик тултырырға кәрәк .
+айырыу/ғәмәлдәр/артафакттар рәттәре.
 
 ```markdown
 ## Wave preview-<tag> feedback digest (YYYY-MM-DD)
@@ -45,5 +46,5 @@ highlights/actions/artefacts rows.
 
 ```
 
-Keep each digest with the invite-tracking ticket so reviewers and governance can
-replay the evidence trail without digging through CI logs.
+Һаҡлау һәр distest менән саҡырыу-күҙәтеү билет шулай рецензенттар һәм идара итеү мөмкин
+реплей дәлилдәр эҙҙәре аша ҡаҙылмай CI журналдар.

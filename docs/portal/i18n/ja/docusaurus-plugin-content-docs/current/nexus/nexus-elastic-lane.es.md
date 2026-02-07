@@ -4,39 +4,41 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-elastic-lane.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-elastic-lane
-title: Provisionamiento de lane elastico (NX-7)
-sidebar_label: Provisionamiento de lane elastico
-description: Flujo de bootstrap para crear manifests de lane Nexus, entradas de catalogo y evidencia de rollout.
+ID: nexus-elastic-lane
+タイトル: プロビジョニングト デ レーン エラシコ (NX-7)
+サイドバーラベル: プロビジョニング・アミエント・デ・レーン・エラシコ
+説明: ブートストラップの詳細は、レーン Nexus のマニフェスト、カタログおよびロールアウトの証拠の記録です。
 ---
 
-:::note Fuente canonica
-Esta pagina refleja `docs/source/nexus_elastic_lane.md`. Manten ambas copias alineadas hasta que el barrido de localizacion llegue al portal.
+:::ノート フエンテ カノニカ
+エスタページナリフレジャ`docs/source/nexus_elastic_lane.md`。 Manten は、ローカルリーグのポータルで、さまざまな情報を共有しています。
 :::
 
-# Kit de provisionamiento de lane elastico (NX-7)
+# レーンエラスティコのプロビジョニングキット (NX-7)
 
-> **Elemento del roadmap:** NX-7 - tooling de provisionamiento de lane elastico  
-> **Estado:** tooling completo - genera manifests, snippets de catalogo, payloads Norito, pruebas de humo,
-> y el helper de bundle de load-test ahora combina gating de latencia por slot + manifests de evidencia para que las corridas de carga de validadores
-> se publiquen sin scripting a medida.
+> **ロードマップの要素:** NX-7 - レーンエラスティックのプロビジョニング用ツール  
+> **Estado:** ツールの完成 - 一般マニフェスト、カタログのスニペット、ペイロード Norito、プルエバス、
+> ロード テストのバンドル ヘルパーとスロットのレイテンシア ゲート + 検証用のマニフェストの組み合わせ
+> メディアのスクリプトを公開する罪。
 
-Esta guia lleva a los operadores por el nuevo helper `scripts/nexus_lane_bootstrap.sh` que automatiza la generacion de manifest de lane, snippets de catalogo de lane/dataspace y evidencia de rollout. El objetivo es facilitar el alta de nuevas lanes Nexus (publicas o privadas) sin editar a mano multiples archivos ni rederivar la geometria del catalogo a mano.
+新しいヘルパー `scripts/nexus_lane_bootstrap.sh` は、レーンのマニフェスト生成の自動化、レーン/データスペースのカタログのスニペット、ロールアウトの証拠を提供します。オブジェクトは、新しいレーン Nexus (公開または公開) を容易にし、複数のアーカイブを編集し、幾何学的なカタログを再提供します。
 
-## 1. Prerrequisitos
+## 1. 前提条件
 
-1. Aprobacion de governance para el alias de lane, dataspace, conjunto de validadores, tolerancia a fallos (`f`) y politica de settlement.
-2. Una lista final de validadores (IDs de cuenta) y una lista de namespaces protegidos.
-3. Acceso al repositorio de configuracion del nodo para poder anexar los snippets generados.
-4. Rutas para el registro de manifests de lane (ver `nexus.registry.manifest_directory` y `cache_directory`).
-5. Contactos de telemetria/handles de PagerDuty para el lane, de modo que las alertas se conecten en cuanto el lane este online.
+1. レーン、データスペース、妥当性検査、寛容性 (`f`) および和解における政治に関する統治に関する問題。
+2. 最終的な有効性のリスト (ID の確認) と名前空間の保護のリスト。
+3. ノードの構成ファイルのリポジトリにアクセスし、スニペットを保存します。
+4. マニフェストの登録に関する規則 (バージョン `nexus.registry.manifest_directory` および `cache_directory`)。
+5. テレメトリアへの連絡先/PagerDuty のパラレル モード、オンライン エステの接続方法の処理。
 
-## 2. Genera artefactos de lane
+## 2. レーンの加工品の属
 
-Ejecuta el helper desde la raiz del repositorio:
+リポジトリのヘルパーの取り出し:
 
 ```bash
 scripts/nexus_lane_bootstrap.sh \
@@ -58,36 +60,34 @@ scripts/nexus_lane_bootstrap.sh \
   --output-dir artifacts/nexus/payments_lane
 ```
 
-Flags clave:
+クラーベの旗:
 
-- `--lane-id` debe coincidir con el index de la nueva entrada en `nexus.lane_catalog`.
-- `--dataspace-alias` y `--dataspace-id/hash` controlan la entrada del catalogo de dataspace (por defecto usa el id del lane cuando se omite).
-- `--validator` puede repetirse o leerse desde `--validators-file`.
-- `--route-instruction` / `--route-account` emiten reglas de enrutamiento listas para pegar.
-- `--metadata key=value` (o `--telemetry-contact/channel/runbook`) capturan contactos del runbook para que los dashboards muestren los propietarios correctos.
-- `--allow-runtime-upgrades` + `--runtime-upgrade-*` agregan el hook de runtime-upgrade al manifest cuando el lane requiere controles extendidos de operadores.
-- `--encode-space-directory` invoca `cargo xtask space-directory encode` automaticamente. Combinelo con `--space-directory-out` cuando quiera que el archivo `.to` codificado vaya a un lugar distinto del default.
+- `--lane-id` は、`nexus.lane_catalog` の新しいインデックスを一致させます。
+- `--dataspace-alias` および `--dataspace-id/hash` は、データスペースのカタログを制御します (米国の欠陥により、安全な情報が提供されません)。
+- `--validator` は、`--validators-file` を繰り返します。
+- `--route-instruction` / `--route-account` は、ペガーのリストを表示します。
+- `--metadata key=value` (o `--telemetry-contact/channel/runbook`) ダッシュボードのダッシュボードに関するランブックの連絡先をキャプチャします。
+- `--allow-runtime-upgrades` + `--runtime-upgrade-*` ランタイム アップグレードのアグリガン エル フックは、マニフェスト クアンド エル レーンを必要とし、オペラドールの拡張を制御します。
+- `--encode-space-directory` は `cargo xtask space-directory encode` を自動的に呼び出します。 `--space-directory-out` は、デフォルトのアーカイブ `.to` を結合します。
 
-El script produce tres artefactos dentro del `--output-dir` (por defecto el directorio actual), mas un cuarto opcional cuando se habilita el encoding:
+El スクリプトは、`--output-dir` (実際のディレクトリの欠陥) を生成し、オプションのエンコーディングを実行できます。
 
-1. `<slug>.manifest.json` - manifest de lane que contiene el quorum de validadores, namespaces protegidos y metadatos opcionales del hook de runtime-upgrade.
-2. `<slug>.catalog.toml` - un snippet TOML con `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]` y cualquier regla de enrutamiento solicitada. Asegura que `fault_tolerance` este configurado en la entrada de dataspace para dimensionar el comite de lane-relay (`3f+1`).
-3. `<slug>.summary.json` - resumen de auditoria que describe la geometria (slug, segmentos, metadatos) mas los pasos de rollout requeridos y el comando exacto de `cargo xtask space-directory encode` (bajo `space_directory_encode.command`). Adjunta este JSON al ticket de onboarding como evidencia.
-4. `<slug>.manifest.to` - emitido cuando `--encode-space-directory` esta activado; listo para el flujo `iroha app space-directory manifest publish` de Torii.
+1. `<slug>.manifest.json` - 有効性の維持およびクォーラムのマニフェスト、ランタイム アップグレードのフックの名前空間プロテギドおよびメタデータのオプション。
+2. `<slug>.catalog.toml` - `[[nexus.lane_catalog]]`、`[[nexus.dataspace_catalog]]` に関するスニペット TOML は、適切な規制を要求します。 `fault_tolerance` は、レーン リレー (`3f+1`) のパラディメンション データスペースのエントリを設定します。
+3. `<slug>.summary.json` - `cargo xtask space-directory encode` (bajo `space_directory_encode.command`) のジオメトリ (スラッグ、セグメント、メタデータ) のロールアウト要求と正確なコマンドの説明を再開します。オンボーディングに関する証拠として JSON チケットを追加します。
+4. `<slug>.manifest.to` - エミディド・クアンド `--encode-space-directory` エスタ・アクティバド; `iroha app space-directory manifest publish` と Torii のリスト。
 
-Usa `--dry-run` para previsualizar los JSON/snippets sin escribir archivos, y `--force` para sobrescribir artefactos existentes.
+米国 `--dry-run` には JSON/スニペットの事前視覚化が保存されており、`--force` には保存されたアーティファクトが存在します。
 
-## 3. Aplica los cambios
+## 3. アプリカ・ロス・カンビオス1. マニフェスト JSON と `nexus.registry.manifest_directory` の構成をコピーします (ディレクトリ キャッシュとレジストリ リフレクションとリモート バンドル)。 Commitea el archive si los マニフェストのバージョンと全体的なリポジトリの構成を示します。
+2. `config/config.toml` のカタログ スニペットの付録 (`config.d/*.toml` 対応)。 Asegura que `nexus.lane_count` sea al menos `lane_id + 1` yactualiza cualquier `nexus.routing_policy.rules` que deba apuntar al nuevo LANE。
+3. Codifica (省略 `--encode-space-directory`) およびスペース ディレクトリの公開マニフェストとコマンド キャプチャの概要 (`space_directory_encode.command`)。 Esto は、ペイロード `.manifest.to` que Torii を生成し、監査上の証拠として登録します。エンビアコン`iroha app space-directory manifest publish`。
+4. Ejecuta `irohad --sora --config path/to/config.toml --trace-config` は、ロールアウトのトレースとチケットのアーカイブを保存します。エスト・プルエバ・ケ・ラ・ヌエバの幾何学的形状は、ナメクジ/セグメント・デ・クラ・ジェネラドスと一致します。
+5. マニフェスト/カタログの表示は、すべてのレーンに表示されます。 Conserva el summary JSON en el ticket para futuras audiotorias。
 
-1. Copia el manifest JSON en el `nexus.registry.manifest_directory` configurado (y en el directorio cache si el registro refleja bundles remotos). Commitea el archivo si los manifests se versionan en tu repo de configuracion.
-2. Anexa el snippet de catalogo a `config/config.toml` (o al `config.d/*.toml` correspondiente). Asegura que `nexus.lane_count` sea al menos `lane_id + 1` y actualiza cualquier `nexus.routing_policy.rules` que deba apuntar al nuevo lane.
-3. Codifica (si omitiste `--encode-space-directory`) y publica el manifest en el Space Directory usando el comando capturado en el summary (`space_directory_encode.command`). Esto produce el payload `.manifest.to` que Torii espera y registra la evidencia para auditores; envia con `iroha app space-directory manifest publish`.
-4. Ejecuta `irohad --sora --config path/to/config.toml --trace-config` y archiva la salida de trace en el ticket de rollout. Esto prueba que la nueva geometria coincide con el slug/segmentos de Kura generados.
-5. Reinicia los validadores asignados al lane una vez que los cambios de manifest/catalogo esten desplegados. Conserva el summary JSON en el ticket para futuras auditorias.
+## 4. 登録バンドルの配布を構成する
 
-## 4. Construye un bundle de distribucion del registro
-
-Empaqueta el manifest generado y el overlay para que los operadores puedan distribuir datos de gobernanza de lanes sin editar configs en cada host. El helper de bundling copia manifests en el layout canonico, produce un overlay opcional del catalogo de gobernanza para `nexus.registry.cache_directory`, y puede emitir un tarball para transferencias offline:
+エンパケタ エル マニフェスト ジェネラドとエル オーバーレイ パラ ケ ロス オペラドーレス プエダン ディストリビュール データ ゴベルナンザ デ レーン 編集設定とホストをホストします。バンドル コピアのヘルパーは、レイアウト カノニコのマニフェストをバンドルし、`nexus.registry.cache_directory` パラメタのオーバーレイ オプション カタログを生成し、オフラインでの転送パラレルの送信を実行します。
 
 ```bash
 scripts/nexus_lane_registry_bundle.sh \
@@ -98,18 +98,18 @@ scripts/nexus_lane_registry_bundle.sh \
   --bundle-out artifacts/nexus/payments_lane/registry_bundle.tar.gz
 ```
 
-Salidas:
+サリダス:
 
-1. `manifests/<slug>.manifest.json` - copia estos archivos en el `nexus.registry.manifest_directory` configurado.
-2. `cache/governance_catalog.json` - deja esto en `nexus.registry.cache_directory`. Cada entrada `--module` se convierte en una definicion de modulo enchufable, habilitando swap-outs del modulo de gobernanza (NX-2) al actualizar el overlay de cache en lugar de editar `config.toml`.
-3. `summary.json` - incluye hashes, metadatos del overlay e instrucciones para operadores.
-4. Opcional `registry_bundle.tar.*` - listo para SCP, S3 o trackers de artefactos.
+1. `manifests/<slug>.manifest.json` - `nexus.registry.manifest_directory` 設定をコピーします。
+2. `cache/governance_catalog.json` - `nexus.registry.cache_directory` を参照してください。 `--module` は、編集可能なモジュールの定義、編集可能な `config.toml` のキャッシュのオーバーレイ (NX-2) の実際のスワップアウトの使用を可能にします。
+3. `summary.json` - ハッシュ、オーバーレイのメタデータ、およびオペランドの命令が含まれます。
+4. オプション `registry_bundle.tar.*` - SCP、S3 のトラッカー デ アーティファクトのリスト。
 
-Sincroniza todo el directorio (o el archivo) a cada validador, extrae en hosts air-gapped y copia los manifests + overlay de cache a sus rutas del registro antes de reiniciar Torii.
+Torii の記録ファイル (アーカイブ) とディレクトリの同期、エアギャップおよびコピア ロス マニフェストのホストの追加 + オーバーレイ キャッシュ。
 
-## 5. Pruebas de humo para validadores
+## 5. バリダドレスのプルエバス
 
-Despues de reiniciar Torii, ejecuta el nuevo helper de smoke para verificar que el lane reporte `manifest_ready=true`, que las metricas expongan el conteo esperado de lanes y que el gauge de sealed este limpio. Las lanes que requieren manifests deben exponer un `manifest_path` no vacio; el helper ahora falla de inmediato cuando falta la ruta para que cada despliegue NX-7 incluya la evidencia del manifest firmado:
+Despues de reiniciar Torii、Ejecuta el nuevo helper de steam para verificar que el LANE report `manifest_ready=true`、que las metricas expongan el conteo esperado de LANES y que elgue de sealed este limpio。 Las lanes que requieren は、deben exponer un `manifest_path` no vacio を明示します。エル・ヘルパー・アホラ・デ・インメディアト・クアンド・ファルタ・ラ・ルータ・パラ・ケ・カダ・デスリーグNX-7には、マニフェスト・ファームードの証拠が含まれています:
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -132,9 +132,9 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Agrega `--insecure` cuando pruebes entornos con certificados self-signed. El script termina con codigo no cero si el lane falta, esta sealed o las metricas/telemetria se desalinean de los valores esperados. Usa los knobs `--min-block-height`, `--max-finality-lag`, `--max-settlement-backlog` y `--max-headroom-events` para mantener la telemetria por lane (altura de bloque/finalidad/backlog/headroom) dentro de tus limites operativos, y combinalos con `--max-slot-p95` / `--max-slot-p99` (mas `--min-slot-samples`) para imponer los objetivos de duracion de slot NX-18 sin salir del helper.
+Agrega `--insecure` cuando pruebes entornos con certificados は自己署名されています。エル スクリプト ターミナル コン コディゴ ノー セロ レーン ファルタ、エスタ シールされたオ ラス メトリカス/テレメトリア セ デス ヴァローレス エスペラード。米国ロスノブ `--min-block-height`、`--max-finality-lag`、`--max-settlement-backlog` および `--max-headroom-events` テレメトリアポーレーン (ブロック/ファイナル/バックログ/ヘッドルーム) の管理および組み合わせの制限`--max-slot-p95` / `--max-slot-p99` (mas `--min-slot-samples`) スロット NX-18 のオブジェクトを無効にし、ヘルパーを支援します。
 
-Para validaciones air-gapped (o CI) puedes reproducir una respuesta Torii capturada en lugar de golpear un endpoint vivo:
+パラ検証エアギャップ (o CI) は、エンドポイントの生体内でのエンドポイント Torii のキャプチャを再現します。
 
 ```bash
 scripts/nexus_lane_smoke.py \
@@ -158,4 +158,4 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Los fixtures grabados bajo `fixtures/nexus/lanes/` reflejan los artefactos producidos por el helper de bootstrap para que los nuevos manifests se puedan lint-ear sin scripting a medida. CI ejecuta el mismo flujo via `ci/check_nexus_lane_smoke.sh` y `ci/check_nexus_lane_registry_bundle.sh` (alias: `make check-nexus-lanes`) para demostrar que el helper de smoke NX-7 siga estando alineado con el formato de payload publicado y para asegurar que los digests/overlays del bundle se mantengan reproducibles.
+ロス フィクスチャ グラバドス バホ `fixtures/nexus/lanes/` reflejan ロス アーティファクト プロダクト ポル エル ヘルパー デ ブートストラップ パラ ケ ロス ヌエボス マニフェスト セ プエダン 糸くず耳罪スクリプト作成メディア。 `ci/check_nexus_lane_smoke.sh` y `ci/check_nexus_lane_registry_bundle.sh` (エイリアス: `make check-nexus-lanes`) での CI 出力は、スモーク NX-7 のデモストラル クエリ ヘルパーとペイロードの公開形式の公開と、ダイジェスト/オーバーレイのバンドル セキュアを介して実行されます。まんてんがん再現。

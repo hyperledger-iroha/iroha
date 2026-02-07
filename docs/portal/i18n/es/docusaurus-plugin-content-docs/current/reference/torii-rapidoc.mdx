@@ -4,27 +4,28 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+importar RapiDocPanel desde '@site/src/components/RapiDocPanel.jsx';
 
 # Torii API (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc` ofrece una representación compacta y documentada del mismo Torii
+Documento OpenAPI. Úselo cuando necesite una descripción general más detallada o una revisión de solo lectura de
+Modelos de solicitud/respuesta.
 
-## Usage tips
+## Consejos de uso
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- Ingrese un token de portador para habilitar llamadas interactivas. El valor se envía como un
+  Encabezado `X-TryIt-Auth` y normalizado por el proxy.
+- Configurar `TRYIT_PROXY_PUBLIC_URL` al dar servicio al portal de forma interactiva
+  las solicitudes se enrutan a través del proxy provisional. El widget advierte cuando el proxy
+  Falta la URL.
+- Utilice el menú desplegable "Instantánea OpenAPI" para cargar especificaciones históricas publicadas por
+  `npm run sync-openapi`; la opción `Latest (tracked)` siempre se resuelve en
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- Combínelo con la consola “[Pruébelo](/api/overview#try-it-sandbox-docs-3)” cuando
+  trabajando contra puertas de enlace preparadas que requieren el proxy.
 
-<RapiDocPanel />

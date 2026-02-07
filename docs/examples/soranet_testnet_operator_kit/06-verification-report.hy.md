@@ -7,46 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf489427d0eba2beebfdefc44092730c3963cbd77e83669853f4e9681ac9fd2d
 source_last_modified: "2025-12-29T18:16:35.092552+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Operator Verification Report (Phase T0)
+## Օպերատորի ստուգման հաշվետվություն (Փուլ T0)
 
-- Operator name: ______________________
-- Relay descriptor ID: ______________________
-- Submission date (UTC): ___________________
-- Contact email / matrix: ___________________
+- Օպերատորի անունը. _____________________
+- Ռելեի նկարագրիչ ID՝ ______________________
+- Ներկայացման ամսաթիվ (UTC): _________________
+- Կոնտակտային էլփոստ / մատրիցա՝ __________________
 
-### Checklist Summary
+### ստուգաթերթի ամփոփում
 
-| Item | Completed (Y/N) | Notes |
+| Նյութ | Ավարտված (Y/N) | Ծանոթագրություններ |
 |------|-----------------|-------|
-| Hardware & network validated | | |
-| Compliance block applied | | |
-| Admission envelope verified | | |
-| Guard rotation smoke test | | |
+| Սարքավորումներ և ցանցային վավերացված | | |
+| Կիրառվել է համապատասխանության բլոկ | | |
+| Ընդունելության ծրարը ստուգված | | |
+| Պահակների ռոտացիայի ծխի փորձարկում | | |
 | Telemetry scraped & dashboards live | | |
-| Brownout drill executed | | |
-| PoW ticket success within target | | |
+| Կատարվել է բրաունաութ փորվածք | | |
+| PoW տոմսի հաջողությունը նպատակային | | |
 
-### Metrics Snapshot
+### Չափման պատկեր
 
-- PQ ratio (`sorafs_orchestrator_pq_ratio`): ________
-- Downgrade count last 24h: ________
-- Average circuit RTT (p95): ________ ms
-- PoW median solve time: ________ ms
+- PQ հարաբերակցություն (`sorafs_orchestrator_pq_ratio`): ________
+- Վերջին 24 ժ-ի իջեցումների քանակը՝ ________
+- Միջին շղթայի RTT (p95): ________ ms
+- PoW լուծման միջին ժամանակը` ________ ms
 
-### Attachments
+### Հավելվածներ
 
-Please attach:
+Խնդրում ենք կցել՝
 
-1. Relay support bundle hash (`sha256`): __________________________
-2. Dashboard screenshots (PQ ratio, circuit success, PoW histogram).
-3. Signed drill bundle (`drills-signed.json` + signer public key hex and attachments).
-4. SNNet-10 metrics report (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
+1. Ռելեի աջակցության փաթեթի հեշ (`sha256`)՝ __________________________
+2. Վահանակի սքրինշոթներ (PQ հարաբերակցություն, շղթայի հաջողություն, PoW հիստոգրամ):
+3. Ստորագրված հորատման փաթեթ (`drills-signed.json` + ստորագրող հանրային բանալին վեցանկյուն և հավելվածներ):
+4. SNNet-10 չափման հաշվետվություն (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`):
 
-### Operator Signature
+### Օպերատորի ստորագրությունը
 
-I certify the above information is accurate and all required steps have been
-completed.
+Ես հավաստում եմ, որ վերը նշված տեղեկատվությունը ճշգրիտ է, և բոլոր պահանջվող քայլերը կատարվել են
+ավարտված.
 
-Signature: _________________________  Date: ___________________
+Ստորագրություն՝ ________________________ Ամսաթիվ՝ ___________________

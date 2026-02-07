@@ -11,62 +11,54 @@ id: puzzle-service-operations
 title: Puzzle Service Operations Guide
 sidebar_label: Puzzle Service Ops
 description: Operating the `soranet-puzzle-service` daemon for Argon2/ML-DSA admission tickets.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# Puzzle Service Operations Guide
+# གབ་གཞིའི་ཞབས་ཞུའི་ལས་དོན་ལམ་སྟོན།
 
-The `soranet-puzzle-service` daemon (`tools/soranet-puzzle-service/`) issues
-Argon2-backed admission tickets that mirror the relay’s `pow.puzzle.*` policy
-and, when configured, brokers ML-DSA admission tokens on behalf of edge relays.
-It exposes five HTTP endpoints:
+`soranet-puzzle-service` ཌེ་མཱོན་ (I18NI00000000007X) གི་གནད་དོན་ཚུ་ཨིན།
+Argon2-རྒྱབ་འགལ་གྱི་འཛུལ་ཞུགས་ཤོག་བྱང་ཚུ་ རི་ལེ་གི་ I18NI0000008X སྲིད་བྱུས་ཀྱི་ མཐོང་སྣང་ཚུ་ མཐོང་སྣང་བྱུང་ཡོདཔ་ཨིན།
+དེ་ལས་ རིམ་སྒྲིག་འབད་བའི་སྐབས་ བར་ཚོང་པ་ ML-DSA འཛུལ་ཞུགས་ཊོ་ཀེན་ཚུ་ མཐའ་མཚམས་བརྡ་སྤྲོད་ཀྱི་ཚབ་ལུ་ཨིན།
+འདི་གིས་ ཨེཆ་ཊི་ཊི་པི་མཇུག་བསྡུའི་ས་སྒོ་ལྔ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
 
-- `GET /healthz` – liveness probe.
-- `GET /v1/puzzle/config` – returns the effective PoW/puzzle parameters pulled
-  from the relay JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` – mints an Argon2 ticket; an optional JSON body
+- `GET /healthz` – སྲོག་ལྡན་གྱི་ཞིབ་འཇུག།
+- I18NI000000010X – ནུས་ཅན་གྱི་ POW/puzzle ཚད་བཟུང་ཚུ་ འཐེན་ཡོདཔ་ཨིན།
+  རི་ལེ་ཇེ་ཨེསི་ཨོ་ཨེན་ (`handshake.descriptor_commit_hex`, `pow.*`) ལས།
+- `POST /v1/puzzle/mint` – མིན་ཊི་ཚུ་ Argon2 གི་ཤོག་འཛིན་; གདམ་ཁ་ཅན་གྱི་ JSON གཟུགས་པོ།
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
-  requests a shorter TTL (clamped to the policy window), binds the ticket to a
-  transcript hash, and returns a relay-signed ticket + signature fingerprint
-  when signing keys are configured.
-- `GET /v1/token/config` – when `pow.token.enabled = true`, returns the active
-  admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
-  and the merged revocation set).
-- `POST /v1/token/mint` – mints an ML-DSA admission token bound to the supplied
-  resume hash; the request body accepts `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
+  ཊི་ཊི་ཨེལ་ཐུང་ཀུ་ཅིག་ཞུ་བ་འབདཝ་ཨིན་ (སྲིད་བྱུས་སྒོ་སྒྲིག་ལུ་བསྡམས་ཡོདཔ་) གིས་ ཤོག་འཛིན་འདི་ ༡ ལུ་བསྡམ་བཞགཔ་ཨིན།
+  ཡིག་བསྒྱུར་གྱི་ཧ་ཤི་དང་ རི་ལེ་མིང་རྟགས་བཀོད་ཡོད་པའི་ ཊིཀཊ་ + མཚན་རྟགས་མཛུབ་མོ་གི་པར་རིས།
+  མཚན་རྟགས་ལྡེ་མིག་ཚུ་རིམ་སྒྲིག་འབད་བའི་སྐབས་ལུ།
+- `GET /v1/token/config` – `pow.token.enabled = true` སྐབས་ ཤུགས་ལྡན་འདི་སླར་ལོག་འབདཝ་ཨིན།
+  adsist-token སྲིད་བྱུས་ (ཉེས་འཛུགས་ཅན་གྱི་མཛུབ་མོ་གི་པར་རིས།, TTL/ཆུ་ཚོད་-skew-skew མཐའ་མཚམས་, རི་ལེ་ཨའི་ཌི་,
+  དང་ མཉམ་བསྡོམས་འབད་ ཆ་མེད་ཆ་ཚན་)།
+- `POST /v1/token/mint` – མིན་ཊི་ཚུ་ ཨེམ་ཨེལ་ཌི་ཨེསི་ཨེ་ འཛུལ་ཞུགས་བརྡ་མཚོན་ཅིག་ བཀྲམ་སྤེལ་འབད་ཡོདཔ་ཨིན།
+  resogy hash; ཞུ་བ་གཟུགས་འདི་གིས་ `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }` དང་ལེན་འབདཝ་ཨིན།
 
-Tickets produced by the service are verified in the
+ཞབས་ཏོག་གིས་བཏོན་མི་ ཤོག་འཛིན་ཚུ་ ནང་ བདེན་དཔྱད་འབདཝ་ཨིན།
 `volumetric_dos_soak_preserves_puzzle_and_latency_slo`
-integration test, which also exercises relay throttles during volumetric DoS
-scenarios.【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
+མཉམ་བསྡོམས་བརྟག་དཔྱད། དེ་གིས་ཡང་ བོ་ལུསཊི་གི་སྐབས་ལུ་ རི་ལེ་ཐོརཊ་ཚུ་ལག་ལེན་འཐབ་ཨིན།
+མཐོང་སྣང་།【【【སོ/སོ་རེན་ཊི་-རི་ལེ་/བརྟག་དཔྱད།/བརྟག་དཔྱད་_དང་_པཱ་ཛལ་.s:337】
 
-## Configuring token issuance
+## ཊོ་ཀན་སྤྲོད་ལེན་རིམ་སྒྲིག་འབད་དོ།
 
-Set the relay JSON fields under `pow.token.*` (see
-`tools/soranet-relay/deploy/config/relay.entry.json` for an example) to enable
-ML-DSA tokens. At minimum provide the issuer public key and optional
-revocation list:
+`pow.token.*` གི་འོག་ལུ་ JSON ས་སྒོ་ཚུ་གཞི་སྒྲིག་འབད།(བལྟ།
+དཔེ་ཅིག་གི་དོན་ལུ་ `tools/soranet-relay/deploy/config/relay.entry.json` ལྕོགས་ཅན་བཟོ་ནི་ལུ་)
+ML-DSA ཊོ་ཀེན་ཚུ། ཉུང་མཐའ་ལུ་ བཀྲམ་སྤེལ་འབད་མི་ མི་མང་ལྡེ་མིག་དང་ གདམ་ཁ་ཅན་ཚུ་ བྱིན།
+ཆ་མེད་ཀྱི་ཐོ་ཡིག་:
 
-```json
-"pow": {
-  "token": {
-    "enabled": true,
-    "issuer_public_key_hex": "<ML-DSA-44 public key>",
-    "revocation_list_hex": [],
-    "revocation_list_path": "/etc/soranet/relay/token_revocations.json"
-  }
-}
-```
+I18NF0000004X
 
-The puzzle service reuses these values and automatically reloads the Norito
-JSON revocation file at runtime. Use the `soranet-admission-token` CLI
-(`cargo run -p soranet-relay --bin soranet_admission_token`) to mint and inspect
-tokens offline, append `token_id_hex` entries to the revocation file, and audit
-existing credentials before pushing updates to production.
+གབ་ཚིག་ཞབས་ཏོག་འདི་གིས་ གནས་གོང་འདི་ཚུ་ལོག་ལག་ལེན་འཐབ་ཨིནམ་དང་ རང་བཞིན་གྱིས་ Norito འདི་ མངོན་གསལ་འབདཝ་ཨིན།
+JSON གི་ གཡོག་བཀོལ་བའི་ཡིག་སྣོད་ རན་ཊའིམ་ལུ་། `soranet-admission-token` CLI ལག་ལེན་འཐབ།
+(I18NI0000023X) དང་ དཔྱད་ཞིབ་འབད་ནི།
+ཊོ་ཀེན་དང་ ཟུར་ཐིག་ཚུ་ ཟུར་མེད་ཡིག་སྣོད་དང་ རྩིས་ཞིབ་ལུ་ I18NI0000024X ཐོ་བཀོད་འབདཝ་ཨིན།
+བཟོ་བསྐྲུན་ལུ་དུས་མཐུན་ཚུ་ བསྐུལ་མ་མ་འབད་བའི་ཧེ་མར་ ད་ལྟོ་ཡོད་པའི་ ངོ་སྤྲོད་ཆ་རྐྱེན་ཚུ།
 
-Pass the issuer secret key to the puzzle service via the CLI flags:
+སི་ཨེལ་ཨའི་རྒྱལ་དར་བརྒྱུད་དེ་ མགུ་ཐོམ་སི་སི་གི་ཞབས་ཏོག་ལུ་ གསང་བའི་གསང་བའི་ལྡེ་མིག་འདི་ བརྒྱུད་དེ་འགྱོ།
 
 ```bash
 cargo run -p soranet-puzzle-service -- \
@@ -76,82 +68,82 @@ cargo run -p soranet-puzzle-service -- \
   --token-revocation-refresh-secs 60
 ```
 
-`--token-secret-hex` is also available when the secret is managed by an out-of-band
-tooling pipeline. The revocation file watcher keeps `/v1/token/config` current;
-coordinate updates with the `soranet-admission-token revoke` command to avoid lagging
-revocation state.
+`--token-secret-hex` འདི་ གསང་བ་འདི་ ཕྱི་ཁའི་སྡེ་ཚན་ཅིག་གིས་ འཛིན་སྐྱོང་འཐབ་པའི་སྐབས་ འཐོབ་ཚུགས།
+ལག་ཆས་ཀྱི་ མདོང་ལམ་། ཆ་མེད་ཡིག་སྣོད་བལྟ་མི་གིས་ `/v1/token/config` གློག་རྒྱུན་བཞགཔ་ཨིན།
+དུས་མཐུན་བཟོ་ནི་ `soranet-admission-token revoke` བརྡ་བཀོད་འདི་ ལཱ་བཀག་བཞག་ནི་ལས་འཛེམ་དགོ།
+ཆ་མེད་ཀྱི་གནས་སྟངས།
 
-Set `pow.signed_ticket_public_key_hex` in the relay JSON to advertise the ML-DSA-44 public
-key used to verify signed PoW tickets; `/v1/puzzle/config` echoes the key and its BLAKE3
-fingerprint (`signed_ticket_public_key_fingerprint_hex`) so clients can pin the verifier.
-Signed tickets are validated against the relay ID and transcript bindings and share the same
-revocation store; raw 74-byte PoW tickets remain valid when the signed-ticket verifier is
-configured. Pass the signer secret via `--signed-ticket-secret-hex` or
-`--signed-ticket-secret-path` when launching the puzzle service; startup rejects mismatched
-keypairs if the secret does not validate against `pow.signed_ticket_public_key_hex`.
-`POST /v1/puzzle/mint` accepts `"signed": true` (and optional `"transcript_hash_hex"`) to
-return a Norito-encoded signed ticket alongside the raw ticket bytes; responses include
-`signed_ticket_b64` and `signed_ticket_fingerprint_hex` to help track replay fingerprints.
-Requests with `signed = true` are rejected if the signer secret is not configured.
+རི་ལེ་ཇེ་ཨེསི་ཨོ་ཨེན་ནང་ `pow.signed_ticket_public_key_hex` འདི་ ML-DSA-44 མི་མང་ལུ་ཁྱབ་བསྒྲགས་འབད་ནིའི་དོན་ལུ་ གཞི་སྒྲིག་འབད།
+མཚན་རྟགས་བཀོད་པའི་ POW ཤོག་བྱང་ཚུ་བདེན་དཔྱད་འབད་ནི་ལུ་ ལྡེ་མིག་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན། I18NI000000029X ལྡེ་མིག་དང་ དེ་གི་བེལ་ཀེ་༣ བསྐྱར་སྒྲོག་འབདཝ་ཨིན།
+མཛུབ་མོ་གི་པར་ (`signed_ticket_public_key_fingerprint_hex`) དེ་འབདཝ་ལས་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ བདེན་དཔྱད་འབད་མི་འདི་ བཙུགས་ཚུགས།
+མཚན་རྟགས་བཀོད་པའི་ཤོག་འཛིན་ཚུ་ རི་ལེ་ཨའི་ཌི་དང་ ཡིག་བསྒྱུར་གྱི་བཱའིན་ཌིང་ཚུ་ལུ་ བདེན་དཔྱད་འབད་དེ་ ཅོག་འཐདཔ་ཨིན།
+ཆ་མེད་ཚོང་ཁང་། raw 74-byte POW ཤོག་འཛིན་ཚུ་ མཚན་རྟགས་བཀོད་པའི་ ཊིཀསི་བདེན་དཔྱད་འདི་ ཨིན་པའི་སྐབས་ ནུས་ཅན་ལུས་ཡོདཔ་ཨིན།
+རིམ་སྒྲིག་འབད་ཡོདཔ། མཚན་རྟགས་བཀོད་མི་འདི་ `--signed-ticket-secret-hex` ཡང་ན་ བརྒྱུད་དེ་བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+མགུ་སྐོར་ཞབས་ཏོག་འགོ་བཙུགས་པའི་སྐབས་ `--signed-ticket-secret-path` དང་། འགོ་འབྱེད་བཀག་ཆ་འབད་མི་ ཆ་མེད་གཏང་ཡོདཔ།
+གསང་བ་འདི་གིས་ I18NI000000033X ལུ་བདེན་དཔྱད་མ་འབད་བ་ཅིན་ ལྡེ་མིག་ཆ་རྐྱེན།
+I18NI0000034X གིས་ `"signed": true` (དང་གདམ་ཁ་ཅན་གྱི་ I18NI000000036X) ལུ་ངོས་ལེན་འབདཝ་ཨིན།
+རཝསི་བཱའིཊི་ཚུ་གི་སྦོ་ལོགས་ཁར་ Norito-encoded མཚན་རྟགས་བཀོད་ཡོད་པའི་ཤོག་བྱང་ཅིག་སླར་ལོག་འབད། ལན་ཚུ་ནང་།
+`signed_ticket_b64` དང་ I18NI000000038X གིས་ མཛུབ་མོ་གི་པར་ཚུ་ བསྐྱར་རྩེད་འབད་ནི་ལུ་ གྲོགས་རམ་འབད་ནིའི་དོན་ལུ་ཨིན།
+མཚན་རྟགས་བཀོད་མི་གསང་བ་འདི་ རིམ་སྒྲིག་མ་འབད་བ་ཅིན་ `signed = true` ཡོད་པའི་ཞུ་བ་ཚུ་ ངོས་ལེན་མི་འབད།
 
-## Key rotation playbook
+## ལྡེ་མིག་བསྒྱིར་རྩེད་དེབ།
 
-1. **Collect the new descriptor commit.** Governance publishes the relay
-   descriptor commit in the directory bundle. Copy the hex string into
-   `handshake.descriptor_commit_hex` inside the relay JSON configuration shared
-   with the puzzle service.
-2. **Review puzzle policy bounds.** Confirm the updated
-   `pow.puzzle.{memory_kib,time_cost,lanes}` values align with the release
-   plan. Operators should keep the Argon2 configuration deterministic across
-   relays (minimum 4 MiB memory, 1 ≤ lanes ≤ 16).
-3. **Stage the restart.** Reload the systemd unit or container once governance
-   announces the rotation cutover. The service has no hot-reload support; a
-   restart is required to pick up the new descriptor commit.
-4. **Validate.** Issue a ticket via `POST /v1/puzzle/mint` and confirm the
-   returned `difficulty` and `expires_at` match the new policy. The soak report
-   (`docs/source/soranet/reports/pow_resilience.md`) captures expected latency
-   bounds for reference. When tokens are enabled, fetch `/v1/token/config` to
-   ensure the advertised issuer fingerprint and revocation count match the
-   expected values.
+1. **འགྲེལ་བཤད་གསརཔ་འདི་བསྡུ་ལེན་འབད།** གཞུང་སྐྱོང་གིས་ རི་ལེ་འདི་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+   འགྲེལ་བཤད་པ་གིས་ སྣོད་ཐོ་བང་སྒྲིག་ནང་ ཁས་བླངས་འབདཝ་ཨིན། ཧེགསི་ཡིག་རྒྱུན་འདི་ནང་ལུ་འདྲ་བཤུས་རྐྱབས།
+   I18NI0000004040 རི་ལེ་ཇེ་ཨེསི་ཨོ་ཨེན་ རིམ་སྒྲིག་རུབ་སྤྱོད་འབད་ཡོད་པའི་ནང་ན་རུབ་སྤྱོད་འབད་ཡོདཔ།
+   མགུ་སྐོར་ཞབས་ཏོག་དང་གཅིག་ཁར།
+2. ** བསྐྱར་ཞིབ་ཀྱི་ གབ་ཚིག་སྲིད་བྱུས་འདི་ མཐའ་མཚམས་ཨིན།** དུས་མཐུན་བཟོ་ཡོད་མི་ ངེས་དཔྱད་འབད།
+   I18NI000000041X གནས་གོང་ཚུ་ གསར་བཏོན་དང་ མཉམ་སྒྲིག་འབདཝ་ཨིན།
+   འཆར༌གཞི། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཨར་གཱོན་༢ རིམ་སྒྲིག་གཏན་འབེབས་འདི་ ནང་འཁོད་ལུ་བཞག་དགོ།
+   རི་ལེ་ (ཉུང་མཐའ་ ༤ མིབ་དྲན་ཤེས་ ༡ 1≤ ལེ་ནེས་ ≤ 16).
+3. **ལོག་སྤྱོད་འདི་གནས་སྡུད་འབད།** གཞུང་སྐྱོང་ཚར་ཚརཝ་ཅིག་ རིམ་ལུགས་ཅན་གྱི་ཆ་ཤས་ཡང་ན་ དོས་ཆས་འདི་བསྐྱར་མངོན་གསལ་འབད།
+   འཁོར་སྐྱོད་ཀྱི་བཀག་ཆ་གསལ་བསྒྲགས་འབདཝ་ཨིན། ཞབས་ཏོག་འདི་ལུ་ ཧོཊ་རི་མངོན་གསལ་རྒྱབ་སྐྱོར་མེདཔ་ཨིན། ཅིག
+   འགྲེལ་བཤད་གསརཔ་འདི་ འཐུ་ནིའི་དོན་ལུ་ ལོག་འགོ་བཙུགས་དགོཔ་ཨིན།
+4. ** Validate.** `POST /v1/puzzle/mint` བརྒྱུད་དེ་ ཤོག་འཛིན་ཅིག་བཏོན་ཞིནམ་ལས་ ངེས་གཏན་བཟོ།
+   ལོག་འོང་མི་ `difficulty` དང་ `expires_at` འདི་ སྲིད་བྱུས་གསརཔ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན། ཆུ་ཁོལ་སྙན་ཞུ།
+   (I18NI00000045) རེ་བ་རེ་བ་སྐྱེད་པའི་བར་ཆད་འཛིན་བཟུང་།
+   གཞི་བསྟུན་གྱི་དོན་ལུ་ binds. ཊོ་ཀེན་ཚུ་ ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ I18NI0000046X ལུ་ལེན་དགོ།
+   ཁྱབ་བསྒྲགས་འབད་ཡོད་པའི་ བཏོན་མི་ མཛུབ་མོ་དང་ ཆ་མེད་ཀྱི་གྱངས་ཁ་འདི་ མཐུན་སྒྲིག་འབད།
+   རེ་བ་ཡོད་པའི་གནས་གོང་ཚུ།
 
-## Emergency disable procedure
+## ཛ་དྲག་བྱ་སྒོ་མེད་པ།
 
-1. Set `pow.puzzle.enabled = false` in the shared relay configuration. Keep
-   `pow.required = true` if hashcash fallback tickets must remain mandatory.
-2. Optionally enforce `pow.emergency` entries to reject stale descriptors while
-   the Argon2 gate is offline.
-3. Restart both the relay and the puzzle service to apply the change.
-4. Monitor `soranet_handshake_pow_difficulty` to ensure the difficulty drops to
-   the expected hashcash value, and verify `/v1/puzzle/config` reports
-   `puzzle = null`.
+༡ རུབ་སྤྱོད་འབད་ཡོད་པའི་རི་ལེ་རིམ་སྒྲིག་ནང་ I18NI000000047X གཞི་སྒྲིག་འབད། བཞག
+   I18NI000000048X གལ་ཏེ་ hashcash fallback ཤོག་འཛིན་ཚུ་ མཐའ་གཅིག་ཏུ་བཞག་དགོཔ་ཨིན།
+2. གདམ་ཁའི་ཐོག་ལས་ `pow.emergency` གིས་ རྒྱུན་རིམ་གྱི་འགྲེལ་བཤད་ཚུ་ བཀག་ཆ་འབད་ནིའི་དོན་ལུ་ ཐོ་བཀོད་ཚུ་ མཚམས་འཇོག་འབད་དགོ།
+   the Argon2 གི་སྒོ་ར་འདི་ ཨོཕ་ལཱའིན་ཨིན།
+༣ བསྒྱུར་བཅོས་ལག་ལེན་འཐབ་ནི་ལུ་ རི་ལེ་དང་ མགུ་ཐོམ་སི་སི་གི་ཞབས་ཏོག་གཉིས་ཆ་ར་ ལོག་འགོ་བཙུགས།
+4. བལྟ་རྟོག་པ་ `soranet_handshake_pow_difficulty` དཀའ་ངལ་འདི་ ༢༠ ལུ་མར་ཕབ་འབད་ཚུགས།
+   རེ་བ་བསྐྱེད་པའི་ཧེ་ཤི་ཀེཤ་གནས་གོང་དང་ I18NI000000051X སྙན་ཞུ་ཚུ་བདེན་སྦྱོར་འབད།
+   I18NI0000002X.
 
-## Monitoring and alerting
+## བལྟ་རྟོག་དང་ཉེན་བརྡ།
 
-- **Latency SLO:** Track `soranet_handshake_latency_seconds` and keep the P95
-  below 300 ms. The soak test offsets provide calibration data for guard
-  throttles.【docs/source/soranet/reports/pow_resilience.md:1】
-- **Quota pressure:** Use `soranet_guard_capacity_report.py` with relay metrics
-  to tune `pow.quotas` cooldowns (`soranet_abuse_remote_cooldowns`,
-  `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
-- **Puzzle alignment:** `soranet_handshake_pow_difficulty` should match the
-  difficulty returned by `/v1/puzzle/config`. Divergence indicates stale relay
-  config or a failed restart.
-- **Token readiness:** Alert if `/v1/token/config` drops to `enabled = false`
-  unexpectedly or if `revocation_source` reports stale timestamps. Operators
-  should rotate the Norito revocation file via the CLI whenever a token is
-  retired to keep this endpoint accurate.
-- **Service health:** Probe `/healthz` in the usual liveness cadence and alert
-  if `/v1/puzzle/mint` returns HTTP 500 responses (indicates Argon2 parameter
-  mismatch or RNG failures). Token minting errors surface through HTTP 4xx/5xx
-  responses on `/v1/token/mint`; treat repeated failures as a paging condition.
+- ** འཕྲིན་དོན་ SLO:** འཚོལ་ཞིབ་ I18NI0000003X དང་ P95 བཞག་དགོ།
+  ༣༠༠ms ལས་དམའ་བ། སོག་བརྟག་དཔྱད་ཨོཕ་སེཊི་ཚུ་གིས་ སྲུང་རྒྱབ་ཀྱི་དོན་ལུ་ ཚད་འཇལ་གནས་སྡུད་བྱིནམ་ཨིན།
+  ཐོརོ་ཊལ།【ཌོཊ།/འབྱུང་ཁུངས།/སོ་རོན་ནེཊ།/སྙན་ཞུ།/པའོ་_རེ་སི་ལིན.md:1】
+- **ཀུ་ཊ་གནོན་ཤུགས་:** རི་ལེ་མེ་ཊིགསི་དང་གཅིག་ཁར་ I18NI0000054X ལག་ལེན་འཐབ།
+  I18NI0000005X བསིལ་དྲོད་ (I18NI000000056X,
+  `soranet_handshake_throttled_remote_quota_total`),【docs/soranet/Relay_audit_pipeline.md:md:68】
+- **Puzzle ཕྲང་སྒྲིག་:** I18NI000000058X དང་མཐུན་དགོ།
+  `/v1/puzzle/config` གིས་ལོག་འོང་དཀའ་སྡིག། ཁ་སྟོར་འདི་གིས་ རྒྱུན་ལམ་བཀག་པའི་རི་ལེ་བརྡ་སྟོནམ་ཨིན།
+  figg ཡང་ན་ འཐུས་ཤོར་འབྱུང་མི་ ལོག་འགོ་བཙུགས་ཡོདཔ།
+- **ཊོ་ཀེན་གྲ་སྒྲིག་:** `/v1/token/config` `enabled = false` ལུ་མར་ཕབ་འབད་བ་ཅིན་ ཉེན་བརྡ་འབདཝ་ཨིན།
+  རེ་བ་མེད་པར་ ཡང་ན་ `revocation_source` གིས་ དུས་ཚོད་བཀག་ཆ་ཚུ་སྙན་ཞུ་འབདཝ་ཨིན། བཀོལ་སྤྱོད་པ།
+  Norito ཊོ་ཀེན་འདི་ ག་དུས་འབད་རུང་ སི་ཨེལ་ཨའི་བརྒྱུད་དེ་ ཁ་ཕྱེ་ཡོད་པའི་ཡིག་སྣོད་འདི་ བསྒྱིར་དགོ།
+  མཇུག་བསྡུའི་ས་ཚིགས་འདི་ངེས་བདེན་སྦེ་བཞག་ནིའི་དོན་ལུ་ དགོངས་ཞུ་འབད་ཡོདཔ།
+- **ཞབས་ཞུ་འཕྲོད་བསྟེན:** དུས་རྒྱུན་གྱི་ཚེ་སྲོག་ཐོབ་ཐང་དང་ཉེན་བརྡ།
+  if I18NI000000064X གིས་ ཨེཆ་ཊི་ཊི་པི་ ༥༠༠ ལན་ཚུ་སླར་ལོག་འབདཝ་ཨིན་ (ཨར་གོན་༢ ཚད་བཟུང་སྟོནམ་ཨིན།
+  མ་མཐུན་པའམ་ RNG འཐུས་ཤོར་)། ཊོ་ཀེན་མིན་ཊིང་འཛོལ་བ་ཚུ་ ཨེཆ་ཊི་ཊི་པི་ ༤xx/༥xx བརྒྱུད་དེ་ ཁ་ཐོག་ལུ་ཨིན།
+  ལན་ཚུ་ `/v1/token/mint` ལུ་; བསྐྱར་ལོག་འཐུས་ཤོར་འདི་ ཤོག་ལེབ་ཀྱི་གནས་སྟངས་ཅིག་སྦེ་ཨིན།
 
-## Compliance and audit logging
+## བསྟུན་པ་དང་རྩིས་ཞིབ་ཀྱི་བརྐོས་བསྐུལ།
 
-Relays emit structured `handshake` events that include throttle reasons and
-cooldown durations. Ensure the compliance pipeline described in
-`docs/source/soranet/relay_audit_pipeline.md` ingests these logs so puzzle
-policy changes remain auditable. When the puzzle gate is enabled, archive the
-minted ticket samples and the Norito configuration snapshot with the rollout
-ticket for future audits. Admission tokens minted ahead of maintenance windows
-should be tracked with their `token_id_hex` values and inserted into the
-revocation file once they expire or are revoked.
+རི་ལེ་གིས་ གཞི་བཀོད་འབད་ཡོད་པའི་ I18NI0000006X ལས་རིམ་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+བསིལ་དྲོད་ཀྱི་དུས་ཚོད། ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ བསྟར་སྤྱོད་ཀྱི་ མདོང་ལམ་འདི་ ངེས་གཏན་བཟོ།
+I18NI000000067X དྲན་ཐོ་འདི་དག་གིས་ མགུ་ཐོམ་སི་སི་བཟོཝ་ཨིན།
+སྲིད་བྱུས་བསྒྱུར་བཅོས་ཚུ་ རྩིས་ཞིབ་འབད་བཏུབ་སྦེ་སྡོད་ཡོདཔ། མགུ་ཐོམ་སྒོ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ གཏན་མཛོད་ནང་།
+inted chitch དཔེ་ཚད་དང་ I18NT0000003X རིམ་སྒྲིག་པར་རིས།
+མ་འོངས་པའི་རྩིས་ཞིབ་ཀྱི་དོན་ལུ་ ཤོག་ཐོབ། རྒྱུན་སྐྱོང་སྒོ་སྒྲིག་ཚུ་གི་གདོང་ཁར་ འཛུལ་ཞུགས་ཊོ་ཀེན་ཚུ་ མིན་འདུག་ཟེར་ བཀོད་ནུག།
+ཁོང་གི་ `token_id_hex` གནས་གོང་ཚུ་དང་གཅིག་ཁར་ བརྟག་ཞིབ་འབད་དགོཔ་དང་ ནང་ན་བཙུགས་དགོ།
+ཡིག་སྣོད་ཚུ་ དུས་ཡུན་ཚང་ཞིནམ་ལས་ ཆ་མེད་བཏང་ཡོདཔ་ ཡང་ན་ ཆ་མེད་བཏང་ཡོདཔ་ཨིན།

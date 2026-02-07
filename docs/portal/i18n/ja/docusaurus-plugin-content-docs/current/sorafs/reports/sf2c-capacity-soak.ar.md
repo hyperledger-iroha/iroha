@@ -4,51 +4,53 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# تقرير اختبار soak لتراكم سعة SF-2c
+# ソーク لتراكم سعة SF-2c
 
-التاريخ: 2026-03-21
+日: 2026-03-21
 
-## النطاق
+## ああ
 
-يسجل هذا التقرير اختبارات soak الحتمية لتراكم سعة SoraFS والمدفوعات المطلوبة ضمن مسار خطة SF-2c.
+液体を浸し、液体を浸し、SoraFS を使用してください。 SF-2c。
 
-- **اختبار soak متعدد المزوّدين لمدة 30 يوما:** يتم عبر
-  `capacity_fee_ledger_30_day_soak_deterministic` في
-  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
+- **اختبار 浸漬 متعدد المزوّدين لمدة 30 يوما:** يتم عبر
+  `capacity_fee_ledger_30_day_soak_deterministic` 年
+  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`。
   يقوم harness بإنشاء خمسة مزودين، ويمتد عبر 30 نافذة تسوية، ويتحقق من أن إجماليات
-  ledger تطابق إسقاطا مرجعيا محسوبا بشكل مستقل. يخرج الاختبار digest من Blake3
-  (`capacity_soak_digest=...`) حتى تتمكن CI من التقاط اللقطة القياسية ومقارنتها.
-- **عقوبات نقص التسليم:** تُفرض بواسطة
+  元帳は、オンラインで管理されています。ブレイク 3 のダイジェスト
+  (`capacity_soak_digest=...`) حتى تتمكن CI من التقاط اللقطة القياسية ومقارنتها。
+- ** 評価:** 評価
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (نفس الملف). يؤكد الاختبار أن عتبات strikes وcooldowns وslashing للضمان وعدّادات
-  ledger تبقى حتمية.
+  (๑فس الملف)攻撃、クールダウン、斬撃、攻撃
+  元帳。
 
-## التنفيذ
+## ああ
 
-شغّل تحقق soak محليا باستخدام:
+浸す方法:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-تكتمل الاختبارات في أقل من ثانية على حاسوب محمول قياسي ولا تتطلب fixtures خارجية.
+試合は、試合の準備をするために行われます。
 
-## الرصد
+## いいえ
 
-يعرض Torii الآن لقطات رصيد المزوّدين جنبًا إلى جنب مع fee ledgers حتى تتمكن لوحات المتابعة
-من الضبط على الأرصدة المنخفضة وpenalty strikes:
+يعرض Torii المزوّدين جنبًا إلى جنب مع 料金台帳の管理
+ペナルティストライキ:
 
-- REST: `GET /v1/sorafs/capacity/state` يعيد إدخالات `credit_ledger[*]` التي
-  تعكس حقول ledger التي تم التحقق منها في اختبار soak. راجع
-  `crates/iroha_torii/src/sorafs/registry.rs`.
-- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` يرسم
-  عدادات strikes المصدّرة وإجمالي العقوبات والضمان المربوط حتى يتمكن فريق
-  المناوبة من مقارنة baselines soak مع البيئات الحية.
+- 残り: `GET /v1/sorafs/capacity/state` يعيد إدخالات `credit_ledger[*]` التي
+  台帳を浸す必要があります。やあ
+  `crates/iroha_torii/src/sorafs/registry.rs`。
+- Grafana インポート: `dashboards/grafana/sorafs_capacity_penalties.json`
+  ストライキは、ストライキを攻撃します。
+  ベースラインがかなり浸み込みます。
 
-## المتابعة
+## ああ
 
-- جدولة تشغيل بوابة أسبوعي في CI لإعادة تشغيل اختبار soak (smoke-tier).
-- توسيع لوحة Grafana بأهداف scrape من Torii بمجرد تفعيل صادرات telemetry الإنتاجية.
+- 煙を浸す（煙層）。
+- Grafana は Torii をスクレイピングし、テレメトリを取得します。

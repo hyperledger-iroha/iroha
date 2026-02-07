@@ -4,83 +4,85 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/orchestrator-ga-parity.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# تقرير تكافؤ GA لمنسق SoraFS
+# عرض المزيد كافؤ GA لمنسق SoraFS
 
-يتم الآن تتبع تكافؤ multi-fetch الحتمي لكل SDK كي يتمكن مهندسو الإطلاق من تأكيد أن
-بايتات payload وإيصالات chunk وتقارير provider ونتائج scoreboard تبقى متطابقة عبر
-التطبيقات. كل harness يستهلك الحزمة القياسية متعددة المزوّدين تحت
-`fixtures/sorafs_orchestrator/multi_peer_parity_v1/`، والتي تجمع خطة SF1 وبيانات
-provider الوصفية ولقطة telemetry وخيارات orchestrator.
+マルチフェッチ SDK のマルチフェッチの実行
+ペイロード チャンク プロバイダ スコアボード スコアボード
+ああ。ハーネス يستهلك الحزمة القياسية متعددة المزوّدين تحت
+`fixtures/sorafs_orchestrator/multi_peer_parity_v1/` SF1 の世界
+プロバイダー、テレメトリ、オーケストレーター。
 
-## خط الأساس في Rust
+## 錆びる
 
-- **الأمر:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
-- **النطاق:** يشغّل خطة `MultiPeerFixture` مرتين عبر orchestrator داخل العملية، مع التحقق
-  من بايتات payload المجمعة وإيصالات chunk وتقارير provider ونتائج scoreboard. كما
-  تتعقب أدوات القياس ذروة التوازي وحجم working-set الفعال (`max_parallel x max_chunk_length`).
+- **回答:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
+- **النطاق:** يشغّل خطة `MultiPeerFixture` مرتين عبر Orchestrator داخل العملية، مع التحقق
+  ペイロード、チャンク、プロバイダー、スコアボード。 كما
+  ワーキング セット (`max_parallel x max_chunk_length`) が必要です。
 - **حاجز الأداء:** يجب أن يكتمل كل تشغيل خلال 2 s على عتاد CI.
-- **سقف مجموعة العمل:** مع ملف تعريف SF1 يفرض harness `max_parallel = 3`، مما ينتج
-  نافذة <= 196608 بايت.
+- ** سقف مجموعة العمل:** ملف تعريف SF1 يفرض ハーネス `max_parallel = 3`، مما ينتج
+  فافذة <= 196608 年。
 
-مثال لمخرجات السجل:
+重要事項:
 
 ```
 Rust orchestrator parity: duration_ms=142.63 total_bytes=1048576 max_inflight=3 peak_reserved_bytes=196608
 ```
 
-## Harness لحزمة JavaScript SDK
+## JavaScript SDK をハーネスする
 
-- **الأمر:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
+- **回答:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
 - **النطاق:** يعيد تشغيل نفس fixture عبر `iroha_js_host::sorafsMultiFetchLocal`، ويقارن
-  payloads وreceipts وتقارير provider ولقطات scoreboard عبر تشغيلين متتاليين.
-- **حاجز الأداء:** يجب أن ينتهي كل تنفيذ خلال 2 s؛ يطبع harness المدة المقاسة وسقف
-  البايتات المحجوزة (`max_parallel = 3`, `peak_reserved_bytes <= 196608`).
+  ペイロード、領収書、プロバイダー、スコアボード、スコアボード。
+- **حاجز الأداء:** يجب أن ينتهي كل تنفيذ خلال 2 s؛ハーネス المقاسة وسقف
+  (`max_parallel = 3`、`peak_reserved_bytes <= 196608`)。
 
-سطر ملخص مثال:
+重要な点:
 
 ```
 JS orchestrator parity: duration_ms=187.42 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Harness لحزمة Swift SDK
+## ハーネス Swift SDK
 
-- **الأمر:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
+- **回答:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
 - **النطاق:** يشغّل مجموعة التكافؤ المعرّفة في `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift`،
-  مع إعادة تشغيل fixture SF1 مرتين عبر جسر Norito (`sorafsLocalFetch`). يتحقق harness
-  من بايتات payload وإيصالات chunk وتقارير provider ومدخلات scoreboard باستخدام نفس
-  بيانات provider الوصفية الحتمية ولقطات telemetry الخاصة بحزم Rust/JS.
-- **تهيئة الجسر:** يفك harness ضغط `dist/NoritoBridge.xcframework.zip` عند الطلب ويحمل
-  شريحة macOS عبر `dlopen`. عند غياب xcframework أو افتقاره لروابط SoraFS، يتراجع إلى
-  `cargo build -p connect_norito_bridge --release` ويربط مع
-  `target/release/libconnect_norito_bridge.dylib`، لذا لا يلزم إعداد يدوي في CI.
-- **حاجز الأداء:** يجب أن ينتهي كل تنفيذ خلال 2 s على عتاد CI؛ ويطبع harness المدة
-  المقاسة وسقف البايتات المحجوزة (`max_parallel = 3`, `peak_reserved_bytes <= 196608`).
+  フィクスチャ SF1 は Norito (`sorafsLocalFetch`) です。ハーネス
+  ペイロード チャンク プロバイダ スコアボード スコアボード
+  プロバイダー、テレメトリー、Rust/JS。
+- ** تهيئة الجسر:** يفك ハーネス ضغط `dist/NoritoBridge.xcframework.zip` عند الطلب ويحمل
+  macOS `dlopen`。 xcframework を使用して、SoraFS を使用してください。
+  `cargo build -p connect_norito_bridge --release` ログイン
+  `target/release/libconnect_norito_bridge.dylib` は、CI です。
+- **حاجز الأداء:** يجب أن ينتهي كل تنفيذ خلال 2 s على عتاد CI؛ハーネス
+  (`max_parallel = 3`、`peak_reserved_bytes <= 196608`)。
 
-سطر ملخص مثال:
+重要な点:
 
 ```
 Swift orchestrator parity: duration_ms=183.54 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Harness لربط Python
+## ハーネス パイソン
 
-- **الأمر:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
-- **النطاق:** يمارس wrapper عالي المستوى `iroha_python.sorafs.multi_fetch_local` وdataclasses
-  المقيّدة بالأنواع كي تمر fixture القياسية عبر نفس الواجهة التي يستخدمها مستهلكو
-  wheel. يعيد الاختبار بناء بيانات provider الوصفية من `providers.json`، ويحقن
-  لقطة telemetry، ويتحقق من بايتات payload وإيصالات chunk وتقارير provider ومحتوى
-  scoreboard مثل حزم Rust/JS/Swift.
-- **متطلب مسبق:** شغّل `maturin develop --release` (أو ثبّت wheel) كي يعرض `_crypto` ربط
-  `sorafs_multi_fetch_local` قبل تشغيل pytest؛ يتخطى harness تلقائيا عندما لا يكون
-  الربط متاحا.
-- **حاجز الأداء:** نفس حد <= 2 s مثل حزمة Rust؛ يسجل pytest عدد البايتات المجمعة
-  وملخص مشاركة providers لقطعة الإصدار.
+- **回答:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
+- ** النطاق:** يمارس ラッパー عالي المستوى `iroha_python.sorafs.multi_fetch_local` وdataclasses
+  試合結果、試合結果、試合結果、試合結果、試合結果、試合結果、試合結果などを記録
+  車輪。 يعيد الاختبار بناء بيانات プロバイダー الوصفية من `providers.json`، ويحقن
+  テレメトリ ペイロード チャンク プロバイダー ペイロード ペイロード チャンク プロバイダー
+  スコアボードは Rust/JS/Swift に対応します。
+- **متطلب مسبق:** شغّل `maturin develop --release` (ホイール) كي يعرض `_crypto` ربط
+  `sorafs_multi_fetch_local` pytest のテストハーネス تلقائيا عندما لا يكون
+  そうです。
+- ** 評価:** 評価 <= 2 秒 評価pytest を実行する
+  プロバイダーは、プロバイダーをサポートします。
 
-يجب أن يلتقط مسار اعتماد الإصدار مخرجات الملخص من كل harness (Rust وPython وJS وSwift)
-حتى يتمكن التقرير المؤرشف من مقارنة إيصالات payload والقياسات بشكل موحد قبل ترقية
-build. شغّل `ci/sdk_sorafs_orchestrator.sh` لتنفيذ كل مجموعات التكافؤ (Rust وPython
-bindings وJS وSwift) في تمريرة واحدة؛ ينبغي أن تُرفق مخرجات CI مقتطف السجل من هذا
-المساعد بالإضافة إلى ملف `matrix.md` المُنشأ (جدول SDK/الحالة/المدة) بتذكرة الإصدار
-حتى يتمكن المراجعون من تدقيق مصفوفة التكافؤ دون إعادة تشغيل المجموعة محليا.
+ハーネス (Rust、Python、JS、Swift)
+ペイロード ペイロード メッセージ ペイロード メッセージ ペイロード ペイロード ペイロード ペイロード ペイロード ペイロード ペイロード ペイロード
+構築します。 `ci/sdk_sorafs_orchestrator.sh` は、Rust と Python を実行します。
+バインディング وJS وSwift) في تمريرة واحدة؛ ينبغي أن تُرفق مخرجات CI مقتطف السجل من هذا
+`matrix.md` バージョン (SDK/バージョン/バージョン) バージョン
+最高のパフォーマンスを見せてください。

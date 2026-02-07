@@ -4,24 +4,26 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-cli.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-cli
-title: Recetario de CLI de SoraFS
-sidebar_label: Recetario de CLI
-description: Recorrido orientado a tareas de la superficie consolidada de `sorafs_cli`.
+ID: ڈویلپر-سی ایل آئی
+عنوان: SoraFS CLI کک بوک
+سائڈبار_لیبل: سی ایل آئی کک بوک
+تفصیل: `sorafs_cli` کی مستحکم سطح کا ٹاسک پر مبنی ٹور۔
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/developer/cli.md`. Mantén ambas copias sincronizadas.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/sorafs/developer/cli.md` کی عکاسی کرتا ہے۔ دونوں کاپیاں مطابقت پذیری میں رکھیں۔
 :::
 
-La superficie consolidada de `sorafs_cli` (proporcionada por el crate `sorafs_car` con la feature `cli` habilitada) expone cada paso necesario para preparar artefactos de SoraFS. Usa este recetario para saltar directamente a flujos comunes; combínalo con el pipeline de manifest y los runbooks del orquestador para contexto operativo.
+`sorafs_cli` کنسولیڈیٹیڈ سطح (`sorafs_car` کریٹ کے ذریعہ `cli` فعال کے ساتھ فراہم کردہ) SoraFS نمونے تیار کرنے کے لئے ضروری ہر قدم کو بے نقاب کرتا ہے۔ عام بہاؤ میں براہ راست کودنے کے لئے اس کک بوک کا استعمال کریں۔ آپریشنل سیاق و سباق کے ل it اس کو مینی فیسٹ پائپ لائن اور آرکسٹریٹر رن بوکس کے ساتھ جوڑیں۔
 
-## Empaquetar payloads
+## پیکیج پے لوڈ
 
-Usa `car pack` para producir archivos CAR deterministas y planes de chunk. El comando selecciona automáticamente el chunker SF-1 salvo que se proporcione un handle.
+عین مطابق کار فائلوں اور حصہ کے منصوبوں کو تیار کرنے کے لئے `car pack` استعمال کرتا ہے۔ کمانڈ خود بخود SF-1 چنکر کا انتخاب کرتا ہے جب تک کہ ہینڈل فراہم نہ کیا جائے۔
 
 ```bash
 sorafs_cli car pack \
@@ -31,11 +33,11 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Handle de chunker predeterminado: `sorafs.sf1@1.0.0`.
-- Las entradas de directorio se recorren en orden lexicográfico para que los checksums se mantengan estables entre plataformas.
-- El resumen JSON incluye digests de payload, metadatos por chunk y el CID raíz reconocido por el registro y el orquestador.
+- پہلے سے طے شدہ چنکر ہینڈل: `sorafs.sf1@1.0.0`۔
+- ڈائریکٹری اندراجات کو لغت کے مطابق ترتیب دیا جاتا ہے تاکہ پلیٹ فارم کے مابین چیکسی مستحکم رہیں۔
+- JSON ڈائجسٹ میں پے لوڈ ڈائجسٹس ، میٹا ڈیٹا فی حصہ ، اور رجسٹری اور آرکسٹریٹر کے ذریعہ تسلیم شدہ جڑ سی آئی ڈی شامل ہے۔
 
-## Construir manifests
+## منشور تعمیر کریں
 
 ```bash
 sorafs_cli manifest build \
@@ -47,11 +49,11 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- Las opciones `--pin-*` se asignan directamente a los campos `PinPolicy` en `sorafs_manifest::ManifestBuilder`.
-- Usa `--chunk-plan` cuando quieras que el CLI recalcule el digest SHA3 de chunk antes del envío; de lo contrario reutiliza el digest incrustado en el resumen.
-- La salida JSON refleja el payload Norito para diffs simples durante las revisiones.
+- `--pin-*` اختیارات `sorafs_manifest::ManifestBuilder` میں براہ راست `PinPolicy` فیلڈز کا نقشہ۔
+- `--chunk-plan` استعمال کریں جب آپ چاہتے ہیں کہ CLI بھیجنے سے پہلے SHA3 چنک ڈائجسٹ کو دوبارہ گنتی کرے۔ بصورت دیگر یہ خلاصہ میں سرایت شدہ ہضم کو دوبارہ استعمال کرتا ہے۔
+- JSON آؤٹ پٹ ترمیم کے دوران سادہ فرق کے لئے پے لوڈ Norito کی عکاسی کرتا ہے۔
 
-## Firmar manifests sin claves de larga duración
+## طویل المیعاد چابیاں کے بغیر ظاہر ہوتا ہے
 
 ```bash
 sorafs_cli manifest sign \
@@ -61,11 +63,11 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Acepta tokens inline, variables de entorno o fuentes basadas en archivos.
-- Añade metadatos de procedencia (`token_source`, `token_hash_hex`, digest de chunk) sin persistir el JWT en bruto salvo que `--include-token=true`.
-- Funciona bien en CI: combínalo con OIDC de GitHub Actions configurando `--identity-token-provider=github-actions`.
+- ان لائن ٹوکن ، ماحولیاتی متغیرات یا فائل پر مبنی ذرائع کو قبول کرتا ہے۔
+- `--include-token=true` کے علاوہ خام JWT کو برقرار رکھے بغیر پروویژن میٹا ڈیٹا (`token_source` ، `token_hash_hex` ، CUNK DISCT) شامل کریں۔
+- CI میں اچھی طرح سے کام کرتا ہے: `--identity-token-provider=github-actions` ترتیب دے کر گٹ ہب ایکشن سے OIDC کے ساتھ جوڑیں۔
 
-## Enviar manifests a Torii
+## Torii پر ظاہر کریں
 
 ```bash
 sorafs_cli manifest submit \
@@ -80,11 +82,11 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Realiza decodificación Norito para alias proofs y verifica que coincidan con el digest del manifest antes de POSTear a Torii.
-- Recalcula el digest SHA3 de chunk desde el plan para prevenir ataques de desajuste.
-- Los resúmenes de respuesta capturan estado HTTP, headers y payloads del registro para auditorías posteriores.
+- Norito کو عرفی ثبوتوں کے لئے ضابطہ کشائی کرتا ہے اور تصدیق کرتا ہے کہ وہ Torii پر پوسٹ کرنے سے پہلے مینی فیسٹ کے ڈائجسٹ سے ملتے ہیں۔
+- مماثل حملوں کو روکنے کے لئے منصوبے سے SHA3 CHUNK ڈائجسٹ کو دوبارہ گنتی کریں۔
+- جوابی خلاصہ بعد میں آڈٹ کے لئے HTTP کی حیثیت ، ہیڈر ، اور لاگ پے لوڈ پر قبضہ کرتا ہے۔
 
-## Verificar contenidos de CAR y proofs
+## کار اور ثبوت کے مندرجات کی تصدیق کریں
 
 ```bash
 sorafs_cli proof verify \
@@ -93,10 +95,10 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Reconstruye el árbol PoR y compara los digests del payload con el resumen del manifest.
-- Captura conteos e identificadores requeridos al enviar proofs de replicación a gobernanza.
+- پور کے درخت کو دوبارہ تعمیر کریں اور پے لوڈ ڈائجسٹ کو مینی فیسٹ سمری کے ساتھ موازنہ کریں۔
+- جب گورننس میں نقل کے ثبوت بھیجتے ہو تو گرفتاری گنتی اور شناخت کنندگان کی ضرورت ہوتی ہے۔
 
-## Transmitir telemetría de proofs
+## پروف پروف ٹیلی میٹری کو منتقل کریں
 
 ```bash
 sorafs_cli proof stream \
@@ -107,16 +109,14 @@ sorafs_cli proof stream \
   --stream-token "$(cat stream.token)" \
   --summary-out artifacts/video.proof_stream.json \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
-```
+```- منتقل کردہ ہر ثبوت کے لئے NDJSON عناصر کو خارج کریں (`--emit-events=false` کے ساتھ ری پلے کو غیر فعال کریں)۔
+- کامیابی/ناکامی کی گنتی ، لیٹینسی ہسٹگرامس ، اور نمونے کی ناکامیوں کو JSON سمری میں شامل کریں تاکہ ڈیش بورڈز لاگ ان کے بغیر نتائج کو گراف کرسکیں۔
+- یہ صفر کے علاوہ کسی دوسرے کوڈ کے ساتھ باہر نکلتا ہے جب گیٹ وے کی ناکامیوں یا مقامی پور کی توثیق (`--por-root-hex` کے ذریعے) ثبوتوں کو مسترد کرتا ہے۔ ٹیسٹ رنز کے ل I `--max-failures` اور `--max-verification-failures` کے ساتھ دہلیز طے کریں۔
+- آج پور کی حمایت کرتا ہے ؛ جب SF-13/SF-14 آنے پر PDP اور POTR وہی پیکیجنگ کا دوبارہ استعمال کریں۔
+- `--governance-evidence-dir` مہیا کی گئی سمری ، میٹا ڈیٹا (ٹائم اسٹیمپ ، سی ایل آئی ورژن ، گیٹ وے یو آر ایل ، مینی فیسٹ ڈائجسٹ) اور سپلائی ڈائریکٹری میں ظاہر ہونے والی ایک کاپی لکھتا ہے تاکہ گورننس پیکجز پر عمل درآمد کو دہرانے کے بغیر پروف پروف پروف پروف ثبوت آرکائیو کریں۔
 
-- Emite elementos NDJSON por cada proof transmitido (desactiva el replay con `--emit-events=false`).
-- Agrega conteos de éxito/fallo, histogramas de latencia y fallos muestreados en el resumen JSON para que los dashboards puedan graficar resultados sin leer logs.
-- Sale con código distinto de cero cuando el gateway reporta fallos o la verificación PoR local (vía `--por-root-hex`) rechaza proofs. Ajusta los umbrales con `--max-failures` y `--max-verification-failures` para ejecuciones de ensayo.
-- Soporta PoR hoy; PDP y PoTR reutilizan el mismo envoltorio cuando lleguen SF-13/SF-14.
-- `--governance-evidence-dir` escribe el resumen renderizado, metadatos (timestamp, versión de CLI, URL del gateway, digest del manifest) y una copia del manifest en el directorio suministrado para que los paquetes de gobernanza archiven la evidencia del proof-stream sin repetir la ejecución.
+## اضافی حوالہ جات
 
-## Referencias adicionales
-
-- `docs/source/sorafs_cli.md` — documentación exhaustiva de flags.
-- `docs/source/sorafs_proof_streaming.md` — esquema de telemetría de proofs y plantilla de dashboard Grafana.
-- `docs/source/sorafs/manifest_pipeline.md` — profundización en chunking, composición de manifest y manejo de CAR.
+- `docs/source/sorafs_cli.md` - مکمل جھنڈوں کی دستاویزات۔
+- `docs/source/sorafs_proof_streaming.md` - پروف ٹیلی میٹری اسکیما اور ڈیش بورڈ ٹیمپلیٹ Grafana۔
+- `docs/source/sorafs/manifest_pipeline.md` - chunking ، ظاہر مرکب اور کار کے انتظام میں گہرا ہونا۔

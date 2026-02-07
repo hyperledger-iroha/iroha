@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-invite-flow.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # مسار دعوات المعاينة
@@ -21,7 +23,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | الموجة | الجمهور | معايير الدخول | معايير الخروج | ملاحظات |
 | --- | --- | --- | --- | --- |
 | **W0 - Maintainers الاساسيون** | Maintainers من Docs/SDK يتحققون من محتوى اليوم الاول. | فريق GitHub `docs-portal-preview` مكتمل، بوابة checksum في `npm run serve` خضراء، Alertmanager هادئ لمدة 7 ايام. | كل مستندات P0 تمت مراجعتها، backlog موسوم، لا توجد حوادث مانعة. | تستخدم للتحقق من المسار؛ لا بريد دعوة، فقط مشاركة اثار المعاينة. |
-| **W1 - Partners** | مشغلو SoraFS، متكاملوا Torii، ومراجعو الحوكمة تحت NDA. | خروج W0، الموافقات القانونية، وكيل Try-it في staging. | جمع موافقة الشركاء (issue او نموذج موقع)، القياس عن بعد يظهر <=10 مراجعين متزامنين، لا تراجعات امنية لمدة 14 يوما. | فرض قالب الدعوة + تذاكر الطلب. |
+| **W1 - שותפים** | مشغلو SoraFS، متكاملوا Torii، ومراجعو الحوكمة تحت NDA. | خروج W0، الموافقات القانونية، وكيل Try-it في staging. | جمع موافقة الشركاء (issue او نموذج موقع)، القياس عن بعد يظهر <=10 مراجعين متزامنين، لا تراجعات امنية لمدة 14 يوما. | فرض قالب الدعوة + تذاكر الطلب. |
 | **W2 - المجتمع** | مساهمون مختارون من قائمة الانتظار المجتمعية. | خروج W1، تدريبات الحوادث مجربة، FAQ العامة محدثة. | استيعاب الملاحظات، >=2 اصدارات توثيق تم شحنها عبر خط المعاينة دون rollback. | تحديد الدعوات المتزامنة (<=25) وجدولة اسبوعية. |
 
 وثق اي موجة نشطة داخل `status.md` وفي متعقب طلبات المعاينة حتى ترى الحوكمة الوضع بنظرة واحدة.
@@ -33,7 +35,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 1. **اثار CI متاحة**
    - اخر `docs-portal-preview` + descriptor تم رفعه بواسطة `.github/workflows/docs-portal-preview.yml`.
    - Pin لـ SoraFS موثق في `docs/portal/docs/devportal/deploy-guide.md` (descriptor التحويل موجود).
-2. **فرض checksum**
+2. **סכום בדיקה**
    - `docs/portal/scripts/serve-verified-preview.mjs` تم استدعاؤه عبر `npm run serve`.
    - تم اختبار تعليمات `scripts/preview_verify.sh` على macOS + Linux.
 3. **خط اساس للقياس عن بعد**
@@ -46,19 +48,17 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 سجل اتمام preflight في متعقب الدعوات قبل ارسال اي بريد.
 
-## خطوات المسار
-
-1. **اختيار المرشحين**
+## خطوات المسار1. **اختيار المرشحين**
    - السحب من قائمة الانتظار او طابور الشركاء.
    - التأكد من ان لكل مرشح قالب طلب مكتمل.
 2. **الموافقة على الوصول**
    - تعيين موافق على issue متعقب الدعوات.
    - التحقق من المتطلبات (CLA/عقد، استخدام مقبول، موجز امني).
-3. **ارسال الدعوات**
+***
    - اكمال الحقول في [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`, `<request_ticket>`, جهات الاتصال).
    - ارفاق descriptor + hash الارشيف، عنوان staging لواجهة Try it، وقنوات الدعم.
    - حفظ البريد النهائي (او محضر Matrix/Slack) في الـ issue.
-4. **تتبع التأهيل**
+4. *
    - تحديث متعقب الدعوات بالقيم `invite_sent_at` و`expected_exit_at` والحالة (`pending`, `active`, `complete`, `revoked`).
    - ربط طلب دخول المراجع لضمان التدقيق.
 5. **مراقبة القياس عن بعد**
@@ -78,7 +78,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | موجز الملاحظات | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (انشاء مجلد لكل موجة) | خلال 5 ايام من خروج الموجة. |
 | ملاحظة اجتماع الحوكمة | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | تعبئة قبل كل مزامنة DOCS-SORA. |
 
-شغل `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
+שאול `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
 بعد كل دفعة لانتاج موجز مقروء اليا. ارفق JSON المولد بالـ issue الخاصة بالموجة كي يتمكن مراجعو الحوكمة من تأكيد اعداد الدعوات دون اعادة تشغيل السجل بالكامل.
 
 ارفق قائمة الادلة بـ `status.md` عند انتهاء كل موجة حتى يتم تحديث مدخل خارطة الطريق بسرعة.

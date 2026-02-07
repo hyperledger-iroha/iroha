@@ -9,42 +9,43 @@ source_last_modified: "2026-01-04T08:19:26.498928+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS SF1 Determinism Dry-Run
 summary: Checklist and expected digests for validating the canonical `sorafs.sf1@1.0.0` chunker profile.
+translator: machine-google-reviewed
 ---
 
-# SoraFS SF1 Determinism Dry-Run
+# I18NT00000000 SF1
 
-This report captures the baseline dry-run for the canonical
-`sorafs.sf1@1.0.0` chunker profile. Tooling WG should re-run the checklist
-below when validating fixture refreshes or new consumer pipelines. Record the
-outcome of each command in the table to maintain an auditable trail.
+སྙན་ཞུ་འདི་གིས་ ཀེ་ནོ་ནིག་གི་དོན་ལུ་ གཞི་རྟེན་སྐམ་ཤུགས་འདི་ བཟུང་ཚུགསཔ་ཨིན།
+`sorafs.sf1@1.0.0` ཆར་ཀར་གསལ་སྡུད། ལག་ཆས་ ཌབ་ལུ་ཇི་གིས་ ཞིབ་དཔྱད་ཐོ་ཡིག་ ལོག་གཡོག་བཀོལ་དགོ།
+གཤམ་གསལ་གྱི་སྒྲིག་བཀོད་འདི་ བདེན་དཔྱད་འབད་བའི་སྐབས་ ཡང་ན་ ཉོ་སྤྱོད་པའི་དུང་ཅུང་གསརཔ་ཚུ་ གསར་བསྐྲུན་འབད་བའི་སྐབས་ཨིན། ལུ་ཐོ་བཀོད་འབད།
+རྩིས་ཞིབ་འབད་བཏུབ་པའི་ལམ་བཞག་ནིའི་དོན་ལུ་ ཐིག་ཁྲམ་ནང་ བརྡ་བཀོད་རེ་རེ་གི་གྲུབ་འབྲས།
 
-## Checklist
+## ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-| Step | Command | Expected Outcome | Notes |
-|------|---------|------------------|-------|
-| 1 | `cargo test -p sorafs_chunker` | All tests pass; `vectors` parity test succeeds. | Confirms canonical fixtures compile and match Rust implementation. |
-| 2 | `ci/check_sorafs_fixtures.sh` | Script exits 0; reports manifest digests below. | Verifies fixtures regenerate cleanly and signatures remain attached. |
-| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | Entry for `sorafs.sf1@1.0.0` matches registry descriptor (`profile_id=1`). | Ensures registry metadata stays in sync. |
-| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | Regeneration succeeds without `--allow-unsigned`; manifest and signature files unchanged. | Provides determinism proof for chunk boundaries and manifests. |
-| 5 | `node scripts/check_sf1_vectors.mjs` | Reports no diff between TypeScript fixtures and Rust JSON. | Optional helper; ensure parity across runtimes (script maintained by Tooling WG). |
+| གོམ་པ་ | བརྡ་བཀོད་ | རེ་བ་བསྐྱེད་པའི་གྲུབ་འབྲས་ | དྲན་ཐོ། |
+|-------------------------------------------------- |
+| 1 | I18NI0000002X | བརྟག་དཔྱད་ཆ་མཉམ་འགྱོཝ་ཨིན། `vectors` ཆ་སྙོམས་བརྟག་དཔྱད་ཚུ་ མཐར་འཁྱོལ་ཡོདཔ་ཨིན། | ཀེ་ནོ་ནིག་སྒྲིག་བཀོད་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིནམ་དང་ རཱསིཊི་ལག་ལེན་འཐབ་ཐངས་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན། |
+| 2 | I18NI0000004X | ཡིག་གཟུགས་འདི་ ༠; སྙན་ཞུ་ཚུ་ འོག་ལུ་ བཞུ་འགྱོཝ་ཨིན། | སྒྲིག་ཆས་ཚུ་ གཙང་ཏོག་ཏོ་སྦེ་ བདེན་དཔྱད་འབད་དེ་ མཚན་རྟགས་ཚུ་ མཉམ་སྦྲགས་འབད་དེ་ཡོདཔ་ཨིན། |
+| 3 | I18NI0000000X | I18NI000000006X གི་དོན་ལུ་ ཐོ་བཀོད་འགྲེལ་བཤད་ (`profile_id=1`) དང་མཐུན་སྒྲིག་འབད། | ཐོ་བཀོད་མེ་ཊ་ཌེ་ཊ་ མཉམ་འབྱུང་སྦེ་སྡོད་དགོཔ་ངེས་གཏན་བཟོཝ་ཨིན། |
+| 4 | I18NI0000008X | བསྐྱར་གསོ་འདི་ `--allow-unsigned` མེད་པར་ མཐར་འཁྱོལ་བྱུང་ཡོདཔ་ཨིན། གསལ་སྟོན་དང་མིང་རྟགས་ཡིག་སྣོད་ཚུ་བསྒྱུར་བཅོས་མ་འབད་བས། | ཆ་རྐྱེན་གྱི་ས་མཚམས་དང་ གསལ་སྟོན་ཚུ་གི་དོན་ལུ་ གཏན་འབེབས་བཟོ་བའི་བདེན་ཁུངས་བྱིནམ་ཨིན། |
+| 5 | `node scripts/check_sf1_vectors.mjs` | ཊའིཔ་ཡིག་གཟུགས་སྒྲིག་བཀོད་དང་ རཱསི་ཊི་ཇེ་ཨེསི་གི་བར་ན་ ཁྱད་པར་མེད་པའི་སྙན་ཞུ་འབདཝ་ཨིན། | གདམ་ཁ་ཅན་གྱི་གྲོགས་རམ་པ། རཱན་ཊའིམ་ཚུ་ནང་ ཆ་སྙོམས་ངེས་གཏན་བཟོ།(ལག་ཆས་ཚུ་ ལག་ཆས་ཀྱིས་བདག་འཛིན་འཐབ་མི་ ཡིག་གཟུགས་) ངེས་གཏན་བཟོ། |
 
-## Expected Digests
+## རེ་བ་བྱོས།
 
-- Chunk digest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
+- ཆུང་ཆུང་བཞུ་བཅོས་ (SHA3-256): I18NI0000011X
 - `manifest_blake3.json`: `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`
-- `sf1_profile_v1.json`: `d89a4fdc030b0c7c4911719ea133c780d9f4610b08eef1d6d0e0ca443391718e`
-- `sf1_profile_v1.ts`: `9a3bb8e4d96518b3a0a1301046b2d86a793991959ebdd8adda1fb2988e4292dc`
-- `sf1_profile_v1.go`: `0f0348b8751b0f85fe874afda3371af75b78fac5dad65182204dcb3cf3e4c0a1`
-- `sf1_profile_v1.rs`: `66b5956826c86589a24b71ca6b400cc1335323c6371f1cec9475f09af8743f61`
+- I18NI0000014X: I18NI0000015X
+- I18NI0000016X: I18NI0000017X
+- I18NI0000018X: I18NI0000019X
+- I18NI0000020X: I18NI0000021X
 
-## Sign-Off Log
+## རྟགས་-ཨོཕ་ལོག་བ།
 
-| Date | Engineer | Checklist Result | Notes |
-|------|----------|------------------|-------|
-| 2026-02-12 | Tooling (LLM) | ❌ Failed | Step 1: `cargo test -p sorafs_chunker` fails `vectors` suite because fixtures are out of date. Step 2: `ci/check_sorafs_fixtures.sh` aborts—`manifest_signatures.json` missing in repo state (deleted in working tree). Step 4: `export_vectors` cannot verify signatures while the manifest file is absent. Recommend restoring the signed fixtures (or providing council key) and regenerating bindings so canonical handles are embedded as required by the tests. |
-| 2026-02-12 | Tooling (LLM) | ✅ Passed | Regenerated fixtures via `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f`, producing canonical handle-only alias lists and a fresh manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`. Verified with `cargo test -p sorafs_chunker` and a clean `ci/check_sorafs_fixtures.sh` run (staged fixtures for the check). Step 5 pending until the Node parity helper lands. |
-| 2026-02-20 | Storage Tooling CI | ✅ Passed | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) fetched via `ci/check_sorafs_fixtures.sh`; script re-generated fixtures, confirmed manifest digest `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`, and re-ran the Rust harness (Go/Node steps execute when available) with no diffs. |
+| ཚེས་གྲངས་ | བཟོ་རིག་པ། | བརྟག་ཞིབ་ཐོ་ཡིག་གྲུབ་འབྲས། | དྲན་ཐོ། |
+|--------------------------------------------------- |
+| ༢༠༢༦-༠༢-༡༢ | ལག་ཆས་ (LLM) | ❌ འཐུས་ཤོར་བྱུང་ཡོདཔ། | གོ་རིམ་༡ པ། `cargo test -p sorafs_chunker` གིས་ `vectors` ཆ་ཚང་འདི་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན། གོམ་པ་ ༢ པ་ `ci/check_sorafs_fixtures.sh` བཤིག་— `manifest_signatures.json` འདི་ repo state ནང་མེདཔ་ (ལཱ་འབད་བའི་ཤིང་ནང་བཏོན་བཏང་ཡོདཔ་ཨིན།) གོ་རིམ་༤ པ་: `export_vectors` གིས་ མཚན་རྟགས་ཚུ་བདེན་དཔྱད་འབད་མི་ཚུགས་པའི་སྐབས་ གསལ་སྟོན་ཡིག་སྣོད་འདི་མེད་པའི་སྐབས་ལུ། མཚན་རྟགས་བཀོད་ཡོད་པའི་སྒྲིག་ཆས་ཚུ་ ཉམས་གསོ་འབད་དེ་ ༼ཡང་ན་ ཚོགས་སྡེའི་ལྡེ་མིག་བྱིན་ནི་༽ བསྐྱར་གསོ་ཚུ་ བསྐྱར་གསོ་འབད་དེ་ ཁྲིམས་ལུགས་ཀྱི་ ལག་ལེན་འཐབ་ཐངས་ཚུ་ བརྟག་དཔྱད་དང་འཁྲིལ་ཏེ་ བཙུགསཔ་ཨིན། |
+| ༢༠༢༦-༠༢-༡༢ | ལག་ཆས་ (LLM) | ✅ བརྒལ་ | I18NI000000027X བརྒྱུད་དེ་ བསྐྱར་བཟོ་འབད་ཡོདཔ་ད་ འདི་གིས་ ཐོ་གཞུང་དང་ གསལ་སྟོན་གསརཔ་ བཞུ་བཅུག་མི་ `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4` ཚུ་ བཏོནམ་ཨིན། I18NI000000029X དང་ གཙང་མ་ `ci/check_sorafs_fixtures.sh` གཡོག་བཀོལ་ (ཞིབ་དཔྱད་ཀྱི་དོན་ལུ་ གནས་རིམ་བཟོ་ཡོད་པའི་ གཏན་འཁེལ་ཚུ་) དང་ཅིག་ཁར་ བདེན་དཔྱད་འབད་ཡོདཔ། གོམ་པ་༥ པ་ ནོ་ཌི་ ཆ་སྙོམས་རོགས་སྐྱོར་གྱི་ ས་ཆ་ཚུ་ མ་ལྷོད་ཚུན་ཚོད་ བསྒུག་སྡོད། |
+| ༢༠༢༦-༠༢-༢༠ | གསོག་འཇོག་ལག་ཆས་ CI | ✅ བརྒལ་ | སྤྱི་ཚོགས་ཀྱི་ཡིག་ཤུབས་ (`fixtures/sorafs_chunker/manifest_signatures.json`) གིས་ `ci/check_sorafs_fixtures.sh` བརྒྱུད་དེ་ ལེན་ཡོདཔ་ཨིན། ཡིག་གཟུགས་ལོག་སྟེ་བཟོ་མི་ བརྟན་བརྟན་དང་ བདེན་བཤད་ཀྱི་ ཌའི་སའིཊི་ `c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4`, དང་ རཱསི་ཊི་ ཧར་ནེསི་ (Go/Node stopces execute) འདི་ ཁྱད་པར་མེད་པར་ ལོག་བཏོནམ་ཨིན། |
 
-Tooling WG should append a dated row after running the checklist. If any step
-fails, file an issue linked here and include remediation details before
-approving new fixtures or profiles.
+ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་གཡོག་བཀོལ་བའི་ཤུལ་ལས་ ཌབ་ལུ་ཇི་ལག་ཆས་འདི་གིས་ ཚེས་གྲངས་གྲལ་ཐིག་ཅིག་ ཁ་སྐོང་འབད་དགོ། གོམ་པ་རེ་ན།
+འཐུས་ཤོར་ཚུ་ ནཱ་ལུ་འབྲེལ་མཐུད་འབད་དེ་ཡོད་པའི་གནད་དོན་ཅིག་བཙུགས་ཞིནམ་ལས་ དེ་གི་སྔོན་བརྡ་ཁ་གསལ་ཚུ་བཙུགས།
+སྒྲིག་བཀོད་གསརཔ་ཡང་ན་གསལ་སྡུད་གསརཔ་ཚུ་ཆ་འཇོག་འབད་དོ།

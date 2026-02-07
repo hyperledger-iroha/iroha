@@ -4,58 +4,54 @@ direction: ltr
 source: docs/portal/docs/reference/publishing-checklist.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Чек‑лист публикации портала
-description: Шаги проверки перед обновлением портала документации Iroha.
+título: Чек‑list публикации портала
+descripción: Шаги проверки перед обновлением портала документации Iroha.
 ---
 
-Используйте этот чек‑лист при каждом обновлении портала разработчика. Он гарантирует, что
-CI‑сборка, деплой GitHub Pages и ручные smoke‑тесты покрывают все разделы перед релизом
-или вехой roadmap’а.
+Utilice esta lista de verificación en el portal de actualizaciones. Он гарантирует, что
+CI‑сборка, implementación de GitHub Pages y ручные smoke‑testы покрывают все разделы перед релизом
+или вехой hoja de ruta’а.
 
 ## 1. Локальная проверка
 
 - `npm run sync-openapi -- --version=current --latest` (добавьте один или несколько
-  флагов `--mirror=<label>`, если Torii OpenAPI меняется для замороженного snapshot’а).
-- `npm run build` — убедитесь, что слоган “Build on Iroha with confidence” всё ещё
+  (las banderas `--mirror=<label>`, o Torii (OpenAPI pueden usarse para una instantánea de la memoria).
+- `npm run build` — убедитесь, что слоган “Construya sobre Iroha con confianza” всё ещё
   отображается в `build/index.html`.
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` — проверьте manifest
-  checksum’ов (добавьте `--descriptor`/`--archive` при тестировании скачанных CI‑артефактов).
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` — manifiesto de protección
+  checksum'ов (добавьте `--descriptor`/`--archive` при тестировании скачанных CI‑артефактов).
 - `npm run serve` — запускает helper‑режим с проверкой checksum’ов, который валидирует
-  manifest перед вызовом `docusaurus serve`, чтобы ревьюеры никогда не смотрели на
-  неподписанный snapshot (alias `serve:verified` остаётся для явных вызовов).
-- Просмотрите изменённые markdown‑файлы через `npm run start` и dev‑сервер с live‑reload.
+  manifiesto antes de que `docusaurus serve`, чтобы ревьюеры никогда не смотрели на
+  instantánea неподписанный (alias `serve:verified` остаётся для явных вызовов).
+- Mejora las plantillas de markdown para `npm run start` y dev-server con live-reload.
 
-## 2. Проверки pull‑request’а
-
-- Убедитесь, что job `docs-portal-build` прошёл успешно в
+## 2. Solicitud de extracción de solicitudes- Убедитесь, что job `docs-portal-build` прошёл успешно в
   `.github/workflows/check-docs.yml`.
-- Проверьте, что был запущен `ci/check_docs_portal.sh` (в логах CI отображается hero‑проверка).
-- Убедитесь, что workflow preview загрузил manifest (`build/checksums.sha256`) и что
-  скрипт проверки preview выполнился успешно (логи CI содержат вывод
+- Проверьте, что был запущен `ci/check_docs_portal.sh` (в логах CI отображается hero-проверка).
+- Убедитесь, qué vista previa del flujo de trabajo muestra el manifiesto (`build/checksums.sha256`) y qué
+  скрипт проверки vista previa выполнился успешно (логи CI содержат вывод
   `scripts/preview_verify.sh`).
-- Добавьте опубликованный preview‑URL из окружения GitHub Pages в описание PR.
+- Agregue la URL de vista previa pública a la página de GitHub en la página de relaciones públicas.
 
-## 3. Подписание по разделам
-
-| Раздел | Владелец | Чек‑лист |
+## 3. Подписание по разделам| Раздел | Владелец | Чек‑лист |
 |--------|----------|----------|
-| Главная | DevRel | Hero‑копирайт отображается; карточки quickstart ведут на валидные маршруты; CTA‑кнопки работают. |
-| Norito | Norito WG | Обзор и гайды по началу работы ссылаются на актуальные CLI‑флаги и Norito‑schema‑доки. |
-| SoraFS | Storage Team | Quickstart выполняется до конца, поля отчёта по manifest’у задокументированы, инструкции по симуляции fetch’а проверены. |
-| SDK‑гайды | Лиды SDK | Rust/Python/JS‑гайды собирают актуальные примеры и ссылаются на живые репозитории. |
-| Reference | Docs/DevRel | Индекс содержит свежие спецификации, справочник Norito‑codec’а соответствует `norito.md`. |
-| Preview‑артефакт | Docs/DevRel | Артефакт `docs-portal-preview` прикреплён к PR, smoke‑проверки пройдены, ссылка опубликована для ревьюеров. |
-| Security & Try it sandbox | Docs/DevRel · Security | Настроен OAuth device-code login (`DOCS_OAUTH_*`), чек‑лист `security-hardening.md` выполнен, заголовки CSP/Trusted Types проверены через `npm run build` или `npm run probe:portal`. |
+| Главная | Desarrollol | Hero‑копирайт отображается; Inicio rápido de tarjetas ведут на валидные маршруты; CTA‑кнопки работают. |
+| Norito | Norito GT | Los dispositivos instalados en los robots actuales están conectados a las etiquetas CLI actuales y al esquema Norito. |
+| SoraFS | Equipo de almacenamiento | Inicio rápido que incluye instrucciones, instrucciones y simulaciones de recuperación de datos. |
+| SDK‑гайды | Nuevo SDK | Rust/Python/JS‑гайды conectan los primeros y posteriores repositorios actuales. |
+| Referencia | Documentos/DevRel | Para cumplir con varias especificaciones, utilice el códec Norito y el codificador `norito.md`. |
+| Vista previa‑артефакт | Documentos/DevRel | El artefacto `docs-portal-preview` se aplica a PR, protectores de humo, instalados públicamente en los refrigeradores. |
+| Seguridad y Pruébelo en la zona de pruebas | Documentos/DevRel · Seguridad | Inicio de sesión con código de dispositivo OAuth (`DOCS_OAUTH_*`), lista de verificación `security-hardening.md`, archivos CSP/Tipos de confianza disponibles en `npm run build` `npm run probe:portal`. |
 
-Отметьте каждую строку в ходе review PR’а или зафиксируйте follow‑up‑задачи, чтобы статус
+Отметьте каждую строку в ходе review PR’а или зафиксируйте follow-up-задачи, чтобы статус
 оставался точным.
 
-## 4. Release‑notes
-
-- Включайте `https://docs.iroha.tech/` (или URL окружения из job’а деплоя) в release‑notes
+## 4. Notas de la versión- Utilice `https://docs.iroha.tech/` (o URL de configuración de la implementación del trabajo) en las notas de la versión.
   и статусные апдейты.
-- Явно перечисляйте новые или изменённые разделы, чтобы downstream‑команды понимали,
-  какие smoke‑тесты им требуется перезапустить.
+- Явно перечисляйте новые или изменённые разделы, чтобы downstream-comandы понимали,
+  какие smoke‑testы и м требуется перезапустить.

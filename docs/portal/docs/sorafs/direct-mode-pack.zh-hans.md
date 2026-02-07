@@ -11,60 +11,61 @@ id: direct-mode-pack
 title: SoraFS Direct-Mode Fallback Pack (SNNet-5a)
 sidebar_label: Direct-Mode Fallback Pack
 description: Required configuration, compliance checks, and rollout steps when operating SoraFS in direct Torii/QUIC mode during the SNNet-5a transition.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-SoraNet circuits remain the default transport for SoraFS, but roadmap item **SNNet-5a** requires a regulated fallback so operators can keep deterministic read-access while the anonymity rollout completes. This pack captures the CLI / SDK knobs, configuration profiles, compliance tests, and deployment checklist needed to run SoraFS in direct Torii/QUIC mode without touching the privacy transports.
+SoraNet 电路仍然是 SoraFS 的默认传输，但路线图项目 **SNNet-5a** 需要受监管的回退，以便操作员可以在匿名推出完成时保持确定性的读取访问。该包捕获在直接 Torii/QUIC 模式下运行 SoraFS 所需的 CLI/SDK 旋钮、配置文件、合规性测试和部署清单，而无需触及隐私传输。
 
-The fallback applies to staging and regulated production environments until SNNet-5 through SNNet-9 clear their readiness gates. Keep the artefacts below alongside the usual SoraFS deployment collateral so operators can swap between anonymous and direct modes on demand.
+回退适用于暂存和受监管的生产环境，直到 SNNet-5 到 SNNet-9 清除其准备就绪大门。将下面的工件与通常的 SoraFS 部署资料一起保存，以便运营商可以根据需要在匿名模式和直接模式之间切换。
 
-## 1. CLI & SDK Flags
+## 1. CLI 和 SDK 标志
 
-- `sorafs_cli fetch --transport-policy=direct-only …` disables relay scheduling and enforces Torii/QUIC transports. CLI help now lists `direct-only` as an accepted value.
-- SDKs must set `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)` whenever they expose a “direct mode” toggle. The generated bindings in `iroha::ClientOptions` and `iroha_android` forward the same enum.
-- Gateway harnesses (`sorafs_fetch`, Python bindings) can parse the direct-only toggle via the shared Norito JSON helpers so automation receives identical behaviour.
+- `sorafs_cli fetch --transport-policy=direct-only …` 禁用中继调度并强制执行 Torii/QUIC 传输。 CLI 帮助现在将 `direct-only` 列为可接受的值。
+- SDK 每当公开“直接模式”切换时都必须设置 `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)`。 `iroha::ClientOptions` 和 `iroha_android` 中生成的绑定转发相同的枚举。
+- 网关线束（`sorafs_fetch`，Python 绑定）可以通过共享的 Norito JSON 帮助程序解析仅直接切换，以便自动化接收相同的行为。
 
-Document the flag in partner-facing runbooks and wire feature toggles through `iroha_config` rather than environment variables.
+在面向合作伙伴的运行手册中记录该标志，并通过 `iroha_config` 而不是环境变量来切换功能。
 
-## 2. Gateway Policy Profiles
+## 2. 网关策略配置文件
 
-Use Norito JSON to persist deterministic orchestrator configuration. The example profile in `docs/examples/sorafs_direct_mode_policy.json` encodes:
+使用 Norito JSON 保留确定性协调器配置。 `docs/examples/sorafs_direct_mode_policy.json` 中的示例配置文件编码：
 
-- `transport_policy: "direct_only"` — reject providers that only advertise SoraNet relay transports.
-- `max_providers: 2` — cap direct peers to the most reliable Torii/QUIC endpoints. Adjust based on regional compliance allowances.
-- `telemetry_region: "regulated-eu"` — label emitted metrics so telemetry dashboards and audits distinguish fallback runs.
-- Conservative retry budgets (`retry_budget: 2`, `provider_failure_threshold: 3`) to avoid masking misconfigured gateways.
+- `transport_policy: "direct_only"` — 拒绝仅宣传 SoraNet 中继传输的提供商。
+- `max_providers: 2` — 将直接对等点限制为最可靠的 Torii/QUIC 端点。根据地区合规津贴进行调整。
+- `telemetry_region: "regulated-eu"` — 标记发出的指标，以便遥测仪表板和审核区分后备运行。
+- 保守的重试预算（`retry_budget: 2`、`provider_failure_threshold: 3`）以避免掩盖配置错误的网关。
 
-Load the JSON through `sorafs_cli fetch --config` (automation) or the SDK bindings (`config_from_json`) before exposing the policy to operators. Persist the scoreboard output (`persist_path`) for audit trails.
+在向操作员公开策略之前，通过 `sorafs_cli fetch --config`（自动化）或 SDK 绑定 (`config_from_json`) 加载 JSON。保留记分板输出 (`persist_path`) 以进行审计跟踪。
 
-Gateway-side enforcement knobs are captured in `docs/examples/sorafs_gateway_direct_mode.toml`. The template mirrors the output from `iroha app sorafs gateway direct-mode enable`, disabling envelope/admission checks, wiring rate-limit defaults, and populating the `direct_mode` table with plan-derived hostnames and manifest digests. Replace the placeholder values with your rollout plan before committing the snippet to configuration management.
+网关端强制旋钮在 `docs/examples/sorafs_gateway_direct_mode.toml` 中捕获。该模板镜像 `iroha app sorafs gateway direct-mode enable` 的输出，禁用信封/准入检查、连接速率限制默认值，并使用计划派生的主机名和清单摘要填充 `direct_mode` 表。在将代码片段提交到配置管理之前，将占位符值替换为您的部署计划。
 
-## 3. Compliance Test Suite
+## 3. 合规性测试套件
 
-Direct-mode readiness now includes coverage in both the orchestrator and CLI crates:
+直接模式准备就绪现在包括 Orchestrator 和 CLI 包中的覆盖范围：
 
-- `direct_only_policy_rejects_soranet_only_providers` guarantees that `TransportPolicy::DirectOnly` fails fast when every candidate advert only supports SoraNet relays.【crates/sorafs_orchestrator/src/lib.rs:7238】
-- `direct_only_policy_prefers_direct_transports_when_available` ensures Torii/QUIC transports are used when present and that SoraNet relays are excluded from the session.【crates/sorafs_orchestrator/src/lib.rs:7285】
-- `direct_mode_policy_example_is_valid` parses `docs/examples/sorafs_direct_mode_policy.json` to ensure documentation stays aligned with the helper utilities.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` exercises `sorafs_cli fetch --transport-policy=direct-only` against a mocked Torii gateway, providing a smoke test for regulated environments that pin direct transports.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
-- `scripts/sorafs_direct_mode_smoke.sh` wraps the same command with the policy JSON and scoreboard persistence for rollout automation.
+- 当每个候选广告仅支持SoraNet中继时，`direct_only_policy_rejects_soranet_only_providers`保证`TransportPolicy::DirectOnly`快速失败。【crates/sorafs_orchestrator/src/lib.rs:7238】
+- `direct_only_policy_prefers_direct_transports_when_available` 确保存在 Torii/QUIC 传输时使用，并且 SoraNet 中继被排除在会话之外。【crates/sorafs_orchestrator/src/lib.rs:7285】
+- `direct_mode_policy_example_is_valid` 解析 `docs/examples/sorafs_direct_mode_policy.json` 以确保文档与帮助程序实用程序保持一致。【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
+- `fetch_command_respects_direct_transports` 针对模拟的 Torii 网关练习 `sorafs_cli fetch --transport-policy=direct-only`，为固定直接传输的受监管环境提供烟雾测试。【crates/sorafs_car/tests/sorafs_cli.rs:2733】
+- `scripts/sorafs_direct_mode_smoke.sh` 将相同的命令与策略 JSON 和记分板持久性包装在一起，以实现部署自动化。
 
-Run the focused suite before publishing updates:
+在发布更新之前运行重点套件：
 
 ```bash
 cargo test -p sorafs_orchestrator direct_only_policy
 cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```
 
-If workspace compilation fails because of upstream changes, record the blocking error in `status.md` and rerun once the dependency catches up.
+如果工作区编译由于上游更改而失败，请在 `status.md` 中记录阻塞错误，并在依赖项赶上后重新运行。
 
-## 4. Automated Smoke Runs
+## 4. 自动烟雾运行
 
-CLI coverage alone does not surface environment-specific regressions (e.g., gateway policy drift or manifest mismatches). A dedicated smoke helper lives in `scripts/sorafs_direct_mode_smoke.sh` and wraps `sorafs_cli fetch` with the direct-mode orchestrator policy, scoreboard persistence, and summary capture.
+仅 CLI 覆盖范围不会显示特定于环境的回归（例如，网关策略漂移或明显不匹配）。 `scripts/sorafs_direct_mode_smoke.sh` 中有一个专用的烟雾助手，并将 `sorafs_cli fetch` 与直接模式编排器策略、记分板持久性和摘要捕获封装在一起。
 
-Example usage:
+用法示例：
 
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
@@ -72,57 +73,57 @@ Example usage:
   --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
 ```
 
-- The script respects both CLI flags and key=value config files (see `docs/examples/sorafs_direct_mode_smoke.conf`). Populate the manifest digest and provider advert entries with production values before running.
-- `--policy` defaults to `docs/examples/sorafs_direct_mode_policy.json`, but any orchestrator JSON produced by `sorafs_orchestrator::bindings::config_to_json` can be supplied. The CLI accepts the policy via `--orchestrator-config=PATH`, enabling reproducible runs without hand-tuning flags.
-- When `sorafs_cli` is not on `PATH` the helper builds it from the
-  `sorafs_orchestrator` crate (release profile) so smoke runs exercise the
-  shipping direct-mode plumbing.
-- Outputs:
-  - Assembled payload (`--output`, defaults to `artifacts/sorafs_direct_mode/payload.bin`).
-  - Fetch summary (`--summary`, defaults alongside the payload) containing the telemetry region and provider reports used for rollout evidence.
-  - Scoreboard snapshot persisted to the path declared in the policy JSON (e.g., `fetch_state/direct_mode_scoreboard.json`). Archive this alongside the summary in change tickets.
-- Adoption gate automation: once the fetch completes the helper invokes `cargo xtask sorafs-adoption-check` using the persisted scoreboard and summary paths. The required quorum defaults to the number of providers supplied on the command line; override it with `--min-providers=<n>` when you need a larger sample. Adoption reports are written next to the summary (`--adoption-report=<path>` can set a custom location) and the helper passes `--require-direct-only` by default (matching the fallback) and `--require-telemetry` whenever you supply the matching CLI flag. Use `XTASK_SORAFS_ADOPTION_FLAGS` to forward additional xtask arguments (for example `--allow-single-source` during an approved downgrade so the gate both tolerates and enforces the fallback). Only skip the adoption gate with `--skip-adoption-check` when running local diagnostics; the roadmap requires every regulated direct-mode run to include the adoption report bundle.
+- 该脚本尊重 CLI 标志和 key=value 配置文件（请参阅 `docs/examples/sorafs_direct_mode_smoke.conf`）。在运行之前使用生产值填充清单摘要和提供商广告条目。
+- `--policy` 默认为 `docs/examples/sorafs_direct_mode_policy.json`，但可以提供由 `sorafs_orchestrator::bindings::config_to_json` 生成的任何编排器 JSON。 CLI 通过 `--orchestrator-config=PATH` 接受策略，从而无需手动调整标志即可实现可重复运行。
+- 当 `sorafs_cli` 不在 `PATH` 上时，帮助程序从
+  `sorafs_orchestrator` 板条箱（释放配置文件）因此烟雾运行锻炼了
+  运输直接模式管道。
+- 输出：
+  - 组装的有效负载（`--output`，默认为 `artifacts/sorafs_direct_mode/payload.bin`）。
+  - 获取包含遥测区域和用于推出证据的提供商报告的摘要（`--summary`，默认与有效负载一起）。
+  - 记分板快照保留到策略 JSON 中声明的路径（例如，`fetch_state/direct_mode_scoreboard.json`）。将其与变更单中的摘要一起存档。
+- 采用门自动化：获取完成后，帮助程序使用持久记分板和摘要路径调用 `cargo xtask sorafs-adoption-check`。所需的仲裁默认为命令行上提供的提供程序的数量；当您需要更大的样本时，用 `--min-providers=<n>` 覆盖它。采用报告写在摘要旁边（`--adoption-report=<path>` 可以设置自定义位置），并且每当您提供匹配的 CLI 标志时，助手都会默认传递 `--require-direct-only`（匹配后备）和 `--require-telemetry`。使用 `XTASK_SORAFS_ADOPTION_FLAGS` 转发其他 xtask 参数（例如，在批准的降级期间使用 `--allow-single-source`，以便门既容忍又强制执行回退）。仅在运行本地诊断时跳过 `--skip-adoption-check` 的采用门；该路线图要求每次受监管的直接模式运行都包含采用报告包。
 
-## 5. Rollout Checklist
+## 5. 推出清单
 
-1. **Configuration freeze:** Store the direct-mode JSON profile in your `iroha_config` repository and record the hash in your change ticket.
-2. **Gateway audit:** Confirm Torii endpoints enforce TLS, capability TLVs, and audit logging prior to flipping direct mode. Publish the gateway policy profile to operators.
-3. **Compliance sign-off:** Share the updated playbook with compliance / regulatory reviewers and capture approvals for running outside the anonymity overlay.
-4. **Dry run:** Execute the compliance test suite plus a staging fetch against known-good Torii providers. Archive scoreboard outputs and CLI summaries.
-5. **Production cutover:** Announce the change window, flip `transport_policy` to `direct_only` (if you had opted into `soranet-first`), and monitor the direct-mode dashboards (`sorafs_fetch` latency, provider failure counters). Document the rollback plan so you can return to SoraNet-first once SNNet-4/5/5a/5b/6a/7/8/12/13 graduate in `roadmap.md:532`.
-6. **Post-change review:** Attach scoreboard snapshots, fetch summaries, and monitoring results to the change ticket. Update `status.md` with the effective date and any anomalies.
+1. **配置冻结：** 将直接模式 JSON 配置文件存储在 `iroha_config` 存储库中，并将哈希值记录在更改票证中。
+2. **网关审核：** 在翻转直接模式之前确认 Torii 端点强制执行 TLS、功能 TLV 和审核日志记录。将网关策略模板发布给运营商。
+3. **合规性签字：** 与合规性/监管审查人员共享更新后的剧本，并获得在匿名覆盖之外运行的批准。
+4. **试运行：** 执行合规性测试套件以及针对已知良好的 Torii 提供商的暂存获取。存档记分板输出和 CLI 摘要。
+5. **生产切换：** 宣布更改窗口，将 `transport_policy` 翻转为 `direct_only`（如果您选择了 `soranet-first`），并监控直接模式仪表板（`sorafs_fetch` 延迟、提供商故障计数器）。记录回滚计划，以便您可以在 SNNet-4/5/5a/5b/6a/7/8/12/13 在 `roadmap.md:532` 中毕业后首先返回到 SoraNet。
+6. **变更后审核：** 将记分板快照、获取摘要和监控结果附加到变更单中。使用生效日期和任何异常情况更新 `status.md`。
 
-Keep the checklist alongside the `sorafs_node_ops` runbook so operators can rehearse the workflow before a live switchover. When SNNet-5 graduates to GA, retire the fallback after confirming parity in production telemetry.
+将清单与 `sorafs_node_ops` 操作手册放在一起，以便操作员可以在实时切换之前排练工作流程。当 SNNet-5 升级到 GA 时，在确认生产遥测中的奇偶校验后退出后备。
 
-## 6. Evidence & Adoption Gate Requirements
+## 6. 证据和收养门要求
 
-Direct-mode captures still need to satisfy the SF-6c adoption gate. Bundle the
-scoreboard, summary, manifest envelope, and adoption report for every run so
-`cargo xtask sorafs-adoption-check` can validate the fallback posture. Missing
-fields force the gate to fail, so record the expected metadata in change
-tickets.
+直接模式捕获仍然需要满足 SF-6c 采用门槛。捆绑
+每次运行的记分板、摘要、清单信封和采用报告
+`cargo xtask sorafs-adoption-check` 可以验证回退姿势。失踪
+字段迫使门失败，因此在变化中记录预期的元数据
+门票。
 
-- **Transport metadata:** `scoreboard.json` must declare
-  `transport_policy="direct_only"` (and flip `transport_policy_override=true`
-  when you forced the downgrade). Keep the paired anonymity policy fields
-  populated even when they inherit defaults so reviewers can see whether you
-  deviated from the staged anonymity plan.
-- **Provider counters:** Gateway-only sessions must persist `provider_count=0`
-  and populate `gateway_provider_count=<n>` with the number of Torii providers
-  used. Avoid hand-editing the JSON—the CLI/SDK already derives the counts and
-  the adoption gate rejects captures that omit the split.
-- **Manifest evidence:** When Torii gateways participate, pass the signed
-  `--gateway-manifest-envelope <path>` (or SDK equivalent) so
-  `gateway_manifest_provided` plus the `gateway_manifest_id`/`gateway_manifest_cid`
-  are recorded in `scoreboard.json`. Ensure `summary.json` carries the matching
-  `manifest_id`/`manifest_cid`; the adoption check fails if either file is
-  missing the pair.
-- **Telemetry expectations:** When telemetry accompanies the capture, run the
-  gate with `--require-telemetry` so the adoption report proves the metrics were
-  emitted. Air-gapped rehearsals can omit the flag, but CI and change tickets
-  should document the absence.
+- **传输元数据：** `scoreboard.json` 必须声明
+  `transport_policy="direct_only"`（和翻转 `transport_policy_override=true`
+  当您强制降级时）。保留配对的匿名策略字段
+  即使它们继承了默认值，也会被填充，以便审阅者可以看到您是否
+  偏离了分阶段的匿名计划。
+- **提供商计数器：** 仅网关会话必须持续 `provider_count=0`
+  并用 Torii 提供者的数量填充 `gateway_provider_count=<n>`
+  使用过。避免手动编辑 JSON — CLI/SDK 已导出计数并
+  采用门拒绝忽略分割的捕获。
+- **显性证据：** Torii网关参与时，传递签名的
+  `--gateway-manifest-envelope <path>`（或同等的 SDK）所以
+  `gateway_manifest_provided` 加上 `gateway_manifest_id`/`gateway_manifest_cid`
+  记录在 `scoreboard.json` 中。确保 `summary.json` 携带匹配
+  `manifest_id`/`manifest_cid`；如果任一文件是，则采用检查失败
+  缺少这对。
+- **遥测期望：** 当遥测伴随捕获时，运行
+  门与 `--require-telemetry` 因此采用报告证明了指标
+  发出。气隙排练可以省略旗帜，但 CI 和改签
+  应记录缺席情况。
 
-Example:
+示例：
 
 ```bash
 cargo xtask sorafs-adoption-check \
@@ -132,9 +133,7 @@ cargo xtask sorafs-adoption-check \
   --require-direct-only \
   --json-out artifacts/sorafs_direct_mode/adoption_report.json \
   --require-telemetry
-```
-
-Attach `adoption_report.json` alongside the scoreboard, summary, manifest
-envelope, and smoke log bundle. These artefacts mirror what the CI adoption job
-(`ci/check_sorafs_orchestrator_adoption.sh`) enforces and keep direct-mode
-downgrades auditable.
+```将 `adoption_report.json` 附在记分板、摘要、清单旁边
+信封和烟木捆。这些文物反映了 CI 采用工作的内容
+(`ci/check_sorafs_orchestrator_adoption.sh`) 强制并保持直接模式
+降级可审核。

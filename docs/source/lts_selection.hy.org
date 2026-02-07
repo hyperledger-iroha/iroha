@@ -11,188 +11,187 @@
 #+TITLE: On selecting versions as LTS candidates
 #+AUTHOR: Aleksandr Petrosyan
 #+DATE: 12-08-2023
-* About
+#+TRANSLATOR: machine-google-reviewed
 
-In the interest of preserving the engineering resources, it is in our
-interests to limit the scope of post-release support. If one has
-several versions of Iroha running in parallel, they might need to
-replicate the support work as many times as there are parallel
-versions.
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* Մոտ
 
-Instead of attempting to support multiple versions badly, we try to
-cater to 80% of use cases with 20% of the effort and reach a
-compromise between supporting every released version equally and only
-supporting the latest stable version.
+Ինժեներական ռեսուրսների պահպանման շահերից ելնելով՝ դա մեր մեջ է
+շահերը՝ սահմանափակելու հետթողարկումից հետո աջակցության շրջանակը: Եթե մեկը ունի
+Iroha-ի մի քանի տարբերակներ, որոնք աշխատում են զուգահեռաբար, նրանց կարող է անհրաժեշտ լինել
+կրկնել աջակցության աշխատանքը այնքան անգամ, որքան կան զուգահեռներ
+տարբերակները։
 
-Specifically, we support the latest =stable= release. Often this
-release is either not as well-tested, well-documented, or
-well-supported by the SDKs, in addition to often changing in terms of
-thus have a monthly release cadence and one release per year is chosen
-to be the target of long-term support and development.
+Մի քանի տարբերակների վատ աջակցելու փորձի փոխարեն, մենք փորձում ենք դա անել
+սպասարկել օգտագործման դեպքերի 80%-ը 20% ջանքերով և հասնել ա
+փոխզիջում յուրաքանչյուր թողարկված տարբերակին հավասարապես և միայն աջակցելու միջև
+աջակցում է վերջին կայուն տարբերակը:
 
-* LTS selection criteria
+Մասնավորապես, մենք աջակցում ենք վերջին =stable= թողարկմանը: Հաճախ սա
+թողարկումը կամ այնքան էլ լավ փորձարկված չէ, լավ փաստագրված կամ
+լավ աջակցվում է SDK-ների կողմից, բացի այդ, հաճախ փոխվում են առումով
+Այսպիսով, ունեն ամսական թողարկման արագություն և ընտրվում է տարեկան մեկ թողարկում
+լինել երկարաժամկետ աջակցության և զարգացման թիրախ:
 
-The following is a non-exhaustive list of recommended considerations
-for selecting a particular version as an LTS candidate
+* LTS ընտրության չափանիշներ
 
-1. The release should be /unlikely/ to contain major /known/ issues which
-   would preclude it from being useful.
+Ստորև ներկայացված է առաջարկվող նկատառումների ոչ սպառիչ ցանկը
+որպես LTS թեկնածու որոշակի տարբերակ ընտրելու համար
 
-   More specifically, the release should have a good coverage of a
-   basic use-case, for example, (Pre-)RC-6[fn:1] was the last release which
-   contained the old consensus engine. Given that the actor-based
-   consensus had a maximum stable throughput of 10 TPS, (Pre-)RC-6 was
-   not labelled as an LTS, despite being used as one.
+1. Թողարկումը պետք է /հավանական չէ/ պարունակի հիմնական /հայտնի/ խնդիրներ, որոնք
+   կբացառի այն օգտակար լինելուց:
 
-   RC-9 contained all the necessary features for running an Iroha node
-   on the new consensus, some changes to the structure of the
-   configuration and a few fixes to the =p2p= subsystem. It could have
-   filled all the possible niches of any projects based on Iroha, and
-   as such it was labelled as an LTS release despite being less-well
-   tested.
+   Ավելի կոնկրետ, թողարկումը պետք է լավ ծածկույթ ունենա a
+   հիմնական օգտագործման դեպքը, օրինակ, (Pre-)RC-6[fn:1] վերջին թողարկումն էր, որը
+   պարունակում էր հին կոնսենսուսային շարժիչը: Հաշվի առնելով, որ դերասանի վրա հիմնված
+   Կոնսենսուսն ուներ 10 TPS առավելագույն կայուն թողունակություն, (Նախա)RC-6 էր
+   պիտակավորված չէ որպես LTS, չնայած օգտագործվում է որպես մեկը:
 
-   Releases RC8, RC12, RC13 and RC17 were disqualified based on this
-   criterion.
+   RC-9-ը պարունակում էր բոլոր անհրաժեշտ հատկանիշները Iroha հանգույցը գործարկելու համար
+   նոր կոնսենսուսի վերաբերյալ որոշ փոփոխություններ կառուցվածքում
+   կոնֆիգուրացիա և =p2p= ենթահամակարգի մի քանի ուղղումներ: Դա կարող էր ունենալ
+   լրացրել է Iroha-ի վրա հիմնված ցանկացած նախագծի բոլոր հնարավոր նիշերը, և
+   որպես այդպիսին, այն պիտակավորվեց որպես LTS թողարկում, չնայած ոչ լավ վիճակում
+   փորձարկված.
 
-2. If there is a large feature that entails an API breakage, the
-   release that has the most stable version of the "old way of doing
-   things" should be prioritised as an LTS candidate.
+   RC8, RC12, RC13 և RC17 թողարկումները որակազրկվել են դրա հիման վրա
+   չափանիշ.
 
-   For example, RC12 and RC13, were the last versions of Iroha that
-   still used a hard-coded permission validator. Them being labelled
-   as an LTS candidate was precluded by the major known issues,
-   particularly with stability, poor coverage, and because releasing
-   an LTS after RC9 would have split the development resources off
-   from fixing the issue of rigid un-modifiable permission validators.
+2. Եթե կա մեծ առանձնահատկություն, որը հանգեցնում է API-ի խզման, ապա
+   թողարկում, որն ունի «հին ձևի» ամենակայուն տարբերակը
+   բաները» պետք է առաջնահերթություն տրվի որպես ԼՏՍ թեկնածու։
 
-   RC14 and RC15 on the other hand, were in the process of a slow
-   migration of features. As such, the latter versions would be
-   considered direct upgrades over the previous one, having more
-   optimisations and better feature coverage.
+   Օրինակ, RC12-ը և RC13-ը Iroha-ի վերջին տարբերակներն էին, որոնք
+   դեռ օգտագործում էր կոշտ կոդավորված թույլտվության վավերացուցիչ: Նրանց պիտակավորում են
+   քանի որ ԼՏՍ-ի թեկնածուն բացառվում էր հիմնական հայտնի խնդիրների պատճառով,
+   հատկապես կայունության, վատ ծածկույթի և ազատման պատճառով
+   RC9-ից հետո LTS-ը կբաժանի զարգացման ռեսուրսները
+   կոշտ չփոփոխվող թույլտվությունների վավերացնողների խնդիրը լուծելուց:
 
-3. The release must be feature complete for a use-case.
+   RC14-ը և RC15-ը, մյուս կողմից, դանդաղ ընթացքի մեջ էին
+   հատկանիշների միգրացիա. Որպես այդպիսին, վերջին տարբերակները կլինեն
+   դիտարկվում է նախորդի նկատմամբ ուղղակի արդիականացում՝ ունենալով ավելին
+   օպտիմիզացումներ և հնարավորությունների ավելի լավ ծածկույթ:
 
-   This is different to point 1, because while RC10 and RC13 were free
-   from major problems, they did not offer sufficiently full coverage
-   of the features required for the major project stakeholders.
+3. Օգտագործման դեպքում թողարկումը պետք է ամբողջական լինի:Սա տարբերվում է 1-ին կետից, քանի որ մինչ RC10-ը և RC13-ը անվճար էին
+   հիմնական խնդիրներից նրանք բավարար չափով լիարժեք լուսաբանում չեն առաջարկել
+   Ծրագրի հիմնական շահագրգիռ կողմերի համար պահանջվող հատկանիշները:
 
-4. The release must be supported by all SDKs.
+4. Թողարկումը պետք է աջակցվի բոլոր SDK-ների կողմից:
 
-   While the support in Iroha Python is largely confined to LTS
-   candidates, creating a catch 22 situation, it is an exception. The
-   two other major SDKs, namely Kotlin, and TypeScript must support
-   the LTS candidate. If the SDK cannot be made to support the
-   candidate, the candidate release is disqualified.
+   Մինչդեռ Iroha Python-ի աջակցությունը հիմնականում սահմանափակված է LTS-ով
+   թեկնածուները, ստեղծելով catch 22 իրավիճակ, դա բացառություն է. Այն
+   երկու այլ հիմնական SDK-ներ, մասնավորապես Kotlin-ը և TypeScript-ը պետք է աջակցեն
+   ԼՏՍ թեկնածուն. Եթե SDK-ն չի կարող ստեղծվել աջակցելու համար
+   թեկնածու, թեկնածուի ազատ արձակումը որակազրկված է:
 
-5. The release must be well-tested.
+5. Ազատումը պետք է լավ փորձարկված լինի:
 
-   This point supplements point 1, in that lack of known features
-   coupled with bad test coverage does not, in fact, mean freedom from
-   major problems.
+   Այս կետը լրացնում է 1-ին կետը՝ հայտնի հատկանիշների այդ բացակայությամբ
+   զուգորդված վատ թեստի ծածկույթով, ըստ էության, չի նշանակում ազատություն
+   հիմնական խնդիրներ.
 
-   This generally applies to all releases after RC6 and until RC17, as
-   the development team was told of a way of restructuring the
-   integration tests, but the process only ended with RC17 and the
-   introduction of the =pytest= framework.
+   Սա, ընդհանուր առմամբ, վերաբերում է բոլոր թողարկումներին RC6-ից հետո և մինչև RC17-ը, ինչպես
+   զարգացման թիմին ասվել է վերակառուցման եղանակի մասին
+   ինտեգրման թեստեր, բայց գործընթացը ավարտվեց միայն RC17-ով և the
+   =pytest= շրջանակի ներդրում:
 
-   While passing integration tests is necessary it is not sufficient,
-   the following minimal testing is required to qualify a release as
-   an LTS candidate
+   Թեև ինտեգրման թեստեր անցնելը անհրաժեշտ է, դա բավարար չէ,
+   Հետևյալ նվազագույն փորձարկումը պահանջվում է թողարկումը որակավորելու համար
+   LTS թեկնածու
 
-   1. Unit and Integration testing. One must take care to run all
-      integration tests, including the long and flaky ones. If tests
-      are unusually flaky that is indicative of a problem, and the
-      release should be disqualified (see [[../../flakyness.org]]).
+   1. Միավորների և ինտեգրման թեստավորում: Պետք է հոգ տանել բոլորը վարելու համար
+      ինտեգրման թեստեր, ներառյալ երկար և շերտավոր: Եթե թեստեր
+      անսովոր շերտավոր են, ինչը վկայում է խնդրի մասին, և
+      թողարկումը պետք է որակազրկվի (տես [[../../flakyness.org]]):
 
-   2. =pytest= tests, which technically qualify as integration
-      tests.
+   2. =pytest= թեստեր, որոնք տեխնիկապես որակվում են որպես ինտեգրում
+      թեստեր.
 
-   3. Longevity testing. The candidate must be tested for at least two
-      weeks to qualify. If the candidate is accepted as an LTS, the
-      longevity testing should be conducted for at least four weeks.
+   3. Երկարակեցության փորձարկում. Թեկնածուն պետք է թեստավորվի առնվազն երկուսի համար
+      շաբաթներ որակավորման համար: Եթե թեկնածուն ընդունվում է որպես LTS, ապա
+      երկարակեցության թեստը պետք է անցկացվի առնվազն չորս շաբաթ:
 
-   4. Load testing. The LTS candidate must satisfy all of the criteria
-      set out by the QA team as operational and developmental
-      requirements under load (also known as extra-functional, and
-      mistakenly as non-functional). Failure to produce blocks in a
-      timely fashion is an automatic disqualification. Other
-      disqualifying criteria are left up to the discretion of the QA
-      team.
+   4. Բեռի փորձարկում: LTS թեկնածուն պետք է բավարարի բոլոր չափանիշներին
+      ՈԱ թիմի կողմից սահմանվել է որպես գործառնական և զարգացնող
+      պահանջներ բեռի տակ (նաև հայտնի է որպես արտաֆունկցիոնալ և
+      սխալմամբ որպես ոչ ֆունկցիոնալ): Ա-ում բլոկներ արտադրելու ձախողում
+      ժամանակին նորաձեւությունը ավտոմատ որակազրկում է: Այլ
+      Որակազրկման չափանիշները թողնված են ՈԱ-ի հայեցողությանը
+      թիմը։
 
-   5. It must be deployed as a =development= container in at least one
-      project for at least two weeks, with no major problems. RC9 did
-      not pass this test and would have been disqualified with the
-      updated criteria listed in the present document.
+   5. Այն պետք է տեղակայվի որպես =development= կոնտեյներ առնվազն մեկում
+      նախագիծը առնվազն երկու շաբաթ, առանց լուրջ խնդիրների: RC9-ն արեց
+      չանցնեք այս թեստը և որակազրկվեին նրա հետ
+      սույն փաստաթղթում թվարկված նորացված չափանիշները:
 
-6. The release must be well-documented.
+6. Ազատումը պետք է լինի լավ փաստաթղթավորված:
 
-   It should not contain multiple new features that lack
-   documentation. Any shortfall in terms of documentation coverage
-   must be fixable within the time-frame of at most the release window
-   for the candidate. Failure to do so is an automatic disqualification.
+   Այն չպետք է պարունակի բազմաթիվ նոր առանձնահատկություններ, որոնք բացակայում են
+   փաստաթղթեր. Փաստաթղթերի ծածկույթի առումով ցանկացած պակասություն
+   պետք է շտկելի լինի առավելագույնը թողարկման պատուհանի ժամանակահատվածում
+   թեկնածուի համար։ Դա չկատարելը ավտոմատ որակազրկում է:
 
-In addition to the regular release procedure outlined in
-[[release_procedure.org]], the LTS must adhere to the following additional
-steps.
+Ի լրումն կանոնավոր թողարկման ընթացակարգի, որը նշված է
+[[release_procedure.org]], LTS-ը պետք է հետևի հետևյալ հավելյալին
+քայլերը.Հերթական թողարկման /ի հավելումն/ կատարման, առանձին PR-ի հետ
+վերնագիր =[release]: <semver> LTS= որտեղ =<semver>= իմաստաբանականն է
+պետք է ստեղծվի մշակման մասնաճյուղի կոդի տարբերակը: Այն
+կանոնավոր ստուգաթերթը պետք է խուսափել, և փոխարենը պետք է «Pull Request»-ը
+վերանայվել նույն անձնակազմի կողմից, որը վերանայել և հաստատել է
+=stable= թողարկում. Առավելագույնը երկու վերանայում է անհրաժեշտ՝ ապահովելու համար, որ բոլորը
+փոփոխությունները տեղի կունենան ճիշտ հերթականությամբ և որ ոչ
+չփաստագրված խնդիրները սայթաքեցին:
 
-In /addition/ to performing a regular release, a separate PR with the
-title =[release]: <semver> LTS= where =<semver>= is the semantic
-version of the code from the development branch must be created. The
-regular checklist must be eschewed, and instead the Pull Request must
-be reviewed by the same personnel that reviewed and approved the
-=stable= release. At most two reviews are needed, to ensure that all
-the changes will take place in the correct order and that no
-undocumented issues slipped through.
+LTS-ի թողարկումից հետո CI-ն կարտադրի դոկեր կոնտեյներ
+LTS թողարկմամբ Alpine Linux հարթակում և Ubuntu Linux-ում,
+օգտագործելով =glibc=-ի հարթակային տարբերակը: ԿԻ-ն նույնպես պետք է արտադրի
+բոլոր աջակցվող փաթեթները և հրապարակել դրանք իրենց համապատասխան հասցեում
+պահոցներ. Սա նշանակում է, օրինակ, որ AUR փաթեթը թարմացվում է
+ձգման հարցումը միաձուլվելուց և ճիշտ փաթեթը արտադրելուց հետո: Այն
+GitHub-ի թողարկման էջը պետք է լցված լինի առանձին թողարկումով, որը վերնագրված է
+LTS և պարունակում է մեկ ֆայլ =AppImage=: Այս թողարկումները պետք է
+գալիս են որպես առանձին փաթեթներ, որոնք նշված են որպես անտեղադրելի
+կայուն տարբերակ.
 
-Once the LTS release is made, the CI will produce a docker container
-with the LTS release on the Alpine Linux platform and on Ubuntu Linux,
-using the platform-native version of =glibc=. The CI must also produce
-all of the supported packages, and publish them to their respective
-repositories. This means, for example, that the AUR package is updated
-after the pull request is merged and produces the correct package. The
-GitHub release page must be populated with a separate release entitled
-LTS and containing the single-file =AppImage=. These releases must
-come as separate packages that are marked as not installable alongside the
-stable version.
+* Հետադարձ տեղափոխման քաղաքականություն
 
-* Back-porting policy
+Ընդհանրապես, հետ տեղափոխումը LTS-ի մեջ չի խրախուսվում: Հետևյալը
+Հետ տեղափոխման պատճառները համարվում են ընդունելի.
+1. Հավելում, որը կապված չէ Iroha API-ի հետ, ինչպես օրինակ. գեներալ
+   օգնական գործիք և/կամ փաստաթղթեր:
+2. Անվտանգության հիմնական խոցելիության շտկում:
+3. Խոշոր սխալի շտկում:
+4. Դիզայնի խոշոր հսկողության ամրագրում, որը բացառում է օգտագործումը, պայմանով, որ դա
+   ընթացիկ ԼՏՍ-ի հիմնական շահագրգիռ կողմերը/օգտագործողները բանավոր են
+   հաստատված է, որ հետնախորշը նախընտրելի լուծում է:
 
-Generally, back-porting into the LTS is discouraged. The following
-back-porting reasons are considered acceptable:
-1. Addition that is not tied to the Iroha API, like e.g. a general
-   helper tool and/or documentation.
-2. Fixing a major security vulnerability.
-3. Fixing a major bug.
-4. Fixing a major design oversight that precludes usage, provided that
-   the key stakeholders/users of the current LTS have verbally
-   certified that a backport is a preferable solution.
+Հետևի նավահանգիստները պետք է հայտարարվեն նույն ալիքներով, ինչպես թողարկումը
+ինքն իրեն։ Պահանջվող փոփոխությունները պետք է պիտակվեն որպես հետնապահովված երկու փաստաթղթերում
+վերին հոսքի թողարկում, որում դրանք ամրագրվել են և այն տարբերակը, որում
+դրանք հետ փոխադրվել են:
 
-Back-ports must be announced through the same channels, as the release
-itself. Required changes must be labelled as backported in both the
-upstream release in which they were fixed and the version into which
-they have been back-ported.
+Հայտարարությունը պետք է բացատրի
+1. Ինչու է ընտրվել backport-ը (տե՛ս վերը նշված պատճառները)
+2. Ինչպիսին պետք է լինի հետնախորշի ազդեցությունը
+3. Ինչպիսի՞ն է ներկայիս կարգավիճակը ֆունկցիոնալ, ինտեգրացիոն և
+   ծանրաբեռնվածության/երկարակեցության փորձարկում:
 
-The announcement must explain
-1. Why the backport was chosen (see above reasons)
-2. What the impact of the backport must be
-3. What is the current status of functional, integration and
-   load/longevity testing.
+* Կիրառելիություն
 
-* Applicability
+LTS/կայուն թողարկման քաղաքականությունը պետք է վերանայվի առաջին անգամ
+Հայտարարվում է Iroha-ի ամբողջական տարբերակը (v2.0.0): Այլևս չի տրվել
+ակտիվ զարգացում, հիմնական զարգացման թիմը կարող է (և պետք է) կարողանա
+ավելի շատ կենտրոնանալ տարբեր տարբերակների աջակցության վրա:
 
-The LTS/stable release policy should be revised as soon as the first
-feature-complete version of Iroha is announced (v2.0.0). Given no more
-active development, the core development team can (and should) be able
-to focus more on the support of the diverging versions.
-
-* Footnotes
-
-[fn:1] The naming convention was stabilised long before any plan to
-release a version of Iroha was made.  As such calling any version of
-Iroha a release candidate has some implications.  Calling them pre
-release candidates is a similar type of misnomer, but less egregious,
-because rather than a misapplication of an existing term, this is an
-invention of a term that /could/ have subtle differences from a
-release candidate.  In reality these should have been called
-*development snapshots*.  But in order not to break continuity too
-much with the existing SDKs a compromise was chosen.
+* Ծանոթագրություններ[fn:1] Անվանակոչման կոնվենցիան կայունացել էր որևէ պլանից շատ առաջ
+թողարկումը պատրաստվել է Iroha-ի տարբերակը:  Որպես այդպիսին անվանելով ցանկացած տարբերակ
+Iroha թողարկման թեկնածուն ունի որոշ հետևանքներ:  Կանչելով նրանց նախապես
+«Ազատ արձակել թեկնածուները» սխալ անվանման նմանատիպ տեսակ է, բայց ավելի քիչ կոպիտ,
+քանի որ ավելի շուտ, քան գոյություն ունեցող տերմինի սխալ կիրառումը, սա է
+տերմինի գյուտ, որը /կարող էր/ ունենալ նուրբ տարբերություններ a-ից
+ազատ արձակել թեկնածուին.  Իրականում դրանք պետք է կոչվեին
+*զարգացման ակնթարթներ*:  Բայց որպեսզի չխախտվի նաև շարունակականությունը
+շատ առկա SDK-ների հետ փոխզիջում է ընտրվել:

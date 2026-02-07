@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/transfer-asset.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: Transférer un actif entre comptes
-description: Flux de transfert d'actifs simple qui reflète les quickstarts SDK et les parcours du registre.
-source: examples/transfer/transfer.ko
+سبيكة: /norito/examples/transfer-asset
+العنوان: نقل نشاط بين الحسابات
+الوصف: تدفق نقل الأنشطة البسيط الذي يعكس Quickstarts SDK وساحات التسجيل.
+المصدر: أمثلة/نقل/transfer.ko
 ---
 
-Flux de transfert d'actifs simple qui reflète les quickstarts SDK et les parcours du registre.
+تدفق نقل الأنشطة البسيط الذي يعكس Quickstarts SDK وساحات التسجيل.
 
-## Parcours du registre
+## باركور دو ريجيستري
 
-- Préfinancez Alice avec l'actif cible (par exemple via le snippet `register and mint` ou les flux de quickstart SDK).
-- Exécutez le point d'entrée `do_transfer` pour déplacer 10 unités d'Alice vers Bob, en satisfaisant la permission `AssetTransferRole`.
-- Interrogez les soldes (`FindAccountAssets`, `iroha_cli ledger assets list`) ou abonnez-vous aux événements du pipeline pour observer le résultat du transfert.
+- قم بتمويل Alice باستخدام النشاط التجاري (على سبيل المثال عبر المقتطف `register and mint` أو تدفق Quickstart SDK).
+- قم بتنفيذ نقطة الدخول `do_transfer` لتحريك 10 وحدات من Alice إلى Bob، مع الحصول على الإذن `AssetTransferRole`.
+- قم بالتحقق من العناصر (`FindAccountAssets`, `iroha_cli ledger assets list`) أو قم بمتابعة أحداث خط الأنابيب لمراقبة نتيجة النقل.
 
-## Guides SDK associés
+## أدلة شركاء SDK
 
 - [Quickstart SDK Rust](/sdks/rust)
 - [Quickstart SDK Python](/sdks/python)
 - [Quickstart SDK JavaScript](/sdks/javascript)
 
-[Télécharger la source Kotodama](/norito-snippets/transfer-asset.ko)
+[تحميل المصدر Kotodama](/norito-snippets/transfer-asset.ko)
 
 ```text
 // Transfer example: uses typed pointer constructors and transfer_asset syscall

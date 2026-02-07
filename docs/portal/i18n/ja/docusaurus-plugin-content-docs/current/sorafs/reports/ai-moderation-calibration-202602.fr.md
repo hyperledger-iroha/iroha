@@ -4,69 +4,71 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Rapport de calibration de modération IA (2026-02)
-summary: Dataset de calibration de base, seuils et scoreboard pour la première release de gouvernance MINFO-1.
+タイトル: 調整と調整の関係 IA (2026-02)
+概要: MINFO-1 のプレミア リリースのベースとなるデータセットとスコアボードのキャリブレーション。
 ---
 
-# Rapport de calibration de modération IA - Février 2026
+# 調整と調整の関係 IA - 2026 年 2 月
 
-Ce rapport regroupe les artefacts de calibration inauguraux pour **MINFO-1**. Le
-dataset, le manifest et le scoreboard ont été produits le 2026-02-05, revus par
+**MINFO-1** を開始するための校正の成果物を再グループ化します。ル
+データセット、マニフェストと製品のスコアボード、2026-02-05、revus par
 le conseil du ministère le 2026-02-10, et ancrés dans le DAG de gouvernance à la
-hauteur `912044`.
+オート`912044`。
 
-## Manifeste du dataset
+## データセットのマニフェスト
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **データセット参照:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **スラッグ:** `ai-moderation-calibration-202602`
+- **エントリ:** マニフェスト 480、チャンク 12,800、メタデータ 920、オーディオ 160
+- **ラベルの混合:** 安全 68%、疑わしい 19%、エスカレート 13%
+- **アーティファクトダイジェスト:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- **配布:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-Le manifest complet se trouve dans `docs/examples/ai_moderation_calibration_manifest_202602.json`
-et contient la signature de gouvernance ainsi que le hash du runner capturé au
-moment de la release.
+`docs/examples/ai_moderation_calibration_manifest_202602.json` のマニフェスト完了設定
+ランナーのキャプチャーを実行するための署名と内容を確認します。
+リリースの瞬間。
 
-## Résumé du scoreboard
+## スコアボードの履歴書
 
-Les calibrations ont tourné avec l'opset 17 et le pipeline de graines déterministes. Le
-JSON complet du scoreboard (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
-consigne les hashes et digests de telemetry; le tableau ci-dessous met en avant les
-métriques les plus importantes.
+最適なセット 17 の校正と粒度決定のパイプライン。ル
+スコアボードの JSON コンプリート (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
+テレメトリのハッシュとダイジェストを委託します。前衛的な風景を描く
+重要な点。
 
-| Modèle (famille) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
+|モデル（ファミーユ） |ブライエ | ECE |オーロック |精度@検疫 |リコール@エスカレート |
 | --------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ViT-H/14 安全性（ビジョン） | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
+| LLaVA-1.6 34B 安全性 (マルチモーダル) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
+|知覚アンサンブル (知覚) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
 
-Métriques combinées: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. La distribution
-des verdicts sur la fenêtre de calibration était pass 91.2%, quarantine 6.8%,
-escalate 2.0%, ce qui correspond aux attentes de politique indiquées dans le
-résumé du manifest. Le backlog de faux positifs est resté à zéro et le drift score
-(7.1%) est resté bien en dessous du seuil d'alerte de 20%.
+メトリックの組み合わせ: `Brier = 0.126`、`ECE = 0.034`、`AUROC = 0.982`。ラ分布
+校正試験の評決 91.2%、検疫 6.8%、
+2.0% をエスカレートし、政治的不法行為に対応する
+マニフェストの履歴書。ゼロとドリフトスコアの残りの疑似ポジティブのバックログ
+(7.1%) 最高の安全性は 20%。
 
-## Seuils et validation
+## セキュリティと検証
 
 - `thresholds.quarantine = 0.42`
 - `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+- 統治動議: `MINFO-2026-02-07`
+- `ministry-council-seat-03` によって `2026-02-10T11:33:12Z` で署名
 
-CI a stocké le bundle signé dans `artifacts/ministry/ai_moderation/2026-02/`
-aux côtés des binaires du moderation runner. Le digest du manifest et les hashes
-du scoreboard ci-dessus doivent être référencés lors des audits et des recours.
+CI は、`artifacts/ministry/ai_moderation/2026-02/` のバンドル署名をストックします。
+オ・コート・デ・ビネール・デュ・モデレーションランナー。マニフェストのダイジェストとハッシュ
+スコアボードは監査や記録を参照することができます。
 
-## Dashboards et alertes
+## ダッシュボードとアラート
 
-Les SRE de modération doivent importer le dashboard Grafana situé à
-`dashboards/grafana/ministry_moderation_overview.json` et les règles d'alerte
-Prometheus dans `dashboards/alerts/ministry_moderation_rules.yml` (la couverture
-de tests se trouve dans `dashboards/alerts/tests/ministry_moderation_rules.test.yml`).
-Ces artefacts émettent des alertes pour les blocages d'ingestion, les pics de drift
-et la croissance de la file quarantine, satisfaisant les exigences de monitoring
-mentionnées dans la [AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+ダッシュボード Grafana のインポーターの管理を行う SRE
+`dashboards/grafana/ministry_moderation_overview.json` および規則
+Prometheus と `dashboards/alerts/ministry_moderation_rules.yml` (クーベルチュール
+`dashboards/alerts/tests/ministry_moderation_rules.test.yml` によるテスト セット)。
+摂取したブロックやドリフトの写真を注ぐ芸術品の安全性
+ファイル隔離と監視の満足度の向上
+[AI モデレーション ランナー仕様](../../ministry/ai-moderation-runner.md) についての言及があります。

@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 44f1c681730f1c94d9d00e8f829a0134374ce6cb29f21727a27685e096f0da40
 source_last_modified: "2026-01-17T06:10:29.077000+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Merge Ledger Design — Lane Finality and Global Reduction
+# མཉམ་བསྡོམས་ ལེཌ་ཇར་བཟོ་བཀོད་ — ལམ་ཕྱོགས་མཐའ་མཇུག་དང་ འཛམ་གླིང་མར་ཕབ་
 
-This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+འདི་དྲན་ཐོ་འདི་གིས་ Milestone 5 གི་དོན་ལུ་ མཉམ་བསྡོམས་འབད་ཡོད་པའི་ མཉམ་སྡེབ་བཟོ་བཀོད་འདི་ མཇུག་བསྡུཝ་ཨིན།
+མ་སྟོང་པའི་སྡེབ་ཚན་སྲིད་བྱུས།
+འཛམ་གླིང་རྒྱལ་ཁབ་ཀྱི་ཁས་བླངས་ལུ་ ལམ་རིམ་གནས་རིམ་གྱི་ བཀོལ་སྤྱོད་འབད་མི་འདི་ མཐུད་ཡོདཔ་ཨིན།
 
-The design extends the Nexus architecture described in `nexus.md`. Terms such as
-"lane block", "lane QC", "merge hint", and "merge ledger" inherit their
-definition from that document; this note focuses on behavioural rules and
-implementation guidance that must be enforced by the runtime, storage, and WSV
-layers.
+བཟོ་བཀོད་འདི་གིས་ `nexus.md` ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ Nexus བཟོ་བཀོད་རྒྱ་སྐྱེད་འབདཝ་ཨིན། གལ་ཆེན།
+"ལམ་ལུགས་བཀག་ཆ་", "ལམ་ཐིག་ཀིའུ་སི", "མཉམ་བསྡོམས་འབད་ནི་", དང་ "མཉམ་བསྡོམས་" འདི་ ཁོང་རའི་ཤུལ་འཛིན་འབད།
+ཡིག་ཆ་དེ་ལས་ངེས་ཚིག་བརྗོད་ནི། འདི་དྲན་འཛིན་འདི་ སྤྱོད་ལམ་གྱི་ལམ་ལུགས་ལུ་གཙོ་བོར་བཏོནམ་ཨིན།
+གཡོག་བཀོལ་བའི་དུས་ཚོད་དང་ གསོག་འཇོག་ དེ་ལས་ ཌབ་ལུ་ཨེསི་ཝི་གིས་ བསྟར་སྤྱོད་འབད་དགོ་པའི་ ལག་ལེན་ལམ་སྟོན།
+བང་རིམ་ཚུ།
 
-## 1. Non-Empty Block Policy
+## 1. སྟོང་པའི་བཀག་སྡོམ་སྲིད་སྲོལ།
 
-**Rule (MUST):** A lane proposer issues a block only when the block contains at
-least one executed transaction fragment, time-based trigger, or deterministic
-artifact update (e.g., DA artifact roll-up). Empty blocks are forbidden.
+**ལམ་ལུགས་ (MUST):** ལེནཔོརོ་པོརསི་ཅིག་གིས་ སྡེབ་ཚན་འདི་ ནང་ན་ཡོད་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ སྡེབ་ཚན་ཅིག་བཏོནམ་ཨིན།
+ཉུང་མཐའ་གཅིག་ལག་ལེན་འཐབ་ཡོད་པའི་ཚོང་འབྲེལ་ཆ་ཤས་དང་དུས་ཚོད་གཞི་བཞག་པའི་ སྐུལ་སློང་ཡང་ན་ གཏན་འབེབས་བཟོ་ནི།
+ཅ་རྙིང་དུས་མཐུན་བཟོ་ནི། (དཔེར་ན་ DA གི་ཅ་རྙིང་བཤུད་སྒྲིག)། བཀག་ཆ་སྟོངམ་ཚུ་བཀག་ཆ་འབད་ཡོདཔ་ཨིན།
 
-**Implications:**
+**གནད་དོན་:**
 
-- Slot keep-alive: when no transaction meets its deterministic commit window,
-the lane emits no block and simply advances to the next slot. The merge ledger
-remains on the previous tip for that lane.
-- Trigger batching: background triggers that produce no state transition (e.g.,
-cron that reaffirms invariants) are considered empty and MUST be skipped or
-bundled with other work before producing a block.
-- Telemetry: `pipeline_detached_merged` and follow-up metrics treat skipped
-slots explicitly—operators can distinguish "no work" from "pipeline stalled".
-- Replay: block storage does not insert synthetic empty placeholders. The Kura
-replay loop simply observes the same parent hash for consecutive slots if no
-block was emitted.
+- ས་སྒོ་འདི་ གསོན་པོ་སྦེ་བཞག་: ཚོང་འབྲེལ་མེད་པའི་སྐབས་ དེ་གི་གཏན་འབེབས་ཁས་བླངས་སྒོ་སྒྲིག་།
+ལམ་འདི་གིས་ བཀག་ཆ་མེདཔ་ལས་ འཇམ་ཏོང་ཏོ་སྦེ་ ཤུལ་མམ་གྱི་ས་སྒོ་ནང་ གོང་འཕེལ་འགྱོཝ་ཨིན། མཉམ་སྡེབ་ཀྱི་ ལག་དེབ་འདི།
+ལྷག་ལུས་འདི་ ལམ་དེ་གི་དོན་ལུ་ ཧེ་མའི་བསླབ་བྱ་ནང་ལུ།
+- ཊི་རི་གཱར་གྱི་སྡེ་ཚན་: གནས་སྟངས་འགྱུར་བ་མེད་པའི་རྒྱབ་ཁུངས་ཀྱི་ གཡོ་འགུལ་ (དཔེར་ན་,
+འགྱུར་ལྡོག་མེད་མི་ཚུ་ སྟོངམ་སྦེ་བརྩི་འཇོག་འབད་དེ་ མ་བཏང་དགོ།
+བཀག་ཆ་མ་བཏོན་པའི་ཧེ་མ་ ལཱ་གཞན་ཚུ་དང་གཅིག་ཁར་ བསྡད་ཡོདཔ།
+- ཊེ་ལི་མི་ཊི་: `pipeline_detached_merged` དང་རྗེས་འཇུག་མེ་ཊིག་ཚུ་ མར་ཕབ་འབདཝ་ཨིན།
+ས་སྒོ་ཚུ་ གསལ་ཏོག་ཏོ་སྦེ་ར་—བཀོལ་སྤྱོད་པ་ཚུ་གིས་ "ལཱ་མེན" འདི་ "ལཱ་མེན" ལས་ "pipeline stalled" ལས་ དབྱེ་བ་ཕྱེ་ཚུགས།
+- བསྐྱར་རྩེད་: སྡེབ་ཚན་གསོག་འཇོག་འདི་གིས་ བཅོས་མའི་སྟོངམ་ས་གནས་འཛིན་མི་ཚུ་བཙུགསཔ་ཨིན། ཀུ་ར་ནི།
+replay loop འདི་ མེན་པ་ བསྟར་སྤྱོད་ཀྱི་ ས་སྒོ་ཚུ་གི་དོན་ལུ་ ཕ་མའི་ཧ་ཤི་འདི་ འཇམ་ཏོང་ཏོ་སྦེ་ བལྟ་བརྟོག་འབདཝ་ཨིན།
+བཀག་སྡོམ་འབད་ཡོདཔ་ཨིན།
 
-**Canonical Check:** During block proposal and validation, `ValidBlock::commit`
-asserts that the associated `StateBlock` carries at least one committed overlay
-(delta, artifact, trigger). This aligns with the `StateBlock::is_empty` guard
-that already ensures no-op writes are elided. Enforcement happens before
-signatures are requested so committees never vote on empty payloads.
+**ཀེ་ན་ནིག་ཞིབ་དཔྱད་:** གྲོས་འཆར་དང་བདེན་དཔྱད་ཀྱི་སྐབས་ལུ་, `ValidBlock::commit`
+འབྲེལ་ཡོད་`StateBlock` གིས་ ཉུང་མཐའ་ལུ་ གཅིག་བརྩེགས་འབད་མི་གཅིག་ཡོདཔ་སྦེ་ བཤདཔ་ཨིན།
+(ཌེལ་ཊ་, ཅ་རྙིང་, ཊི་རི་ཊི།). འདི་ `StateBlock::is_empty` སྲུང་དམག་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+དེ་གིས་ ཧེ་མ་ལས་ འབྲི་མ་ཚུགས་པའི་ བྲིས་མི་ཚུ་ བཏོན་གཏང་ནི་ལུ་ ངེས་གཏན་བཟོཝ་ཨིན། བསྟར་སྤྱོད་འདི་ཧེ་མ་ལས་འབྱུང་ཡོདཔ།
+མཚན་རྟགས་ཚུ་ཞུ་བ་འབདཝ་ལས་ ཚོགས་ཆུང་ཚུ་གིས་ གླ་ཆ་སྟོངམ་ཚུ་ལུ་ ཚོགས་རྒྱན་བཙུགས་མི་བཏུབ།
 
-## 2. Cross-Lane QC Merge Semantics
+## 2. Cross-Lane QC མཉམ་སྡེབ་བརྡ་དོན།
 
-Each lane block `B_i` finalised by its committee produces:
+ལམ་གྱི་བཀག་ཆ་རེ་རེ་བཞིན་ `B_i` དེའི་ཚོགས་ཆུང་གིས་མཇུག་བསྡུ་བའི་ཕྱིར་ཐོན་ཡོད།
 
-- `lane_state_root_i`: Poseidon2-SMT commitment over per-DS state roots touched
-in the block.
-- `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
-"iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the
-  execution-vote preimage (block hash, `parent_state_root`,
-  `post_state_root`, height/view/epoch, chain_id, and mode tag).
+- `lane_state_root_i`: Poseidon2-SMT རེ་རེ་བཞིན་གྱི་ རྩ་བའི་རྩ་བའི་ལས་ལྷག་པའི་ཁས་བླངས་འདི་ཨེབ་གཏང་འབད་ཡོདཔ།
+སྡེབ་ཚན་ནང་།
+- `merge_hint_root_i`: མཉམ་བསྡོམ་གྱི་ལེད་ཇར་ (`tag =
+"ཨའི་རོ་ཧ་:མར་ཇི་:ཝི་༡\༠"`).
+- `lane_qc_i`: ཉིན་མའི་ལམ་ཐིག་ཚོགས་ཆུང་ལས་ མཚན་རྟགས་བསྡོམས་རྩིས་ཚུ།
+  བཀོལ་སྤྱོད་-ཝོ་ཊི་ སྔོན་འགྲོ། (བཀག་ཆ་ཧ་ཤི་, `parent_state_root`,
+  `post_state_root`, མཐོ་ཚད་/མཐོང་སྣང་/ཨི་པོཆ་, རིམ་སྒྲིག་_ཨའི་ཌི་, དང་ཐབས་ལམ་ངོ་རྟགས་)།
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+མཉམ་བསྡོམས་མཛུབ་གནོན་འདི་གིས་ མཐའ་མའི་བསླབ་བྱ་ `{(B_i, lane_qc_i, merge_hint_root_i)}` གི་དོན་ལུ་ བསྡུ་སྒྲིག་འབད་ཡོདཔ།
+ལམ་ཆ་མཉམ་ `i ∈ [0, K)`.
 
-**Merge Entry (MUST):**
+**མཉམ་བསྡོམས་ (མནའ):**
 
 ```
 MergeLedgerEntry {
@@ -72,23 +73,21 @@ MergeLedgerEntry {
     global_state_root: Hash32,
     merge_qc: QuorumCertificate,
 }
-```
+```- `lane_tips[i]` འདི་ ལམ་གྱི་བཀག་ཆ་གི་ མཉམ་བསྡོམས་ཐོ་བཀོད་ཀྱི་ མཐུད་མཚམས་ཚུ་གི་ ཧེཤ་ཨིན།
+  `i`. ཧེ་མའི་ཐོ་བཀོད་ལས་ བང་མཛོད་ཅིག་ བཏོན་གཏང་མི་ སྡེབ་ཚན་ཅིག་ མ་བཏོན་པ་ཅིན་ གནས་གོང་འདི་ཨིན།
+  ཡང་བསྐྱར་ཡང་།
+- `merge_hint_root[i]` འདི་ འབྲེལ་མཐུན་ལམ་ལས་ Nexus ཨིན།
+  དུམ། འདི་ཡང་ `lane_tips[i]` བསྐྱར་ལོག་འབད་བའི་སྐབས་ བསྐྱར་ལོག་འབདཝ་ཨིན།
+- `global_state_root` མཉམ་པ་ `ReduceMergeHints(merge_hint_root[0..K-1])`, a
+  ཌོ་མེན་དབྱེ་རྟགས་དང་གཅིག་ཁར་ ཕོསི་ཌོན་༢ ཕོག
+  `"iroha:merge:reduce:v1\0"`. མར་ཕབ་འདི་ གཏན་འབེབས་དང་ངེས་པར་དུ།
+  མཉམ་རོགས་ཀྱི་གནས་གོང་གཅིག་པ་བསྐྱར་བཟོ་འབད།
+- `merge_qc` འདི་ སྤྱི་ ༡༧ ཀྱི་ཉིན་བསྡོམས་ཚོགས་ཆུང་ལས་ BFT གི་ཚད་གཞིའི་ལག་ཁྱེར་ཨིན།
+  རིམ་སྒྲིག་འབད་ཡོད་པའི་ཐོ་འགོད།
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
-  Poseidon2 fold with domain separation tag
-  `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
-  reconstruct the same value across peers.
-- `merge_qc` is a BFT quorum certificate from the merge committee over the
-  serialized entry.
+**QC Payload (མངམ):** མཉམ་བསྡོམས་འབད།
 
-**Merge QC Payload (MUST):**
-
-Merge committee members sign a deterministic digest:
+མཉམ་སྡེབ་ཚོགས་ཆུང་གི་འཐུས་མི་ཚུ་གིས་ ཐག་བཅད་ཀྱི་ འཇུ་བྱེད་ལུ་ མཚན་རྟགས་བཀོད་ཡོདཔ།
 
 ```
 merge_qc_digest = blake2b32(
@@ -104,110 +103,118 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
-  `view_change_index` across the lane headers sealed by the entry).
-- `chain_id` is the configured chain identifier string (UTF-8 bytes).
-- The payload uses Norito encoding with the field order shown above.
+- `view` འདི་ ལམ་གྱི་མཇུག་ (max
+  `view_change_index` གིས་ འཛུལ་སྒོ་གིས་ བསྡམ་བཞག་ཡོད་པའི་ ལམ་མགོ་ཚུ་ནང་ལས་ཕར་ བརྒྱུད་དེ་)
+- `chain_id` འདི་ རིམ་སྒྲིག་འབད་ཡོད་པའི་རིམ་སྒྲིག་ངོས་འཛིན་ཡིག་རྒྱུན་ (ཡུ་ཊི་ཨེཕ་-༨ བཱའིཊིསི) ཨིན།
+- པེ་ལོཌི་འདི་གིས་ གོང་ལུ་སྟོན་ཡོད་པའི་ས་སྒོ་གོ་རིམ་དང་གཅིག་ཁར་ Norito ཨིན་ཀོ་ཌིང་ལག་ལེན་འཐབ་ཨིན།
 
-The resulting digest is stored in `merge_qc.message_digest` and is the message
-verified by BLS signatures.
+གྲུབ་འབྲས་འཇུ་བྱེད་འདི་ `merge_qc.message_digest` ནང་ལུ་གསོག་འཇོག་འབད་དེ་ཡོདཔ་དང་ འདི་འཕྲིན་དོན་འདི་ཨིན།
+བི་ཨེལ་ཨེསི་མིང་རྟགས་ཚུ་གིས་བདེན་དཔྱད་འབད་ཡོདཔ།
 
-**Merge QC Construction (MUST):**
+**QC བཟོ་བསྐྲུན་ (MUST):** མཉམ་བསྡོམས་འབད་ནི།
 
-- The merge committee roster is the current commit-topology validator set.
-- Required quorum = `commit_quorum_from_len(roster_len)`.
-- `merge_qc.signers_bitmap` encodes participating validator indices (LSB-first)
-  in commit-topology order.
-- `merge_qc.aggregate_signature` is the BLS-normal aggregate for the digest
-  above.
+- མཉམ་སྡེབ་ཚོགས་ཆུང་གི་ཐོ་ཡིག་འདི་ ད་ལྟོའི་ཁས་བླངས་སྔོན་འགོག་བདེན་དཔྱད་ཆ་ཚན་ཅིག་ཨིན།
+- དགོས་མཁོའི་ཚད་གཞི་ = `commit_quorum_from_len(roster_len)`.
+- `merge_qc.signers_bitmap` ཨིན་ཀོ་ཚུ་གིས་ བཅའ་མར་གཏོགས་ཡོད་པའི་བདེན་དཔྱད་ཀྱི་ཟུར་ཐོ་ཚུ་ (LSB-first)
+  ཁས་བླངས་སྔོན་འགྲོའི་གོ་རིམ་ནང་།
+- `merge_qc.aggregate_signature` འདི་ བཞུ་ནི་གི་དོན་ལུ་ BLS-སྤྱིར་བཏང་བསྡོམས་རྩིས་ཨིན།
+  ལྟག་ལུ།
 
-**Validation (MUST):**
+**བདེན་དཔྱད་ (མང):**
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
-   non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
-   and aggregate signature against the commit-topology roster.
+1. `lane_qc_i` རེ་རེ་བཞིན་ བདེན་དཔྱད་འབད་དེ་ `lane_tips[i]` ལུ་རྒྱབ་འགལ་འབད་ཞིནམ་ལས་ སྡེབ་ཚན་མགོ་ཡིག་ཚུ་ངེས་དཔྱད་འབད།
+   མཐུན་སྒྲིག་ `merge_hint_root_i` འདི་ཚུདཔ་ཨིན།
+2. `lane_qc_i` གིས་ `Invalid` ཡང་ན་ ལག་ལེན་མ་འཐབ་པའི་སྡེབ་ཚན་ལུ་ བརྡ་སྟོནམ་ཨིན། ཚིག༌ཕྲད
+   གོང་འཁོད་ཀྱི་སྟོང་ཆ་མེད་པའི་སྲིད་བྱུས་འདི་གིས་ མགོ་ཡིག་འདི་ རྒྱལ་ཁབ་ཀྱི་ བཀབ་བཙུགས་ཚུ་ ཚུད་ཡོདཔ་ངེས་གཏན་བཟོཝ་ཨིན།
+3. `ReduceMergeHints` བསྐྱར་སྒྲིག་འབད་དེ་ `global_state_root` དང་ག་བསྡུར་འབད།
+༤ མཉམ་སྡེབ་ཀྱི་ ཀིའུ་སི་ བཞུ་བཅོས་འདི་ རྩིས་རྐྱབ་ཞིནམ་ལས་ མཚན་རྟགས་བཀོད་མི་ བིཊི་མེཔ་ ཀོར་རམ་ཚད་གཞི་ བདེན་དཔྱད་འབད།
+   དང་ ཁས་བླངས་སྔོན་འགྲོའི་ཐོ་ཡིག་ལུ་ བསྡོམས་རྩིས་མཚན་རྟགས་བཀོད་ཡོདཔ།
 
-**Observability:** Merge nodes emit Prometheus counters for
-`merge_entry_lane_repeats_total{i}` to highlight lanes that skipped slots for
-operational visibility.
+**བལྟ་རྟོག་འབད་ཚུགསཔ་:** མཉམ་བསྡོམས་མཛུབ་གནོན་འདི་ ཕྱིར་འཐེན་ Prometheus གྱངས་ཁ་རྐྱབ།
+`merge_entry_lane_repeats_total{i}` གི་དོན་ལུ་ གཡོག་བཀོལ་མི་ ལམ་ཚུ་ འོད་རྟགས་བཀལ་ནིའི་དོན་ལུ་ འོད་རྟགས་བཀལ་ནི།
+ལག་ལེན་མཐོང་ཚུལ།
 
-## 3. Finality Workflow
+## 3. མཐའ་མའི་ལས་རིམ།
 
-### 3.1 Lane-Level Finality
+### ༣་༡ ལམ་རིམ་མཐའ་འཁོར།
 
-1. Transactions are scheduled per lane in deterministic slots.
-2. The executor applies overlays into `StateBlock`, producing deltas and
-artifacts.
-3. Upon validation, the lane committee signs the execution-vote preimage that
-   binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
-4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
-must record the associated `merge_hint_root` to reconcile with the merge ledger
-later.
+༡ ཚོང་འབྲེལ་ཚུ་ གཏན་འབེབས་ཀྱི་ས་སྒོ་ནང་ ལམ་རེ་ལུ་ དུས་ཚོད་བཀོད་ཡོདཔ་ཨིན།
+2. བཀོལ་སྤྱོད་པ་དེ་ `StateBlock` ནང་ལུ་ བཀབ་སྟེ་ ཌེལ་ཊ་དང་ ཌེལ་ཊ་ཚུ་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+ཅ་རྙིང་ཚུ།
+༣ བདེན་དཔྱད་འབད་བའི་སྐབས་ ལམ་ཐིག་ཚོགས་ཆུང་གིས་ བཀོལ་སྤྱོད་ཀྱི་ ཚོགས་རྒྱན་བཙུགས་པའི་ སྔོན་བརྡ་ལུ་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན།
+   སྡེབ་ཚན་ཧེཤ་དང་ གནས་ལུགས་རྩ་བ་ དེ་ལས་ མཐོ་ཚད་/མཐོང་སྣང་/འདྲ་བ་ཚུ་ བསྡམས་བཞགཔ་ཨིན། ཊུཔ་ལི་འདི།
+   `(block_hash, lane_qc_i, merge_hint_root_i)` འདི་ ལམ་གྱི་མཐའ་དཔྱད་ལུ་བརྩི་འཇོག་འབདཝ་ཨིན།
+4. འོད་མདངས་ཅན་གྱི་མཁོ་མངགས་འབད་མི་ཚུ་གིས་ DS ཚད་འཛིན་གྱི་བདེན་ཁུངས་ཚུ་གི་དོན་ལུ་ ལམ་ཐིག་འདི་ མཐའ་མཇུག་སྦེ་ བརྩི་འཇོག་འབད།
+མཉམ་བསྡོམས་རྩིས་ཁྲ་དང་གཅིག་ཁར་ མཐུན་སྒྲིག་འབད་ནི་ལུ་ འབྲེལ་བ་ཡོད་པའི་ `merge_hint_root` འདི་ཐོ་བཀོད་འབད་དགོ།
+ཤུལ་ལས།ལམ་ཐིག་ཚོགས་ཆུང་ཚུ་ གནས་སྡུད་རེ་རེ་ལུ་ཨིནམ་ལས་ འཛམ་གླིང་ཡོངས་ཀྱི་ཁས་བླངས་འདི་ ཚབ་མ་འབད་མི་བཏུབ།
+ཊོ་པོ་ལོ། ཚོགས་ཆུང་གི་ཚད་འདི་ `3f+1` ལུ་གཏན་འཁེལ་བཟོ་སྟེ་ཡོདཔ་ད་ དེ་ནང་ `f` འདི་ ༢༠༡༢ ལས་འོངམ་ཨིན།
+གནད་སྡུད་ས་སྟོང་ཐོ་གཞུང་ (`fault_tolerance`). བདེན་དཔྱད་འབད་མི་ཆུ་རྫིང་འདི་ གནད་སྡུད་བར་སྟོང་འདི་ཨིན།
+བདེན་དཔྱད་འབད་མི་ (ལམ་གཞུང་གིས་ བདག་སྐྱོང་འཛིན་སྐྱོང་འཐབ་མི་ ལམ་ཡང་ན་ མི་མང་ལམ་གྱི་དོན་ལུ་ མངོན་གསལ་འབདཝ་ཨིན།
+བཀོད་སྒྲིག་འབད་ཡོད་པའི་ལམ་ཚུ་གི་དོན་ལུ་ ཐོ་བཀོད་ཚུ་)། ཚོགས་ཆུང་གི་འཐུས་མི།
+དབུལ་ཕོངས་རེ་ལུ་ཚར་གཅིག་དཔེ་ཚད་བཏོན་ཡོདཔ་ཨིན།
+`dataspace_id` དང་ `lane_id`. གལ་ཏེ་ཆུ་རྫིང་འདི་ `3f+1` ལས་ཆུང་ན་ ལམ་ཐིག་མཐའ་མ།
+ཀོའུ་རམ་སླར་གསོ་འབད་ཚུན་ཚོད་ མཚམས་འཇོག་འབདཝ་ཨིན་ (གློ་བུར་སླར་གསོ་འདི་སོ་སོ་སྦེ་ འཛིན་སྐྱོང་འཐབ་ཨིན།)།
 
-Lane committees are per-dataspace and do not replace the global commit
-topology. Committee size is fixed at `3f+1`, where `f` comes from the
-dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
-validators (lane governance manifests for admin-managed lanes, or public-lane
-staking records for stake-elected lanes). Committee membership is
-deterministically sampled once per epoch using the VRF epoch seed bound with
-`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
-pauses until quorum is restored (emergency recovery is handled separately).
+### ༣་༢ མཉམ་བསྡོམས་མཐའ་མཇུག་།
 
-### 3.2 Merge-Ledger Finality
+1. མཉམ་སྡེབ་ཚོགས་ཆུང་གིས་ ལམ་གྱི་བསླབ་བྱ་གསརཔ་ཚུ་ བསྡུ་ལེན་འབད་དེ་ `lane_qc_i` རེ་རེ་བཞིན་ བདེན་དཔྱད་འབདཝ་ཨིན།
+གོང་འཁོད་ངེས་འཛིན་འབད་ཡོད་པའི་ Torii འདི་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+2. གཏན་འཁེལ་གྱི་མར་ཕབ་འདི་བདེན་དཔང་འབད་བའི་ཤུལ་ལས་ མཉམ་སྡེབ་ཚོགས་ཆུང་གིས་ མཚན་རྟགས་བཀོད་ནི།
+འཛུལ་ཞུགས་ (`merge_qc`).
+3. མཛུབ་གནོན་འདི་ མཉམ་བསྡོམ་རྩིས་ཐོ་དྲན་ཐོ་ནང་ ཐོ་བཀོད་འདི་ མཐུད་དེ་ མཉམ་དུ་ གནས་ཏེ་ཡོདཔ་ཨིན།
+ལམ་སྡེབ་སྡེབ་ཚན་གཞི་བསྟུན་ཚུ།
+4. ```
+merge_qc_digest = blake2b32(
+    "iroha:merge:qc:v1\0" ||
+    chain_id ||
+    norito(MergeLedgerSignPayload {
+        view,
+        epoch_id,
+        lane_tips,
+        merge_hint_roots,
+        global_state_root,
+    })
+)
+``` གི་དོན་ལུ་ འཛམ་གླིང་རྒྱལ་ཁབ་ཀྱི་ཁས་བླངས་ཅིག་ལུ་འགྱུརཝ་ཨིན།
+epoch/slot. ཕུལ་ནོ་ཌིས་འདི་ འདི་མེ་ལོང་ནང་ ཁོང་རའི་ཌབ་ལུ་ཨེསི་ཝི་ ཞིབ་དཔྱད་ས་ཚིགས་ མེ་ཊ་ཌེ་ཊ་དུས་མཐུན་བཟོ་ནི།
+རིན་གོང; བཙོག་རླུང་བསྐྱར་བཟོ་འདི་གིས་ མར་ཕབ་ཅོག་འཐདཔ་འདི་ བསྐྱར་བཟོ་འབད་དགོ།
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
-2. After verifying the deterministic reduction, the merge committee signs the
-entry (`merge_qc`).
-3. Nodes append the entry to the merge ledger log and persist it alongside the
-lane block references.
-4. `global_state_root` becomes the authoritative world state commitment for the
-epoch/slot. Full nodes update their WSV checkpoint metadata to mirror this
-value; deterministic replay must reproduce the same reduction.
+### ༣.༣ ཝ་ཨེསི་ཝི་དང་ གསོག་འཇོག་མཉམ་འབྲེལ།
 
-### 3.3 WSV and Storage Integration
+- `nexus.md` གིས་ ལམ་གྱི་རེ་རེ་གི་ མངའ་སྡེ་རྩ་བའི་ རྩ་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+  མཐའ་མའི་`global_state_root`, འཛམ་གླིང་བརྟག་དཔྱད་དང་མཉམ་དུ་བརྡུང་བའི་ལམ་བཤུད།
+- ཀུ་ར་གིས་ ལམ་གྱི་བཀག་ཆ་ཅ་ཆས་ཚུ་གི་ཉེ་འདབས་ལུ་ `MergeLedgerEntry` གིས་ གནས་ཏེ་ཡོདཔ་ཨིན།
+  replay གིས་ ལེན་གནས་རིམ་དང་ འཛམ་གླིང་མཐའ་མཇུག་གི་རིམ་པ་གཉིས་ཆ་ར་ བསྐྱར་བཟོ་འབད་ཚུགས།
+- ལམ་ཐིག་ཅིག་གིས་ ས་སྒོ་ཅིག་ བརྒལ་བའི་སྐབས་ གསོག་འཇོག་འདི་གིས་ ཧེ་མའི་མཐའ་མ་འདི་ འཇམ་ཏོང་ཏོ་སྦེ་ བཞག་ཚུགས། མིང༌དགོ
+  ས་གནས་འཛིན་མི་མཉམ་བསྡོམས་ཐོ་བཀོད་ཚུ་ ཉུང་མཐའ་ལུ་ ལམ་གཅིག་གིས་ གསརཔ་བཟོ་མ་ཚུགས་ཚུན་ཚོད་ གསར་བསྐྲུན་འབདཝ་ཨིན།
+  དུམ།
+- ཨེ་པི་ཨའི་ ཁ་ཐོག་ (Torii, telymetry) གིས་ ལམ་གྱི་མཐའམ་དང་ གསརཔ་མཉམ་བསྡོམས་གཉིས་ཆ་ར་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  འཛུལ་ཞུགས་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་དང་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ལམ་ཐིག་རེ་ལུ་དང་ འཛམ་གླིང་མཐོང་སྣང་ཚུ་ མཐུན་སྒྲིག་འབད་ཚུགས།
 
-- `State::commit_merge_entry` records the per-lane state roots and the
-  final `global_state_root`, bridging lane execution with the global checksum.
-- Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
-  replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
-- API surfaces (Torii, telemetry) expose both lane tips and the latest merge
-  entry so operators and clients can reconcile per-lane and global views.
-
-## 4. Implementation Notes
-
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
-- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
-  the block and persists the associated merge entry in one step, rolling back
-  the in-memory block when the append fails so storage never records a block
-  without its sealing metadata. The merge-ledger log is pruned in lock-step
-  with the validated block height during startup recovery, and cached in memory
-  with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes. Recovery truncates partial or
-  oversized merge-ledger tail entries, and append rejects entries above the
-  maximum payload size guard to cap allocations.
-- `crates/iroha_core/src/block.rs`: block validation rejects blocks without
-  entrypoints (external transactions or time triggers) and without deterministic
-  artifacts such as DA bundles (`BlockValidationError::EmptyBlock`), ensuring
-  the non-empty policy is enforced before signatures are requested and carried
-  into the merge ledger.
-- Deterministic reduction helper lives in the merge service: `reduce_merge_hint_roots`
-  (`crates/iroha_core/src/merge.rs`) implements the Poseidon2 fold described above.
-  Hardware acceleration hooks remain future work, but the scalar path now enforces
-  the canonical reduction deterministically.
-- Telemetry integration: exposing per-lane merge repeats and the
-  `global_state_root` gauge remains tracked in the observability backlog so the
-  dashboard work can ship alongside the merge service rollout.
-- Cross-component tests: golden replay coverage for the merge reduction is
-  tracked with the integration-test backlog to ensure future changes to
-  `reduce_merge_hint_roots` keep the recorded roots stable.
+## 4. ལག་བསྟར་དྲན་ཐོ།- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry`.
+  མར་ཕབ་དང་ གློག་ཐག་/འཛམ་གླིང་མེ་ཊ་ཌེ་ཊ་འདི་ འཛམ་གླིང་གནས་སྟངས་ནང་ འདྲི་དཔྱད་འབདཝ་ལས་ འདྲི་དཔྱད་ཚུ།
+  དང་བལྟ་རྟོག་པ་ཚུ་གིས་ མཉམ་བསྡོམ་གྱི་བརྡ་སྟོན་དང་ འཛམ་གླིང་ཡོངས་ཁྱབ་ཀྱི་ ཧེཤ་ཚུ་ འཛུལ་སྤྱོད་འབད་ཚུགས།
+- `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` གི་མནའམ།
+  སྡེབ་ཚན་དང་ འབྲེལ་བའི་མཉམ་བསྡོམས་ཐོ་བཀོད་འདི་ གོམ་པ་གཅིག་ནང་ ལོག་བསྐོར་ཏེ་ གནས་ཡུན་འབདཝ་ཨིན།
+  མཐོ་ཚད་འདི་འཐུས་ཤོར་བྱུང་པའི་སྐབས་དྲན་ཚད་ནང་སྡེབ་ཚན།
+  དེ་གི་བསྡམ་བཞག་པའི་མེ་ཊ་ཌེ་ཊ་མེད་པར་། མཉམ་བསྡོམས་-ལྕེ་དྲན་དེབ་འདི་ ལྡེ་མིག་རིམ་པ་ནང་ གཤག་བཅོས་འབད་ཡོདཔ་ཨིན།
+  འགོ་བཙུགས་སླར་གསོ་འབད་བའི་སྐབས་ བདེན་དཔྱད་འབད་ཡོད་པའི་སྡེབ་ཚན་མཐོ་ཚད་ དེ་ལས་ དྲན་ཚད་ནང་ འདྲ་མཛོད་འབད་ཡོདཔ་ཨིན་པ།
+  མཐའ་མཚམས་ཡོད་པའི་སྒོ་སྒྲིག་ (`kura.merge_ledger_cache_capacity`, སྔོན་སྒྲིག་ ༢༥༦) ལུ།
+  ཡུན་རིངམོ་སྦེ་འགྱོ་མི་ མཛུབ་མོ་གུ་ མ་བཀག་པར་ ཡར་འཕར་འགྱོ་ནི་ལས་ འཛེམ་དགོ། སླར་གསོ་འབད་མི་ བཏོག་བཏོགཔ་ ཡང་ན་ ཆ་ཤས་ཅིག་ཡང་ན་
+  ཚད་ལས་བརྒལ་བའི་མཉམ་བསྡོམས་ཡིག་ཚང་གི་མཇུག་ཐོ་ཚུ་དང་ ཟུར་དེབ་འདི་ གོང་ལས་ཐོ་བཀོད་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+  མཐོ་རིམ་སྤྲོད་ལེན་གྱི་ ཚད་གཞི་སྲུང་སྐྱོབ་ལུ་ མགུ་ཏོག་བགོ་བཀྲམ་འབད་ནི་ལུ་ཨིན།
+- `crates/iroha_core/src/block.rs`: སྡེབ་ཚན་བཀག་ཆ་གིས་ སྡེབ་ཚན་ཚུ་མེད་པའི་བཀག་ཆ་འབདཝ་ཨིན།
+  འཛུལ་ཞུགས་ས་ཚིགས་ (ཕྱི་ཁའི་ཚོང་འབྲེལ་ཡང་ན་དུས་ཚོད་ཀྱི་ གཡོ་འགུལ་) དང་ གཏན་འབེབས་མེདཔ་ཨིན།
+  DA bundles (`BlockValidationError::EmptyBlock`) བཟུམ་གྱི་ཅ་ཆས་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+  མཚན་རྟགས་ཚུ་ཞུ་བ་འབད་དེ་ འབག་མ་འགྱོ་བའི་ཧེ་མ་ སྟོངམ་མེད་པའི་སྲིད་བྱུས་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  མཉམ་སྡེབ་ཀྱི་ལག་དེབ་ནང་ལུ།
+- མཉམ་སྡེབ་ཞབས་ཏོག་ནང་ བདེ་སྐྱིད་མར་ཕབ་ཀྱི་གྲོགས་རམ་གྱི་མི་ཚེ་: `reduce_merge_hint_roots`
+  (`crates/iroha_core/src/merge.rs`) གིས་ གོང་འཁོད་འགྲེལ་བཤད་རྐྱབ་མི་ Poseidon2 ཕོལཌ་འདི་ ལག་ལེན་འཐབ་ཨིན།
+  མཐུན་རྐྱེན་མགྱོགས་ཚད་ཀྱི་ཧུཀ་ཚུ་ མ་འོངས་པའི་ལཱ་སྦེ་རང་ ལུས་ཡོདཔ་ཨིན་རུང་ ད་ལྟོ་ ཨེསི་ཀེ་ལར་འགྲུལ་ལམ་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  ཁྲིམས་ལུགས་མར་ཕབ་འདི་ གཏན་འབེབས་སྦེ་ གཏན་འབེབས་བཟོཝ་ཨིན།
+- ཊེ་ལི་མི་ཊི་མཉམ་བསྡོམས་: ལམ་གྱི་རེ་ལུ་མཉམ་བསྡོམ་བསྐྱར་ལོག་དང་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  `global_state_root` བལྟ་བརྟོག་འདི་ བལྟ་བརྟོག་འབད་བཏུབ་པའི་རྒྱབ་ལོག་ནང་ལུ་ བརྟག་ཞིབ་འབད་དེ་ཡོདཔ་ཨིན།
+  dashboard ལཱ་འདི་ མཉམ་བསྡོམ་ཞབས་ཏོག་འགོ་བཙུགས་དང་གཅིག་ཁར་ བཏང་ཚུགས།
+- ཆ་ཤས་བརྒལ་བའི་བརྟག་དཔྱད།: མཉམ་བསྡོམས་མར་ཕབ་ཀྱི་དོན་ལུ་ གསེར་གྱི་བསྐྱར་རྩེད་ཁྱབ་ཁོངས།
+  མ་འོངས་པའི་བསྒྱུར་བཅོས་ཚུ་འབད་ནི་ལུ་ མཉམ་བསྡོམ་བརྟག་དཔྱད་རྒྱབ་ལོག་དང་གཅིག་ཁར་ བརྟག་ཞིབ་འབད་ཡོདཔ།
+  `reduce_merge_hint_roots` ཐོ་བཀོད་འབད་ཡོད་པའི་རྩ་འདི་ བརྟན་ཏོག་ཏོ་སྦེ་བཞགཔ་ཨིན།

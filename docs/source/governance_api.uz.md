@@ -8,127 +8,120 @@ source_hash: eea277d4aae6a7b29b5be539ef9d8e63948ccdd89a152de5af4a3cb357fe543a
 source_last_modified: "2026-01-22T16:26:46.569356+00:00"
 translation_last_reviewed: 2026-02-07
 title: Governance App API — Endpoints (Draft)
+translator: machine-google-reviewed
 ---
 
-Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when `authority` and `private_key` are provided, otherwise clients build and submit to `/transaction`.
+Status: boshqaruvni amalga oshirish vazifalariga qo'shiladigan qoralama/eskiz. Amalga oshirish jarayonida shakllar o'zgarishi mumkin. Determinizm va RBAC siyosati me'yoriy cheklovlardir; Torii, `authority` va `private_key` taqdim etilganda tranzaktsiyalarni imzolashi/yuborishi mumkin, aks holda mijozlar `/transaction` ga tuzadilar va topshiradilar.
 
-Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the configured parameters (stake asset, term, committee size) when enabled. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
+Muhim: biz doimiy kengash yoki "standart" boshqaruv ro'yxatini jo'natmaymiz. Kengashning so'nggi nuqtalari yoqilganda bo'sh/kutish holatini qaytaradi yoki sozlangan parametrlardan (ulush aktivi, muddat, qo'mita hajmi) deterministik qaytadi. Operatorlar boshqaruv oqimlari orqali o'z ro'yxatini saqlab qolishlari kerak; bu omborda pishirilgan multisig, maxfiy kalit yoki imtiyozli kengash hisobi mavjud emas.
 
-Overview
-- All endpoints return JSON. For transaction-producing flows, responses include `tx_instructions` — an array of one or more instruction skeletons:
-  - `wire_id`: registry identifier for the instruction type
-  - `payload_hex`: Norito payload bytes (hex)
-- If `authority` and `private_key` are provided (or `private_key` on ballot DTOs), Torii signs and submits the transaction and still returns `tx_instructions`.
-- Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/transaction`.
-- SDK coverage:
-- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` returns `GovernanceUnlockStats`, and `ToriiClient.list_governance_instances_typed` returns `GovernanceInstancesPage`, enforcing typed access across the governance surface with README usage examples.
-- Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and now `listGovernanceInstances(namespace, options)` plus the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) so Node.js clients can paginate `/v1/gov/instances/{ns}` and drive VRF-backed workflows alongside the existing contract-instance listing. `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers. `getGovernanceLocksTyped` now normalises `404 Not Found` responses into `{found: false, locks: {}, referendum_id: <id>}` so JS callers get the same shaped result as the Python helper when a referendum has no locks.
+Umumiy koʻrinish
+- Barcha so'nggi nuqtalar JSONni qaytaradi. Tranzaktsiyalarni ishlab chiqaruvchi oqimlar uchun javoblar `tx_instructions` - bir yoki bir nechta ko'rsatmalar skeletlari qatorini o'z ichiga oladi:
+  - `wire_id`: ko'rsatma turi uchun registr identifikatori
+  - `payload_hex`: Norito foydali yuk baytlari (hex)
+- Agar `authority` va `private_key` (yoki ovoz berish byulletenlarida `private_key`) taqdim etilgan bo'lsa, Torii imzo qo'yadi va bitimni topshiradi va baribir `tx_instructions` qaytaradi.
+- Aks holda, mijozlar o'zlarining vakolatlari va zanjir_identifikatorlaridan foydalangan holda SignedTransaction ni yig'adilar, keyin imzolaydilar va `/transaction` ga POST qiladilar.
+- SDK qamrovi:
+- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` qaytaradi `GovernanceProposalResult` (holat/turdagi maydonlarni normallashtirish), `ToriiClient.get_governance_referendum_typed` qaytaradi `GovernanceReferendumResult`, Prometheus, Prometheus, Sumeragi `ToriiClient.get_governance_locks_typed` `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` `GovernanceUnlockStats`, `ToriiClient.list_governance_instances_typed` esa `GovernanceInstancesPage` qaytaradi, bu esa bizni misollar boʻylab terilgan kirishni taʼminlaydi.
+- Python engil mijozi (`iroha_torii_client`): `ToriiClient.finalize_referendum` va `ToriiClient.enact_proposal` `GovernanceInstructionDraft` to'plamlarini qaytaradi (Torii skeletini o'rash, Prometheus qo'llanmasini tuzishdan qochish), Oqimlarni yakunlash/aniqlash.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` takliflar, referendumlar, hisob-kitoblar, blokirovkalar, blokirovkalar uchun yozilgan yordamchilarni koʻrsatadi va endi `listGovernanceInstances(namespace, options)` va kengashning soʻnggi nuqtalari (`ToriiClient`, Prometheus, Prometheus `governancePersistCouncil`, `getGovernanceCouncilAudit`) shuning uchun Node.js mijozlari `/v1/gov/instances/{ns}` sahifalarini ajratishi va mavjud shartnoma namunalari roʻyxati bilan bir qatorda VRF tomonidan qoʻllab-quvvatlanadigan ish oqimlarini boshqarishi mumkin. `governanceFinalizeReferendumTyped` va `governanceEnactProposalTyped` har doim tuzilgan qoralamani qaytarish orqali Python yordamchilarini aks ettiradi (Torii `204 No Content` bilan javob berganda bo'sh skeletni sintez qiladi), bu Prometheus tranzaksiyadan oldin tarmoqlanishdan avtomatlashtirishni saqlaydi. yoki tetiklar. `getGovernanceLocksTyped` endi `404 Not Found` javoblarini `{found: false, locks: {}, referendum_id: <id>}` ga normallashtiradi, shuning uchun referendumda qulf bo'lmaganda JS qo'ng'iroq qiluvchilar Python yordamchisi bilan bir xil shakldagi natijaga erishadilar.
 
-Endpoints
-
-- POST `/v1/gov/proposals/deploy-contract`
-  - Request (JSON):
+Yakuniy nuqtalar- POST `/v1/gov/proposals/deploy-contract`
+  - So'rov (JSON):
     {
-      "namespace": "apps",
+      "namespace": "ilovalar",
       "contract_id": "my.contract.v1",
-      "code_hash": "blake2b32:…" | "…64hex",
-      "abi_hash": "blake2b32:…" | "…64hex",
+      "code_hash": "blake2b32:..." | "...64hex",
+      "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
-      "window": { "lower": 12345, "upper": 12400 },
-      "authority": "ih58...?",
-      "private_key": "…?"
+      "oyna": { "pastki": 12345, "yuqori": 12400},
+      "avtority": "ih58...?",
+      "private_key": "...?"
     }
-  - Response (JSON):
-    { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
-  - Validation: nodes canonicalise `abi_hash` for the provided `abi_version` and reject mismatches. For `abi_version = "v1"`, the expected value is `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.
+  - Javob (JSON):
+    { "ok": rost, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
+  - Tasdiqlash: tugunlar taqdim etilgan `abi_version` uchun `abi_hash` ni kanoniklashtiradi va mos kelmaslikni rad etadi. `abi_version = "v1"` uchun kutilgan qiymat `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.
 
-Contracts API (deploy)
+Contracts API (joylashtirish)
 - POST `/v1/contracts/deploy`
-  - Request: { "authority": "ih58...", "private_key": "…", "code_b64": "…" }
-  - Behavior: Computes `code_hash` from the IVM program body and `abi_hash` from the header `abi_version`, then submits `RegisterSmartContractCode` (manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
-  - Response: { "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }
-  - Related:
-    - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
-    - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
+  - So'rov: { "authority": "ih58...", "private_key": "...", "code_b64": "..." }
+  - Xulq-atvor: IVM dastur tanasidan `code_hash` va `abi_version` sarlavhasidan `abi_hash` ni hisoblaydi, so‘ngra `RegisterSmartContractCode` (manifest) va I10840l ni taqdim etadi `.to` bayt) `authority` nomidan.
+  - Javob: { "ok": rost, "code_hash_hex": "...", "abi_hash_hex": "..." }
+  - Tegishli:
+    - GET `/v1/contracts/code/{code_hash}` → saqlangan manifestni qaytaradi
+    - `/v1/contracts/code-bytes/{code_hash}` ni oling → `{ code_b64 }`ni qaytaradi
 - POST `/v1/contracts/instance`
-  - Request: { "authority": "ih58...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }
-  - Behavior: Deploys the supplied bytecode and immediately activates the `(namespace, contract_id)` mapping via `ActivateContractInstance`.
-  - Response: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }
+  - So'rov: { "authority": "ih58...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
+  - Xulq-atvor: Taqdim etilgan baytekodni joylashtiradi va `(namespace, contract_id)` xaritalashni `ActivateContractInstance` orqali darhol faollashtiradi.
+  - Javob: { "ok": rost, "nom maydoni": "ilovalar", "kontrakt_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
-Alias Service
+Taxallus xizmati
 - POST `/v1/aliases/voprf/evaluate`
-  - Request: { "blinded_element_hex": "…" }
-  - Response: { "evaluated_element_hex": "…128hex", "backend": "blake2b512-mock" }
-    - `backend` reflects the evaluator implementation. Current value: `blake2b512-mock`.
-  - Notes: Deterministic mock evaluator that applies Blake2b512 with domain separation `iroha.alias.voprf.mock.v1`. Meant for test tooling until the production VOPRF pipeline is wired through Iroha.
-  - Errors: HTTP `400` on malformed hex input. Torii returns a Norito `ValidationFail::QueryFailed::Conversion` envelope with the decoder error message.
+  - So'rov: { "blinded_element_hex": "..." }
+  - Javob: { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
+    - `backend` baholovchining amalga oshirilishini aks ettiradi. Joriy qiymat: `blake2b512-mock`.
+  - Eslatmalar: `iroha.alias.voprf.mock.v1` domen ajratish bilan Blake2b512 qo'llaydigan deterministik soxta baholovchi. Ishlab chiqarish VOPRF quvur liniyasi Iroha orqali o'tkazilgunga qadar sinov asboblari uchun mo'ljallangan.
+  - Xatolar: noto'g'ri tuzilgan hex kiritishda HTTP `400`. Torii dekoder xato xabari bilan Norito `ValidationFail::QueryFailed::Conversion` konvertini qaytaradi.
 - POST `/v1/aliases/resolve`
-  - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Response: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
-  - Notes: Requires the ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`). Torii normalises aliases by stripping whitespace and upper-casing before lookup. Returns 404 when the alias is absent and 503 when the ISO bridge runtime is disabled.
+  - So'rov: { "taxallus": "GB82 WEST 1234 5698 7654 32" }
+  - Javob: { "taxallus": "GB82WEST12345698765432", "account_id": "ih58...", "indeks": 0, "manba": "iso_bridge" }
+  - Eslatmalar: ISO ko'prigining ish vaqti bosqichini talab qiladi (`[iso_bridge.account_aliases]`, `iroha_config`). Torii qidiruvdan oldin boʻshliq va bosh harflarni olib tashlash orqali taxalluslarni normallashtiradi. Taxallus mavjud bo'lmaganda 404 va ISO ko'prigining ishlash vaqti o'chirilganda 503 qaytariladi.
 - POST `/v1/aliases/resolve_index`
-  - Request: { "index": 0 }
-  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
-  - Notes: Alias indices are assigned deterministically from configuration order (0-based). Clients can cache responses offline to build audit trails for alias attestation events.
-
-Code Size Cap
-- Custom parameter: `max_contract_code_bytes` (JSON u64)
-  - Controls the maximum allowed size (in bytes) for on-chain contract code storage.
-  - Default: 16 MiB. Nodes reject `RegisterSmartContractBytes` when the `.to` image length exceeds the cap with an invariant violation error.
-  - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
+  - So'rov: { "indeks": 0 }
+  - Javob: { "indeks": 0, "taxallus": "GB82WEST12345698765432", "account_id": "ih58...", "manba": "iso_bridge" }
+  - Eslatmalar: taxallus indekslari konfiguratsiya tartibidan (0-asosli) deterministik tarzda tayinlanadi. Taxallus attestatsiya hodisalari uchun audit izlarini yaratish uchun mijozlar javoblarni oflayn rejimda keshlashi mumkin.Kod o'lchami qopqog'i
+- Maxsus parametr: `max_contract_code_bytes` (JSON u64)
+  - Zanjirli kontrakt kodini saqlash uchun ruxsat etilgan maksimal hajmni (baytlarda) boshqaradi.
+  - Standart: 16 Mb. `.to` tasvir uzunligi chegaradan oshib ketganda tugunlar `RegisterSmartContractBytes` ni oʻzgarmas buzilish xatosi bilan rad etadi.
+  - Operatorlar `SetParameter(Custom)` ni `id = "max_contract_code_bytes"` va raqamli foydali yukni taqdim etish orqali sozlashlari mumkin.
 
 - POST `/v1/gov/ballots/zk`
-  - Request: { "authority": "ih58...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
-  - Notes:
-    - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`) unless hinted; only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
-    - When any lock hint is provided, the ballot must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required.
-    - ZK re-votes that attempt to shrink amount or expiry are rejected server-side with `BallotRejected` diagnostics.
-    - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
+  - So'rov: { "avtoritet": "ih58...", "private_key": "...?", "chain_id": "...", "select_id": "e1", "proof_b64": "...", "ommaviy": {…} }
+  - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }
+  - Eslatmalar:
+    - Sxemaning umumiy kirishlari `owner`, `amount` va `duration_blocks` ni oʻz ichiga olgan boʻlsa va isbot sozlangan VK ga qarshi tekshirilsa, tugun Sumeragi bilan Prometheus bilan boshqaruv blokini yaratadi yoki kengaytiradi. Yo'nalish yashirin qoladi (`unknown`), agar ishora qilinmasa; faqat miqdor/muddati yangilanadi. Qayta ovoz berish monotondir: miqdor va amal qilish muddati faqat oshadi (tugun max(summa, oldingi miqdor) va max(muddati, oldingi. muddati) amal qiladi).
+    - Qulflash bo'yicha har qanday maslahat berilganda, ovoz berish byulletenida `owner`, `amount` va `duration_blocks` bo'lishi kerak; qisman maslahatlar rad etiladi. Qachon `min_bond_amount > 0`, qulflash bo'yicha maslahatlar talab qilinadi.
+    - Miqdorni qisqartirishga yoki amal qilish muddatini qisqartirishga urinayotgan ZK qayta ovozlari `BallotRejected` diagnostikasi bilan server tomonida rad etiladi.
+    - Shartnomaning bajarilishi `SubmitBallot` navbati oldidan `ZK_VOTE_VERIFY_BALLOT` chaqirilishi kerak; xostlar bir martalik mandalni majbur qiladi.
 
 - POST `/v1/gov/ballots/plain`
-  - Request: { "authority": "ih58...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "ih58...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
-  - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
-
-- POST `/v1/gov/finalize`
-  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "ih58...?", "private_key": "…?" }
-  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
-  - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
-  - Notes:
-    - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
-    - Auto-close at `h_end` emits Approved/Rejected only for Plain referenda; ZK referenda remain closed until a finalized tally is submitted and `FinalizeReferendum` is executed.
-    - Turnout checks use approve+reject only; abstain does not count toward turnout.
+  - So'rov: { "avtoritet": "ih58...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "egasi": "ih58...", "summa": "1000", "davomiylik_bloklar": 6000, "absp_taxminiy"
+  - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }
+  - Eslatmalar: Qayta ovoz berish faqat uzaytiriladi - yangi byulleten mavjud blokirovka miqdorini yoki amal qilish muddatini kamaytira olmaydi. `owner` tranzaksiya vakolatiga teng bo'lishi kerak. Minimal davomiylik `conviction_step_blocks`.- POST `/v1/gov/finalize`
+  - So'rov: { "referendum_id": "r1", "proposal_id": "...64hex", "hokimiyat": "ih58...?", "private_key": "...?" }
+  - Javob: { "ok": rost, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
+  - Zanjirdagi effekt (joriy iskala): tasdiqlangan joylashtirish taklifini amalga oshirish kutilgan `abi_hash` bilan `code_hash` tomonidan kalitlangan minimal `ContractManifest` kiritadi va taklifni Qabul qilingan deb belgilaydi. Agar boshqa `abi_hash` bilan `code_hash` uchun manifest allaqachon mavjud bo'lsa, qabul qilish rad etiladi.
+  - Eslatmalar:
+    - ZK saylovlari uchun shartnoma yo'llari `FinalizeElection` ni bajarishdan oldin `ZK_VOTE_VERIFY_TALLY` raqamiga qo'ng'iroq qilishlari kerak; xostlar bir martalik mandalni majbur qiladi. `FinalizeReferendum` saylovlar yakuni aniqlanmaguncha ZK referendumini rad etadi.
+    - `h_end` da avtomatik yopilish faqat oddiy referendumlar uchun tasdiqlangan/rad etilgan chiqaradi; ZK referendumlari yakuniy hisob topshirilmaguncha va `FinalizeReferendum` bajarilmaguncha yopiq qoladi.
+    - Saylov ishtirokini tekshirishda faqat tasdiqlash+rad etishdan foydalaniladi; betaraf bo'lish saylovchilarning ishtirokini hisobga olmaydi.
 
 - POST `/v1/gov/enact`
-  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58...?", "private_key": "…?" }
-  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
-  - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
+  - So'rov: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "pastki": 0, "yuqori": 0 }?, "hokimiyat": "ih58...?", "private_key": "...?" }
+  - Javob: { "ok": rost, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
+  - Izohlar: Torii imzolangan bitimni `authority`/`private_key` taqdim etilganda taqdim etadi; aks holda u mijozlar imzolashi va topshirishi uchun skeletni qaytaradi. Preimage ixtiyoriy va hozirda ma'lumotlidir.
 
-- GET `/v1/gov/proposals/{id}`
-  - Path `{id}`: proposal id hex (64 chars)
-  - Response: { "found": bool, "proposal": { … }? }
+- `/v1/gov/proposals/{id}` OLING
+  - `{id}` yo'li: taklif identifikatori hex (64 belgi)
+  - Javob: { "topildi": bool, "taklif": { … }? }
 
-- GET `/v1/gov/locks/{rid}`
-  - Path `{rid}`: referendum id string
-  - Response: { "found": bool, "referendum_id": "rid", "locks": { … }? }
+- `/v1/gov/locks/{rid}` OLING
+  - `{rid}` yo'li: referendum identifikatori qatori
+  - Javob: { "topildi": bool, "referendum_id": "rid", "qulflar": { … }? }
 
-- GET `/v1/gov/council/current`
-  - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
-  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback using the configured stake asset and thresholds (mirrors the VRF spec until live VRF proofs are persisted on chain).
+- `/v1/gov/council/current` OLING
+  - Javob: { "davr": N, "a'zolar": [{ "account_id": "..." }, …] }
+  - Eslatmalar: Qachon mavjud bo'lsa, doimiy kengashni qaytaradi; aks holda konfiguratsiya qilingan ulush aktivi va chegaralari yordamida deterministik qaytarilish hosil qiladi (jonli VRF isbotlari zanjirda saqlanib qolguncha VRF spetsifikatsiyasini aks ettiradi).
 
-- POST `/v1/gov/council/derive-vrf` (feature: gov_vrf)
-  - Request: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "…", "variant": "Normal|Small", "pk_b64": "…", "proof_b64": "…" }, …] }
-  - Behavior: Verifies each candidate’s VRF proof against the canonical input derived from `chain_id`, `epoch`, and the latest block hash beacon; sorts by output bytes desc with tiebreakers; returns the top `committee_size` members. Does not persist.
-  - Response: { "epoch": N, "members": [{ "account_id": "…" } …], "total_candidates": M, "verified": K }
-  - Notes: Normal = pk in G1, proof in G2 (96 bytes). Small = pk in G2, proof in G1 (48 bytes). Inputs are domain-separated and include `chain_id`.
+- POST `/v1/gov/council/derive-vrf` (xususiyat: gov_vrf)
+  - So'rov: { "komitet_size": 21, "davr": 123? , "nomzodlar": [{ "account_id": "...", "variant": "Oddiy|Kichik", "pk_b64": "...", "proof_b64": "..." }, …] }
+  - Xulq-atvor: har bir nomzodning VRF isbotini `chain_id`, `epoch` va oxirgi blok xesh-mayoqidan olingan kanonik kiritishga nisbatan tekshiradi; chiqish baytlari bo'yicha saralash desc tiebreakers bilan; eng yaxshi `committee_size` a'zolarini qaytaradi. Davom etmaydi.
+  - Javob: { "davr": N, "a'zolar": [{ "account_id": "..." } …], "jami_nomzodlar": M, "tasdiqlangan": K }
+  - Eslatmalar: Oddiy = G1 da pk, G2 da isboti (96 bayt). Kichik = G2 da pk, G1 da isboti (48 bayt). Kirishlar domendan ajratilgan va `chain_id` ni o'z ichiga oladi.
 
-### Governance defaults (iroha_config `gov.*`)
+### Boshqaruv standartlari (iroha_config `gov.*`)
 
-The council fallback used by Torii when no persisted roster exists is parameterised via `iroha_config`:
-
-```toml
+Doimiy ro'yxat mavjud bo'lmaganda Torii tomonidan qo'llaniladigan kengash zaxirasi `iroha_config` orqali parametrlanadi:```toml
 [gov]
   vk_ballot.backend = "halo2/ipa"
   vk_ballot.name    = "ballot_v1"
@@ -153,7 +146,7 @@ The council fallback used by Torii when no persisted roster exists is parameteri
   parliament_eligibility_asset_id = "SORA#stake"
 ```
 
-Equivalent environment overrides:
+Ekvivalent muhit bekor qiladi:
 
 ```
 GOV_VK_BACKEND=halo2/ipa
@@ -173,157 +166,147 @@ GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
 
-Sora Nexus default: ballots lock `min_bond_amount` of `voting_asset_id` into the
-configured escrow account. Locks are created or extended when ballots land and
-released on expiry; bond lifecycle is emitted via `governance_bond_events_total`
-telemetry (lock_created|lock_extended|lock_unlocked|lock_slashed|lock_restituted).
+Sora Nexus sukut bo'yicha: saylov byulletenlari `min_bond_amount` `voting_asset_id` ichiga qulflanadi
+sozlangan eskrow hisobi. Qulflar saylov byulletenlari tushganda yaratiladi yoki uzaytiriladi va
+muddati tugashi bilan ozod qilingan; obligatsiyalarning hayot aylanishi `governance_bond_events_total` orqali chiqariladi
+telemetriya (lock_created|lock_extended|lock_unlocked|lock_slashed|lock_restituted).
 
-`parliament_committee_size` caps the number of fallback members returned when no council has been persisted, `parliament_term_blocks` defines the epoch length used for seed derivation (`epoch = floor(height / term_blocks)`), `parliament_min_stake` enforces the minimum stake (in smallest units) on the eligibility asset, and `parliament_eligibility_asset_id` selects which asset balance is scanned when building the candidate set.
+`parliament_committee_size` hech qanday kengash oʻtkazilmaganda qaytarilgan qoʻshimcha aʼzolar sonini cheklaydi, `parliament_term_blocks` urugʻ hosil qilish uchun ishlatiladigan davr uzunligini belgilaydi (`epoch = floor(height / term_blocks)`), `parliament_min_stake` (eng kichik va eng kichik birliklarni talab qiladi) `parliament_eligibility_asset_id` nomzodlar to‘plamini yaratishda qaysi aktiv balansi skanerlanishini tanlaydi.
 
-Governance VK verification has no bypass: ballot verification always requires an `Active` verifying key with inline bytes, and environments must not rely on test-only toggles to skip verification.
+Boshqaruv VK tekshiruvini chetlab o‘tish imkoniyati yo‘q: ovoz berish byulletenini tekshirish har doim ichki baytlarga ega `Active` tasdiqlash kalitini talab qiladi va muhitlar tekshirishni o‘tkazib yuborish uchun faqat test o‘tish tugmalariga tayanmasligi kerak.
 
 RBAC
-- On-chain execution requires permissions:
-  - Proposals: `CanProposeContractDeployment{ contract_id }`
-  - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
-  - Enactment: `CanEnactGovernance`
-  - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
-  - Council management (future): `CanManageParliament`
-- Slashing/appeals:
-  - Double-vote/invalid/ineligible ballots apply configured slash percentages against the bond escrow, moving funds into `slash_receiver_account`, updating the slashing ledger, and emitting typed `LockSlashed` events (reason + destination + note).
-  - Manual `SlashGovernanceLock`/`RestituteGovernanceLock` instructions support operator-driven penalties and appeals; restitution is capped by recorded slashes, restores funds to the bond escrow, updates the ledger, and emits `LockRestituted` while keeping the lock active until expiry.
-
-Protected Namespaces
-- Custom parameter `gov_protected_namespaces` (JSON array of strings) enables admission gating for deploys into listed namespaces.
-- Clients must include transaction metadata keys for deploys targeting protected namespaces:
-  - `gov_namespace`: the target namespace (e.g., `"apps"`)
-  - `gov_contract_id`: the logical contract id within the namespace
-- `gov_manifest_approvers`: optional JSON array of ih58... account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
-- Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_ih58..._authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
-- Telemetry surfaces the enforcement path via `governance_manifest_quorum_total{outcome}` (values `satisfied` / `rejected`) so operators can audit missing approvals.
-- Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_namespace` must provide `gov_contract_id`, and the namespace must appear in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
-- Admission enforces that an Enacted governance proposal exists for the tuple `(namespace, contract_id, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
+- Zanjirda bajarish uchun ruxsatlar talab qilinadi:
+  - Takliflar: `CanProposeContractDeployment{ contract_id }`
+  - Saylov byulletenlari: `CanSubmitGovernanceBallot{ referendum_id }`
+  - Qabul qilish: `CanEnactGovernance`
+  - Kesish/murojaatlar: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
+  - Kengash boshqaruvi (kelajakda): `CanManageParliament`
+- Slashing / murojaatlar:
+  - Ikki marta ovoz berish/yaroqsiz/noqobil saylov byulletenlari obligatsiya eskroviga nisbatan sozlangan slash foizlarini qo'llaydi, mablag'larni `slash_receiver_account`-ga o'tkazadi, kesilgan daftarni yangilaydi va `LockSlashed` hodisalarini chiqaradi (sabab + maqsad + eslatma).
+  - Qo'llanma `SlashGovernanceLock`/`RestituteGovernanceLock` ko'rsatmalari operator tomonidan boshqariladigan jarimalar va apellyatsiyalarni qo'llab-quvvatlaydi; restitusiya qayd etilgan chiziqchalar bilan chegaralanadi, obligatsiya eskroviga mablag‘larni tiklaydi, daftarni yangilaydi va `LockRestituted` chiqaradi, shu bilan birga qulfni muddati tugaguniga qadar faol ushlab turadi.Himoyalangan nom maydonlari
+- Maxsus parametr `gov_protected_namespaces` (JSON qatorlar qatori) roʻyxatdagi nomlar boʻshliqlariga joylashtirish uchun kirish eshiklarini yoqish imkonini beradi.
+- Mijozlar himoyalangan nom maydonlariga moʻljallangan joylashtirishlar uchun tranzaksiya metamaʼlumotlari kalitlarini oʻz ichiga olishi kerak:
+  - `gov_namespace`: maqsadli nom maydoni (masalan, `"apps"`)
+  - `gov_contract_id`: nomlar maydonidagi mantiqiy shartnoma identifikatori
+- `gov_manifest_approvers`: ih58... hisob identifikatorlarining ixtiyoriy JSON massivi. Agar chiziqli manifest birdan ortiq kvorumni e'lon qilsa, qabul qilish manifest kvorumini qondirish uchun tranzaksiya organi va sanab o'tilgan hisoblarni talab qiladi.
+- Telemetriya `governance_manifest_admission_total{result}` orqali yaxlit qabul hisoblagichlarini ochib beradi, shuning uchun operatorlar muvaffaqiyatli qabullarni `missing_manifest`, `non_ih58..._authority`, `quorum_rejected`, `protected_namespace_rejected`, `protected_namespace_rejected` va I181010 yoʻllaridan ajrata oladilar.
+- Telemetriya ijro yo'lini `governance_manifest_quorum_total{outcome}` (qiymatlari `satisfied` / `rejected`) orqali yuzaga keltiradi, shuning uchun operatorlar etishmayotgan tasdiqlarni tekshirishlari mumkin.
+- Yo'llar o'zlarining manifestlarida chop etilgan nomlar maydoni ruxsat etilgan ro'yxatini ta'minlaydi. `gov_namespace` ni o'rnatadigan har qanday tranzaksiya `gov_contract_id` ni ta'minlashi kerak va nom maydoni manifestning `protected_namespaces` to'plamida paydo bo'lishi kerak. Himoya yoqilgan bo'lsa, ushbu metama'lumotlarsiz `RegisterSmartContractCode` taqdimotlari rad etiladi.
+- `(namespace, contract_id, code_hash, abi_hash)` korteji uchun qabul qilingan boshqaruv taklifi mavjudligini tasdiqlaydi; aks holda tekshirish Ruxsat berilmagan xato bilan bajarilmaydi.
 
 Runtime Upgrade Hooks
-- Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
-- Hook fields:
-  - `allow` (bool, default `true`): when `false`, all runtime-upgrade instructions are rejected.
-  - `require_metadata` (bool, default `false`): require the transaction metadata entry specified by `metadata_key`.
-  - `metadata_key` (string): metadata name enforced by the hook. Defaults to `gov_upgrade_id` when metadata is required or an allowlist is present.
-  - `allowed_ids` (array of strings): optional allowlist of metadata values (after trimming). Rejects when the provided value is not listed.
-- When the hook is present, queue admission enforces the metadata policy before the transaction enters the queue. Missing metadata, blank values, or values outside the allowlist produce a deterministic `NotPermitted` error.
-- Telemetry tracks enforcement outcomes via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
-- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any ih58... approvals required by the manifest quorum.
+- Lane manifestlari `hooks.runtime_upgrade` ni ish vaqtini yangilash bo'yicha ko'rsatmalarni e'lon qilishi mumkin (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
+- Kanca maydonlari:
+  - `allow` (bool, sukut bo'yicha `true`): `false`, ish vaqtini yangilash bo'yicha barcha ko'rsatmalar rad etiladi.
+  - `require_metadata` (bool, standart `false`): `metadata_key` tomonidan belgilangan tranzaksiya metamaʼlumotlarini kiritish talab qilinadi.
+  - `metadata_key` (string): ilgak tomonidan qo'llaniladigan metadata nomi. Metamaʼlumotlar kerak boʻlganda yoki ruxsat etilgan roʻyxat mavjud boʻlsa, standart `gov_upgrade_id`.
+  - `allowed_ids` (satrlar massivi): metadata qiymatlarining ixtiyoriy ruxsat etilgan ro'yxati (qirqib olingandan keyin). Taqdim etilgan qiymat ro'yxatda bo'lmaganda rad etadi.
+- Ilgak mavjud bo'lganda, navbatga kirish tranzaksiya navbatga kirishidan oldin metadata siyosatini amalga oshiradi. Yo'qolgan metama'lumotlar, bo'sh qiymatlar yoki ruxsat etilgan ro'yxatdan tashqari qiymatlar deterministik `NotPermitted` xatosini keltirib chiqaradi.
+- Telemetriya `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}` orqali ijro natijalarini kuzatib boradi.
+- Kancani qondiradigan tranzaksiyalar manifest kvorumi talab qiladigan har qanday ih58... tasdiqlari bilan birga `gov_upgrade_id=<value>` metamaʼlumotlarini (yoki manifestda belgilangan kalitni) oʻz ichiga olishi kerak.
 
-Convenience Endpoint
-- POST `/v1/gov/protected-namespaces` — applies `gov_protected_namespaces` directly on the node.
-  - Request: { "namespaces": ["apps", "system"] }
-  - Response: { "ok": true, "applied": 1 }
-  - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
-
-CLI Helpers
+Qulaylik so'nggi nuqtasi
+- POST `/v1/gov/protected-namespaces` - `gov_protected_namespaces` to'g'ridan-to'g'ri tugunga qo'llaniladi.
+  - So'rov: { "namespaces": ["ilovalar", "tizim"] }
+  - Javob: { "ok": rost, "qo'llaniladi": 1 }
+  - Eslatmalar: Administrator/test uchun mo'ljallangan; sozlangan bo'lsa, API tokenini talab qiladi. Ishlab chiqarish uchun `SetParameter(Custom)` bilan imzolangan tranzaksiyani topshirish afzal.CLI yordamchilari
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
-  - Fetches contract instances for the namespace and cross-checks that:
-    - Torii stores bytecode for each `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
-    - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
-    - An enacted governance proposal exists for `(namespace, contract_id, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
-  - Outputs a JSON report with `results[]` per contract (issues, manifest/code/proposal summaries) plus a one-line summary unless suppressed (`--no-summary`).
-  - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
+  - Nomlar maydoni uchun shartnoma misollarini olib keladi va quyidagilarni tekshiradi:
+    - Torii har bir `code_hash` uchun bayt kodini saqlaydi va uning Blake2b-32 dayjesti `code_hash` bilan mos keladi.
+    - `/v1/contracts/code/{code_hash}` ostida saqlangan manifest `code_hash` va `abi_hash` qiymatlariga mos kelishi haqida xabar beradi.
+    - `(namespace, contract_id, code_hash, abi_hash)` uchun qabul qilingan boshqaruv taklifi tugun foydalanadigan bir xil taklif-identifikatori orqali olingan.
+  - Har bir shartnoma bo'yicha `results[]` (muammolar, manifest/kod/takliflar xulosalari) va agar bostirilmasa, bir qatorli xulosa bilan JSON hisobotini chiqaradi (`--no-summary`).
+  - Himoyalangan nom maydonlarini tekshirish yoki boshqaruv tomonidan boshqariladigan joylashtirish ish oqimlarini tekshirish uchun foydalidir.
 - `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
-  - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
+  - Manifest kvorum qoidalarini qondirish uchun ixtiyoriy `gov_manifest_approvers`, jumladan, himoyalangan nomlar maydoniga joylashtirishni yuborishda foydalaniladigan JSON metamaʼlumotlar skeletini chiqaradi.
 - `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
-  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
+  - Kanonik hisob identifikatorlarini tasdiqlaydi, 32 baytlik bekor qiluvchi maslahatlarni kanoniklashtiradi va maslahatlarni `public_inputs_json` ga birlashtiradi (qo'shimcha bekor qilish uchun `--public <path>` bilan).
+  - Nullifier tasdiqlovchi majburiyatdan (ommaviy kiritish) va `domain_tag`, `chain_id` va `election_id`dan olingan; `--nullifier` taqdim etilganda isbot bilan tasdiqlangan.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
-  - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
-  - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
+  - CLI javoblari `tx_instructions[]` va `payload_fingerprint_hex` va dekodlangan maydonlar bilan izohlanadi, shuning uchun quyi oqim asboblari Norito dekodlashni qayta ishlatmasdan skeletni tekshirishi mumkin.
+  - Har qanday blokirovka bo'yicha maslahat berilganda, ZK byulletenlari `owner`, `amount` va `duration_blocks` bilan ta'minlanishi kerak; qisman maslahatlar rad etiladi. Qachon `min_bond_amount > 0`, qulflash bo'yicha maslahatlar talab qilinadi. Yo'nalish ixtiyoriy bo'lib qoladi va faqat maslahat sifatida ko'riladi.
 - `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` accepts canonical IH58 literals; optional `@<domain>` suffixes are routing hints only.
-  - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
-  - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
+  - `--owner` kanonik IH58 literallarini qabul qiladi; ixtiyoriy `@<domain>` qo'shimchalari faqat marshrutlash bo'yicha maslahatlardir.
+  - `--lock-amount`/`--lock-duration-blocks` taxalluslari skript pariteti uchun ZK bayroq nomlarini aks ettiradi.
+  - `vote --mode zk` ko'rsatmasining xulosasi shifrlangan ko'rsatma barmoq izi va odam o'qiy oladigan saylov byulletenlarini (`owner`, `amount`, `duration_blocks`, `direction` imzolashdan oldin) o'z ichiga oladi.Hodisalar ro'yxati
+- GET `/v1/gov/instances/{ns}` - nom maydoni uchun faol shartnoma misollarini ro'yxatlaydi.
+  - So'rov parametrlari:
+    - `contains`: `contract_id` pastki qatori boʻyicha filtrlash (harf-katta sezgir)
+    - `hash_prefix`: `code_hash_hex` olti burchakli prefiks bo'yicha filtrlash (kichik harf)
+    - `offset` (standart 0), `limit` (standart 100, maksimal 10_000)
+    - `order`: biri `cid_asc` (standart), `cid_desc`, `hash_asc`, `hash_desc`
+  - Javob: { "namespace": "ns", "instances": [{ "contract_id": "...", "code_hash_hex": "..." }, …], "jami": N, "ofset": n, "chegara": m }
+  - SDK yordamchisi: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) yoki `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
 
-Instances Listing
-- GET `/v1/gov/instances/{ns}` — lists active contract instances for a namespace.
-  - Query params:
-    - `contains`: filter by substring of `contract_id` (case-sensitive)
-    - `hash_prefix`: filter by hex prefix of `code_hash_hex` (lowercase)
-    - `offset` (default 0), `limit` (default 100, max 10_000)
-    - `order`: one of `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
-  - Response: { "namespace": "ns", "instances": [{ "contract_id": "…", "code_hash_hex": "…" }, …], "total": N, "offset": n, "limit": m }
-  - SDK helper: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) or `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
-
-Unlock Sweep (Operator/Audit)
-- GET `/v1/gov/unlocks/stats`
-  - Response: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
-  - Notes: `last_sweep_height` reflects the most recent block height where expired locks were swept and persisted. `expired_locks_now` is computed by scanning lock records with `expiry_height <= height_current`.
+Qulfni ochish (Operator/Audit)
+- `/v1/gov/unlocks/stats` OLING
+  - Javob: { "balandlik_joriy": H, "muddati tugagan_qulflar": n, "muddati tugagan_referendum": m, "oxirgi_supurish_balandligi": S }
+  - Eslatmalar: `last_sweep_height` muddati o'tgan qulflar tozalangan va saqlanib qolgan eng so'nggi blok balandligini aks ettiradi. `expired_locks_now` `expiry_height <= height_current` bilan blokirovka yozuvlarini skanerlash orqali hisoblanadi.
 - POST `/v1/gov/ballots/zk-v1`
-  - Request (v1-style DTO):
+  - So'rov (v1 uslubidagi DTO):
     {
-      "authority": "ih58...",
+      "hokimiyat": "ih58...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "…?",
+      "private_key": "...?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64hex?",
-      "owner": "ih58…",          // canonical AccountId (IH58 literal; optional @domain hint)
-      "amount": "100?",
+      "owner": "ih58…", // kanonik AccountId (IH58 literal; ixtiyoriy @domen maslahati)
+      "summa": "100?",
       "duration_blocks": 6000?,
-      "direction": "Aye|Nay|Abstain?",
-      "nullifier": "blake2b32:…64hex?"
+      "direction": "Ha|Yo'q|Tixtash kerakmi?",
+      "nullifier": "blake2b32:...64hex?"
     }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
-
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
-  - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
-  - Request:
+  - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (xususiyat: `zk-ballot`)
+  - `BallotProof` JSON-ni to'g'ridan-to'g'ri qabul qiladi va `CastZkBallot` skeletini qaytaradi.
+  - Talab:
     {
-      "authority": "ih58...",
+      "hokimiyat": "ih58...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "…?",
+      "private_key": "...?",
       "election_id": "ref-1",
-      "ballot": {
+      "saylov byulleteni": {
         "backend": "halo2/ipa",
-        "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
-        "root_hint": null,                // optional 32-byte hex string (eligibility root)
-        "owner": null,                    // optional canonical AccountId (IH58 literal; optional @domain hint)
-        "nullifier": null,                // optional 32-byte hex string (nullifier hint)
-        "amount": "100",                  // optional lock amount hint (decimal string)
-        "duration_blocks": 6000,          // optional lock duration hint
-        "direction": "Aye"                // optional direction hint
+        "envelope_bytes": "AAECAwQ=", // ZK1 yoki H2* konteynerining 64 bazasi
+        "root_hint": null, // ixtiyoriy 32 baytli hex string (muvofiqlik ildizi)
+        "egasi": null, // ixtiyoriy kanonik AccountId (IH58 literal; ixtiyoriy @domen maslahati)
+        "nullifier": null, // ixtiyoriy 32 baytlik hex string (nollifier maslahati)
+        "summa": "100", // ixtiyoriy blokirovka miqdori bo'yicha maslahat (o'nlik qator)
+        "duration_blocks": 6000, // ixtiyoriy blokirovka muddati haqida maslahat
+        "yo'nalish": "Ha" // ixtiyoriy yo'nalishga ishora
       }
     }
-  - Response:
+  - Javob:
     {
-      "ok": true,
-      "accepted": true,
-      "reason": "build transaction skeleton",
+      "OK": rost,
+      "qabul qilingan": rost,
+      "reason": "tranzaksiya skeletini qurish",
       "tx_instructions": [
-        { "wire_id": "CastZkBallot", "payload_hex": "…" }
+        { "wire_id": "CastZkBallot", "payload_hex": "..." }
       ]
     }
-  - Notes:
-    - When `private_key` is provided, Torii submits the signed transaction and sets `reason` to `submitted transaction`.
-    - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
-    - The envelope bytes are re-encoded as base64 for the instruction payload.
-    - This endpoint is only available when the `zk-ballot` feature is enabled.
+  - Eslatmalar:
+    - `private_key` taqdim etilganda, Torii imzolangan bitimni taqdim etadi va `reason` ni `submitted transaction` ga o'rnatadi.
+    - Server ixtiyoriy `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` dan I018 uchun saylov byulletenini00000280Xga xaritalaydi. `CastZkBallot`.
+    - Zarf baytlari ko'rsatmalarning foydali yuki uchun base64 sifatida qayta kodlangan.
+    - Bu oxirgi nuqta faqat `zk-ballot` funksiyasi yoqilganda mavjud.
 
-CastZkBallot Verification Path
-- `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).
-- If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
-- The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
-- Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
-- Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.
-- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
-- Successful proofs emit `BallotAccepted`; duplicate nullifiers, stale eligibility roots, or lock regressions continue to produce the existing rejection reasons described earlier in this document.
+CastZkBallot tekshirish yo'li
+- `CastZkBallot` taqdim etilgan base64 isbotini dekodlaydi va bo'sh yoki noto'g'ri tuzilgan foydali yuklarni rad etadi (`BallotRejected`, `invalid or empty proof` bilan).
+- Agar `public_inputs_json` ta'minlangan bo'lsa, u JSON ob'ekti bo'lishi kerak; ob'ekt bo'lmagan foydali yuklar rad etiladi.
+- Uy egasi referendumdan (`vk_ballot`) ovoz berish byulletenini tasdiqlash kalitini yoki boshqaruv sukutini hal qiladi va yozuv mavjud boʻlishini, `Active` boʻlishini va ichki baytlarni tashishni talab qiladi.
+- Saqlangan tasdiqlovchi kalit baytlar `hash_vk` bilan qayta xeshlanadi; har qanday majburiyatning nomuvofiqligi ro'yxatga olish kitobining o'zgartirilgan yozuvlaridan (`BallotRejected` bilan `verifying key commitment mismatch`) himoya qilish uchun tekshirishdan oldin ijroni to'xtatadi.
+- Tasdiqlash baytlari `zk::verify_backend` orqali ro'yxatdan o'tgan backendga yuboriladi; yaroqsiz transkriptlar `invalid proof` bilan `BallotRejected` sifatida yuzaga chiqadi va ko'rsatma aniq bajarilmaydi.
+- dalil saylov byulletenlari majburiyatini va saylov huquqining ildizini jamoatchilik fikri sifatida ko'rsatishi kerak; ildiz saylovning `eligible_root` ga mos kelishi kerak va olingan bekor qiluvchi har qanday berilgan maslahatga mos kelishi kerak.
+- Muvaffaqiyatli dalillar `BallotAccepted` chiqaradi; takroriy bekor qiluvchilar, eskirgan muvofiqlik ildizlari yoki blokirovka regresslari ushbu hujjatda avval tasvirlangan mavjud rad etish sabablarini keltirib chiqarishda davom etmoqda.
 
-## Validator Misbehaviour & Joint Consensus
+## Tekshiruvchining noto'g'ri xatti-harakati va qo'shma konsensus
 
-### Slashing and Jailing Workflow
+### Slashing va Jailing Ish jarayoniIh58... protokolni buzsa, konsensus Norito kodli `Evidence` chiqaradi. Har bir foydali yuk `EvidenceStore` xotirasiga tushadi va agar ko'rinmasa, WSV tomonidan qo'llab-quvvatlanadigan `consensus_evidence` xaritasida amalga oshiriladi. `sumeragi.npos.reconfig.evidence_horizon_blocks` dan eskiroq yozuvlar (standart `7200` bloklari) rad etiladi, shuning uchun arxiv cheklangan bo'lib qoladi, lekin rad etish operatorlar uchun qayd etiladi. Ufqdagi dalillar qo'shma konsensus bosqichma-bosqich qoidasiga (`mode_activation_height requires next_mode to be set in the same block`), faollashtirish kechikishiga (`sumeragi.npos.reconfig.activation_lag_blocks`, standart `1`) va kesish kechikishiga (`sumeragi.npos.reconfig.slashing_delay_blocks`, standart I00700X) bo'ysunadi. qo'llashdan oldin jarimalar.
 
-Consensus emits Norito-encoded `Evidence` whenever a ih58... violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
-
-Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
+Tan olingan jinoyatlar `EvidenceKind` ga birma-bir xarita; diskriminantlar barqaror va ma'lumotlar modeli tomonidan amalga oshiriladi:
 
 ```rust
 use iroha_data_model::block::consensus::EvidenceKind;
@@ -341,55 +324,53 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** — the ih58... signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
-- **InvalidQc** — an aggregator gossiped a commit QC whose shape fails deterministic checks (e.g., empty signer bitmap).
-- **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
-- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
+- **DoublePrepare/DoubleCommit** — bir xil `(phase,height,view,epoch)` korteji uchun ih58... imzolangan ziddiyatli xeshlar.
+- **InvalidQc** — agregator shakli deterministik tekshiruvlardan o‘tmagan (masalan, bo‘sh imzo bitmap) QC haqida g‘iybat qildi.
+- **InvalidProposal** — yetakchi tizimli tekshiruvdan o‘tmagan blokni taklif qildi (masalan, qulflangan zanjir qoidasini buzadi).
+- **Tsenzura** — imzolangan topshirish kvitansiyalari hech qachon taklif qilinmagan/tugallanmagan tranzaksiyani ko'rsatadi.
 
-VRF penalties are enforced automatically after `activation_lag_blocks` (offenders are jailed). Consensus slashing is applied only after the `slashing_delay_blocks` window unless governance cancels the penalty.
+VRF jazolari `activation_lag_blocks` dan keyin avtomatik ravishda amalga oshiriladi (jinoyatchilar qamoqqa olinadi). Konsensus kesish faqat `slashing_delay_blocks` oynasidan keyin qo'llaniladi, agar boshqaruv jazoni bekor qilmasa.
 
-Operators and tooling can inspect and re-broadcast payloads through:
+Operatorlar va asboblar foydali yuklarni tekshirishi va qayta uzatishi mumkin:
 
-- Torii: `GET /v1/sumeragi/evidence` and `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha ops sumeragi evidence list`, `… count`, and `… submit --evidence-hex <payload>`.
+- Torii: `GET /v1/sumeragi/evidence` va `GET /v1/sumeragi/evidence/count`.
+- CLI: `iroha ops sumeragi evidence list`, `… count` va `… submit --evidence-hex <payload>`.
 
-Governance must treat the evidence bytes as canonical proof:
+Boshqaruv dalillar baytlarini kanonik dalil sifatida ko'rib chiqishi kerak:
 
-1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
-2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
-3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
-4. **Schedule the follow-up topology** so the offending ih58... cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
-5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
+1. **Foydali yukni eskirishdan oldin to'plang**. Norito baytlarini balandlik/koʻrish metamaʼlumotlari bilan birga arxivlang.
+2. **Agar kerak bo'lsa, bekor qiling** `CancelConsensusEvidencePenalty` hujjat yuki bilan `slashing_delay_blocks` muddati tugagunga qadar taqdim etish; yozuv `penalty_cancelled` va `penalty_cancelled_at_height` deb belgilangan va hech qanday kesish qo'llanilmaydi.
+3. Referendum yoki sudo koʻrsatmasi (masalan, `Unregister::peer`). Bajarish foydali yukni qayta tasdiqlaydi; noto'g'ri shakllangan yoki eskirgan dalillar deterministik ravishda rad etiladi.
+4. **Keyingi topologiyani rejalashtirish** shunday qilib, qoidabuzar ih58... darhol qayta qo‘shila olmaydi. Odatdagi oqimlar navbati `SetParameter(Sumeragi::NextMode)` va `SetParameter(Sumeragi::ModeActivationHeight)` yangilangan ro'yxat bilan.
+5. **Audit natijalari** `/v1/sumeragi/evidence` va `/v1/sumeragi/status` orqali dalil hisoblagichning ilg'orligini ta'minlash va boshqaruv olib tashlashni amalga oshirgan.
 
-### Joint-Consensus Sequencing
+### Birgalikda konsensus ketma-ketligi
 
-Joint consensus guarantees that the outgoing ih58... set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
-
-- `SumeragiParameter::NextMode` and `SumeragiParameter::ModeActivationHeight` must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag.
-- `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) is the configuration guard that prevents zero-lag hand-offs:
-- `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
+Qo'shma konsensus, chiquvchi ih58... to'plami yangi to'plam taklif qilishni boshlashdan oldin chegara blokini yakunlashini kafolatlaydi. Ish vaqti qoidani juftlashtirilgan parametrlar orqali amalga oshiradi:- `SumeragiParameter::NextMode` va `SumeragiParameter::ModeActivationHeight` **bir xil blokda** amalga oshirilishi kerak. `mode_activation_height` kamida bir blokli kechikishni ta'minlab, yangilanishni amalga oshirgan blok balandligidan qat'iy kattaroq bo'lishi kerak.
+- `sumeragi.npos.reconfig.activation_lag_blocks` (sukut bo'yicha `1`) nol kechikishning oldini oluvchi konfiguratsiya himoyachisi:
+- `sumeragi.npos.reconfig.slashing_delay_blocks` (standart `259200`) konsensusni qisqartirishni kechiktiradi, shuning uchun boshqaruv jazolarni ular qo'llanilishidan oldin bekor qilishi mumkin.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and ih58... rosters.
-- Governance automation should always:
-  1. Finalise the evidence-backed removal (or reinstatement) decision.
-  2. Queue a follow-up reconfiguration with `mode_activation_height = h_current + activation_lag_blocks`.
-  3. Monitor `/v1/sumeragi/status` until `effective_consensus_mode` flips at the expected height.
+- Ish vaqti va CLI bosqichli parametrlarni `/v1/sumeragi/params` va `iroha sumeragi params --summary` orqali ochib beradi, shuning uchun operatorlar faollashtirish balandligi va ih58... ro'yxatlarini tasdiqlashlari mumkin.
+- boshqaruvni avtomatlashtirish har doim:
+  1. Dalillarga asoslangan olib tashlash (yoki qayta tiklash) to'g'risidagi qarorni yakunlang.
+  2. `mode_activation_height = h_current + activation_lag_blocks` bilan keyingi qayta konfiguratsiyani navbatga qo'ying.
+  3. `effective_consensus_mode` kutilgan balandlikda aylanguncha monitor `/v1/sumeragi/status`.
 
-Any script that rotates ih58...s or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
+ih58...s aylantiruvchi yoki kesishni qo'llaydigan har qanday skript **kechikishsiz faollashtirishga urinmasligi yoki uzatish parametrlarini o'tkazib yubormasligi kerak; bunday operatsiyalar rad etiladi va tarmoqni avvalgi rejimda qoldiradi.
 
-## Telemetry surfaces
+## Telemetriya sirtlari
 
-- Prometheus metrics export governance activity:
-  - `governance_proposals_status{status}` (gauge) tracks proposal counts by status.
-  - `governance_protected_namespace_total{outcome}` (counter) increments when protected namespace admission allows or rejects a deploy.
-  - `governance_manifest_activations_total{event}` (counter) records manifest insertions (`event="manifest_inserted"`) and namespace bindings (`event="instance_bound"`).
-- `/status` includes a `governance` object mirroring the proposal counts, reporting protected namespace totals, and listing recent manifest activations (namespace, contract id, code/ABI hash, block height, activation timestamp). Operators can poll this field to confirm that enactments updated manifests and that protected namespace gates are enforced.
-- A Grafana template (`docs/source/grafana_governance_constraints.json`) and the
-  telemetry runbook in `telemetry.md` show how to wire alarms for stuck
-  proposals, missing manifest activations, or unexpected protected-namespace
-  rejections during runtime upgrades.
+- Prometheus eksportni boshqarish faoliyati ko'rsatkichlari:
+  - `governance_proposals_status{status}` (oʻlchagich) status boʻyicha takliflar sonini kuzatib boradi.
+  - `governance_protected_namespace_total{outcome}` (hisoblagich) himoyalangan nomlar maydoniga kirish joylashtirishga ruxsat bergan yoki rad etganda oshadi.
+  - `governance_manifest_activations_total{event}` (hisoblagich) manifest qo'shishlarni (`event="manifest_inserted"`) va nomlar maydonini bog'lashni (`event="instance_bound"`) qayd qiladi.
+- `/status` takliflar sonini aks ettiruvchi `governance` ob'ektini o'z ichiga oladi, himoyalangan nomlar maydoni jami to'g'risida hisobot beradi va so'nggi manifest faollashuvlari ro'yxatini (nomlar maydoni, shartnoma identifikatori, kod/ABI xesh, blok balandligi, faollashtirish vaqt tamg'asi) ko'rsatadi. Operatorlar ushbu maydonda yangilangan qonunlar manifestligini va himoyalangan nom maydoni eshiklari kuchga kirganligini tasdiqlash uchun so'rov o'tkazishlari mumkin.
+- Grafana shabloni (`docs/source/grafana_governance_constraints.json`) va
+  `telemetry.md`-dagi telemetriya runbook tiqilib qolgan signallarni qanday ulash kerakligini ko'rsatadi
+  takliflar, etishmayotgan manifest faollashtirishlari yoki kutilmagan himoyalangan nomlar maydoni
+  ish vaqtini yangilash paytida rad etishlar.

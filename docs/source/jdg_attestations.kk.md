@@ -7,33 +7,34 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
 source_last_modified: "2026-01-08T21:57:18.412403+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# JDG Attestations: Guard, Rotation, and Retention
+# JDG аттестациялары: күзет, айналдыру және ұстау
 
-This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
+Бұл жазба қазір `iroha_core` нұсқасында жеткізілетін v1 JDG аттестаттау қорғаушысын құжаттайды.
 
-- **Committee manifests:** Norito-encoded `JdgCommitteeManifest` bundles carry per-dataspace rotation
-  schedules (`committee_id`, ordered members, threshold, `activation_height`, `retire_height`).
-  Manifests are loaded with `JdgCommitteeSchedule::from_path` and enforce strictly increasing
-  activation heights with an optional grace overlap (`grace_blocks`) between retiring/activating
-  committees.
-- **Attestation guard:** `JdgAttestationGuard` enforces dataspace binding, expiry, stale bounds,
-  committee id/threshold matching, signer membership, supported signature schemes, and optional
-  SDN validation via `JdgSdnEnforcer`. Size caps, max lag, and allowed signature schemes are
-  constructor parameters; `validate(attestation, dataspace, current_height)` returns the active
-  committee or a structured error.
-  - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
-  - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
-    aggregate validation requires a valid PoP per committee member in the manifest; missing or
-    invalid PoPs reject the attestation.
-  Configure the allow-list via `governance.jdg_signature_schemes`.
-- **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
-  per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or
-  `for_dataspace_and_epoch` to retrieve audit/replay bundles.
-- **Tests:** Unit coverage now exercises valid committee selection, unknown signer rejection, stale
-  attestation rejection, unsupported scheme ids, and retention pruning. See
+- **Комитет мынаны көрсетеді:** Norito кодталған `JdgCommitteeManifest` топтамалары деректер кеңістігінің айналуын қамтамасыз етеді
+  кестелер (`committee_id`, реттелген мүшелер, шекті мән, `activation_height`, `retire_height`).
+  Манифесттер `JdgCommitteeSchedule::from_path` жүктелген және оларды қатаң түрде күшейтеді
+  өшіру/белсендендіру арасындағы қосымша артықшылық қабаттасуы (`grace_blocks`) бар белсендіру биіктіктері
+  комитеттер.
+- **Аттестация қорғаушысы:** `JdgAttestationGuard` деректер кеңістігін байланыстыруды, жарамдылық мерзімін, ескірген шекараларды,
+  комитет идентификаторы/шекті сәйкестік, қол қоюшы мүшелік, қолдау көрсетілетін қол қою схемалары және қосымша
+  `JdgSdnEnforcer` арқылы SDN валидациясы. Өлшем шегі, максималды кешігу және рұқсат етілген қолтаңба схемалары
+  конструктор параметрлері; `validate(attestation, dataspace, current_height)` белсендіні қайтарады
+  комитет немесе құрылымдық қате.
+  - `scheme_id = 1` (`simple_threshold`): әр қол қоюшы қолтаңбалары, қосымша қол қоюшының нүктелік суреті.
+  - `scheme_id = 2` (`bls_normal_aggregate`): бір алдын ала жинақталған BLS-қалыпты қолтаңба
+    аттестаттау хэші; қол қоюшының нүктелік суреті міндетті емес, аттестациядағы барлық қол қоюшылар үшін әдепкі. BLS
+    жиынтық валидация манифесттегі әрбір комитет мүшесі үшін жарамды PoP талап етеді; жоқ немесе
+    жарамсыз PoP аттестациядан бас тартады.
+  `governance.jdg_signature_schemes` арқылы рұқсат етілген тізімді конфигурациялаңыз.
+- **Сақтау қоймасы:** `JdgAttestationStore` конфигурацияланатын деректер кеңістігіндегі аттестацияларды бақылайды
+  әр деректер кеңістігінің қақпағы, кірістірудегі ең ескі жазбаларды кесу. `for_dataspace` қоңырау шалыңыз немесе
+  Аудит/қайта ойнату бумаларын шығарып алу үшін `for_dataspace_and_epoch`.
+- **Тесттер:** Бірлікті қамту енді жарамды комиссия таңдауын, қол қоюшының белгісіз бас тартуын, ескіргенін пайдаланады
+  аттестациядан бас тарту, қолдау көрсетілмейтін схема идентификаторлары және сақтауды кесу. Қараңыз
   `crates/iroha_core/src/jurisdiction.rs`.
 
-The guard rejects schemes outside the configured allow-list.
+Күзет конфигурацияланған рұқсаттар тізімінен тыс схемаларды қабылдамайды.

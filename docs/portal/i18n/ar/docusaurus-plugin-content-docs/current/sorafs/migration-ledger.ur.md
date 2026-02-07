@@ -4,39 +4,39 @@ direction: rtl
 source: docs/portal/docs/sorafs/migration-ledger.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: SoraFS مائیگریشن لیجر
-description: ہر مائیگریشن سنگ میل، ذمہ داران اور مطلوبہ فالو اپس کو ٹریک کرنے والا کینونیکل چینج لاگ۔
+العنوان: SoraFS مائیگریشن لیجر
+الوصف: مليون سنة فما فوق، وذخيرة ومطلوبة فالو اپس كرنے وكينونيكل شينج لاغ.
 ---
 
-> [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) سے ماخوذ۔
+> [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md) سے ما خوذة۔
 
-# SoraFS مائیگریشن لیجر
+# SoraFS مايگریشن لیجر
 
-یہ لیجر SoraFS Architecture RFC میں ریکارڈ کردہ مائیگریشن چینج لاگ کی عکاسی کرتا ہے۔ اندراجات
-سنگ میل کے حساب سے گروپ ہوتی ہیں اور effective window، متاثرہ ٹیمیں، اور مطلوبہ actions درج
-کرتی ہیں۔ مائیگریشن پلان میں اپڈیٹس لازمی طور پر اس صفحے اور RFC
-(`docs/source/sorafs_architecture_rfc.md`) دونوں میں تبدیلی کریں تاکہ downstream consumers
-ہم آہنگ رہیں۔
+إنه لـ SoraFS Architecture RFC وهو عبارة عن تسجيل صوتي سريع للغاية. اندراجات
+سنجر ميلا من حساب المجموعة ونافذة فعالة، ومؤثرة، وإجراءات مطلوبة
+شكرا جزيلا. يجب وضع الخطة البحرية على الصفحة وRFC
+(`docs/source/sorafs_architecture_rfc.md`) يقدم الدعم للمستهلكين النهائيين
+نحن نتحدث عنه.
 
-| سنگ میل | موثر مدت | تبدیلی کا خلاصہ | متاثرہ ٹیمیں | ایکشن آئٹمز | حیثیت |
-|---------|----------|-----------------|--------------|-------------|-------|
-| M1 | ہفتے 7–12 | CI deterministic fixtures نافذ کرتا ہے؛ alias proofs staging میں دستیاب ہیں؛ tooling explicit expectation flags دیتا ہے۔ | Docs, Storage, Governance | Fixtures کو signed رکھیں، staging registry میں aliases رجسٹر کریں، release checklists کو `--car-digest/--root-cid` enforcement کے ساتھ اپڈیٹ کریں۔ | ⏳ زیر التوا |
+| سنگ ميل | موثر مدت | تبدیلی كا الخلاصة | تاثرہ ٹیمیں | ایکشن آیٹمز | حیثیت |
+|---------|----------|----------------|-------------|-------------|-------|
+| م1 | ہفتے ٧–١٢ | تم استخدام التركيبات الحتمية CI؛ الاسم المستعار البراهين التدريج هو برنامج؛ أدوات أعلام التوقع الصريحة دیتا ہے۔ | المستندات والتخزين والحوكمة | التركيبات الموقعة، والتسجيل المرحلي تحتوي على أسماء مستعارة لمسجل السجل، وإصدار قوائم المراجعة لفرض `--car-digest/--root-cid` في نفس الوقت. | ⏳ زیر التوا |
 
-گورننس control plane کی minutes جو ان milestones کو حوالہ دیتی ہیں `docs/source/sorafs/` کے تحت
-موجود ہیں۔ ٹیموں کو ہر قطار کے نیچے dated bullet points شامل کرنے چاہئیں جب نمایاں واقعات
-ہوئیں (مثلا نئے alias registrations یا registry incident retrospectives) تاکہ قابلِ آڈٹ
-ریکارڈ فراہم ہو۔
+گورنس التحكم في الطائرة دقائق جو ان المعالم التي حوالة ديتی ہیں `docs/source/sorafs/` تحت
+موجود . تتضمن أحدث القطارات التي تتضمن نقاطًا نقطية مؤرخة أشياء أساسية تتعلق بالواقع
+التسجيل (مثل تسجيلات الاسم المستعار الجديدة أو استرجاع أحداث التسجيل)
+تسجيل الدخول.
 
-## تازہ ترین اپڈیٹس
-
-- 2025-11-01 — `migration_roadmap.md` کو governance council اور operator lists میں review کے
-  لیے بھیجا گیا؛ اگلی council session میں sign-off کا انتظار ہے (ref:
-  `docs/source/sorafs/council_minutes_2025-10-29.md` follow-up).
-- 2025-11-02 — Pin Registry register ISI اب `sorafs_manifest` helpers کے ذریعے shared chunker/
-  policy validation نافذ کرتا ہے، جس سے on-chain paths Torii checks کے ساتھ aligned رہتے ہیں۔
-- 2026-02-13 — Provider advert rollout phases (R0–R3) لیجر میں شامل کی گئیں اور متعلقہ dashboards
-  اور operator guidance شائع کی گئی
-  (`provider_advert_rollout.md`, `grafana_sorafs_admission.json`).
+## أحدث إصدار- 01-11-2025 — `migration_roadmap.md` مجلس الإدارة وقوائم المشغلين الذين يقومون بمراجعة
+  لا يوجد شيء آخر؛ يتم التوقيع على الجلسة الأولى للمجلس كما هو متوقع (المرجع:
+  متابعة `docs/source/sorafs/council_minutes_2025-10-29.md`).
+- 02-11-2025 — تسجيل Pin Registry ISI اب `sorafs_manifest` helpers کے ذریعے Shared Chunker/
+  التحقق من صحة السياسة هو مفتاح التحقق من صحة المسارات الموجودة على السلسلة Torii يتحقق من محاذاة الشبكة بشكل ثابت.
+- 13-02-2026 — مراحل طرح إعلان الموفر (R0–R3) ليجر تشمل جميع اللوحات ولوحات المعلومات ذات الصلة
+  وإرشادات المشغل شاع کی گئی
+  (`provider_advert_rollout.md`، `grafana_sorafs_admission.json`).

@@ -7,26 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 035600f179f4dd225778fae57c927b2a6c9a0f1c45ca949e3536b99283c2dde3
 source_last_modified: "2026-01-28T17:11:30.697433+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Rust SDK Quickstart
 
-The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
-type for talking to Torii. Use it when you need to submit transactions,
-subscribe to events, or query state from a Rust application.
+Rust клиент API йәшәй I18NI000000022X йәшник, был фашлай `client::Client` .
+тип һөйләшкән өсөн I18NT0000000006X. Уны ҡулланыу, ҡасан һеҙгә кәрәк, операциялар тапшырырға,
+ваҡиғаларға яҙылырға, йәки эҙләү дәүләте Rust ғариза.
 
-## 1. Add the crate
+## 1. Йәшник өҫтәгеҙ
 
 ```toml title="Cargo.toml"
 [dependencies]
 iroha = { path = "../../crates/iroha", features = ["client"] }
 ```
 
-The workspace example unlocks the client module via the `client` feature. If you
-consume the published crate, replace the `path` attribute with the current
-version string.
+Эш урыны миҫалы клиент модулен I18NI000000024X функцияһы аша аса. Әгәр һеҙ
+баҫылған йәшникте ҡулланыу, I18NI000000025X атрибутын ток менән алмаштырыу
+версия еп.
 
-## 2. Configure the client
+## 2. Клиент конфигурациялау
 
 ```rust title="src/main.rs"
 use iroha::client::{Client, ClientConfiguration};
@@ -45,10 +46,10 @@ fn main() -> eyre::Result<()> {
 }
 ```
 
-`ClientConfiguration` mirrors the CLI configuration file: it includes Torii and
-telemetry URLs, authentication material, timeouts, and batching preferences.
+`ClientConfiguration` CLI конфигурацияһы файлын көҙгөләй: ул Torii һәм
+телеметрия URL-адрестар, аутентификация материалы, тайм-ауттар, һәм партия өҫтөнлөктәре.
 
-## 3. Submit a transaction
+## 3. Транзакция тапшырыу
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -88,11 +89,11 @@ fn submit_example() -> eyre::Result<()> {
 }
 ```
 
-Under the hood the client uses Norito to encode the transaction payload before
-posting it to Torii. If submission succeeds, the returned hash can be used to
-track status via `client.poll_transaction_status(hash)`.
+Капот аҫтында клиент I18NT000000001X ҡуллана, транзакция файҙалы йөкләмәһен кодлау өсөн .
+уны Torii-ға урынлаштырыу. Әгәр ҙә тапшырыу уңышлы булһа, ҡайтарылған хеш ҡулланырға мөмкин
+трасса статусы аша I18NI0000000027X.
 
-## 4. Submit DA blobs
+## 4. DA блобтарын тапшырыу
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -115,11 +116,11 @@ fn submit_da_blob() -> eyre::Result<()> {
 }
 ```
 
-When you need to inspect or persist the Norito payload without sending it to
-Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
+Ҡасан һеҙгә тикшерергә йәки һаҡланырға кәрәк I18NT0000000002X файҙалы йөк ебәрмәйенсә, уны
+I18NT000000009X, шылтыратыу I18NI0000000028X ҡул ҡуйылған запрос алыу өсөн
+һәм уны JSON/байте тип күрһәтә, көҙгө `iroha app da submit --no-submit`.
 
-## 5. Query data
+## 5. Һорау мәғлүмәттәре
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -135,11 +136,11 @@ fn list_domains() -> eyre::Result<()> {
 }
 ```
 
-Queries follow the request/response pattern: construct a query type from
-`iroha_data_model::query`, send it via `client.request`, and iterate over the
-results. Responses use Norito-backed JSON, so the wire format is deterministic.
+Һорауҙар үтенес/яуап өлгөһө буйынса үтә: эҙләү тибы төҙөү.
+I18NI0000000030X, уны I18NI0000000031X аша ебәрергә, һәм итерационный өҫтөндә .
+һөҙөмтәләр. Яуаптар ҡулланыу I18NT0000000003X-ярҙам JSON, шуға күрә сым форматы детерминистик.
 
-## 6. Explorer QR snapshots
+## 6. Эксплорер QR снимок
 
 ```rust
 use iroha::client::{
@@ -160,57 +161,41 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` mirrors the `/v1/explorer/accounts/{id}/qr` JSON
-surface: it includes the canonical account id, the literal rendered with the
-requested format, network prefix/error-correction metadata, QR dimensions, and
-the inline SVG payload that wallets/explorers can embed directly. Omit
-`ExplorerAccountQrOptions` to default to the preferred IH58 output or set
-`address_format: Some(AddressFormat::Compressed)` to retrieve the second-best
-`sora…` variant used by ADDR-6b.
+I18NI000000032Х көҙгө I18NI0000000333X JSON
+ер өҫтө: ул канонлы иҫәп id инә, туранан-тура күрһәтелгән менән
+форматында, селтәр префикс/хата-коррекция метамағлүмәттәре, QR үлсәмдәре һәм
+рәтле SVG файҙалы йөк, тип янсыҡтар/тикшерелгән туранан-тура встраиваемый ала. Ҡотолоу
+I18NI000000034X өҫтөнлөк IH58 сығыш йәки комплект өсөн ғәҙәттәгесә ғәҙәттәгесә
+I18NI0000000035X икенсе иң яҡшыһын алыу өсөн
+ADDR-6б ҡулланған `sora…` варианты.
 
-## 7. Subscribe to events
+## 7. Ваҡиғаларға яҙылығыҙ
 
-```rust
-use iroha::client::{Client, ClientConfiguration};
-use iroha_data_model::events::pipeline::PipelineEventFilterBox;
-use futures_lite::stream::StreamExt;
+I18NF000000018X
 
-async fn listen_for_blocks() -> eyre::Result<()> {
-    let client = Client::new(ClientConfiguration::test())?;
-    let mut stream = client
-        .listen_for_events([PipelineEventFilterBox::any()])
-        .await?;
+Клиент I18NT000000010X’s SSE ос нөктәләре өсөн асинк ағымдарын фашлай, шул иҫәптән торба .
+ваҡиғалар, мәғлүмәт ваҡиғалары һәм телеметрия каналдары.
 
-    while let Some(event) = stream.next().await {
-        println!("Received event: {:?}", event?);
-    }
-    Ok(())
-}
-```
+## Күберәк миҫалдар
 
-The client exposes async streams for Torii’s SSE endpoints, including pipeline
-events, data events, and telemetry feeds.
+- `tests/` буйынса тура эфирҙа осонда-осона тура килә I18NI000000038X. Интеграцияны эҙләү
+  һынауҙар, мәҫәлән, I18NI000000039X байыраҡ сценарийҙар өсөн.
+- CLI (`iroha_cli`) шул уҡ клиент модулен ҡуллана; браузер
+  I18NI0000000041X нисек аутентификация, партиялы һәм ретиялар күрергә
+  етештереү инструменттары менән эш итеү.
+- I18NT000000004X-ты күҙ уңында тотоп һаҡлағыҙ: клиент бер ҡасан да `serde_json`-ға ҡайтмай. Ҡасан һеҙ
+  SDK оҙайтыу, I18NI000000043X ярҙамсылары өсөн JSON ос нөктәләре һәм
+  `norito::codec` бинар файҙалы йөктәр өсөн.
 
-## More examples
+## I18NT0000000005X миҫалдары
 
-- End-to-end flows live under `tests/` in `crates/iroha`. Search for integration
-  tests such as `transaction_submission.rs` for richer scenarios.
-- The CLI (`iroha_cli`) uses the same client module; browse
-  `crates/iroha_cli/src/` to see how authentication, batching, and retries are
-  handled in production tooling.
-- Keep Norito in mind: the client never falls back to `serde_json`. When you
-  extend the SDK, rely on `norito::json` helpers for JSON endpoints and
-  `norito::codec` for binary payloads.
+- [Хажимари инеү нөктәһе скелеты] (I18NU000000019X) — компиляция, йүгерә һәм таратыу
+  был тиҙ стартта ҡуйыу фазаһын көҙгөләгән I18NT0000000000000000000 минималь.
+- [Регистр домен һәм мәтрүшкә активтары](I18NU000000020X) — тура килә.
+  I18NI000000045X + I18NI0000000000046X ағымы өҫтә күрһәтелгән, шулай итеп, һеҙ контракттан шул уҡ операцияларҙы ҡабатлай алаһығыҙ.
+- [Иҫәптәр араһында күсерергә] (../norito/examples/transfer-asset) — күрһәтә
+  I18NI0000000047X syscall менән шул уҡ иҫәп идентификаторҙары SDK quickstarts ҡулланыу.
 
-## Related Norito examples
-
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — compile, run, and deploy
-  the minimal Kotodama scaffold that mirrors the setup phase in this quickstart.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — aligns with the
-  `Register` + `Mint` flow shown above so you can replay the same operations from a contract.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — demonstrates the
-  `transfer_asset` syscall with the same account IDs the SDK quickstarts use.
-
-With these building blocks you can integrate Torii into Rust services or CLIs.
-Refer to the generated documentation and data-model crates for the full set of
-instructions, queries, and events.
+Был төҙөлөш блоктары менән һеҙ I18NT000000011X интеграциялай аласыз, йәки CLIs Rust хеҙмәттәре.
+Һылтанма генерацияланған документация һәм мәғлүмәт-модель йәшниктәр өсөн тулы комплект .
+күрһәтмәләр, эҙләүҙәр һәм ваҡиғалар.

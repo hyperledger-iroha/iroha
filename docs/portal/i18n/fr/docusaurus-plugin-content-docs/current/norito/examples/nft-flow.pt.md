@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: Cunhar, transferir e queimar um NFT
-description: Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+limace : /norito/exemples/nft-flow
+titre : Cunhar, transférer et faire un NFT
+description : Percorre le cycle de vie d'un NFT au début du processus : gestion du don, du transfert, du marché des métadonnées et de l'argent.
+source : crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
+Percorre le cycle de vie d'un NFT au début du programme : gestion du don, du transfert, du marché des métadonnées et de l'argent.
 
-## Roteiro do livro razao
+## Roteiro do livro razão
 
-- Garanta que a definicao do NFT (por exemplo `n0#wonderland`) exista junto com as contas de dono/destinatario usadas no trecho (`ih58...`, `ih58...`).
-- Invoque o entrypoint `nft_issue_and_transfer` para cunhar o NFT, transferi-lo de Alice para Bob e anexar um sinal de metadados que descreva a emissao.
-- Inspecione o estado do livro razao de NFT com `iroha_cli ledger nfts list --account <id>` ou os equivalentes do SDK para verificar a transferencia, depois confirme que o ativo e removido quando a instrucao de queima roda.
+- Garantit que la définition du NFT (par exemple `n0#wonderland`) existe avec les données de don/destination utilisées pas (`ih58...`, `ih58...`).
+- Appelez le point d'entrée `nft_issue_and_transfer` pour trouver NFT, transférez Alice à Bob et ajoutez le signal des métadonnées qui sont affichées à l'émission.
+- Inspectez l'état du livre de NFT avec `iroha_cli ledger nfts list --account <id>` ou les équivalents du SDK pour vérifier le transfert, après avoir confirmé que l'activité est supprimée lorsque l'instruction de cette opération est effectuée.
 
-## Guias de SDK relacionados
+## Guides des utilisateurs du SDK
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [Démarrage rapide du SDK Rust](/sdks/rust)
+- [Démarrage rapide du SDK Python](/sdks/python)
+- [Démarrage rapide du SDK JavaScript](/sdks/javascript)
 
 [Baixe a fonte Kotodama](/norito-snippets/nft-flow.ko)
 

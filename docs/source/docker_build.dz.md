@@ -7,23 +7,24 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a5ac4be3d387269898112d465ec404490f67c6c2b9267c0a0781d0de70cf783d
 source_last_modified: "2025-12-29T18:16:35.951567+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docker Builder Image
+# Docker བཟོས་པའི་པར་རིས།
 
-This container is defined in `Dockerfile.build` and bundles all toolchain
-dependencies required for CI and local release builds. The image now runs as a
-non-root user by default, so Git operations continue to work with Arch Linux’s
-`libgit2` package without resorting to the global `safe.directory` workaround.
+འ་ནི་ཀོན་ཊེན་འདི་ `Dockerfile.build` ནང་ལུ་ངེས་འཛིན་འབད་དེ་ ལག་ཆས་རྒྱུན་རིམ་ཆ་མཉམ་བཱན་ཌི་འབདཝ་ཨིན།
+སི་ཨའི་དང་ས་གནས་ཀྱི་གསར་བཏོན་ལུ་དགོ་པའི་རྟེན་འབྲེལ་ཚུ་བཟོ་བསྐྲུན་འབདཝ་ཨིན། ད་ གཟུགས་བརྙན་འདི་ ༡ སྦེ་གཡོག་བཀོལཝ་ཨིན།
+རྩ་མེད་ལག་ལེན་པ་སྔོན་སྒྲིག་གིས་ཨིནམ་ལས་ གིཊི་བཀོལ་སྤྱོད་ཚུ་ ཨར་ཅིནཊི་ལི་ནགསི་གི་དང་གཅིག་ཁར་ འཕྲོ་མཐུད་དེ་རང་ ལཱ་འབད་དོ་ཡོདཔ་ཨིན།
+`libgit2` ཐུམ་སྒྲིལ་འདི་ འཛམ་གླིང་ཡོངས་ཁྱབ་ `safe.directory` གི་ལཱ་འབད་སའི་ལམ་ལུ་ བརྟེན་མ་དགོ་པར་.
 
-## Build arguments
+## རྩོད་གཞི་བསྐྲུན་པ།
 
-- `BUILDER_USER` – login name created inside the container (default: `iroha`).
-- `BUILDER_UID` – numeric user id (default: `1000`).
-- `BUILDER_GID` – primary group id (default: `1000`).
+- `BUILDER_USER` – དོས་ཁང་ནང་ལུ་གསར་བསྐྲུན་འབད་ཡོད་པའི་ནང་བསྐྱོད་མིང་ (སྔོན་སྒྲིག་: `iroha`).
+- `BUILDER_UID` – ཨང་གྲངས་ལག་ལེན་པའི་ id (སྔོན་སྒྲིག་: `1000`).
+- `BUILDER_GID` – གཞི་རིམ་སྡེ་ཚན་ཨའི་ཌི་ (སྔོན་སྒྲིག་: `1000`).
 
-When you mount the workspace from your host, pass matching UID/GID values so
-generated artifacts remain writable:
+ཁྱོད་ཀྱིས་ ཧོསིཊི་ལས་ ལཱ་གི་ས་སྒོ་འདི་ སྦྱར་བརྩེགས་འབད་བའི་སྐབས་ མཐུན་སྒྲིག་ཡོད་པའི་ ཡུ་ཨའི་ཌི་/ཇི་ཨའི་ཌི་གནས་གོང་ཚུ་ བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+བཟོ་ཡོད་པའི་ཅ་ལག་ཚུ་ བྲིས་བཏུབ་སྦེ་ལུསཔ་ཨིན།
 
 ```bash
 docker build \
@@ -34,14 +35,14 @@ docker build \
   -t iroha-builder .
 ```
 
-The toolchain directories (`/usr/local/rustup`, `/usr/local/cargo`, `/opt/poetry`)
-are owned by the configured user so Cargo, rustup, and Poetry commands remain fully
-functional once the container drops root privileges.
+ལག་ཆས་རིམ་སྒྲིག་ (`/usr/local/rustup`, `/usr/local/cargo`, `/opt/poetry`)
+རིམ་སྒྲིག་འབད་མི་ ལག་ལེན་པ་གིས་ བདག་དབང་འབདཝ་ལས་ ཀཱར་གོ་ དང་ ཟད་འགྲོའི་ དེ་ལས་ སྙན་རྩོམ་གྱི་བརྡ་བཀོད་ཚུ་ ཆ་ཚང་སྦེ་ ལུས་ཡོདཔ་ཨིན།
+སྣོད་ཐོ་འདི་ རྩ་བའི་ཐོབ་དབང་ཚུ་ བཀོདཔ་ཨིན།
 
-## Running builds
+## གཡོག་བཀོལ།
 
-Attach your workspace to `/workspace` (the container `WORKDIR`) when invoking the
-image. Example:
+ཁྱོད་རའི་ལཱ་གི་ས་སྒོ་འདི་ `/workspace` ལུ་མཉམ་སྦྲགས་འབད་ཞིནམ་ལས་ (ཀོན་ཊེན་ `WORKDIR`)
+པར། དཔེ:
 
 ```bash
 docker run --rm -it \
@@ -50,22 +51,22 @@ docker run --rm -it \
   cargo build --workspace
 ```
 
-The image keeps the `docker` group membership so nested Docker commands (e.g.
-`docker buildx bake`) remain available for CI workflows that mount the host PID
-and socket. Adjust group mappings as needed for your environment.
+གཟུགས་བརྙན་འདི་གིས་ `docker` སྡེ་ཚན་གྱི་འཐུས་འདི་ བཞགཔ་ཨིན།
+`docker buildx bake`) ཧོསིཊི་པི་ཨའི་ཌི་འདི་སྦྱར་བརྩེགས་འབད་མི་ སི་ཨའི་ལཱ་གི་རྒྱུན་རིམ་ཚུ་གི་དོན་ལུ་ འཐོབ་ཚུགསཔ་བཟོཝ་ཨིན།
+དང་ སོ་ཀེཊ་. ཁྱོད་རའི་མཐའ་འཁོར་གནས་སྟངས་ལུ་དགོཔ་དང་འཁྲིལ་ སྡེ་ཚན་སབ་ཁྲ་བཟོ་ནི་ཚུ་ བདེ་སྒྲིག་འབད།
 
-## Iroha 2 vs Iroha 3 artefacts
+## Iroha 2 vs Iroha ༣ ཅ་ཆས།
 
-The workspace now emits separate binaries per release line to avoid collisions:
-`iroha3`/`iroha3d` (default) and `iroha2`/`iroha2d` (Iroha 2). Use the helpers to
-produce the desired pair:
+ད་ལྟོ་ལཱ་གི་ས་སྒོ་འདི་གིས་ ཁ་ཐུག་རྐྱབ་ནི་ལས་འཛེམ་ནིའི་དོན་ལུ་ བཏོན་གཏང་ཐིག་རེ་ལུ་ གཉིས་ལྡན་སོ་སོ་སྦེ་བཏོནམ་ཨིན།
+`iroha3`/`iroha3d` (སྔོན་སྒྲིག་) དང་ `iroha2`/`iroha2d` (Iroha 2). གྲོགས་རམ་པ་ཚུ་ ལུ་ལག་ལེན་འཐབ།
+རེ་འདོད་བསྐྱེད་པའི་ཆ་འདི་བཏོནམ་ཨིན།
 
-- `make build` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i3`) for Iroha 3
-- `make build-i2` (or `BUILD_PROFILE=deploy bash scripts/build_line.sh --i2`) for Iroha 2
+- `make build` (ཡང་ན་ `BUILD_PROFILE=deploy bash scripts/build_line.sh --i3`) གི་དོན་ལུ་ Iroha གི་དོན་ལུ་ ༣
+- `make build-i2` (ཡང་ན་ `BUILD_PROFILE=deploy bash scripts/build_line.sh --i2`) གི་དོན་ལུ་ Iroha གི་དོན་ལུ་ ༢
 
-The selector pins the feature sets (`telemetry` + `schema-endpoint` plus the
-line-specific `build-i{2,3}` flag) so Iroha 2 builds cannot accidentally pick up
-Iroha 3-only defaults.
+སེལ་འཐུ་འབད་མི་གིས་ ཁྱད་རྣམ་ཆ་ཚན་ཚུ་ (`telemetry` + `schema-endpoint` དང་ མཉམ་བསྡོམས་འབདཝ་ཨིན།
+གྲལ་ཐིག་-དམིགས་བསལ་ `build-i{2,3}` རྒྱལ་དར་), དེ་འབདཝ་ལས་ Iroha ༢ བཟོ་བསྐྲུན་ཚུ་གིས་ གློ་བུར་དུ་ འཐུ་མི་ཚུགས།
+Iroha ༣-རྐྱངམ་གཅིག་སྔོན་སྒྲིག་ཚུ།
 
-Release bundles built via `scripts/build_release_bundle.sh` pick the correct binary
-names automatically when `--profile` is set to `iroha2` or `iroha3`.
+`scripts/build_release_bundle.sh` བརྒྱུད་དེ་བཟོ་ཡོད་པའི་ བུན་ཌི་ཚུ་ གཉིས་ལྡན་འདི་ ངེས་བདེན་ཨིན།
+`--profile` འདི་ `iroha2` ཡང་ན་ `iroha3` ལུ་གཞི་སྒྲིག་འབད་བའི་སྐབས་ རང་བཞིན་གྱིས་མིང་བཏགས།

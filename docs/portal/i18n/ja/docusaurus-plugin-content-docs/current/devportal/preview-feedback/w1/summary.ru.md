@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/summary.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-summary
-title: Сводка отзывов и закрытие W1
-sidebar_label: Сводка W1
-description: Выводы, действия и доказательства выхода для preview-волны партнеров/интеграторов Torii.
+id: プレビュー-フィードバック-w1-まとめ
+タイトル: Сводка отзывов и закрытие W1
+サイドバーラベル: Сводка W1
+説明: Выводы、действия и доказательства выхода для プレビュー - волны партнеров/интеграторов Torii.
 ---
 
-| Пункт | Детали |
+| Пункт |ださい |
 | --- | --- |
-| Волна | W1 - партнеры и интеграторы Torii |
-| Окно приглашений | 2025-04-12 -> 2025-04-26 |
+| Волна | W1 - と интеграторы Torii |
+| Окно приглазений | 2025-04-12 -> 2025-04-26 |
 | Тег артефакта | `preview-2025-04-12` |
 | Трекер | `DOCS-SORA-Preview-W1` |
-| Участники | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, gateway-ops-01 |
+| Участники | sorafs-op-01...03、torii-int-01...02、sdk-partner-01...02、gateway-ops-01 |
 
 ## Основные моменты
 
-1. **Workflow checksum** - Все reviewers проверили descriptor/archive через `scripts/preview_verify.sh`; логи сохранены рядом с подтверждениями приглашения.
-2. **Телеметрия** - Дашборды `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` оставались зелеными на протяжении всей волны; инцидентов или alert pages не было.
-3. **Feedback по docs (`docs-preview/w1`)** - Зафиксированы две небольшие правки:
-   - `docs-preview/w1 #1`: уточнить навигационную формулировку в разделе Try it (закрыто).
-   - `docs-preview/w1 #2`: обновить скриншот Try it (закрыто).
-4. **Паритет runbook** - Операторы SoraFS подтвердили, что новые cross-links между `orchestrator-ops` и `multi-source-rollout` закрыли их замечания W0.
+1. **ワークフロー チェックサム** - レビュー担当者による記述子/アーカイブ через `scripts/preview_verify.sh`; логи сохранены рядом с подтверждениями приглазения。
+2. **Телеметрия** - `docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals` を確認してください。警告ページが表示されます。
+3. **フィードバック ドキュメント (`docs-preview/w1`)** - フィードバック メッセージ:
+   - `docs-preview/w1 #1`: уточнить навигационную формулировку в разделе 試してみてください (закрыто)。
+   - `docs-preview/w1 #2`: обновить скринсот 試してみてください (закрыто)。
+4. **ランブック** - SoraFS のクロスリンク、`orchestrator-ops` および `multi-source-rollout` のリンクW0 です。
 
 ## Пункты действий
 
 | ID | Описание | Владелец | Статус |
 | --- | --- | --- | --- |
-| W1-A1 | Обновить навигационную формулировку Try it по `docs-preview/w1 #1`. | Docs-core-02 | ✅ Завершено (2025-04-18). |
-| W1-A2 | Обновить скриншот Try it по `docs-preview/w1 #2`. | Docs-core-03 | ✅ Завершено (2025-04-19). |
-| W1-A3 | Свести выводы партнеров и телеметрию в roadmap/status. | Docs/DevRel lead | ✅ Завершено (см. tracker + status.md). |
+| W1-A1 | `docs-preview/w1 #1` を試してみてください。 |ドキュメント-コア-02 | ✅ Заверøено (2025-04-18)。 |
+| W1-A2 | `docs-preview/w1 #2` を試してみてください。 |ドキュメントコア-03 | ✅Заверøено (2025-04-19)。 |
+| W1-A3 |ロードマップ/ステータスを確認します。 |ドキュメント/DevRel リード | ✅ Заверзено (см.tracker + status.md)。 |
 
 ## Итоговое резюме (2025-04-26)
 
-- Все восемь reviewers подтвердили завершение во время финальных office hours, очистили локальные артефакты и получили отзыв доступа.
-- Телеметрия оставалась зеленой до выхода; финальные snapshots приложены к `DOCS-SORA-Preview-W1`.
-- Лог приглашений обновлен подтверждениями выхода; tracker отметил W1 как 🈴 и добавил checkpoints.
-- Bundle доказательств (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) архивирован в `artifacts/docs_preview/W1/`.
+- レビュー担当者は、営業時間、営業時間、営業時間、営業時間、営業時間などを確認できます。 доступа。
+- Телеметрия оставалась зеленой до выхода;スナップショット к `DOCS-SORA-Preview-W1`。
+- Лог приглазений обновлен подтверждениями выхода;トラッカー отметил W1 как 🈴 および добавил チェックポイント。
+- バンドル (記述子、チェックサム ログ、プローブ出力、Try it プロキシ トランスクリプト、テレメトリ スクリーンショット、フィードバック ダイジェスト) `artifacts/docs_preview/W1/`。
 
-## Следующие шаги
+## Следующие заги
 
-- Подготовить план community intake W2 (governance approval + правки request template).
-- Обновить preview artefact tag для волны W2 и перезапустить preflight скрипт после финализации дат.
-- Перенести применимые выводы W1 в roadmap/status, чтобы community wave получила актуальные рекомендации.
+- コミュニティ インテーク W2 (政府の承認 + リクエスト テンプレート) を作成します。
+- W2 のアーティファクト タグをプレビューしたり、プリフライトを確認したりできます。
+- W1 のロードマップ/ステータス、コミュニティ ウェーブの情報を確認できます。

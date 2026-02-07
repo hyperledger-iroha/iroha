@@ -6,104 +6,103 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 05dc578338882ddfcdf2410b0643774ceb8212f28739ba94ac83edf087b9b5dc
 source_last_modified: "2026-01-03T18:07:59.245516+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Device Lab Reservation Procedure (AND6/AND7)
+# נוהל הזמנת מעבדת מכשירי Android (AND6/AND7)
 
-This playbook describes how the Android team books, confirms, and audits device
-lab time for milestones **AND6** (CI & compliance hardening) and **AND7**
-(observability readiness). It complements the contingency log in
-`docs/source/compliance/android/device_lab_contingency.md` by ensuring capacity
-shortfalls are avoided in the first place.
+ספר משחק זה מתאר כיצד צוות אנדרואיד מזמין, מאשר ובודק את המכשיר
+זמן מעבדה לאבני דרך **AND6** (CI והקשחת תאימות) ו**AND7**
+(מוכנות לצפייה). זה משלים את הכניסה למקריים
+`docs/source/compliance/android/device_lab_contingency.md` על ידי הבטחת קיבולת
+חוסרים נמנעים מלכתחילה.
 
-## 1. Goals & Scope
+## 1. מטרות והיקף
 
-- Keep the StrongBox + general device pools above the roadmap-mandated 80 %
-  capacity target throughout freeze windows.
-- Provide a deterministic calendar so CI, attestation sweeps, and chaos
-  rehearsals never compete for the same hardware.
-- Capture an auditable trail (requests, approvals, post-run notes) that feeds
-  the AND6 compliance checklist and the evidence log.
+- שמור את ה-StrongBox + מאגרי המכשירים הכלליים מעל 80% המחייב מפת הדרכים
+  יעד קיבולת לאורך חלונות הקפאה.
+- ספק לוח שנה דטרמיניסטי כך ש-CI, אישורים גורפים וכאוס
+  החזרות לעולם לא מתחרות על אותה חומרה.
+- לכידת שביל שניתן לביקורת (בקשות, אישורים, הערות לאחר ריצה) שמזין
+  רשימת התיוג של AND6 ויומן ההוכחות.
 
-This procedure covers the dedicated Pixel lanes, the shared fallback pool, and
-the external StrongBox lab retainer referenced in the roadmap. Ad‑hoc emulator
-usage is out of scope.
+הליך זה מכסה את נתיבי ה-Pixel הייעודיים, את הבריכה המשותפת, וכן
+שומר המעבדה החיצוני של StrongBox המוזכר במפת הדרכים. אמולטור אד-הוק
+השימוש הוא מחוץ לתחום.
 
-## 2. Reservation Windows
+## 2. הזמנות חלונות
 
-| Pool / Lane | Hardware | Default Slot Length | Booking Lead Time | Owner |
-|-------------|----------|---------------------|-------------------|-------|
-| `pixel8pro-strongbox-a` | Pixel 8 Pro (StrongBox) | 4 h | 3 business days | Hardware Lab Lead |
-| `pixel8a-ci-b` | Pixel 8a (CI general) | 2 h | 2 business days | Android Foundations TL |
-| `pixel7-fallback` | Pixel 7 shared pool | 2 h | 1 business day | Release Engineering |
-| `firebase-burst` | Firebase Test Lab smoke queue | 1 h | 1 business day | Android Foundations TL |
-| `strongbox-external` | External StrongBox lab retainer | 8 h | 7 calendar days | Program Lead |
+| בריכה / נתיב | חומרה | אורך חריץ ברירת מחדל | זמן אספקת הזמנה | בעלים |
+|-------------|--------|---------------------|------------------|-------|
+| `pixel8pro-strongbox-a` | Pixel8Pro (StrongBox) | 4 שעות | 3 ימי עסקים | מוביל מעבדת חומרה |
+| `pixel8a-ci-b` | Pixel8a (CI כללי) | 2 שעות | 2 ימי עסקים | Android Foundations TL |
+| `pixel7-fallback` | בריכה משותפת Pixel7 | 2 שעות | יום עסקים אחד | הנדסת שחרור |
+| `firebase-burst` | תור עשן של מעבדת הבדיקות של Firebase | שעה אחת | יום עסקים אחד | Android Foundations TL |
+| `strongbox-external` | מגן מעבדה StrongBox חיצוני | 8 שעות | 7 ימים קלנדריים | מוביל תוכנית |
 
-Slots are booked in UTC; overlapping reservations require explicit approval
-from the Hardware Lab Lead.
+משבצות מוזמנות ב-UTC; הזמנות חופפות דורשות אישור מפורש
+ממנהל מעבדת החומרה.
 
-## 3. Request Workflow
+## 3. בקשת זרימת עבודה
 
-1. **Prepare context**
-   - Update `docs/source/sdk/android/android_strongbox_device_matrix.md` with
-     the devices you plan to exercise and the readiness tag
+1. **הכן הקשר**
+   - עדכון `docs/source/sdk/android/android_strongbox_device_matrix.md` עם
+     המכשירים שאתה מתכנן להתאמן ותג המוכנות
      (`attestation`, `ci`, `chaos`, `partner`).
-   - Collect the latest capacity snapshot from
+   - אסוף את תמונת המצב העדכנית ביותר של הקיבולת
      `docs/source/sdk/android/android_strongbox_capture_status.md`.
-2. **Submit request**
-   - File a ticket in the `_android-device-lab` queue using the template in
-     `docs/examples/android_device_lab_request.md` (owner, dates, workloads,
-     fallback requirement).
-   - Attach any regulatory dependencies (e.g. AND6 attestation sweep, AND7
-     telemetry drill) and link to the relevant roadmap entry.
-3. **Approval**
-   - Hardware Lab Lead reviews within one business day, confirms slot in the
-     shared calendar (`Android Device Lab – Reservations`), and updates the
-     `device_lab_capacity_pct` column in
+2. **שלח בקשה**
+   - הגש כרטיס בתור `_android-device-lab` באמצעות התבנית ב
+     `docs/examples/android_device_lab_request.md` (בעלים, תאריכים, עומסי עבודה,
+     דרישת החזרה).
+   - צרף כל תלות רגולטורית (לדוגמה, סריקה של אישור AND6, AND7
+     תרגיל טלמטריה) וקישור לערך מפת הדרכים הרלוונטי.
+3. **אישור**
+   - חוות דעת של מובילי מעבדת חומרה תוך יום עסקים אחד, מאשרת חריץ ב-
+     לוח שנה משותף (`Android Device Lab – Reservations`), ומעדכן את
+     `device_lab_capacity_pct` בעמודה
      `docs/source/compliance/android/evidence_log.csv`.
-4. **Execution**
-   - Run the scheduled jobs; record Buildkite run IDs or tooling logs.
-   - Note any deviations (hardware swaps, overruns).
-5. **Closure**
-   - Comment on the ticket with artefacts/links.
-   - If the run was compliance-related, update
-     `docs/source/compliance/android/and6_compliance_checklist.md` and add a row
-     to `evidence_log.csv`.
+4. **ביצוע**
+   - הפעל את העבודות המתוזמנות; רשום מזהי ריצה של Buildkite או יומני כלים.
+   - שימו לב לכל סטיות (החלפות חומרה, חריגות).
+5. **סגירה**
+   - הגיבו על הכרטיס עם חפצים/קישורים.
+   - אם ההרצה הייתה קשורה לתאימות, עדכן
+     `docs/source/compliance/android/and6_compliance_checklist.md` והוסף שורה
+     ל-`evidence_log.csv`.
 
-Requests that impact partner demos (AND8) must cc Partner Engineering.
+בקשות שמשפיעות על הדגמות של שותפים (AND8) חייבות להיות ב-cc Partner Engineering.
 
-## 4. Change & Cancellation
+## 4. שינוי וביטול- **תזמון מחדש:** פתח מחדש את הכרטיס המקורי, הצע משבצת חדשה ועדכן את הכרטיס
+  הזנת לוח שנה. אם החריץ החדש נמצא בתוך 24 שעות, שלח ping Hardware Lab Lead + SRE
+  ישירות.
+- **ביטול חירום:** יש לפעול לפי תוכנית המגירה
+  (`device_lab_contingency.md`) ורשום את שורות ההדק/פעולה/מעקב.
+- **חריפות:** אם ריצה חורגת מהמשבצת שלה ב->15 דקות, פרסם עדכון ואשר
+  האם ניתן להמשיך בהזמנה הבאה; אחרת מסור ל-fallback
+  בריכה או נתיב פרץ של Firebase.
 
-- **Reschedule:** reopen the original ticket, propose a new slot, and update the
-  calendar entry. If the new slot is within 24 h, ping Hardware Lab Lead + SRE
-  directly.
-- **Emergency cancellation:** follow the contingency plan
-  (`device_lab_contingency.md`) and record the trigger/action/follow-up rows.
-- **Overruns:** if a run exceeds its slot by >15 min, post an update and confirm
-  whether the next reservation can proceed; otherwise hand off to the fallback
-  pool or Firebase burst lane.
+## 5. ראיות וביקורת
 
-## 5. Evidence & Auditing
+| חפץ | מיקום | הערות |
+|--------|--------|-------|
+| הזמנת כרטיסים | תור `_android-device-lab` (Jira) | ייצוא סיכום שבועי; קישור מזהי כרטיסים ביומן ראיות. |
+| ייצוא יומן | `artifacts/android/device_lab/<YYYY-WW>-calendar.{ics,json}` | הפעל `scripts/android_device_lab_export.py --ics-url <calendar_ics_feed>` בכל יום שישי; העוזר שומר את קובץ ה-`.ics` המסונן בתוספת סיכום JSON לשבוע ISO כך שביקורות יכולות לצרף את שני החפצים ללא הורדות ידניות. |
+| תמונות קיבולת | `docs/source/compliance/android/evidence_log.csv` | עדכון לאחר כל הזמנה/סגירה. |
+| הערות לאחר ריצה | `docs/source/compliance/android/device_lab_contingency.md` (במקרה חירום) או הערה לכרטיס | נדרש לביקורות. |
 
-| Artefact | Location | Notes |
-|----------|----------|-------|
-| Reservation tickets | `_android-device-lab` queue (Jira) | Export weekly summary; link ticket IDs in evidence log. |
-| Calendar export | `artifacts/android/device_lab/<YYYY-WW>-calendar.{ics,json}` | Run `scripts/android_device_lab_export.py --ics-url <calendar_ics_feed>` each Friday; the helper saves the filtered `.ics` file plus a JSON summary for the ISO week so audits can attach both artefacts without manual downloads. |
-| Capacity snapshots | `docs/source/compliance/android/evidence_log.csv` | Update after every booking/closure. |
-| Post-run notes | `docs/source/compliance/android/device_lab_contingency.md` (if contingency) or ticket comment | Required for audits. |
+במהלך סקירות תאימות רבעוניות, צרף את ייצוא היומן, סיכום הכרטיסים,
+וקטע יומן ראיות להגשת רשימת ה-AND6.
 
-During quarterly compliance reviews, attach the calendar export, ticket summary,
-and evidence log excerpt to the AND6 checklist submission.
+### אוטומציה של ייצוא יומן
 
-### Calendar export automation
-
-1. Obtain the ICS feed URL (or download a `.ics` file) for “Android Device Lab – Reservations”.
-2. Execute
+1. השג את כתובת האתר של עדכון ICS (או הורד קובץ `.ics`) עבור "מעבדת מכשירי אנדרואיד - הזמנות".
+2. בצע
 
    ```bash
    python3 scripts/android_device_lab_export.py \
@@ -111,68 +110,66 @@ and evidence log excerpt to the AND6 checklist submission.
      --week <ISO week, defaults to current>
    ```
 
-   The script writes both `artifacts/android/device_lab/<YYYY-WW>-calendar.ics`
-   and `...-calendar.json`, capturing the selected ISO week.
-3. Upload the generated files with the weekly evidence packet and reference the
-   JSON summary in `docs/source/compliance/android/evidence_log.csv` when
-   logging device-lab capacity.
+   התסריט כותב את שני `artifacts/android/device_lab/<YYYY-WW>-calendar.ics`
+   ו-`...-calendar.json`, ללכוד את שבוע ה-ISO שנבחר.
+3. העלה את הקבצים שנוצרו עם חבילת ההוכחות השבועית ועיין ב-
+   סיכום JSON ב-`docs/source/compliance/android/evidence_log.csv` כאשר
+   קיבולת מכשיר רישום-מעבדה.
 
-## 6. Escalation Ladder
+## 6. סולם הסלמה
 
-1. Hardware Lab Lead (primary)
+1. מוביל מעבדת חומרה (ראשי)
 2. Android Foundations TL
-3. Program Lead / Release Engineering (for freeze windows)
-4. External StrongBox lab contact (when retainer is invoked)
+3. הנדסת הובלת תוכנית/שחרור (עבור חלונות הקפאה)
+4. איש קשר חיצוני למעבדה StrongBox (כאשר ה-Retainer מופעל)
 
-Escalations must be logged in the ticket and mirrored in the weekly Android
-status mail.
+יש לרשום הסלמות בכרטיס ולשקף באנדרואיד השבועי
+דואר סטטוס.
 
-## 7. Related Documents
+## 7. מסמכים קשורים
 
-- `docs/source/compliance/android/device_lab_contingency.md` — incident log for
-  capacity shortfalls.
-- `docs/source/compliance/android/and6_compliance_checklist.md` — master
-  deliverables checklist.
-- `docs/source/sdk/android/android_strongbox_device_matrix.md` — hardware
-  coverage tracker.
+- `docs/source/compliance/android/device_lab_contingency.md` - יומן אירועים עבור
+  מחסור בקיבולת.
+- `docs/source/compliance/android/and6_compliance_checklist.md` - מאסטר
+  צ'ק רשימת תוצרים.
+- `docs/source/sdk/android/android_strongbox_device_matrix.md` - חומרה
+  מעקב אחר כיסוי.
 - `docs/source/sdk/android/android_strongbox_attestation_run_log.md` —
-  StrongBox attestation evidence referenced by AND6/AND7.
+  עדות אישור StrongBox שהתייחסו אליו על ידי AND6/AND7.
 
-Maintaining this reservation procedure satisfies the roadmap action item “define
-device-lab reservation procedure” and keeps partner-facing compliance artefacts
-in sync with the rest of the Android readiness plan.
+שמירה על הליך הזמנה זה עונה על פריט הפעולה של מפת הדרכים "הגדר
+הליך הזמנת מכשיר-מעבדה" ושומר על חפצי תאימות מול שותפים
+מסונכרן עם שאר תוכנית המוכנות של אנדרואיד.
 
-## 8. Failover Drill Procedure & Contacts
+## 8. נוהל תרגיל ואנשי קשר
 
-Roadmap item AND6 also requires a quarterly failover rehearsal. The full,
-step-by-step instructions live in
-`docs/source/compliance/android/device_lab_failover_runbook.md`, but the high
-level workflow is summarised below so requestors can plan drills alongside
-routine reservations.
+פריט מפת הדרכים AND6 מצריך גם חזרה רבעונית לכשל על כשל. המלא,
+הוראות שלב אחר שלב חיות
+`docs/source/compliance/android/device_lab_failover_runbook.md`, אבל הגבוה
+זרימת העבודה ברמה מסוכמת להלן כך שמבקשים יוכלו לתכנן תרגילים לצדם
+הזמנות שגרתיות.1. **תזמן את התרגיל:** חסום את הנתיבים המושפעים (`pixel8pro-strongbox-a`,
+   מאגר חילופין, `firebase-burst`, מחזיק StrongBox חיצוני) במשותף
+   לוח שנה ותור `_android-device-lab` לפחות 7 ימים לפני התרגיל.
+2. **לדמות הפסקה:** הסר את הנתיב הראשי, הפעל את ה-PagerDuty
+   (`AND6-device-lab`) תקרית, ולציין את העבודות התלויות ב-Buildkite עם
+   מזהה התרגיל המצוין בספר ההפעלה.
+3. **נכשל:** קדם את נתיב ה-Pixel7, התחל את פרץ Firebase
+   חבילה, וערב את השותף החיצוני StrongBox בתוך 6 שעות. לכידת
+   כתובות URL להרצת Buildkite, ייצוא Firebase ואישורי שמירה.
+4. **אמת ושחזר:** אימות זמני ריצה של אישור + CI, הפעל מחדש את
+   נתיבים מקוריים, ועדכון `device_lab_contingency.md` בתוספת יומן ההוכחות
+   עם נתיב החבילה + סיכומי ביקורת.
 
-1. **Schedule the drill:** Block the affected lanes (`pixel8pro-strongbox-a`,
-   fallback pool, `firebase-burst`, external StrongBox retainer) in the shared
-   calendar and `_android-device-lab` queue at least 7 days ahead of the drill.
-2. **Simulate outage:** Depool the primary lane, trigger the PagerDuty
-   (`AND6-device-lab`) incident, and annotate the dependent Buildkite jobs with
-   the drill ID noted in the runbook.
-3. **Fail over:** Promote the Pixel 7 fallback lane, initiate the Firebase burst
-   suite, and engage the external StrongBox partner within 6 hours. Capture
-   Buildkite run URLs, Firebase exports, and retainer acknowledgements.
-4. **Validate and restore:** Verify attestation + CI runtimes, reinstate the
-   original lanes, and update `device_lab_contingency.md` plus the evidence log
-   with the bundle path + checksums.
+### הפנייה ליצירת קשר והסלמה
 
-### Contact & Escalation Reference
+| תפקיד | איש קשר ראשי | ערוצים | סדר הסלמה |
+|------|----------------|----------------|----------------|
+| מוביל מעבדת חומרה | פריה רמנתן | `@android-lab` Slack · +81-3-5550-1234 | 1 |
+| Device Lab Ops | מתאו קרוז | תור `_android-device-lab` | 2 |
+| Android Foundations TL | אלנה וורובבה | `@android-foundations` Slack | 3 |
+| הנדסת שחרור | אלכסיי מורוזוב | `release-eng@iroha.org` | 4 |
+| מעבדת StrongBox חיצונית | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | 5 |
 
-| Role | Primary Contact | Channel(s) | Escalation Order |
-|------|-----------------|------------|------------------|
-| Hardware Lab Lead | Priya Ramanathan | `@android-lab` Slack · +81-3-5550-1234 | 1 |
-| Device Lab Ops | Mateo Cruz | `_android-device-lab` queue | 2 |
-| Android Foundations TL | Elena Vorobeva | `@android-foundations` Slack | 3 |
-| Release Engineering | Alexei Morozov | `release-eng@iroha.org` | 4 |
-| External StrongBox Lab | Sakura Instruments NOC | `noc@sakura.example` · +81-3-5550-9876 | 5 |
-
-Escalate sequentially if the drill uncovers blocking issues or if any fallback
-lane cannot be brought online within 30 minutes. Always record the escalation
-notes in the `_android-device-lab` ticket and mirror them in the contingency log.
+הסלמה ברצף אם המקדחה מגלה בעיות חסימה או אם יש נפילה כלשהי
+לא ניתן להעלות את הליין לאינטרנט תוך 30 דקות. רשום תמיד את ההסלמה
+הערות בכרטיס `_android-device-lab` ושיקוף אותם ביומן המגירה.

@@ -7,66 +7,67 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 624ef9305dc14d477a616923c80445094c692bc6a38d69465f679b54ccd52e92
 source_last_modified: "2025-12-29T18:16:35.940844+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Audit Success Criteria
-% Iroha Crypto Working Group
+% SM2/SM3/SM4 Аудиттің табыс критерийлері
+% Iroha крипто жұмыс тобы
 % 2026-01-30
 
-# Purpose
+#Мақсат
 
-This checklist captures the concrete criteria required for a successful
-completion of the SM2/SM3/SM4 external audit. It should be reviewed during
-kick-off, revisited at each status checkpoint, and used to confirm exit
-conditions before enabling SM signing for production validators.
+Бұл бақылау парағы сәтті өту үшін қажетті нақты критерийлерді қамтиды
+SM2/SM3/SM4 сыртқы аудитінің аяқталуы. кезінде қайта қарау керек
+басталуы, әрбір күйді бақылау пунктінде қайта қаралады және шығуды растау үшін пайдаланылады
+өндірістік валидаторлар үшін SM қол қоюды қосу алдында шарттар.
 
-# Pre-Engagement Readiness
+# Келісуге дейінгі дайындық
 
-- [ ] Contract signed, including scope, deliverables, confidentiality, and
-      remediation support language.
-- [ ] Audit team receives repository mirror access, CI artefact bucket, and
-      documentation bundle listed in `docs/source/crypto/sm_audit_brief.md`.
-- [ ] Points of contact confirmed with backups for each role
-      (crypto, IVM, platform ops, security, docs).
-- [ ] Internal stakeholders align on target release date and freeze windows.
-- [ ] SBOM export (`cargo auditable` + CycloneDX) generated and shared.
-- [ ] OpenSSL/Tongsuo build provenance package prepared
-      (source tarball hash, build script, reproducibility notes).
-- [ ] Latest deterministic test outputs captured:
-      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, and
-      Norito round-trip fixtures.
-- [ ] Torii `/v1/node/capabilities` advert (via `iroha runtime capabilities`) recorded, verifying the `crypto.sm` manifest fields and acceleration policy snapshot.
+- [ ] Келісімшартқа қол қойылды, оның ішінде көлемі, жеткізілімдері, құпиялылығы және
+      түзетуді қолдау тілі.
+- [ ] Аудит тобы репозиторийге айна қатынасын, CI артефакті шелегін және
+      `docs/source/crypto/sm_audit_brief.md` тізімінде берілген құжаттама жинағы.
+- [ ] Әрбір рөл үшін сақтық көшірмелермен расталған байланыс нүктелері
+      (крипто, IVM, платформа операциялары, қауіпсіздік, құжаттар).
+- [ ] Ішкі мүдделі тараптар мақсатты шығарылым күніне сәйкес келеді және терезелерді бекітеді.
+- [ ] SBOM экспорты (`cargo auditable` + CycloneDX) жасалған және ортақ.
+- [ ] OpenSSL/Tongsuo құрастыру шығу тегі пакеті дайындалды
+      (көзі tarball хэш, құрастыру сценарийі, қайталану туралы ескертпелер).
+- [ ] Соңғы детерминирленген сынақ нәтижелері түсірілді:
+      `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm`, және
+      Norito екі жаққа бару құрылғылары.
+- [ ] Torii `/v1/node/capabilities` жарнамасы (`iroha runtime capabilities` арқылы), `crypto.sm` манифест өрістерін және жеделдету саясатының суретін тексереді.
 
-# Engagement Execution
+# Келісімді орындау
 
-- [ ] Kick-off workshop completed with shared understanding of goals,
-      timelines, and communication cadence.
-- [ ] Weekly status reports received and triaged; risk register updated.
-- [ ] Findings communicated within one business day of discovery when severity
-      is High or Critical.
-- [ ] Audit team validates determinism paths on ≥2 CPU architectures (x86_64,
-      aarch64) with matching outputs.
-- [ ] Side-channel review includes constant-time proofs or empirical testing
-      evidence for both Rust and FFI paths.
-- [ ] Compliance and documentation review confirms operator guidance matches
-      regulatory obligations.
-- [ ] Differential testing against reference implementations (RustCrypto,
-      OpenSSL/Tongsuo) executed with auditor oversight.
-- [ ] Fuzz harnesses evaluated; new seed corpora provided where gaps exist.
+- [ ] Бастауыш семинар мақсаттарды ортақ түсінумен аяқталды,
+      уақыт кестелері және коммуникация каденциясы.
+- [ ] Апталық күй есептері алынған және триаждандырылған; тәуекелдер тізілімі жаңартылды.
+- [ ] Нәтижелер ауырлық анықталған кезде бір жұмыс күні ішінде хабарланады
+      Жоғары немесе Критикалық болып табылады.
+- [ ] Аудит тобы ≥2 CPU архитектурасында детерминизм жолдарын тексереді (x86_64,
+      aarch64) сәйкес шығыстармен.
+- [ ] Бүйірлік арна шолуы тұрақты уақыттағы дәлелдемелерді немесе эмпирикалық сынақтарды қамтиды
+      Rust және FFI жолдары үшін дәлелдер.
+- [ ] Сәйкестік пен құжаттаманы тексеру оператор нұсқауларының сәйкестігін растайды
+      реттеуші міндеттемелер.
+- [ ] Анықтамалық енгізулерге қарсы дифференциалды тестілеу (RustCrypto,
+      OpenSSL/Tongsuo) аудиторлық бақылаумен орындалды.
+- [ ] Түтіктер бағаланған; олқылықтар бар жерде жаңа тұқым корпусы қамтамасыз етіледі.
 
-# Remediation & Exit
+# Түзету және шығу
 
-- [ ] All findings categorised with severity, impact, exploitability, and
-      recommended remediation steps.
-- [ ] High/Critical issues receive patches or mitigations with auditor-approved
-      verification; residual risks documented.
-- [ ] Auditor supplies re-test validation evidencing fixed issues (diff, test
-      runs, or signed attestation).
-- [ ] Final report delivered: executive summary, detailed findings, methodology,
-      determinism verdict, compliance verdict.
-- [ ] Internal sign-off meeting concludes next steps, release adjustments,
-      and documentation updates.
-- [ ] `status.md` updated with audit outcome and outstanding remediation
-      follow-ups.
-- [ ] Post-mortem captured in `docs/source/crypto/sm_program.md` (lessons
-      learned, future hardening tasks).
+- [ ] Барлық нәтижелер ауырлық, әсер ету, пайдалану мүмкіндігі және
+      ұсынылған түзету қадамдары.
+- [ ] Жоғары/Критикалық мәселелер аудитор мақұлдаған патчтарды немесе жұмсартуды алады
+      тексеру; қалдық тәуекелдер құжатталған.
+- [ ] Аудитор бекітілген мәселелерді (айырма, сынақ
+      жұмыс істейді немесе қол қойылған аттестат).
+- [ ] Қорытынды есеп берілді: қысқаша қорытынды, егжей-тегжейлі қорытындылар, әдістеме,
+      детерминизм үкімі, сәйкестік үкімі.
+- [ ] Ішкі қол қою жиналысы келесі қадамдарды, шығару түзетулерін,
+      және құжаттама жаңартулары.
+- [ ] `status.md` аудит нәтижесімен және тамаша жөндеумен жаңартылды
+      бақылаулар.
+- [ ] Өлгеннен кейінгі `docs/source/crypto/sm_program.md` (сабақтар)
+      үйренген, болашақ шыңдауға арналған тапсырмалар).

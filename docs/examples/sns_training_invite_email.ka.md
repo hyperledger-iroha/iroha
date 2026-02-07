@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e9bf7a41f46d220502776b77d0e2cf86ba19874da9ea373ea440706e531b661
 source_last_modified: "2025-12-29T18:16:35.078745+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-Subject: [SNS Training] <suffix> cohort briefing — <date>
+თემა: [SNS Training] <სუფიქსი> კოჰორტის ბრიფინგი — <თარიღი>
 
-Hi <name/team>,
+გამარჯობა <name/team>,
 
-You are scheduled for the upcoming Sora Name Service training covering the
-<suffix> suffix launch.
+თქვენ დაგეგმილი ხართ Sora Name Service-ის მომავალ ტრენინგზე, რომელიც მოიცავს
+<სუფიქსი> სუფიქსის გაშვება.
 
-**Details**
-- **Date / Time:** <weekday, UTC offset + link to calendar invite>
-- **Duration:** 2 hours (includes labs + annex capture)
-- **Format:** Live workshop + breakout rooms
-- **Language:** <language> (simultaneous interpretation available: <yes/no>)
+** დეტალები **
+- **თარიღი / დრო: ** <კვირის დღე, UTC ოფსეტი + კალენდრის მოწვევის ბმული>
+- **ხანგრძლივობა:** 2 საათი (მოიცავს ლაბორატორიებს + დანართის გადაღებას)
+- **ფორმატი:** ცოცხალი სახელოსნო + ბრეაუტ ოთახები
+- **ენა:** <ენა> (ხელმისაწვდომია ერთდროული ინტერპრეტაცია: <დიახ/არა>)
 
-**Pre-work (30 minutes)**
-1. Read `docs/source/sns/onboarding_kit.md`.
-2. Skim the KPI walkthrough (`docs/portal/docs/sns/kpi-dashboard.md`).
-3. Install the tooling listed in `docs/source/sns/training_collateral.md#13-lab-prerequisites`.
+** წინასწარი სამუშაო (30 წუთი) **
+1. წაიკითხეთ `docs/source/sns/onboarding_kit.md`.
+2. გადახედეთ KPI-ს (`docs/portal/docs/sns/kpi-dashboard.md`).
+3. დააინსტალირეთ `docs/source/sns/training_collateral.md#13-lab-prerequisites`-ში ჩამოთვლილი ხელსაწყოები.
 
-**What to expect**
-- KPI dashboard orientation and registrar SLA review.
-- Manifest + resolver exercises with live validation.
-- Dispute drill covering guardian + council workflows.
-- KPI annex automation via `cargo xtask sns-annex`.
+** რას უნდა ველოდოთ **
+- KPI დაფის ორიენტაცია და რეგისტრატორი SLA მიმოხილვა.
+- მანიფესტი + გადამწყვეტი სავარჯიშოები ცოცხალი დადასტურებით.
+- დავის სავარჯიშო, რომელიც მოიცავს მეურვეს + საბჭოს სამუშაო პროცესებს.
+- KPI დანართის ავტომატიზაცია `cargo xtask sns-annex`-ის საშუალებით.
 
-Please confirm attendance by replying to this email or accepting the calendar
-invite. If you cannot attend, nominate a delegate and copy governance so we can
-keep the readiness log accurate.
+გთხოვთ, დაადასტუროთ დასწრება ამ ელფოსტაზე პასუხით ან კალენდრის დათანხმებით
+მოიწვიე. თუ ვერ დაესწრებით, დაასახელეთ დელეგატი და დააკოპირეთ მმართველობა, რომ ჩვენ შევძლოთ
+შეინახეთ მზადყოფნის ჟურნალი ზუსტი.
 
-Thanks,  
+მადლობა,  
 `sns-training@sora.org`

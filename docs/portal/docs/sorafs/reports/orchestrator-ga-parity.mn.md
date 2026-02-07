@@ -7,83 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a206b033b430fc9895f64d402cd53bfea35c3f269b2c18bb12a1f929114423aa
 source_last_modified: "2025-12-29T18:16:35.200252+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Orchestrator GA Parity Report
+# SoraFS Оркестрийн GA Паритын тайлан
 
-Deterministic multi-fetch parity is now tracked per SDK so release engineers can confirm that
-payload bytes, chunk receipts, provider reports, and scoreboard outcomes remain aligned across
-implementations. Every harness consumes the canonical multi-provider bundle under
-`fixtures/sorafs_orchestrator/multi_peer_parity_v1/`, which packages the SF1 plan, provider
-metadata, telemetry snapshot, and orchestrator options.
+Тодорхойлогч олон таталтын паритыг одоо SDK тус бүрээр хянаж байгаа тул хувилбарын инженерүүд үүнийг батлах боломжтой
+Ачааллын байт, хэсэгчилсэн баримт, үйлчилгээ үзүүлэгчийн тайлан, онооны самбарын үр дүнгүүд хоорондоо зэрэгцсэн хэвээр байна
+хэрэгжилт. Морь бүр дор дурдсан олон үйлчилгээ үзүүлэгчийн каноник багцыг хэрэглэдэг
+SF1 төлөвлөгөөг багцалсан `fixtures/sorafs_orchestrator/multi_peer_parity_v1/`, үйлчилгээ үзүүлэгч
+мета өгөгдөл, телеметрийн хормын хувилбар, найруулагчийн сонголтууд.
 
-## Rust Baseline
+## Зэвийн суурь
 
-- **Command:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
-- **Scope:** Runs the `MultiPeerFixture` plan twice via the in-process orchestrator, verifying
-  assembled payload bytes, chunk receipts, provider reports, and scoreboard outcomes. Instrumentation
-  also tracks peak concurrency and effective working-set size (`max_parallel × max_chunk_length`).
-- **Performance guard:** Each run must complete within 2 s on CI hardware.
-- **Working set ceiling:** With the SF1 profile the harness enforces `max_parallel = 3`, yielding a
-  ≤ 196 608 byte window.
+- **Тушаал:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
+- **Хамрах хүрээ:** `MultiPeerFixture` төлөвлөгөөг процессын найруулагчаар дамжуулан хоёр удаа ажиллуулж, баталгаажуулна.
+  цуглуулсан ачааны байт, бөөн баримт, үйлчилгээ үзүүлэгчийн тайлан, онооны самбарын үр дүн. Багаж хэрэгсэл
+  Мөн оргил үе ба үр дүнтэй ажлын багцын хэмжээг (`max_parallel × max_chunk_length`) хянадаг.
+- **Гүйцэтгэлийн хамгаалалт:** Гүйлт бүрийг CI тоног төхөөрөмж дээр 2 секундын дотор дуусгах ёстой.
+- **Ажлын тааз:** SF1 профайлтай бол бэхэлгээ нь `max_parallel = 3`-ийг хангаж,
+  ≤196608 байт цонх.
 
-Sample log output:
+Жишээ бүртгэлийн гаралт:
 
 ```
 Rust orchestrator parity: duration_ms=142.63 total_bytes=1048576 max_inflight=3 peak_reserved_bytes=196608
 ```
 
-## JavaScript SDK Harness
+## JavaScript SDK хэрэгсэл
 
-- **Command:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
-- **Scope:** Replays the same fixture via `iroha_js_host::sorafsMultiFetchLocal`, comparing payloads,
-  receipts, provider reports, and scoreboard snapshots across consecutive runs.
-- **Performance guard:** Each execution must finish within 2 s; the harness prints the measured
-  duration and reserved-byte ceiling (`max_parallel = 3`, `peak_reserved_bytes ≤ 196 608`).
+- **Тушаал:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
+- **Хамрах хүрээ:** Ачааллыг харьцуулан `iroha_js_host::sorafsMultiFetchLocal`-ээр дамжуулан ижил төхөөрөмжийг дахин тоглуулж,
+  орлого, үйлчилгээ үзүүлэгчийн тайлан, дараалсан гүйлтийн онооны самбарын агшин агшин.
+- **Гүйцэтгэлийн хамгаалалт:** Гүйцэтгэл бүр 2 секундын дотор дуусах ёстой; оосор нь хэмжсэнийг хэвлэдэг
+  үргэлжлэх хугацаа ба нөөцлөгдсөн байт тааз (`max_parallel = 3`, `peak_reserved_bytes ≤ 196 608`).
 
-Example summary line:
+Жишээ хураангуй мөр:
 
 ```
 JS orchestrator parity: duration_ms=187.42 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Swift SDK Harness
+## Swift SDK бэхэлгээ
 
-- **Command:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
-- **Scope:** Runs the parity suite defined in `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift`,
-  replaying the SF1 fixture twice through the Norito bridge (`sorafsLocalFetch`). The harness verifies
-  payload bytes, chunk receipts, provider reports, and scoreboard entries using the same deterministic
-  provider metadata and telemetry snapshots as the Rust/JS suites.
-- **Bridge bootstrap:** The harness unpacks `dist/NoritoBridge.xcframework.zip` on demand and loads
-  the macOS slice via `dlopen`. When the xcframework is missing or lacks the SoraFS bindings, it
-  falls back to `cargo build -p connect_norito_bridge --release` and links against
-  `target/release/libconnect_norito_bridge.dylib`, so no manual setup is required in CI.
-- **Performance guard:** Each execution must finish within 2 s on CI hardware; the harness prints the
-  measured duration and reserved-byte ceiling (`max_parallel = 3`, `peak_reserved_bytes ≤ 196 608`).
+- **Тушаал:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
+- **Хамрах хүрээ:** `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift`-д тодорхойлсон паритын багцыг ажиллуулна.
+  Norito (`sorafsLocalFetch`) гүүрээр SF1 бэхэлгээг хоёр удаа дахин тоглуулах. Утас нь баталгаажуулдаг
+  ижил детерминистикийг ашиглан ачааны байт, хэсэгчилсэн баримт, үйлчилгээ үзүүлэгчийн тайлан, онооны самбарын оруулгууд
+  үйлчилгээ үзүүлэгчийн мета өгөгдөл болон телеметрийн агшин зуурын зургийг Rust/JS иж бүрдэл болгон ашиглаж болно.
+- **Гүүр ачаалах оосор:** Хүсэлт болон ачааллын үед бэхэлгээ `dist/NoritoBridge.xcframework.zip`-ийг задалдаг.
+  `dlopen`-ээр дамжуулан macOS зүсмэлийг. Хэрэв xcframework байхгүй эсвэл SoraFS холболт байхгүй бол энэ нь
+  буцаж `cargo build -p connect_norito_bridge --release` руу унаж, эсрэг холбоосууд
+  `target/release/libconnect_norito_bridge.dylib` тул CI-д гараар тохируулах шаардлагагүй.
+- **Гүйцэтгэлийн хамгаалалт:** Гүйцэтгэл бүр CI техник хангамж дээр 2 секундын дотор дуусах ёстой; оосор нь хэвлэдэг
+  хэмжсэн үргэлжлэх хугацаа ба нөөцлөгдсөн байт тааз (`max_parallel = 3`, `peak_reserved_bytes ≤ 196 608`).
 
-Example summary line:
+Жишээ хураангуй мөр:
 
 ```
 Swift orchestrator parity: duration_ms=183.54 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Python Bindings Harness
+## Python холбох хэрэгсэл
 
-- **Command:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
-- **Scope:** Exercises the high-level `iroha_python.sorafs.multi_fetch_local` wrapper and its typed
-  dataclasses so the canonical fixture flows through the same API that wheel consumers call. The test
-  rebuilds the provider metadata from `providers.json`, injects the telemetry snapshot, and verifies
-  payload bytes, chunk receipts, provider reports, and scoreboard content just like the Rust/JS/Swift
-  suites.
-- **Pre-req:** Run `maturin develop --release` (or install the wheel) so `_crypto` exposes the
-  `sorafs_multi_fetch_local` binding before invoking pytest; the harness auto-skips when the binding
-  is unavailable.
-- **Performance guard:** Same ≤ 2 s budget as the Rust suite; pytest logs the assembled byte count
-  and provider participation summary for the release artefact.
+- **Тушаал:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
+- **Хамрах хүрээ:** Өндөр түвшний `iroha_python.sorafs.multi_fetch_local` боодол болон түүний бичсэн хэв маягийг дасгалжуулна
+  өгөгдлийн ангиудтай тул каноник бэхэлгээ нь дугуй хэрэглэгчдийн дууддаг API-ээр дамждаг. Туршилт
+  `providers.json`-аас үйлчилгээ үзүүлэгчийн мета өгөгдлийг дахин бүтээж, телеметрийн агшин зуурын зургийг оруулж, баталгаажуулдаг
+  Rust/JS/Swift шиг ачааны байт, хэсэгчилсэн баримт, үйлчилгээ үзүүлэгчийн тайлан, онооны самбарын контент
+  люкс.
+- **Урьдчилсан шаардлага:** `maturin develop --release`-г ажиллуул (эсвэл дугуйг суулгаарай) ингэснээр `_crypto`
+  `sorafs_multi_fetch_local` pytest-ыг дуудахын өмнө холбох; оосор нь уях үед автоматаар алгасах болно
+  боломжгүй байна.
+- **Гүйцэтгэлийн хамгаалалт:** Rust багцтай ижил ≤2s төсөв; pytest нь цуглуулсан байт тоог бүртгэдэг
+  болон олдворыг гаргах үйлчилгээ үзүүлэгчийн оролцооны хураангуй.
 
-Release gating should capture the summary output from every harness (Rust, Python, JS, Swift) so the
-archived report can diff payload receipts and metrics uniformly before promoting a build. Run
-`ci/sdk_sorafs_orchestrator.sh` to execute every parity suite (Rust, Python bindings, JS, Swift) in
-one pass; CI artifacts should attach the log excerpt from that helper plus the generated
-`matrix.md` (SDK/status/duration table) to the release ticket so reviewers can audit the parity
-matrix without rerunning the suite locally.
+Суллах хаалга нь бэхэлгээ бүрээс (Rust, Python, JS, Swift) хураангуй гаралтыг авах ёстой.
+Архивлагдсан тайлан нь бүтээцийг сурталчлахаас өмнө ачааллын баримт болон хэмжигдэхүүнийг жигд ялгаж чаддаг. Гүй
+`ci/sdk_sorafs_orchestrator.sh` нь паритет бүрийг (Rust, Python bindings, JS, Swift) гүйцэтгэхэд зориулагдсан.
+нэг дамжуулалт; CI олдворууд нь тухайн туслагчийн бүртгэлийн ишлэл дээр үүсгэгдсэн хэсгийг хавсаргах ёстой
+`matrix.md` (SDK/статус/хугацааны хүснэгт) хувилбарын тасалбар руу оруулснаар хянагчид паритетийг шалгах боломжтой
+иж бүрдлийг орон нутагт дахин ажиллуулахгүйгээр матриц.

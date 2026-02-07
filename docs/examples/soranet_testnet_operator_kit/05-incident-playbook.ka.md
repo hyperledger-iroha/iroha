@@ -7,36 +7,37 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d2fbce156952c669e73d74c13284fca317013d706ee401359028c3638341d34b
 source_last_modified: "2025-12-29T18:16:35.091815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # Brownout / Downgrade Response Playbook
 
-1. **Detect**
-   - Alert `soranet_privacy_circuit_events_total{kind="downgrade"}` fires or
-     brownout webhook triggers from governance.
-   - Confirm via `kubectl logs soranet-relay` or systemd journal within 5 mins.
+1. **გამოცნობა**
+   - გაფრთხილება `soranet_privacy_circuit_events_total{kind="downgrade"}` ხანძარი ან
+     brownout webhook იწვევს მმართველობიდან.
+   - დაადასტურეთ `kubectl logs soranet-relay` ან სისტემური ჟურნალის საშუალებით 5 წუთის განმავლობაში.
 
-2. **Stabilise**
-   - Freeze guard rotation (`relay guard-rotation disable --ttl 30m`).
-   - Enable direct-only override for affected clients
+2. **სტაბილიზაცია**
+   - გაყინვის დამცავი როტაცია (`relay guard-rotation disable --ttl 30m`).
+   - ჩართეთ მხოლოდ პირდაპირი უგულებელყოფა დაზარალებული კლიენტებისთვის
      (`sorafs fetch --transport-policy direct-only --write-mode read-only`).
-   - Capture current compliance config hash (`sha256sum compliance.toml`).
+   - გადაიღეთ მიმდინარე შესაბამისობის კონფიგურაციის ჰეში (`sha256sum compliance.toml`).
 
-3. **Diagnose**
-   - Collect latest directory snapshot and relay metrics bundle:
+3. **დიაგნოსტიკა**
+   - შეაგროვეთ დირექტორია უახლესი სნეპშოტი და სარელეო მეტრიკის ნაკრები:
      `soranet-relay support-bundle --output /tmp/bundle.tgz`.
-   - Note PoW queue depth, throttle counters, and GAR category spikes.
-   - Identify whether PQ deficit, compliance override, or relay failure caused the event.
+   - გაითვალისწინეთ PoW რიგის სიღრმე, დროსელის მრიცხველები და GAR კატეგორიის მწვერვალები.
+   - დაადგინეთ, გამოიწვია თუ არა PQ დეფიციტი, შესაბამისობის უკმარისობა ან რელეს უკმარისობა.
 
-4. **Escalate**
-   - Notify the governance bridge (`#soranet-incident`) with summary and bundle hash.
-   - Open incident ticket linking to the alert, including timestamps and mitigation steps.
+4. **ესკალაცია **
+   - შეატყობინეთ მართვის ხიდს (`#soranet-incident`) შეჯამებით და შეფუთვის ჰეშით.
+   - გახსენით ინციდენტის ბილეთი, რომელიც დაკავშირებულია გაფრთხილებასთან, მათ შორის დროის ანაბეჭდები და შემარბილებელი ნაბიჯები.
 
-5. **Recover**
-   - Once root cause addressed, re-enable rotation
-     (`relay guard-rotation enable`) and revert direct-only overrides.
-   - Monitor KPIs for 30 minutes; ensure no new brownouts appear.
+5. **აღდგენა **
+   - ძირეული მიზეზის მოგვარების შემდეგ, ხელახლა ჩართეთ როტაცია
+     (`relay guard-rotation enable`) და დააბრუნეთ მხოლოდ პირდაპირი გადაფარვები.
+   - KPI-ების მონიტორინგი 30 წუთის განმავლობაში; დარწმუნდით, რომ არ გამოჩნდეს ახალი ნაოჭები.
 
-6. **Postmortem**
-   - Submit incident report within 48 hours using governance template.
-   - Update runbooks if new failure mode discovered.
+6. **პოსტმორტმი**
+   - წარადგინეთ ინციდენტის ანგარიში 48 საათის განმავლობაში მმართველობის შაბლონის გამოყენებით.
+   - განაახლეთ runbooks, თუ აღმოჩენილია წარუმატებლობის ახალი რეჟიმი.

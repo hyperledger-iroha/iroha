@@ -4,13 +4,15 @@ direction: ltr
 source: docs/portal/docs/norito-streaming-roadmap.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: خارطة طريق Norito Streaming
+título: خارطة طريق Norito Streaming
 ---
 
-يلخص سجل الاعمال التالي بنود العمل القريبة التي يتابعها Streaming Working Group لتسليم الصوت/الفيديو في Norito. يتم تحديث القيم مع `status.md` وتشارك هنا لمستخدمي البوابة الذين يفضلون عرضا ملائما للالات.
+O Grupo de Trabalho de Streaming está disponível no Norito. Você pode usar o `status.md` para obter mais informações sobre o produto.
 
 ```json
 [

@@ -7,42 +7,44 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Ledger Walkthrough
 description: Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This walkthrough complements the [Norito quickstart](./quickstart.md) by showing
-how to mutate and inspect ledger state with the `iroha` CLI. You will register a
-new asset definition, mint some units into the default operator account, transfer
-part of the balance to another account, and verify the resulting transactions
-and holdings. Each step mirrors the flows covered in the Rust/Python/JavaScript
-SDK quickstarts so you can confirm parity between CLI and SDK behaviour.
+Bu təlimat [Norito sürətli başlanğıcı](./quickstart.md) göstərərək tamamlayır
+`iroha` CLI ilə kitab vəziyyətini necə mutasiya etmək və yoxlamaq olar. Qeydiyyatdan keçəcəksiniz a
+yeni aktiv tərifi, bəzi vahidləri standart operator hesabına köçürmək, köçürmək
+balansın bir hissəsini başqa hesaba köçürün və nəticədə aparılan əməliyyatları yoxlayın
+və holdinqlər. Hər bir addım Rust/Python/JavaScript-də əhatə olunmuş axınları əks etdirir
+CLI və SDK davranışı arasında pariteti təsdiqləmək üçün SDK sürətli işə salınır.
 
-## Prerequisites
+## İlkin şərtlər
 
-- Follow the [quickstart](./quickstart.md) to boot the single-peer network via
+- Tək-peer şəbəkəni yükləmək üçün [sürətli başlanğıc](./quickstart.md) izləyin
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Ensure `iroha` (the CLI) is built or downloaded and that you can reach the
-  peer using `defaults/client.toml`.
-- Optional helpers: `jq` (formatting JSON responses) and a POSIX shell for the
-  environment-variable snippets used below.
+- `iroha` (CLI) qurulduğundan və ya endirildiyindən və bu əlaqəni əldə edə bildiyinizdən əmin olun.
+  `defaults/client.toml` istifadə edərək peer.
+- Əlavə köməkçilər: `jq` (JSON cavablarının formatlaşdırılması) və POSIX qabığı
+  aşağıda istifadə olunan mühit dəyişən fraqmentləri.
 
-Throughout the guide, replace `$ADMIN_ACCOUNT` and `$RECEIVER_ACCOUNT` with the
-account IDs you plan to use. The defaults bundle already includes two accounts
-derived from the demo keys:
+Bələdçi boyunca `$ADMIN_ACCOUNT` və `$RECEIVER_ACCOUNT` ilə əvəz edin.
+istifadə etməyi planlaşdırdığınız hesab identifikatorları. Defolt paketə artıq iki hesab daxildir
+demo açarlarından əldə edilmişdir:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirm the values by listing the first few accounts:
+İlk bir neçə hesabı sadalayaraq dəyərləri təsdiqləyin:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspect the genesis state
+## 1. Yaranma vəziyyətini yoxlayın
 
-Start by exploring the ledger the CLI is targeting:
+CLI-nin hədəf aldığı kitabçanı araşdırmaqla başlayın:
 
 ```sh
 # Domains registered in genesis
@@ -57,26 +59,26 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-These commands rely on Norito-backed responses, so filtering and pagination are
-deterministic and match what the SDKs receive.
+Bu əmrlər Norito tərəfindən dəstəklənən cavablara əsaslanır, ona görə də filtrləmə və səhifələmə
+deterministik və SDK-ların qəbul etdiklərinə uyğundur.
 
-## 2. Register an asset definition
+## 2. Aktiv tərifini qeydiyyatdan keçirin
 
-Create a new, infinitely mintable asset called `coffee` inside the `wonderland`
-domain:
+`wonderland` daxilində `coffee` adlı yeni, sonsuz zərrəlik aktiv yaradın
+domen:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-The CLI prints the submitted transaction hash (for example,
-`0x5f…`). Save it so you can query the status later.
+CLI təqdim edilmiş əməliyyat hashını çap edir (məsələn,
+`0x5f…`). Daha sonra statusu sorğulaya bilmək üçün onu yadda saxlayın.
 
-## 3. Mint units into the operator account
+## 3. Vahidləri operator hesabına köçürün
 
-Asset quantities live under the `(asset definition, account)` pair. Mint 250
-units of `coffee#wonderland` into `$ADMIN_ACCOUNT`:
+Aktiv kəmiyyətləri `(asset definition, account)` cütü altında yaşayır. Nanə 250
+`coffee#wonderland` vahidləri `$ADMIN_ACCOUNT`-ə:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -84,14 +86,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Again, capture the transaction hash (`$MINT_HASH`) from the CLI output. To
-double-check the balance, run:
+Yenə də CLI çıxışından əməliyyat hashını (`$MINT_HASH`) əldə edin. Kimə
+balansı iki dəfə yoxlayın, qaçın:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-or, to target just the new asset:
+və ya yalnız yeni aktivi hədəfləmək üçün:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -99,9 +101,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfer part of the balance to another account
+## 4. Balansın bir hissəsini başqa hesaba köçürün
 
-Move 50 units from the operator account to `$RECEIVER_ACCOUNT`:
+Operator hesabından 50 vahidi `$RECEIVER_ACCOUNT`-ə köçürün:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -110,8 +112,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Save the transaction hash as `$TRANSFER_HASH`. Query the holdings on both
-accounts to verify the new balances:
+Əməliyyat hashini `$TRANSFER_HASH` olaraq saxlayın. Hər ikisinin holdinqlərini sorğulayın
+yeni qalıqları yoxlamaq üçün hesablar:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -121,35 +123,35 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verify ledger evidence
+## 5. Kitab dəlillərini yoxlayın
 
-Use the saved hashes to confirm that both transactions committed:
+Hər iki əməliyyatın həyata keçirildiyini təsdiqləmək üçün yadda saxlanan heşlərdən istifadə edin:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-You can also stream recent blocks to see which block included the transfer:
+Siz həmçinin hansı blokun transferin daxil olduğunu görmək üçün son blokları yayımlaya bilərsiniz:
 
 ```sh
 # Stream from the latest block and stop after ~5 seconds
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Every command above uses the same Norito payloads as the SDKs. If you replicate
-this flow via code (see the SDK quickstarts below), the hashes and balances will
-line up as long as you target the same network and defaults.
+Yuxarıdakı hər bir əmr SDK-lar kimi eyni Norito faydalı yüklərdən istifadə edir. Təkrar etsəniz
+kod vasitəsilə bu axın (aşağıdakı SDK sürətli başlanğıclarına baxın), hashlar və balanslar olacaq
+eyni şəbəkə və defoltları hədəflədiyiniz müddətcə sıraya düzün.
 
-## SDK parity links
+## SDK paritet keçidləri
 
-- [Rust SDK quickstart](../sdks/rust) — demonstrates registering instructions,
-  submitting transactions, and polling status from Rust.
-- [Python SDK quickstart](../sdks/python) — shows the same register/mint
-  operations with Norito-backed JSON helpers.
-- [JavaScript SDK quickstart](../sdks/javascript) — covers Torii requests,
-  governance helpers, and typed query wrappers.
+- [Rust SDK quickstart](../sdks/rust) — qeydiyyat təlimatlarını nümayiş etdirir,
+  əməliyyatların təqdim edilməsi və Rustdan sorğu statusu.
+- [Python SDK sürətli başlanğıc](../sdks/python) — eyni registr/nanəni göstərir
+  Norito dəstəkli JSON köməkçiləri ilə əməliyyatlar.
+- [JavaScript SDK sürətli başlanğıc](../sdks/javascript) — Torii sorğularını əhatə edir,
+  idarəetmə köməkçiləri və çap edilmiş sorğu sarğıları.
 
-Run the CLI walkthrough first, then repeat the scenario with your preferred SDK
-to make sure both surfaces agree on transaction hashes, balances, and query
-outputs.
+Əvvəlcə CLI prospektini işə salın, sonra seçim etdiyiniz SDK ilə ssenarini təkrarlayın
+hər iki səthin əməliyyat hashləri, balanslar və sorğu ilə razılaşdığından əmin olmaq
+çıxışlar.

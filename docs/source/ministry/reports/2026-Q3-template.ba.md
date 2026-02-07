@@ -10,6 +10,7 @@ translation_last_reviewed: 2026-02-07
 title: Ministry Transparency Report — 2026 Q3 (Template)
 summary: Scaffold for the MINFO-8 quarterly transparency packet; replace all tokens before publication.
 quarter: 2026-Q3
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -19,126 +20,124 @@ quarter: 2026-Q3
     3. Attach supporting artefacts (data appendix, CSVs, manifest, Grafana export) under artifacts/ministry/transparency/<YYYY-Q>/.
 -->
 
-# Executive Summary
+# Башҡарма резюме
 
-> Provide a one-paragraph summary of moderation accuracy, appeal outcomes, denylist churn, and treasury highlights. Mention whether release met the T+14 deadline.
+> Бер абзац йыйылмаһын тәьмин итеү өсөн самалылыҡ теүәллеге, апелляция һөҙөмтәләре, денилист churn, һәм ҡаҙна өҫтөнлөктәре. Һөйләү, тип, релиз тура килде, Т+14 срогы.
 
-## Quarter in Review
+## Квартал тикшерелгән
 
-### Highlights
-- {{HIGHLIGHT_1}}
-- {{HIGHLIGHT_2}}
-- {{HIGHLIGHT_3}}
+###
+- {{HIGHT_1}}.
+- {{HIGHT_2}}.
+- {{HIGHT_3}}.
 
-### Risks & Mitigations
+### Хәүефтәр һәм йомшартыуҙар
 
-| Risk | Impact | Mitigation | Owner | Status |
-|------|--------|------------|-------|--------|
-| {{RISK_1}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
-| {{RISK_2}} | {{Impact}} | {{Mitigation}} | {{Owner}} | {{Status}} |
+| Хәүеф | Һөҙөмтә | Йомшартыу | Хужа | Статус |
+|-----|--------|-------------|-------|---------|
+| {{RISK_1}} | {{Имп. | {{Йәһәтләү}} | {{Хужа}} | {{Статус}} |
+| {{RISK_2}} | {{Имп. | {{Йәһәтләү}} | {{Хужа}} | {{Статус}} |
 
-## Metrics Overview
+## Метрика
 
-All metrics originate from `ministry_transparency_builder` (Norito bundle) after the DP sanitizer runs. Attach corresponding CSV slices referenced below.
+Бөтә метрикалар ҙа DP дезинфекциялаусы йүгергәндән һуң `ministry_transparency_builder` (Norito өйөмө) башлана. Беркетергә тейешле CSV киҫәктәре түбәндә һылтанма.
 
-### AI Moderation Accuracy
+### AI Модерацияның теүәллеге
 
-| Model Profile | Region | FP Rate (Target) | FN Rate (Target) | Drift vs Calibration | Sample Size | Notes |
-|---------------|--------|------------------|------------------|----------------------|-------------|-------|
-| {{profile}} | {{region}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{samples}} | {{notes}} |
+| Модель профиле | Төбәк | FP ставкаһы (Маҡсат) | FN ставкаһы (Маҡсат) | Дрейф vs Калибровка | Өлгө ҙурлығы | Иҫкәрмәләр |
+|--------------------------------------------------------------------------ент-------------------------------|
+| {{профил}} | {{район}} | {{fp_rate}} ({{fp_target}}) | {{fn_rate}} ({{fn_target}}) | {{drift}} | {{үлсәмдәр}} | {{иҫкәрмәләр}} |
 
-### Appeals & Panel Activity
+### Апелляция & Панель эшмәкәрлеге
 
-| Metric | Value | SLA Target | Trend vs Q-1 | Notes |
-|--------|-------|------------|--------------|-------|
-| Appeals received | {{appeals_received}} | {{sla}} | {{delta}} | {{notes}} |
-| Median resolution time | {{median_resolution}} | {{sla}} | {{delta}} | {{notes}} |
-| Reversal rate | {{reversal_rate}} | {{target}} | {{delta}} | {{notes}} |
-| Panel utilization | {{panel_utilization}} | {{target}} | {{delta}} | {{notes}} |
+| Метрика | Ҡиммәте | СЛА Маҡсат | Тренд vs Q-1 | Иҫкәрмәләр |
+|-------|-------|--------------|--------------|--------|
+| Апелляциялар алынған | {{апелляциялар_ҡабул ителгән}} | {{sla}} | {{Delta}} | {{иҫкәрмәләр}} |
+| Медиана хәл итеү ваҡыты | {{медиана_сиселеш}} | {{sla}} | {{Delta}} | {{иҫкәрмәләр}} |
+| Кире ставка | {{reversal_rate}} | {{маҡсат}} | {{Delta}} | {{иҫкәрмәләр}} |
+| Панель утилләштереү | {{панел_утилизация}} | {{маҡсат}} | {{Delta}} | {{иҫкәрмәләр}} |
 
-### Denylist & Emergency Canon
+### Эндолляция & Ғәҙәттән тыш канон
 
-| Metric | Count | DP Noise (ε) | Emergency Flags | TTL Compliance | Notes |
-|--------|-------|--------------|-----------------|----------------|-------|
-| Hash additions | {{additions}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Hash removals | {{removals}} | {{epsilon_counts}} | {{flags}} | {{ttl_status}} | {{notes}} |
-| Canon invocations | {{canon_invocations}} | n/a | {{flags}} | {{ttl_status}} | {{notes}} |
+| Метрика | Иҫәп | DP Тауыш (ε) | Ғәҙәттән тыш хәлдәр флагтары | TTL үтәү | Иҫкәрмәләр |
+|----------------|-----------------------------------------------|----------||
+| Хэш өҫтәмәләр | {{өҫтәүҙәр}} | {{epsilon_bounds}} | {{flags}} | {{ttl_status}} | {{иҫкәрмәләр}} |
+| Хэш алыуҙар | {{ремотаждар}} | {{epsilon_bounds}} | {{flags}} | {{ttl_status}} | {{иҫкәрмәләр}} |
+| Канон саҡырыуҙары | {{canon_ саҡырыуҙар}} | н/а | {{flags}} | {{ttl_status}} | {{иҫкәрмәләр}} |
 
-### Treasury Movements
+### ҡаҙна хәрәкәте
 
-| Flow | Amount (MINFO) | Source Reference | Notes |
-|------|----------------|------------------|-------|
-| Appeal deposits | {{amount}} | {{tx_ref}} | {{notes}} |
-| Panel rewards | {{amount}} | {{tx_ref}} | {{notes}} |
-| Operational spend | {{amount}} | {{tx_ref}} | {{notes}} |
+| Ағым | Күләм (МИНФО) | Сығанаҡ белешмә | Иҫкәрмәләр |
+|-----|----------------|----------------|--------|
+| Апелляция ятҡылыҡтары | {{smount}} | {{tx_ref}} | {{иҫкәрмәләр}} |
+| Панель бүләктәр | {{smount}} | {{tx_ref}} | {{иҫкәрмәләр}} |
+| Оператив сарыф | {{smount}} | {{tx_ref}} | {{иҫкәрмәләр}} |
 
-### Volunteer & Outreach Signals
+### ирекмән & Аутрич сигналдар
 
-| Metric | Value | Target | Notes |
-|--------|-------|--------|-------|
-| Volunteer briefs published | {{value}} | {{target}} | {{notes}} |
-| Languages covered | {{value}} | {{target}} | {{notes}} |
-| Governance workshops hosted | {{value}} | {{target}} | {{notes}} |
+| Метрика | Ҡиммәте | Маҡсат | Иҫкәрмәләр |
+|-------|--------|---------|-------|
+| Ирекмәндәр трусик баҫылып сыҡты | {{ҡиммәт}} | {{маҡсат}} | {{иҫкәрмәләр}} |
+| Телдәр ҡапланған | {{ҡиммәт}} | {{маҡсат}} | {{иҫкәрмәләр}} |
+| Идара итеү оҫтаханалары ҡабул ителде | {{ҡиммәт}} | {{маҡсат}} | {{иҫкәрмәләр}} |
 
-## Differential Privacy & Sanitization
+## Дифференциаль хосуси һәм санитария
 
-Summarise the sanitizer run and include the RNG commitment.
+Йәмғеһе дезинфекциялаусы йүгерә һәм RNG йөкләмәһен үҙ эсенә ала.
 
-- Sanitizer job: `{{CI_JOB_URL}}`
-- DP parameters: ε = {{epsilon_total}}, δ = {{delta_total}}
-- RNG commitment: `{{blake3_seed_commitment}}`
-- Buckets suppressed: {{suppressed_buckets}}
-- QA reviewer: {{reviewer}}
+- Сантизер эше: `{{CI_JOB_URL}}`
+- DP параметрҙары: ε={{epsilon_tatal}}}, δ={delta_tatal}}.
+- RNG йөкләмәһе: `{{blake3_seed_commitment}}`
+- Биҙрәләр баҫтырылған: {{баҫылған_күкәттәр}}.
+- QA рецензент: {{рецензиялаусы}}.
 
-Attach `artifacts/ministry/transparency/{{Quarter}}/dp_report.json` and note any manual interventions.
+`artifacts/ministry/transparency/{{Quarter}}/dp_report.json` беркетергә һәм ҡул менән ҡыҫылыуҙы билдәләгеҙ.## Мәғлүмәт беркетмәләре
 
-## Data Attachments
+| Артефакт | Юл | SHA-256 | SoraFS тейәлгән? | Иҫкәрмәләр |
+|--------|-------|-------------------------------|-------- |
+| Йәмғеһе PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Эйе/Юҡ} | {{иҫкәрмәләр}} |
+| Norito мәғлүмәт ҡушымтаһы | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Эйе/Юҡ} | {{иҫкәрмәләр}} |
+| Метрика CSV өйөм | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Эйе/Юҡ} | {{иҫкәрмәләр}} |
+| Grafana экспорты | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Эйе/Юҡ} | {{иҫкәрмәләр}} |
+| Иҫкәртергә ҡағиҙәләр | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Эйе/Юҡ} | {{иҫкәрмәләр}} |
+| Провенанс манифест | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Эйе/Юҡ} | {{иҫкәрмәләр}} |
+| Манифест ҡултамғаһы | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Эйе/Юҡ} | {{иҫкәрмәләр}} |
 
-| Artefact | Path | SHA-256 | Uploaded to SoraFS? | Notes |
-|----------|------|---------|---------------------|-------|
-| Summary PDF | `artifacts/ministry/transparency/{{Quarter}}/summary.pdf` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Norito data appendix | `artifacts/ministry/transparency/{{Quarter}}/data/appendix.norito` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Metrics CSV bundle | `artifacts/ministry/transparency/{{Quarter}}/data/csv/` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Grafana export | `dashboards/grafana/ministry_transparency_overview.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Alert rules | `dashboards/alerts/ministry_transparency_rules.yml` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Provenance manifest | `artifacts/ministry/transparency/{{Quarter}}/manifest.json` | {{hash}} | {{Yes/No}} | {{notes}} |
-| Manifest signature | `artifacts/ministry/transparency/{{Quarter}}/manifest.json.sig` | {{hash}} | {{Yes/No}} | {{notes}} |
+## Баҫма метамағлүмәттәре
 
-## Publication Metadata
-
-| Field | Value |
-|-------|-------|
-| Release quarter | {{Quarter}} |
-| Release timestamp (UTC) | {{timestamp}} |
+| Ялан | Ҡиммәте |
+|------|-------|
+| Квартал сығарыу | {{Квартал}} |
+| Ваҡыт тамғаһы сығарыу (UTC) | {{ваҡыт тамғаһы}} |
 | SoraFS CID | `{{cid}}` |
-| Governance vote ID | {{vote_id}} |
-| Manifest digest (`blake2b`) | `{{manifest_digest}}` |
-| Git commit / tag | `{{git_rev}}` |
-| Release owner | {{owner}} |
+| Идара итеү тауыш биреүҙең идентификаторы | {{vote_id}} |
+| Манифест disist (`blake2b`) | `{{manifest_digest}}` |
+| Гит йөкләмә / тег | `{{git_rev}}` |
+| Хужаһын сығарыу | {{хужа}} |
 
-## Approvals
+## раҫлауҙар
 
-| Role | Name | Decision | Timestamp | Notes |
-|------|------|----------|-----------|-------|
-| Ministry Observability TL | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Governance Council Liaison | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
-| Docs/Comms Lead | {{name}} | ✅/⚠️ | {{timestamp}} | {{notes}} |
+| Роль | Исем | Ҡарар | Ваҡыт тамғаһы | Иҫкәрмәләр |
+|-----|-----|-----------|-----------|--------|
+| Министрлыҡ күҙәтеүсәнлеге TL | {{name}} | ✅/⚠️ | {{ваҡыт тамғаһы}} | {{иҫкәрмәләр}} |
+| Идара итеү советы бәйләнеше | {{name}} | ✅/⚠️ | {{ваҡыт тамғаһы}} | {{иҫкәрмәләр}} |
+| Доктар/Коммдар ҡурғаш | {{name}} | ✅/⚠️ | {{ваҡыт тамғаһы}} | {{иҫкәрмәләр}} |
 
-## Changelog & Follow-Ups
+## Үҙгәрештәр һәм эйәртеү-өҫтөндә
 
-- {{CHANGELOG_ITEM_1}}
-- {{CHANGELOG_ITEM_2}}
+- {{ХАНЖЕЛОГ_ITEM_11}}.
+- {{CHANGELOG_ITEM_2}}.
 
-### Open Action Items
+### Асыҡ әйберҙәр әйберҙәре
 
-| Item | Owner | Due | Status | Notes |
-|------|-------|-----|--------|-------|
-| {{Action}} | {{Owner}} | {{Due}} | {{Status}} | {{Notes}} |
+| Элемент | Хужа | Ауыр | Статус | Иҫкәрмәләр |
+|-----|------|------|---------|-------|
+| {{Эш}} | {{Хужа}} | {{Due}} | {{Статус}} | {{Иҫкәрмәләр}} |
 
-### Contact
+### Контакт
 
-- Primary contact: {{contact_name}} (`{{chat_handle}}`)
-- Escalation path: {{escalation_details}}
-- Distribution list: {{mailing_list}}
+- Беренсел бәйләнеш: {{contact_name}} (`{{chat_handle}}`)
+- Эскалация юлы: {{escalation_details}}.
+- Таратыу исемлеге: {{ pailing_list}}.
 
-_Template version: 2026-03-25. Update the revision date when making structural changes._
+_Ҡалып версияһы: 2026-03-25. Яңыртыу ҡабатлау көнө структур үҙгәрештәр индереү._

@@ -4,29 +4,31 @@ direction: rtl
 source: docs/portal/docs/sorafs/orchestrator-ops.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-ops
-title: Runbook de operaciones del orquestador de SoraFS
-sidebar_label: Runbook del orquestador
-description: Guía operativa paso a paso para desplegar, supervisar y revertir el orquestador multi-origen.
+المعرف: عمليات الأوركسترا
+العنوان: Runbook de Operations del orquestador de SoraFS
+Sidebar_label: Runbook del orquestador
+الوصف: دليل التشغيل خطوة بخطوة للانطلاق والإشراف وإرجاع المُنسق متعدد الأصول.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Mantén ambas copias sincronizadas hasta que el conjunto de documentación Sphinx heredado se haya migrado por completo.
+:::ملاحظة فوينتي كانونيكا
+هذه الصفحة تعكس `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. حافظ على النسخ المتزامنة حتى يتم ترحيل مجموعة وثائق أبو الهول الموروثة بالكامل.
 :::
 
-Este runbook guía a los SRE en la preparación, el despliegue y la operación del orquestador de fetch multi-origen. Complementa la guía de desarrollo con procedimientos ajustados a despliegues de producción, incluida la habilitación por etapas y el bloqueo de peers.
+دليل التشغيل هذا هو دليل SRE للتحضير والتنفيذ وعملية الجلب المتعددة المصادر. أكمل دليل التطوير بإجراءات معدلة بعد الإنتاج، بما في ذلك القدرة على الخطوات وحظر الأقران.
 
-> **Ver también:** El [Runbook de despliegue multi-origen](./multi-source-rollout.md) se centra en oleadas de despliegue a nivel de flota y en la denegación de proveedores en emergencias. Consúltalo para la coordinación de gobernanza / staging mientras usas este documento para las operaciones diarias del orquestador.
+> **العرض أيضًا:** يقع [Runbook of Despliegue multiorigen](./multi-source-rollout.md) في وسط سفن النشر على مستوى الأسطول وفي انتهاك الموردين في حالات الطوارئ. استشارة حول تنسيق الإدارة / التدريج أثناء استخدام هذا المستند الخاص بعمليات يوميات المنسق.
 
-## 1. Lista de verificación previa
+## 1. قائمة التحقق المسبقة
 
-1. **Recopilar entradas de proveedores**
-   - Los últimos anuncios de proveedores (`ProviderAdvertV1`) y la instantánea de telemetría de la flota objetivo.
-   - El plan de payload (`plan.json`) derivado del manifiesto bajo prueba.
-2. **Generar un scoreboard determinista**
+1. **استعادة مدخلات الموردين**
+   - آخر إعلانات الموردين (`ProviderAdvertV1`) والقياس الفوري لهدف الأسطول.
+   - خطة الحمولة (`plan.json`) مشتقة من البيان التجريبي المنخفض.
+2. **إنشاء تحديد لوحة النتائج**
 
    ```bash
    sorafs_fetch \
@@ -37,32 +39,28 @@ Este runbook guía a los SRE en la preparación, el despliegue y la operación d
      --provider gamma=fixtures/provider-gamma.bin \
      --scoreboard-out artifacts/scoreboard.json \
      --json-out artifacts/session.summary.json
-   ```
+   ```- التحقق من أن `artifacts/scoreboard.json` يدرج كل منتج إنتاج مثل `eligible`.
+   - أرشيف JSON للاستئناف بجوار لوحة النتائج؛ سيطلب المدققون من محاسبي قطع الغيار أن يشهدوا طلب التغيير.
+3. **Dry-run with Installations** — قم بتنفيذ نفس الأمر ضد التركيبات العامة في `docs/examples/sorafs_ci_sample/` لضمان تزامن البرنامج الثنائي مع الإصدار المتوقع قبل تحميل حمولة الإنتاج.
 
-   - Valida que `artifacts/scoreboard.json` liste a cada proveedor de producción como `eligible`.
-   - Archiva el JSON de resumen junto al scoreboard; los auditores se apoyan en los contadores de reintentos de chunks al certificar la solicitud de cambio.
-3. **Dry-run con fixtures** — Ejecuta el mismo comando contra los fixtures públicos en `docs/examples/sorafs_ci_sample/` para garantizar que el binario del orquestador coincide con la versión esperada antes de tocar payloads de producción.
+## 2. إجراءات التخلص من المخلفات1. **إيتابا كناريا (<2 مستوردين)**
+   - أعد بناء لوحة النتائج وقم بتشغيل `--max-peers=2` لتقييد الأوركستراد بمجموعة فرعية صغيرة.
+   - الإشراف:
+     -`sorafs_orchestrator_active_fetches`
+     -`sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
+     -`sorafs_orchestrator_retries_total`
+   - استمر في حين يتم الحفاظ على عمليات إعادة الإيداع بتخفيض 1% لجلب البيان بالكامل ولن يتراكم أي فشل في الموفر.
+2. ** إتابا دي رامبا (50% من الموردين) **
+   - قم بزيادة `--max-peers` وقم بالتنفيذ بلحظة قياس عن بعد حديثة.
+   - استمر في التشغيل كل مرة باستخدام `--provider-metrics-out` و`--chunk-receipts-out`. احتفظ بالمصنوعات اليدوية لمدة تزيد عن 7 أيام.
+3. **الشرح كامل**
+   - قم بإزالة `--max-peers` (أو قم بتكوين القائمة الكاملة للمؤهلات).
+   - تمكين وضع المنسق على العملاء: توزيع لوحة النتائج المستمرة وتكوين JSON عبر نظام إدارة التكوين.
+   - تحديث لوحات المعلومات لعرض `sorafs_orchestrator_fetch_duration_ms` p95/p99 والمخططات التكرارية لكل منطقة.
 
-## 2. Procedimiento de despliegue por etapas
+## 3. حظر واستعادة الأقران
 
-1. **Etapa canaria (≤2 proveedores)**
-   - Reconstruye el scoreboard y ejecuta con `--max-peers=2` para limitar el orquestador a un subconjunto pequeño.
-   - Supervisa:
-     - `sorafs_orchestrator_active_fetches`
-     - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
-     - `sorafs_orchestrator_retries_total`
-   - Continúa cuando las tasas de reintentos se mantengan por debajo del 1% para un fetch completo del manifiesto y ningún proveedor acumule fallos.
-2. **Etapa de rampa (50% de proveedores)**
-   - Incrementa `--max-peers` y vuelve a ejecutar con una instantánea de telemetría reciente.
-   - Persiste cada ejecución con `--provider-metrics-out` y `--chunk-receipts-out`. Conserva los artefactos durante ≥7 días.
-3. **Despliegue completo**
-   - Elimina `--max-peers` (o configúralo al recuento completo de elegibles).
-   - Habilita el modo orquestador en los despliegues cliente: distribuye el scoreboard persistido y el JSON de configuración mediante tu sistema de gestión de configuración.
-   - Actualiza los dashboards para mostrar `sorafs_orchestrator_fetch_duration_ms` p95/p99 y los histogramas de reintentos por región.
-
-## 3. Bloqueo y refuerzo de peers
-
-Usa las anulaciones de la política de puntuación del CLI para clasificar proveedores no saludables sin esperar actualizaciones de gobernanza.
+استخدم عبارات التنقيط السياسية لـ CLI لتصنيف الموردين دون أن تكون جديرة بالثناء دون توقع تحديثات الإدارة.
 
 ```bash
 sorafs_fetch \
@@ -74,36 +72,32 @@ sorafs_fetch \
   --deny-provider=beta \
   --boost-provider=gamma=5 \
   --json-out artifacts/override.summary.json
-```
+```- `--deny-provider` يزيل الاسم المستعار المشار إليه في الجلسة الفعلية.
+- `--boost-provider=<alias>=<weight>` يعمل على زيادة سعر جهاز التخطيط. يتم تطبيع القيم في لوحة النتائج ويتم تطبيقها فقط على التنفيذ المحلي.
+- سجل الإلغاءات في تذكرة الحادث وأضف ملفات JSON حتى يتمكن الفريق المسؤول من تسوية الحالة بمجرد حل المشكلة الفرعية.
 
-- `--deny-provider` elimina el alias indicado de la consideración en la sesión actual.
-- `--boost-provider=<alias>=<weight>` aumenta el peso del planificador del proveedor. Los valores se suman al peso normalizado del scoreboard y solo se aplican a la ejecución local.
-- Registra las anulaciones en el ticket de incidente y adjunta las salidas JSON para que el equipo responsable pueda reconciliar el estado una vez que se corrija el problema subyacente.
+للتغييرات الدائمة، قم بتعديل القياس عن بعد الأصلي (علامة المخالفة كعقوبة) أو تحديث الإعلان بافتراضات التدفق المحدثة قبل تنظيف مخالفات CLI.
 
-Para cambios permanentes, modifica la telemetría de origen (marca al infractor como penalizado) o actualiza el anuncio con presupuestos de flujo actualizados antes de limpiar las anulaciones del CLI.
+## 4. تشخيص السقوط
 
-## 4. Diagnóstico de fallos
+Cuando un fetch Falla:
 
-Cuando un fetch falla:
+1. التقط العناصر التالية قبل تشغيلها:
+   -`scoreboard.json`
+   -`session.summary.json`
+   -`chunk_receipts.json`
+   -`provider_metrics.json`
+2. فحص `session.summary.json` لرؤية سلسلة الأخطاء المقروءة:
+   - `no providers were supplied` → التحقق من تعليمات الموردين والإعلانات.
+   - `retry budget exhausted ...` → الزيادة `--retry-budget` أو إزالة الأقران غير المستقرة.
+   - `no compatible providers available ...` → قم بمراجعة معلومات السعة لنطاق مرتكب المخالفة.
+3. قم بربط اسم المورّد بـ `sorafs_orchestrator_provider_failures_total` وأنشئ تذكرة تسلسل في حالة اختلاف المقياس.
+4. قم بإعادة إنتاج الحصول على `--scoreboard-json` بدون اتصال والقياس عن بعد الذي تم التقاطه لإعادة إنتاج شكل التحديد.## 5. الرجوع
 
-1. Captura los siguientes artefactos antes de volver a ejecutar:
-   - `scoreboard.json`
-   - `session.summary.json`
-   - `chunk_receipts.json`
-   - `provider_metrics.json`
-2. Inspecciona `session.summary.json` para ver la cadena de error legible:
-   - `no providers were supplied` → verifica las rutas de los proveedores y los anuncios.
-   - `retry budget exhausted ...` → incrementa `--retry-budget` o elimina peers inestables.
-   - `no compatible providers available ...` → audita la metainformación de capacidad de rango del proveedor infractor.
-3. Correlaciona el nombre del proveedor con `sorafs_orchestrator_provider_failures_total` y crea un ticket de seguimiento si la métrica se dispara.
-4. Reproduce la obtención sin conexión con `--scoreboard-json` y la telemetría capturada para reproducir el fallo de forma determinista.
+للرجوع إلى لعبة orquestador:
 
-## 5. Reversión
+1. قم بتوزيع التكوين الذي تم تعيينه `--max-peers=1` (إلغاء تمكين التخطيط متعدد المصادر) أو قم بتوجيه العملاء إلى طريق جلب الموروثات من مصدر واحد فقط.
+2. قم بإزالة أي إلغاء `--boost-provider` حتى تصبح لوحة النتائج بيزو محايد.
+3. استمر في جمع مقاييس الأوركيستادور لمدة أقل من يوم للتأكد من عدم جلب أي طائر بالطائرة.
 
-Para revertir un despliegue del orquestador:
-
-1. Distribuye una configuración que establezca `--max-peers=1` (deshabilita de hecho la planificación multi-origen) o vuelve a los clientes a la ruta de fetch heredada de un solo origen.
-2. Elimina cualquier anulación `--boost-provider` para que el scoreboard vuelva a un peso neutral.
-3. Continúa recolectando las métricas del orquestador durante al menos un día para confirmar que no queden fetches en vuelo.
-
-Mantener una captura disciplinada de artefactos y despliegues por etapas garantiza que el orquestador multi-origen pueda operarse de forma segura en flotas heterogéneas de proveedores mientras se mantienen los requisitos de observabilidad y auditoría.
+حافظ على لقطة منضبطة للمصنوعات اليدوية والسفن من خلال ضمان أن المنسق متعدد الأصول يمكنه العمل بشكل آمن في أساطيل الموردين غير المتجانسة مع الحفاظ على متطلبات المراقبة والاستماع.

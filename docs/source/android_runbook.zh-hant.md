@@ -7,321 +7,308 @@ generator: scripts/sync_docs_i18n.py
 source_hash: da7119ab99121dbcfc268f5406f43b16ac9149cef6500a45c6717ad16c02ab80
 source_last_modified: "2026-01-28T15:38:09.507154+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android SDK Operations Runbook
+# Android SDK 操作手冊
 
-This runbook supports operators and support engineers managing Android SDK
-deployments for AND7 and beyond. Pair with the Android Support Playbook for SLA
-definitions and escalation paths.
+此運行手冊支持操作員和支持工程師管理 Android SDK
+AND7 及更高版本的部署。與 SLA 的 Android 支持手冊配對
+定義和升級路徑。
 
-> **Note:** When updating incident procedures, also refresh the shared
-> troubleshooting matrix (`docs/source/sdk/android/troubleshooting.md`) so the
-> scenario table, SLAs, and telemetry references stay aligned with this runbook.
+> **注意：** 更新事件過程時，同時刷新共享的
+> 故障排除矩陣 (`docs/source/sdk/android/troubleshooting.md`)
+> 場景表、SLA 和遙測參考與本運行手冊保持一致。
 
-## 0. Quickstart (when pagers fire)
+## 0. 快速入門（尋呼機觸發時）
 
-Keep this sequence handy for Sev 1/Sev 2 alerts before diving into the detailed
-sections below:
+在深入了解詳細信息之前，請將此序列放在方便的 Sev1/Sev2 警報中
+以下部分：
 
-1. **Confirm the active config:** Capture the `ClientConfig` manifest checksum
-   emitted at app startup and compare it to the pinned manifest in
-   `configs/android_client_manifest.json`. If hashes diverge, halt releases and
-   file a config drift ticket before touching telemetry/overrides (see §1).
-2. **Run the schema diff gate:** Execute the `telemetry-schema-diff` CLI against
-   the accepted snapshot
-   (`docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`).
-   Treat any `policy_violations` output as Sev 2 and block exports until the
-   discrepancy is understood (see §2.6).
-3. **Check dashboards + status CLI:** Open the Android Telemetry Redaction and
-   Exporter Health boards, then run
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>`. If
-   authorities are under the floor or exports error, capture screenshots and
-   CLI output for the incident doc (see §2.4–§2.5).
-4. **Decide on overrides:** Only after the above steps and with incident/owner
-   recorded, issue a limited override via `scripts/android_override_tool.sh`
-   and log it in `telemetry_override_log.md` (see §3). Default expiry: <24 h.
-5. **Escalate per contact list:** Page the Android on-call and Observability TL
-   (contacts in §8), then follow the escalation tree in §4.1. If attestation or
-   StrongBox signals are involved, pull the latest bundle and run the harness
-   checks from §7 before re-enabling exports.
+1. **確認活動配置：** 捕獲 `ClientConfig` 清單校驗和
+   在應用程序啟動時發出並將其與固定清單進行比較
+   `configs/android_client_manifest.json`。如果哈希值出現分歧，則停止發布並
+   在接觸遙測/覆蓋之前提交配置漂移票證（請參閱§1）。
+2. **運行架構差異門：** 針對以下對象執行 `telemetry-schema-diff` CLI
+   接受的快照
+   （`docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`）。
+   將任何 `policy_violations` 輸出視為 Sev2 並阻止導出，直到
+   差異是可以理解的（參見§2.6）。
+3. **檢查儀表板 + 狀態 CLI：** 打開 Android Telemetry Redaction 並
+   出口商健康委員會，然後運行
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>`。如果
+   當局在地板下或導出錯誤，捕獲屏幕截圖和
+   事件文檔的 CLI 輸出（請參閱§2.4–§2.5）。
+4. **決定覆蓋：** 僅在上述步驟之後並與事件/所有者一起
+   記錄，通過 `scripts/android_override_tool.sh` 發出有限覆蓋
+   並將其記錄在 `telemetry_override_log.md` 中（參見第 3 節）。默認有效期：<24 小時。
+5. **按聯繫人列表升級：** 分頁 Android 待命和可觀察性 TL
+   （第 8 節中的聯繫方式），然後遵循第 4.1 節中的升級樹。如果證明或
+   涉及 StrongBox 信號，拉動最新的捆綁包並運行線束
+   在重新啟用導出之前檢查第 7 節。
 
-## 1. Configuration & Deployment
+## 1. 配置與部署
 
-- **ClientConfig sourcing:** Ensure Android clients load Torii endpoint, TLS
-  policies, and retry knobs from `iroha_config`-derived manifests. Validate
-  values during app startup and log checksum of the active manifest.
-  Implementation reference: `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
-  threads `TelemetryOptions` from `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/TelemetryOptions.java`
-  (plus the generated `TelemetryObserver`) so hashed authorities are emitted automatically.
-- **Hot reload:** Use the configuration watcher to pick up `iroha_config`
-  updates without app restarts. Failed reloads should emit the
-  `android.telemetry.config.reload` event and trigger retry with exponential
-  backoff (max 5 attempts).
-- **Fallback behaviour:** When configuration is missing or invalid, fall back to
-  safe defaults (read-only mode, no pending queue submission) and surface a user
-  prompt. Record the incident for follow-up.
+- **ClientConfig 來源：** 確保 Android 客戶端加載 Torii 端點、TLS
+  策略，以及來自 `iroha_config` 派生清單的重試旋鈕。驗證
+  應用程序啟動期間的值以及活動清單的日誌校驗和。
+  實現參考：`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
+  來自 `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/TelemetryOptions.java` 的線程 `TelemetryOptions`
+  （加上生成的 `TelemetryObserver`），因此散列權限會自動發出。
+- **熱重載：** 使用配置觀察器拾取 `iroha_config`
+  更新無需重新啟動應用程序。失敗的重新加載應該發出
+  `android.telemetry.config.reload` 事件和触髮指數重試
+  退避（最多 5 次嘗試）。
+- **回退行為：** 當配置丟失或無效時，回退到
+  安全默認值（只讀模式，無待處理隊列提交）並顯示用戶
+  提示。記錄事件以便後續處理。
 
-### 1.1 Config reload diagnostics
+### 1.1 配置重新加載診斷- 配置觀察器發出 `android.telemetry.config.reload` 信號
+  `source`、`result`、`duration_ms` 和可選 `digest`/`error` 字段（請參閱
+  `configs/android_telemetry.json` 和
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ConfigWatcher.java`）。
+  每個應用的清單預計有一個 `result:"success"` 事件；重複
+  `result:"error"` 記錄表明觀察者已用盡 5 次退避嘗試
+  從 50 毫秒開始。
+- 發生事件期間，從收集器捕獲最新的重新加載信號
+  （OTLP/span 存儲或編輯狀態端點）並記錄 `digest` +
+  事件文檔中的 `source`。將摘要與
+  `configs/android_client_manifest.json` 和發布清單分發到
+  運營商。
+- 如果觀察者繼續發出錯誤，請運行目標工具來重現
+  可疑清單解析失敗：
+  `ci/run_android_tests.sh org.hyperledger.iroha.android.client.ConfigWatcherTests`。
+  將測試輸出和失敗清單附加到事件包中，以便 SRE
+  可以將其與烘焙的配置模式進行比較。
+- 當重新加載遙測丟失時，確認活動的 `ClientConfig` 帶有
+  遙測接收器並且 OTLP 收集器仍然接受
+  `android.telemetry.config.reload` ID；否則將其視為 Sev2 遙測
+  回歸（與§2.4 相同的路徑）並暫停釋放，直到信號返回。
 
-- The config watcher emits `android.telemetry.config.reload` signals with
-  `source`, `result`, `duration_ms`, and optional `digest`/`error` fields (see
-  `configs/android_telemetry.json` and
-  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ConfigWatcher.java`).
-  Expect a single `result:"success"` event per applied manifest; repeated
-  `result:"error"` records indicate the watcher exhausted its 5 backoff attempts
-  starting at 50 ms.
-- During an incident, capture the latest reload signal from the collector
-  (OTLP/span store or the redaction status endpoint) and log the `digest` +
-  `source` in the incident doc. Compare the digest to
-  `configs/android_client_manifest.json` and the release manifest distributed to
-  operators.
-- If the watcher continues to emit errors, run the targeted harness to reproduce
-  the parse failure with the suspect manifest:
-  `ci/run_android_tests.sh org.hyperledger.iroha.android.client.ConfigWatcherTests`.
-  Attach the test output and the failing manifest to the incident bundle so SRE
-  can diff it against the baked configuration schema.
-- When reload telemetry is missing, confirm the active `ClientConfig` carries a
-  telemetry sink and that the OTLP collector still accepts the
-  `android.telemetry.config.reload` ID; otherwise treat it as a Sev 2 telemetry
-  regression (same path as §2.4) and pause releases until the signal returns.
+### 1.2 確定性密鑰導出包
+- 軟件導出現在發出帶有每個導出鹽 + 隨機數、`kdf_kind` 和 `kdf_work_factor` 的 v3 捆綁包。
+  導出器更喜歡 Argon2id（64 MiB，3 次迭代，並行度 = 2）並回退到
+  當 Argon2id 在設備上不可用時，PBKDF2-HMAC-SHA256 具有 350 k 迭代層。捆綁包
+  AAD 仍然綁定到別名；對於 v3 導出，密碼必須至少為 12 個字符，並且
+  進口商拒絕全零鹽/隨機數種子。
+  `KeyExportBundle.decode(Base64|bytes)`，使用原始密碼導入，然後重新導出到 v3
+  轉向內存硬格式。進口商拒絕全零或重複使用的鹽/隨機數對；總是
+  輪換捆綁包，而不是在設備之間重複使用舊的導出。
+- `ci/run_android_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests` 中的負路徑測試
+  拒絕。使用後清除密碼字符數組並捕獲捆綁版本和 `kdf_kind`
+  在恢復失敗時的事件註釋中。
 
-### 1.2 Deterministic key export bundles
-- Software exports now emit v3 bundles with per-export salt + nonce, `kdf_kind`, and `kdf_work_factor`.
-  The exporter prefers Argon2id (64 MiB, 3 iterations, parallelism = 2) and falls back to
-  PBKDF2-HMAC-SHA256 with a 350 k iteration floor when Argon2id is unavailable on the device. Bundle
-  AAD still binds to the alias; passphrases must be at least 12 characters for v3 exports and the
-  importer rejects all-zero salt/nonce seeds.
-  `KeyExportBundle.decode(Base64|bytes)`, import with the original passphrase, and re-export to v3 to
-  move to the memory-hard format. The importer rejects all-zero or reused salt/nonce pairs; always
-  rotate bundles instead of reusing old exports between devices.
-- Negative-path tests in `ci/run_android_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests`
-  rejection. Clear passphrase char arrays after use and capture both the bundle version and `kdf_kind`
-  in incident notes when recovery fails.
+## 2. 遙測和編輯
 
-## 2. Telemetry & Redaction
-
-> Quick reference: see
+> 快速參考：參見
 > [`telemetry_redaction_quick_reference.md`](sdk/android/telemetry_redaction_quick_reference.md)
-> for the condensed command/threshold checklist used during enablement
-> sessions and incident bridges.
-
-- **Signal inventory:** Refer to `docs/source/sdk/android/telemetry_redaction.md`
-  for the full list of emitted spans/metrics/events and
+> 用於啟用期間使用的精簡命令/閾值清單
+> 會話和事件橋樑。- **信號清單：** 參考 `docs/source/sdk/android/telemetry_redaction.md`
+  有關發出的跨度/指標/事件的完整列表以及
   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md`
-  for owner/validation details and outstanding gaps.
-- **Canonical schema diff:** The approved AND7 snapshot is
-  `docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`.
-  Every new CLI run must be compared against this artefact so reviewers can see
-  that the accepted `intentional_differences` and `android_only_signals` still
-  match the policy tables documented in
-  `docs/source/sdk/android/telemetry_schema_diff.md` §3. The CLI now adds
-  `policy_violations` when any intentional difference is missing a
-  `status:"accepted"`/`"policy_allowlisted"` (or when Android-only records lose
-  their accepted status), so treat non-empty violations as Sev 2 and stop
-  exports. The `jq` snippets below remain as a manual sanity check on archived
-  artefacts:
+  了解所有者/驗證詳細信息和突出的差距。
+- **規範模式差異：** 批准的 AND7 快照是
+  `docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`。
+  每個新的 CLI 運行都必須與此工件進行比較，以便審閱者可以看到
+  接受的 `intentional_differences` 和 `android_only_signals` 仍然
+  與中記錄的策略表相匹配
+  `docs/source/sdk/android/telemetry_schema_diff.md` §3。 CLI 現在添加了
+  `policy_violations` 當任何有意的差異丟失時
+  `status:"accepted"`/`"policy_allowlisted"`（或者當僅限 Android 的記錄丟失時
+  他們接受的狀態），因此將非空違規視為 Sev2 並停止
+  出口。下面的 `jq` 片段保留作為對存檔的手動健全性檢查
+  文物：
   ```bash
   jq '.intentional_differences[] | select(.status != "accepted" and .status != "policy_allowlisted")' "$OUT"
   jq '.android_only_signals[] | select(.status != "accepted")' "$OUT"
   jq '.field_mismatches[] | {signal, field, android, rust}' "$OUT"
   ```
-  Treat any output from these commands as a schema regression that needs an
-  AND7 readiness bug before telemetry exports continue; `field_mismatches`
-  must stay empty per `telemetry_schema_diff.md` §5. The helper now writes
-  `artifacts/android/telemetry/schema_diff.prom` automatically; pass
-  `--textfile-dir /var/lib/node_exporter/textfile_collector` (or set
-  `ANDROID_SCHEMA_DIFF_TEXTFILE_DIR`) when running on staging/production hosts
-  so the `telemetry_schema_diff_run_status` gauge flips to `policy_violation`
-  automatically if the CLI detects drift.
-- **CLI helper:** `scripts/telemetry/check_redaction_status.py` inspects
-  `artifacts/android/telemetry/status.json` by default; pass `--status-url` to
-  query staging and `--write-cache` to refresh the local copy for offline
-  drills. Use `--min-hashed 214` (or set
-  `ANDROID_TELEMETRY_MIN_HASHED_AUTHORITIES=214`) to enforce the governance
-  floor on hashed authorities during every status poll.
-- **Authority hashing:** All authorities are hashed using Blake2b-256 with the
-  quarterly rotation salt stored in the secure secrets vault. Rotations occur on
-  the first Monday of each quarter at 00:00 UTC. Verify the exporter picks up
-  the new salt by checking the `android.telemetry.redaction.salt_version` metric.
-- **Device profile buckets:** Only `emulator`, `consumer`, and `enterprise`
-  tiers are exported (alongside SDK major version). Dashboards compare these
-  counts against Rust baselines; variance >10% raises alerts.
-- **Network metadata:** Android exports `network_type` and `roaming` flags only.
-  Carrier names are never emitted; operators should not request subscriber
-  information in incident logs. The sanitised snapshot is emitted as the
-  `android.telemetry.network_context` event, so ensure apps register a
-  `NetworkContextProvider` (either via
-  `ClientConfig.Builder.setNetworkContextProvider(...)` or the convenience
-  `enableAndroidNetworkContext(...)` helper) before Torii calls are issued.
-- **Grafana pointer:** The `Android Telemetry Redaction` dashboard is the
-  canonical visual check for the CLI output above—confirm the
-  `android.telemetry.redaction.salt_version` panel matches the current salt epoch
-  and the `android_telemetry_override_tokens_active` widget stays at zero
-  whenever no drills or incidents are running. Escalate if either panel drifts
-  before the CLI scripts report a regression.
+  將這些命令的任何輸出視為需要一個模式回歸
+  遙測導出繼續之前的 AND7 就緒錯誤； `field_mismatches`
+  根據 `telemetry_schema_diff.md` §5，必須保持為空。助手現在寫道
+  自動`artifacts/android/telemetry/schema_diff.prom`；通過
+  `--textfile-dir /var/lib/node_exporter/textfile_collector`（或設置
+  `ANDROID_SCHEMA_DIFF_TEXTFILE_DIR`) 在臨時/生產主機上運行時
+  因此 `telemetry_schema_diff_run_status` 儀表翻轉為 `policy_violation`
+  如果 CLI 檢測到漂移，則會自動進行。
+- **CLI 幫助程序：** `scripts/telemetry/check_redaction_status.py` 檢查
+  默認為`artifacts/android/telemetry/status.json`；將 `--status-url` 傳遞給
+  查詢暫存和 `--write-cache` 刷新本地副本以供離線使用
+  演習。使用 `--min-hashed 214`（或設置
+  `ANDROID_TELEMETRY_MIN_HASHED_AUTHORITIES=214`) 強制執行治理
+  在每次狀態民意調查中，對散列權威的底線。
+- **權限哈希：** 所有權限都使用 Blake2b-256 進行哈希處理
+  每季度輪換鹽存儲在安全秘密庫中。旋轉發生在
+  每個季度的第一個星期一 00:00 UTC。核實出口商提貨
+  通過檢查 `android.telemetry.redaction.salt_version` 指標來確定新的鹽。
+- **設備配置文件存儲桶：** 僅 `emulator`、`consumer` 和 `enterprise`
+  層被導出（與 SDK 主要版本一起）。儀表板比較這些
+  根據 Rust 基線進行計數；方差 >10% 會引發警報。
+- **網絡元數據：** Android 僅導出 `network_type` 和 `roaming` 標誌。
+  運營商名稱永遠不會被公開；運營商不應要求訂戶
+  事件日誌中的信息。清理後的快照作為
+  `android.telemetry.network_context` 事件，因此請確保應用程序註冊
+  `NetworkContextProvider`（通過
+  `ClientConfig.Builder.setNetworkContextProvider(...)` 還是方便
+  `enableAndroidNetworkContext(...)` 幫助程序）在發出 Torii 調用之前。
+- **Grafana 指針：** `Android Telemetry Redaction` 儀表板是
+  對上述 CLI 輸出進行規範的目視檢查 — 確認
+  `android.telemetry.redaction.salt_version`面板與當前鹽紀元匹配
+  並且 `android_telemetry_override_tokens_active` 小部件保持為零
+  每當沒有演習或事件發生時。如果任一面板出現偏差則升級
+  在 CLI 腳本報告回歸之前。
 
-### 2.1 Export pipeline workflow
+### 2.1 導出管道工作流程1. **配置分配。 ** `ClientConfig.telemetry.redaction` 是從線程
+   `iroha_config` 並由 `ConfigWatcher` 熱重載。每次重新加載都會記錄
+   明顯的消化加鹽時代——捕捉事件中和期間的那條線
+   排練。
+2. **Instrumentation.** SDK 組件將 span/metrics/events 發送到
+   `TelemetryBuffer`。緩衝區用設備配置文件標記每個有效負載，並且
+   當前的鹽紀元，以便導出器可以確定性地驗證哈希輸入。
+3. **編輯過濾器。 ** `RedactionFilter` 哈希值 `authority`、`alias` 和
+   設備標識符在離開設備之前。故障發出
+   `android.telemetry.redaction.failure` 並阻止導出嘗試。
+4. **導出器 + 收集器。 ** 淨化後的有效負載通過 Android 傳送
+   OpenTelemetry 導出器到 `android-otel-collector` 部署。的
+   收集器風扇輸出到軌跡 (Tempo)、指標 (Prometheus) 和 Norito
+   日誌下沉。
+5. **可觀察性掛鉤。 ** `scripts/telemetry/check_redaction_status.py` 讀取
+   收集器計數器（`android.telemetry.export.status`，
+   `android.telemetry.redaction.salt_version`) 並生成狀態包
+   本運行手冊中均引用了該內容。
 
-1. **Config distribution.** `ClientConfig.telemetry.redaction` is threaded from
-   `iroha_config` and hot-reloaded by `ConfigWatcher`. Each reload logs the
-   manifest digest plus salt epoch—capture that line in incidents and during
-   rehearsals.
-2. **Instrumentation.** SDK components emit spans/metrics/events into the
-   `TelemetryBuffer`. The buffer tags every payload with the device profile and
-   current salt epoch so the exporter can verify hashing inputs deterministically.
-3. **Redaction filter.** `RedactionFilter` hashes `authority`, `alias`, and
-   device identifiers before they leave the device. Failures emit
-   `android.telemetry.redaction.failure` and block the export attempt.
-4. **Exporter + collector.** Sanitised payloads are shipped through the Android
-   OpenTelemetry exporter to the `android-otel-collector` deployment. The
-   collector fans outputs to traces (Tempo), metrics (Prometheus), and Norito
-   log sinks.
-5. **Observability hooks.** `scripts/telemetry/check_redaction_status.py` reads
-   collector counters (`android.telemetry.export.status`,
-   `android.telemetry.redaction.salt_version`) and produces the status bundle
-   referenced throughout this runbook.
+### 2.2 驗證門
 
-### 2.2 Validation gates
-
-- **Schema diff:** Run
+- **架構差異：** 運行
   `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json`
-  whenever manifests change. After each run, confirm every
-  `intentional_differences[*]` and `android_only_signals[*]` entry is stamped
-  `status:"accepted"` (or `status:"policy_allowlisted"` for hashed/bucketed
-  fields) as recommended in `telemetry_schema_diff.md` §3 before attaching the
-  artefact to incidents and chaos lab reports. Use the approved snapshot
-  (`android_vs_rust-20260305.json`) as a guardrail and lint the freshly emitted
-  JSON before it is filed:
+  每當出現變化時。每次運行後，確認每個
+  `intentional_differences[*]` 和 `android_only_signals[*]` 條目帶有標記
+  `status:"accepted"`（或 `status:"policy_allowlisted"` 用於散列/分桶
+  字段）按照 `telemetry_schema_diff.md` §3 中的建議，然後再附加
+  事件和混亂實驗室報告的人工製品。使用批准的快照
+  (`android_vs_rust-20260305.json`) 作為護欄和棉絨新鮮排放
+  提交之前的 JSON：
   ```bash
   LATEST=docs/source/sdk/android/readiness/schema_diffs/$(date -u +%Y%m%d).json
   jq '.intentional_differences[] | select(.status != "accepted" and .status != "policy_allowlisted") | {signal, field, status}' "$LATEST"
   jq '.android_only_signals[] | select(.status != "accepted") | {signal, status}' "$LATEST"
   ```
-  Compare `$LATEST` against
+  將 `$LATEST` 與
   `docs/source/sdk/android/readiness/schema_diffs/android_vs_rust-20260305.json`
-  to prove that the allowlist stayed unchanged. Missing or blank `status`
-  entries (for example on `android.telemetry.redaction.failure` or
-  `android.telemetry.redaction.salt_version`) are now treated as regressions and
-  must be resolved before the review can close; the CLI surfaces the accepted
-  state directly, so the manual §3.4 cross-reference only applies when
-  explaining why a non-`accepted` status appears.
+  證明允許名單保持不變。 `status` 缺失或空白
+  條目（例如 `android.telemetry.redaction.failure` 或
+  `android.telemetry.redaction.salt_version`) 現在被視為回歸
+  必須在審核結束前得到解決； CLI 顯示接受的
+  直接說明，因此手冊§3.4交叉引用僅適用於
+  解釋為什麼出現非 `accepted` 狀態。
 
-  **Canonical AND7 signals (2026-03-05 snapshot)**
-
-  | Signal | Channel | Status | Governance note | Validation hook |
+  **規範 AND7 信號（2026 年 3 月 5 日快照）**|信號|頻道|狀態 |治理說明|驗證鉤子 |
   |--------|---------|--------|-----------------|-----------------|
-  | `android.telemetry.redaction.override` | Event | `accepted` | Mirrors override manifests and must match `telemetry_override_log.md` entries. | Watch `android_telemetry_override_tokens_active` and archive manifests per §3. |
-  | `android.telemetry.network_context` | Event | `accepted` | Android intentionally redacts carrier names; only `network_type` and `roaming` are exported. | Ensure apps register a `NetworkContextProvider` and confirm the event volume follows Torii traffic on `Android Telemetry Overview`. |
-  | `android.telemetry.redaction.failure` | Counter | `accepted` | Emits whenever hashing fails; governance now requires explicit status metadata in the schema diff artefact. | The `Redaction Compliance` dashboard panel and CLI output from `check_redaction_status.py` must stay at zero except during drills. |
-  | `android.telemetry.redaction.salt_version` | Gauge | `accepted` | Proves the exporter is using the current quarterly salt epoch. | Compare Grafana’s salt widget with the secrets-vault epoch and ensure schema diff runs retain the `status:"accepted"` annotation. |
+  | `android.telemetry.redaction.override` |活動 | `accepted` |鏡像會覆蓋清單並且必須與 `telemetry_override_log.md` 條目匹配。 |觀看 `android_telemetry_override_tokens_active` 並按照 §3 歸檔清單。 |
+  | `android.telemetry.network_context` |活動 | `accepted` | Android 有意修改運營商名稱；僅導出 `network_type` 和 `roaming`。 |確保應用程序註冊 `NetworkContextProvider` 並確認事件量遵循 `Android Telemetry Overview` 上的 Torii 流量。 |
+  | `android.telemetry.redaction.failure` |專櫃| `accepted` |每當散列失敗時發出；治理現在需要模式差異工件中的顯式狀態元數據。 | `Redaction Compliance` 儀表板面板和 `check_redaction_status.py` 的 CLI 輸出必須保持為零（演習期間除外）。 |
+  | `android.telemetry.redaction.salt_version` |儀表| `accepted` |證明出口商正在使用當前的季度鹽紀元。 |將 Grafana 的 salt 小部件與 Secrets-Vault 紀元進行比較，並確保架構差異運行保留 `status:"accepted"` 註釋。 |
 
-  If any entry in the table above drops a `status`, the diff artefact must be
-  regenerated **and** `telemetry_schema_diff.md` updated before the AND7
-  governance packet is circulated. Include the refreshed JSON in
-  `docs/source/sdk/android/readiness/schema_diffs/` and link it from the
-  incident, chaos lab, or enablement report that triggered the rerun.
-- **CI/unit coverage:** `ci/run_android_tests.sh` must pass before
-  publishing builds; the suite enforces hashing/override behaviour by exercising
-  the telemetry exporters with sample payloads.
-- **Injector sanity checks:** Use
-  `scripts/telemetry/inject_redaction_failure.sh --dry-run` ahead of rehearsals
-  to confirm failure injection works and that alerts fire when hashing guards
-  are tripped. Always clear the injector with `--clear` once validation
-  completes.
+  如果上表中的任何條目刪除了 `status`，則差異偽影必須是
+  重新生成**和** `telemetry_schema_diff.md` 在 AND7 之前更新
+  治理數據包已分發。將刷新的 JSON 包含在
+  `docs/source/sdk/android/readiness/schema_diffs/` 並從
+  觸發重新運行的事件、混沌實驗室或啟用報告。
+- **CI/單位覆蓋範圍：** `ci/run_android_tests.sh` 必須先通過
+  發布版本；該套件通過執行來強制散列/覆蓋行為
+  具有示例有效負載的遙測導出器。
+- **噴油器健全性檢查：** 使用
+  `scripts/telemetry/inject_redaction_failure.sh --dry-run` 排練前
+  確認故障注入有效，並在散列防護時發出警報
+  被絆倒。驗證後始終使用 `--clear` 清除噴油器
+  完成。
 
-### 2.3 Mobile ↔ Rust telemetry parity checklist
+### 2.3 移動 ↔ Rust 遙測奇偶校驗清單
 
-Keep the Android exporters and Rust node services aligned while respecting the
-different redaction requirements documented in
-`docs/source/sdk/android/telemetry_redaction.md`. The table below serves as the
-dual allowlist referenced in the AND7 roadmap entry—update it whenever the
-schema diff introduces or removes fields.
+保持 Android 導出器和 Rust 節點服務保持一致，同時尊重
+不同的編輯要求記錄在
+`docs/source/sdk/android/telemetry_redaction.md`。下表作為
+AND7 路線圖條目中引用的雙重允許列表 - 每當
+模式差異引入或刪除字段。|類別 | Android 出口商 |防銹服務|驗證鉤子 |
+|----------|--------------------|------------------------|------|
+|權限/路線上下文|通過 Blake2b-256 對 `authority`/`alias` 進行哈希處理，並在導出之前刪除原始 Torii 主機名；發出 `android.telemetry.redaction.salt_version` 以證明鹽旋轉。 |發出完整的 Torii 主機名和對等 ID 以進行關聯。 |在 `readiness/schema_diffs/` 下的最新架構差異中比較 `android.torii.http.request` 與 `torii.http.request` 條目，然後通過運行 `scripts/telemetry/check_redaction_status.py` 確認 `android.telemetry.redaction.salt_version` 與集群鹽匹配。 |
+|設備和簽名者身份 |存儲桶 `hardware_tier`/`device_profile`、哈希控制器別名，並且從不導出序列號。 |無設備元數據；節點逐字發出驗證器 `peer_id` 和控制器 `public_key`。 |鏡像 `docs/source/sdk/mobile_device_profile_alignment.md` 中的映射，在實驗室期間審核 `PendingQueueInspector` 輸出，並確保 `ci/run_android_tests.sh` 內的別名哈希測試保持綠色。 |
+|網絡元數據|僅導出 `network_type` + `roaming` 布爾值； `carrier_name` 已刪除。 | Rust 保留對等主機名以及完整的 TLS 端點元數據。 |將最新的 diff JSON 存儲在 `readiness/schema_diffs/` 中，並確認 Android 端仍然省略 `carrier_name`。如果 Grafana 的“網絡上下文”小部件顯示任何運營商字符串，則會發出警報。 |
+|覆蓋/混亂證據|使用蒙面演員角色發出 `android.telemetry.redaction.override` 和 `android.telemetry.chaos.scenario` 事件。 | Rust 服務發出覆蓋批准，無需角色屏蔽，也沒有特定於混沌的跨度。 |每次演練後交叉檢查 `docs/source/sdk/android/readiness/and7_operator_enablement.md`，以確保覆蓋令牌和混亂工件與未屏蔽的 Rust 事件一起存檔。 |
 
-| Category | Android exporters | Rust services | Validation hook |
-|----------|-------------------|---------------|-----------------|
-| Authority / route context | Hash `authority`/`alias` via Blake2b-256 and drop raw Torii hostnames before export; emit `android.telemetry.redaction.salt_version` to prove salt rotation. | Emit full Torii hostnames and peer IDs for correlation. | Compare `android.torii.http.request` vs `torii.http.request` entries in the latest schema diff under `readiness/schema_diffs/`, then confirm `android.telemetry.redaction.salt_version` matches the cluster salt by running `scripts/telemetry/check_redaction_status.py`. |
-| Device & signer identity | Bucket `hardware_tier`/`device_profile`, hash controller aliases, and never export serial numbers. | No device metadata; nodes emit validator `peer_id` and controller `public_key` verbatim. | Mirror the mappings in `docs/source/sdk/mobile_device_profile_alignment.md`, audit `PendingQueueInspector` outputs during labs, and ensure the alias hashing tests inside `ci/run_android_tests.sh` remain green. |
-| Network metadata | Export only `network_type` + `roaming` booleans; `carrier_name` is dropped. | Rust retains peer hostnames plus full TLS endpoint metadata. | Store the latest diff JSON in `readiness/schema_diffs/` and confirm that the Android side still omits `carrier_name`. Alert if Grafana’s “Network Context” widget shows any carrier strings. |
-| Override / chaos evidence | Emit `android.telemetry.redaction.override` and `android.telemetry.chaos.scenario` events with masked actor roles. | Rust services emit override approvals without role masking and no chaos-specific spans. | Cross-check `docs/source/sdk/android/readiness/and7_operator_enablement.md` after every drill to ensure override tokens and chaos artefacts are archived alongside the unmasked Rust events. |
+奇偶校驗工作流程：
 
-Parity workflow:
-
-1. After each manifest or exporter change, run
+1. 每次清單或導出器更改後，運行
    `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json --out docs/source/sdk/android/readiness/schema_diffs/$(date -u +%Y%m%d).json --textfile-dir /var/lib/node_exporter/textfile_collector`
-   so the JSON artefact and the mirrored metrics both land in the evidence bundle
-   (the helper still writes `artifacts/android/telemetry/schema_diff.prom` by default).
-2. Review the diff against the table above; if Android now emits a field that is
-   only allowed on Rust (or vice versa), file an AND7 readiness bug and update
-   the redaction plan.
-3. During weekly checks, run
+   因此 JSON 工件和鏡像指標都位於證據包中
+   （助手默認情況下仍然寫入 `artifacts/android/telemetry/schema_diff.prom`）。
+2. 對照上表查看差異；如果 Android 現在發出一個字段
+   僅允許在 Rust 上（反之亦然），提交 AND7 就緒性錯誤並更新
+   修訂計劃。
+3. 在每週檢查期間，運行
    `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`
-   to confirm salt epochs match the Grafana widget and note the epoch in the
-   on-call journal.
-4. Record any deltas in
-   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` so
-   governance can audit parity decisions.
+   確認鹽紀元與 Grafana 小部件匹配並記下中的紀元
+   待命日記。
+4. 記錄所有增量
+   `docs/source/sdk/android/readiness/signal_inventory_worksheet.md`所以
+   治理可以審核平等決策。
 
-### 2.4 Observability dashboards & alert thresholds
+### 2.4 可觀測性儀表板和警報閾值
 
-Keep dashboards and alerts aligned with the AND7 schema diff approvals when
-reviewing `scripts/telemetry/check_redaction_status.py` output:
+使儀表板和警報與 AND7 架構差異批准保持一致
+查看 `scripts/telemetry/check_redaction_status.py` 輸出：
 
-- `Android Telemetry Redaction` — Salt epoch widget, override token gauge.
-- `Redaction Compliance` — `android.telemetry.redaction.failure` counter and
-  injector trend panels.
-- `Exporter Health` — `android.telemetry.export.status` rate breakdowns.
-- `Android Telemetry Overview` — device profile buckets and network context volume.
+- `Android Telemetry Redaction` — 鹽紀元小部件，覆蓋代幣計量表。
+- `Redaction Compliance` — `android.telemetry.redaction.failure` 計數器和
+  噴油器趨勢面板。
+- `Exporter Health` — `android.telemetry.export.status` 速率細分。
+- `Android Telemetry Overview` — 設備配置文件存儲桶和網絡上下文卷。
 
-The following thresholds mirror the quick-reference card and must be enforced
-during incident response and rehearsals:
+以下閾值反映了快速參考卡，必須強制執行
+在事件響應和排練期間：|公制/面板|門檻|行動|
+|----------------|---------|--------|
+| `android.telemetry.redaction.failure`（`Redaction Compliance`板）| >0 在滾動 15 分鐘窗口內 |調查故障信號，運行清除注入器，記錄 CLI 輸出 + Grafana 屏幕截圖。 |
+| `android.telemetry.redaction.salt_version`（`Android Telemetry Redaction`板）|與秘密庫鹽時代的不同|停止發布，與秘密輪換協調，歸檔 AND7 註釋。 |
+| `android.telemetry.export.status{status="error"}`（`Exporter Health`板）| > 出口額的 1% |檢查收集器運行狀況、捕獲 CLI 診斷、升級到 SRE。 |
+| `android.telemetry.device_profile{tier="enterprise"}` 與 Rust 奇偶校驗 (`Android Telemetry Overview`) |與 Rust 基線的差異 >10% |文件治理跟進，驗證夾具池，註釋模式差異工件。 |
+| `android.telemetry.network_context` 卷 (`Android Telemetry Overview`) |當 Torii 流量存在時，流量降至零 |確認 `NetworkContextProvider` 註冊，重新運行 schema diff 以確保字段不變。 |
+| `android.telemetry.redaction.override` / `android_telemetry_override_tokens_active` (`Android Telemetry Redaction`) |非零外部批准覆蓋/鑽取窗口 |將令牌與事件聯繫起來，重新生成摘要，並通過第 3 節中的工作流程進行撤銷。 |
 
-| Metric / panel | Threshold | Action |
-|----------------|-----------|--------|
-| `android.telemetry.redaction.failure` (`Redaction Compliance` board) | >0 over a rolling 15 min window | Investigate failing signal, run injector clear, log CLI output + Grafana screenshot. |
-| `android.telemetry.redaction.salt_version` (`Android Telemetry Redaction` board) | Differs from secrets-vault salt epoch | Halt releases, coordinate with secrets rotation, file AND7 note. |
-| `android.telemetry.export.status{status="error"}` (`Exporter Health` board) | >1 % of exports | Inspect collector health, capture CLI diagnostics, escalate to SRE. |
-| `android.telemetry.device_profile{tier="enterprise"}` vs Rust parity (`Android Telemetry Overview`) | Variance >10 % from Rust baseline | File governance follow-up, verify fixture pools, annotate schema diff artefact. |
-| `android.telemetry.network_context` volume (`Android Telemetry Overview`) | Drops to zero while Torii traffic exists | Confirm `NetworkContextProvider` registration, rerun schema diff to ensure fields unchanged. |
-| `android.telemetry.redaction.override` / `android_telemetry_override_tokens_active` (`Android Telemetry Redaction`) | Non-zero outside approved override/drill window | Tie token to an incident, regenerate digest, revoke via workflow in §3. |
+### 2.5 操作員準備和支持跟踪
 
-### 2.5 Operator readiness & enablement trail
+路線圖項目 AND7 提出了專門的操作員課程，以便支持、SRE 和
+發布干係人在運行手冊發布之前了解上面的奇偶校驗表
+GA。使用中的輪廓
+`docs/source/sdk/android/telemetry_readiness_outline.md` 用於規範物流
+（議程、演講者、時間表）和 `docs/source/sdk/android/readiness/and7_operator_enablement.md`
+查看詳細的清單、證據鏈接和操作日誌。保留以下內容
+每當遙測計劃發生變化時，階段都會同步：|相|描述 |證據包|主要業主 |
+|--------|-------------|--------------------|------------------------|
+|預讀發行|在簡報會前至少五個工作日發送保單預讀 `telemetry_redaction.md` 和快速參考卡。跟踪大綱通信日誌中的確認。 | `docs/source/sdk/android/telemetry_readiness_outline.md`（會話物流 + 通信日誌）和 `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` 中的存檔電子郵件。 |文檔/支持經理 |
+|現場準備會議|提供 60 分鐘的培訓（政策深入探討、運行手冊演練、儀表板、混沌實驗室演示）並為異步觀看者保持錄製運行。 |錄音 + 幻燈片存儲在 `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` 下，並在大綱的第 2 節中捕獲參考文獻。 |法學碩士（AND7 代理所有者）|
+|混沌實驗室執行|在實時會話結束後立即從 `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` 運行至少 C2（覆蓋）+ C6（隊列重播），並將日誌/屏幕截圖附加到支持套件。 | `docs/source/sdk/android/readiness/labs/reports/<YYYY-MM>/` 和 `/screenshots/<YYYY-MM>/` 內的場景報告和屏幕截圖。 | Android 可觀測性 TL + SRE 待命 |
+|知識檢查與考勤|收集提交的測驗，糾正得分低於 90% 的人，並記錄出勤/測驗統計數據。讓快速參考問題與奇偶校驗清單保持一致。 |測驗在 `docs/source/sdk/android/readiness/forms/responses/` 中導出，摘要 Markdown/JSON 通過 `scripts/telemetry/generate_and7_quiz_summary.py` 生成，以及 `and7_operator_enablement.md` 中的考勤表。 |支持工程|
+|存檔及後續|更新啟用工具包的操作日誌，將工件上傳到存檔，並在 `status.md` 中記下完成情況。會話期間發出的任何修復或覆蓋令牌都必須複製到 `telemetry_override_log.md` 中。 | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6（操作日誌）、`.../archive/<YYYY-MM>/checklist.md` 以及§3 中引用的覆蓋日誌。 |法學碩士（AND7 代理所有者）|
 
-Roadmap item AND7 calls out a dedicated operator curriculum so support, SRE, and
-release stakeholders understand the parity tables above before the runbook goes
-GA. Use the outline in
-`docs/source/sdk/android/telemetry_readiness_outline.md` for canonical logistics
-(agenda, presenters, timeline) and `docs/source/sdk/android/readiness/and7_operator_enablement.md`
-for the detailed checklist, evidence links, and action log. Keep the following
-phases in sync whenever the telemetry plan changes:
+當課程重新運行時（每季度或在主要架構更改之前），刷新
+包含新會議日期的大綱，保持與會者名單最新，以及
+重新生成測驗摘要 JSON/Markdown 工件，以便治理數據包可以
+參考一致的證據。 AND7 的 `status.md` 條目應鏈接到
+每個啟用衝刺結束後的最新存檔文件夾。
 
-| Phase | Description | Evidence bundle | Primary owner |
-|-------|-------------|-----------------|---------------|
-| Pre-read distribution | Send the policy pre-read, `telemetry_redaction.md`, and the quick-reference card at least five business days before the briefing. Track acknowledgements in the outline’s comms log. | `docs/source/sdk/android/telemetry_readiness_outline.md` (Session Logistics + Communications Log) and the archived email in `docs/source/sdk/android/readiness/archive/<YYYY-MM>/`. | Docs/Support manager |
-| Live readiness session | Deliver the 60-minute training (policy deep dive, runbook walkthrough, dashboards, chaos lab demo) and keep the recording running for asynchronous viewers. | Recording + slides stored under `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` with references captured in §2 of the outline. | LLM (acting AND7 owner) |
-| Chaos lab execution | Run at least C2 (override) + C6 (queue replay) from `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` immediately after the live session and attach logs/screenshots to the enablement kit. | Scenario reports and screenshots inside `docs/source/sdk/android/readiness/labs/reports/<YYYY-MM>/` and `/screenshots/<YYYY-MM>/`. | Android Observability TL + SRE on-call |
-| Knowledge check & attendance | Collect quiz submissions, remediate anyone scoring <90 %, and record attendance/quiz statistics. Keep the quick-reference questions aligned with the parity checklist. | Quiz exports in `docs/source/sdk/android/readiness/forms/responses/`, summary Markdown/JSON produced via `scripts/telemetry/generate_and7_quiz_summary.py`, and the attendance table inside `and7_operator_enablement.md`. | Support engineering |
-| Archive & follow-ups | Update the enablement kit’s action log, upload artefacts to the archive, and note the completion in `status.md`. Any remediation or override tokens issued during the session must be copied into `telemetry_override_log.md`. | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 (action log), `.../archive/<YYYY-MM>/checklist.md`, and the override log referenced in §3. | LLM (acting AND7 owner) |
+### 2.6 架構差異允許列表和策略檢查
 
-When the curriculum is rerun (quarterly or before major schema changes), refresh
-the outline with the new session date, keep the attendee roster current, and
-regenerate the quiz summary JSON/Markdown artefacts so governance packets can
-reference consistent evidence. The `status.md` entry for AND7 should link to the
-latest archive folder once each enablement sprint closes.
-
-### 2.6 Schema diff allowlists & policy checks
-
-The roadmap explicitly calls out a dual-allowlist policy (mobile redactions vs
-Rust retention) that is enforced by the `telemetry-schema-diff` CLI housed under
-`tools/telemetry-schema-diff`. Every diff artefact recorded in
-`docs/source/sdk/android/readiness/schema_diffs/` must document which fields are
-hashed/bucketed on Android, which fields remain unhashed on Rust, and whether
-any non-allowlisted signal slipped into the build. Capture those decisions
-directly in the JSON by running:
+該路線圖明確提出了雙重白名單政策（移動編輯與
+防銹保留）由 `telemetry-schema-diff` CLI 強制執行，位於
+`tools/telemetry-schema-diff`。每個差異工件記錄在
+`docs/source/sdk/android/readiness/schema_diffs/` 必須記錄哪些字段
+Android 上已散列/分桶，哪些字段在 Rust 上保持未散列，以及是否
+任何非允許的信號都會溜進構建中。記錄這些決定
+直接在 JSON 中運行：
 
 ```bash
 cargo run -p telemetry-schema-diff -- \
@@ -334,51 +321,47 @@ if jq -e '.policy_violations | length > 0' "$LATEST" >/dev/null; then
   jq '.policy_violations[]' "$LATEST"
   exit 1
 fi
-```
+```當報告乾淨時，最終的 `jq` 評估為無操作。處理任何輸出
+從該命令作為 Sev2 就緒性錯誤：填充的 `policy_violations`
+array 表示 CLI 發現了一個不在僅限 Android 的列表中的信號
+也不在僅 Rust 的豁免列表中記錄的
+`docs/source/sdk/android/telemetry_schema_diff.md`。出現這種情況時，請停止
+導出，提交 AND7 票證，並僅在策略模塊之後重新運行 diff
+清單快照已得到更正。將生成的 JSON 存儲在
+`docs/source/sdk/android/readiness/schema_diffs/` 帶有日期後綴和註釋
+事件或實驗室報告內的路徑，以便治理可以重播檢查。
 
-The final `jq` evaluates to a no-op when the report is clean. Treat any output
-from that command as a Sev 2 readiness bug: a populated `policy_violations`
-array means the CLI discovered a signal that is neither on the Android-only list
-nor on the Rust-only exemption list documented in
-`docs/source/sdk/android/telemetry_schema_diff.md`. When this occurs, halt
-exports, file an AND7 ticket, and rerun the diff only after the policy module
-and manifest snapshots have been corrected. Store the resulting JSON in
-`docs/source/sdk/android/readiness/schema_diffs/` with the date suffix and note
-the path inside the incident or lab report so governance can replay the checks.
+**散列和保留矩陣**
 
-**Hashing & retention matrix**
+|信號場 |安卓處理 |防銹處理 |允許列表標籤 |
+|--------------|-----------------|----------------|---------------|
+| `torii.http.request.authority` | Blake2b-256 散列 (`representation: "blake2b_256"`) |逐字存儲以實現可追溯性 | `policy_allowlisted`（移動哈希）|
+| `attestation.result.alias` | Blake2b-256 散列 |純文本別名（證明檔案）| `policy_allowlisted` |
+| `attestation.result.device_tier` |桶裝 (`representation: "bucketed"`) |普通層字符串 | `policy_allowlisted` |
+| `hardware.profile.hardware_tier` |缺席——Android出口商完全放棄這個領域不加編輯地呈現 | `rust_only`（記錄在 `telemetry_schema_diff.md` 的第 3 節中）|
+| `android.telemetry.redaction.override.*` |僅限 Android 的信號，帶有蒙面演員角色 |沒有發出等效信號 | `android_only`（必須保留 `status:"accepted"`）|
 
-| Signal.field | Android handling | Rust handling | Allowlist tag |
-|--------------|-----------------|---------------|---------------|
-| `torii.http.request.authority` | Blake2b-256 hashed (`representation: "blake2b_256"`) | Stored verbatim for traceability | `policy_allowlisted` (mobile hash) |
-| `attestation.result.alias` | Blake2b-256 hashed | Plain text alias (attestation archives) | `policy_allowlisted` |
-| `attestation.result.device_tier` | Bucketed (`representation: "bucketed"`) | Plain tier string | `policy_allowlisted` |
-| `hardware.profile.hardware_tier` | Absent — Android exporters drop the field entirely | Present without redaction | `rust_only` (documented in §3 of `telemetry_schema_diff.md`) |
-| `android.telemetry.redaction.override.*` | Android-only signal with masked actor roles | No equivalent signal emitted | `android_only` (must stay `status:"accepted"`) |
+當出現新信號時，將它們添加到架構差異策略模塊**和**
+因此 Runbook 反映了 CLI 中提供的強制邏輯。
+如果任何僅限 Android 的信號省略顯式 `status` 或如果
+`policy_violations` 數組非空，因此請保持此清單與
+`telemetry_schema_diff.md` §3 以及中引用的最新 JSON 快照
+`telemetry_redaction_minutes_*.md`。
 
-When new signals appear, add them to the schema diff policy module **and** the
-table above so the runbook mirrors the enforcement logic shipped in the CLI.
-Schema runs now fail if any Android-only signal omits an explicit `status` or if
-the `policy_violations` array is non-empty, so keep this checklist in sync with
-`telemetry_schema_diff.md` §3 and the latest JSON snapshots referenced in
-`telemetry_redaction_minutes_*.md`.
+## 3. 覆蓋工作流程
 
-## 3. Override Workflow
-
-Overrides are the “break glass” option when hashing regressions or privacy
-alerts block customers. Apply them only after recording the full decision trail
-in the incident doc.
-
-1. **Confirm drift and scope.** Wait for the PagerDuty alert or the schema diff
-   gate to fire, then run
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>` to
-   prove mismatched authorities. Attach the CLI output and Grafana screenshots
-   to the incident record.
-2. **Prepare a signed request.** Populate
-   `docs/examples/android_override_request.json` with the ticket id, requester,
-   expiry, and justification. Store the file next to the incident artefacts so
-   compliance can audit the inputs.
-3. **Issue the override.** Invoke
+在散列回歸或隱私時，覆蓋是“打破玻璃”的選項
+警報會阻止客戶。僅在記錄完整決策軌跡後應用它們
+在事件文檔中。1. **確認偏差和範圍。 ** 等待 PagerDuty 警報或架構差異
+   門開火，然後跑
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>` 至
+   證明當局不匹配。附上 CLI 輸出和 Grafana 屏幕截圖
+   到事件記錄。
+2. **準備簽名請求。 ** 填充
+   `docs/examples/android_override_request.json` 以及票證 ID、請求者、
+   到期日和理由。將文件存儲在事件文物旁邊，以便
+   合規性可以審核輸入。
+3. **發出覆蓋。 ** 調用
    ```bash
    scripts/android_override_tool.sh apply \
      --request docs/examples/android_override_request.json \
@@ -387,310 +370,294 @@ in the incident doc.
      --event-log docs/source/sdk/android/readiness/override_logs/override_events.ndjson \
      --actor-role <support|sre|docs|compliance|program|other>
    ```
-   The helper prints the override token, writes the manifest, and appends a row
-   to the Markdown audit log. Never post the token in chat; deliver it directly
-   to the Torii operators applying the override.
-4. **Monitor the effect.** Within five minutes verify a single
-   `android.telemetry.redaction.override` event was emitted, the collector
-   status endpoint shows `override_active=true`, and the incident doc lists the
-   expiry. Watch the Android Telemetry Overview dashboard’s “Override tokens
-   active” panel (`android_telemetry_override_tokens_active`) for the same
-   token count and continue running the status CLI every 10 minutes until
-   hashing stabilises.
-5. **Revoke and archive.** As soon as the mitigation lands, run
-  `scripts/android_override_tool.sh revoke --token <token>` so the audit log
-  captures the revocation time, then execute
+   幫助程序打印覆蓋令牌，寫入清單，並附加一行
+   到 Markdown 審核日誌。切勿在聊天中發布令牌；直接交付
+   到應用覆蓋的 Torii 操作員。
+4. **監控效果。 ** 五分鐘內驗證單個
+   `android.telemetry.redaction.override` 事件已發出，收集器
+   狀態端點顯示 `override_active=true`，事件文檔列出了
+   到期。觀看 Android 遙測概述儀表板的“覆蓋令牌
+   活動”面板（`android_telemetry_override_tokens_active`）相同
+   令牌計數並繼續每 10 分鐘運行一次狀態 CLI，直到
+   散列穩定。
+5. **撤銷並存檔。 ** 緩解措施生效後，立即運行
+  `scripts/android_override_tool.sh revoke --token <token>` 所以審核日誌
+  捕獲撤銷時間，然後執行
   `scripts/android_override_tool.sh digest --out docs/source/sdk/android/readiness/override_logs/override_digest_$(date -u +%Y%m%dT%H%M%SZ).json`
-  to refresh the sanitised snapshot that governance expects. Attach the
-  manifest, digest JSON, CLI transcripts, Grafana snapshots, and the NDJSON log
-  produced via `--event-log` to
-  `docs/source/sdk/android/readiness/screenshots/<date>/` and cross-link the
-  entry from `docs/source/sdk/android/telemetry_override_log.md`.
+  刷新治理期望的經過清理的快照。附上
+  清單、摘要 JSON、CLI 轉錄本、Grafana 快照和 NDJSON 日誌
+  通過 `--event-log` 生成
+  `docs/source/sdk/android/readiness/screenshots/<date>/` 並交聯
+  來自 `docs/source/sdk/android/telemetry_override_log.md` 的條目。
 
-Overrides exceeding 24 hours require SRE Director and Compliance approval and
-must be highlighted in the next weekly AND7 review.
+超過 24 小時的覆蓋需要 SRE 總監和合規部批准，並且
+必須在下週 AND7 審核中重點強調。
 
-### 3.1 Override escalation matrix
+### 3.1 覆蓋升級矩陣
 
-| Situation | Max duration | Approvers | Required notifications |
-|-----------|--------------|-----------|------------------------|
-| Single-tenant investigation (hashed authority mismatch, customer Sev 2) | 4 hours | Support engineer + SRE on-call | Ticket `SUP-OVR-<id>`, `android.telemetry.redaction.override` event, incident log |
-| Fleet-wide telemetry outage or SRE-requested reproduction | 24 hours | SRE on-call + Program Lead | PagerDuty note, override log entry, update in `status.md` |
-| Compliance/forensics request or any case exceeding 24 hours | Until explicitly revoked | SRE Director + Compliance lead | Governance mailing list, override log, AND7 weekly status |
+|情況|最長持續時間|批准人 |所需通知 |
+|------------|--------------|------------------------|------------------------|
+|單租戶調查（散列權限不匹配，客戶 Sev2）| 4小時|支持工程師+SRE on-call |票證 `SUP-OVR-<id>`、`android.telemetry.redaction.override` 事件、事件日誌 |
+|整個艦隊的遙測中斷或 SRE 請求的複制 | 24小時 | SRE 隨叫隨到 + 項目主管 | PagerDuty 註釋，覆蓋日誌條目，在 `status.md` 中更新 |
+|合規/取證請求或任何超過 24 小時的案件 |直到明確撤銷| SRE 總監 + 合規主管 |治理郵件列表、覆蓋日誌、AND7 每週狀態 |
 
-#### Role responsibilities
+#### 角色職責|角色 |職責| SLA / 註釋 |
+|------|--------------------|-------------|
+| Android 遙測待命（事件指揮官）|驅動檢測、執行覆蓋工具、在事件文檔中記錄批准，並確保在到期之前進行撤銷。 |在 5 分鐘內確認 PagerDuty，並每 15 分鐘記錄一次進度。 |
+| Android 可觀測性 TL（Haruka Yamamoto）|驗證漂移信號，確認出口商/收集商狀態，並在將其交給操作員之前在覆蓋清單上簽字。 | 10分鐘內上橋；如果不可用，則委託給暫存集群所有者。 |
+| SRE 聯絡員 (Liam O’Connor) |將清單應用於收集器、監控待辦事項並與發布工程協調以實現 Torii 端緩解措施。 |記錄更改請求中的每個 `kubectl` 操作，並將命令記錄粘貼到事件文檔中。 |
+|合規性（索菲亞·馬丁斯/丹尼爾·帕克）|批准超過 30 分鐘的覆蓋，驗證審核日誌行，並就監管機構/客戶消息傳遞提供建議。 |在 `#compliance-alerts` 中發布確認；對於生產事件，在發布覆蓋之前提交合規說明。 |
+|文檔/支持經理 (Priya Deshpande) |將清單/CLI 輸出存檔在 `docs/source/sdk/android/readiness/…` 下，保持覆蓋日誌整潔，並在出現差距時安排後續實驗。 |在結束事件之前確認證據保留（13 個月）並提交 AND7 後續行動。 |
 
-| Role | Responsibilities | SLA / Notes |
-|------|------------------|-------------|
-| Android telemetry on-call (Incident Commander) | Drive detection, execute the override tooling, record approvals in the incident doc, and ensure revocation happens before expiry. | Acknowledge PagerDuty within 5 minutes and log progress every 15 minutes. |
-| Android Observability TL (Haruka Yamamoto) | Validate the drift signal, confirm exporter/collector state, and sign off on the override manifest before it is handed to operators. | Join the bridge within 10 minutes; delegate to the staging cluster owner if unavailable. |
-| SRE liaison (Liam O’Connor) | Apply the manifest to collectors, monitor backlog, and coordinate with Release Engineering for Torii-side mitigations. | Log every `kubectl` action in the change request and paste command transcripts in the incident doc. |
-| Compliance (Sofia Martins / Daniel Park) | Approve overrides longer than 30 minutes, verify the audit log row, and advise on regulator/customer messaging. | Post acknowledgement in `#compliance-alerts`; for production events file a compliance note before the override is issued. |
-| Docs/Support Manager (Priya Deshpande) | Archive manifests/CLI output under `docs/source/sdk/android/readiness/…`, keep the override log tidy, and schedule follow-up labs if gaps surface. | Confirms evidence retention (13 months) and files AND7 follow-ups before closing the incident. |
+如果任何覆蓋令牌即將到期且沒有任何更新，請立即升級
+記錄撤銷計劃。
 
-Escalate immediately if any override token approaches its expiry without a
-documented revocation plan.
+## 4. 事件響應
 
-## 4. Incident Response
+- **警報：** PagerDuty 服務 `android-telemetry-primary` 涵蓋密文
+  故障、出口機停機和鏟斗漂移。在 SLA 窗口內確認
+  （請參閱支持手冊）。
+- **診斷：** 運行 `scripts/telemetry/check_redaction_status.py` 進行收集
+  當前出口商的健康狀況、最近的警報和散列權威指標。包括
+  事件時間線中的輸出 (`incident/YYYY-MM-DD-android-telemetry.md`)。
+- **儀表板：** 監控 Android 遙測編輯、Android 遙測
+  概述、修訂合規性和出口商健康狀況儀表板。捕獲
+  事件記錄的屏幕截圖並註釋任何鹽版本或覆蓋
+  結束事件之前的令牌偏差。
+- **協調：** 參與發布工程以解決出口商問題、合規性
+  覆蓋/PII 問題，以及嚴重 1 事件的項目負責人。
 
-- **Alerts:** PagerDuty service `android-telemetry-primary` covers redaction
-  failures, exporter outages, and bucket drift. Acknowledge within SLA windows
-  (see support playbook).
-- **Diagnostics:** Run `scripts/telemetry/check_redaction_status.py` to gather
-  current exporter health, recent alerts, and hashed authority metrics. Include
-  output in the incident timeline (`incident/YYYY-MM-DD-android-telemetry.md`).
-- **Dashboards:** Monitor the Android Telemetry Redaction, Android Telemetry
-  Overview, Redaction Compliance, and Exporter Health dashboards. Capture
-  screenshots for incident records and annotate any salt-version or override
-  token deviations before closing an incident.
-- **Coordination:** Engage Release Engineering for exporter issues, Compliance
-  for override/PII questions, and Program Lead for Sev 1 incidents.
+### 4.1 升級流程
 
-### 4.1 Escalation flow
+Android 事件使用與 Android 相同的嚴重級別進行分類
+支持 Playbook (§2.1)。下表總結了必須尋呼的人員以及如何尋呼
+預計每個響應者都會很快加入橋樑。|嚴重性 |影響 |主要響應者（≤5 分鐘）|二次升級（≤10分鐘）|附加通知 |筆記|
+|----------|--------|----------------------------|--------------------------------|----------------------------------------|--------|
+|嚴重程度1 |面向客戶的中斷、隱私洩露或數據洩露 | Android 遙測待命 (`android-telemetry-primary`) | Torii 待命 + 項目主管 |合規性 + SRE 治理 (`#sre-governance`)、臨時集群所有者 (`#android-staging`) |立即啟動作戰室並打開共享文檔以進行命令記錄。 |
+|嚴重程度2 |隊列退化、覆蓋誤用或長時間重放積壓 | Android 遙測隨叫隨到 | Android 基礎 TL + 文檔/支持管理器 |項目負責人，發布工程聯絡員 |如果超馳超過 24 小時，則升級至合規性。 |
+|嚴重程度3 |單租戶問題、實驗室演練或諮詢警報 |支持工程師| Android 隨叫隨到（可選）|文檔/意識支持 |如果範圍擴大或多個租戶受到影響，請轉換為 Sev2。 |
 
-Android incidents are triaged using the same severity levels as the Android
-Support Playbook (§2.1). The table below summarises who must be paged and how
-quickly each responder is expected to join the bridge.
-
-| Severity | Impact | Primary responder (≤5 min) | Secondary escalation (≤10 min) | Additional notifications | Notes |
-|----------|--------|----------------------------|--------------------------------|--------------------------|-------|
-| Sev 1 | Customer-facing outage, privacy breach, or data leak | Android telemetry on-call (`android-telemetry-primary`) | Torii on-call + Program Lead | Compliance + SRE Governance (`#sre-governance`), staging cluster owners (`#android-staging`) | Start war room immediately and open a shared doc for command logging. |
-| Sev 2 | Fleet degradation, override misuse, or prolonged replay backlog | Android telemetry on-call | Android Foundations TL + Docs/Support Manager | Program Lead, Release Engineering liaison | Escalate to Compliance if overrides exceed 24 hours. |
-| Sev 3 | Single-tenant issue, lab rehearsal, or advisory alert | Support engineer | Android on-call (optional) | Docs/Support for awareness | Convert to Sev 2 if scope expands or multiple tenants are affected. |
-
-| Window | Action | Owner(s) | Evidence/Notes |
+|窗口|行動|所有者 |證據/註釋|
 |--------|--------|----------|----------------|
-| 0–5 min | Acknowledge PagerDuty, assign an incident commander (IC), and create `incident/YYYY-MM-DD-android-telemetry.md`. Drop the link plus one-line status in `#android-sdk-support`. | On-call SRE / Support engineer | Screenshot of PagerDuty ack + incident stub committed beside other incident logs. |
-| 5–15 min | Run `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status` and paste the summary in the incident doc. Ping Android Observability TL (Haruka Yamamoto) and Support lead (Priya Deshpande) for real-time hand-off. | IC + Android Observability TL | Attach CLI output JSON, note dashboard URLs opened, and mark who owns diagnostics. |
-| 15–25 min | Engage staging cluster owners (Haruka Yamamoto for observability, Liam O’Connor for SRE) to reproduce on `android-telemetry-stg`. Seed load with `scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg` and capture queue dumps from the Pixel + emulator to confirm symptom parity. | Staging cluster owners | Upload sanitized `pending.queue` + `PendingQueueInspector` output to the incident folder. |
-| 25–40 min | Decide on overrides, Torii throttling, or StrongBox fallback. If PII exposure or non-deterministic hashing is suspected, page Compliance (Sofia Martins, Daniel Park) via `#compliance-alerts` and notify the Program Lead in the same incident thread. | IC + Compliance + Program Lead | Link override tokens, Norito manifests, and approval comments. |
-| ≥40 min | Provide 30-minute status updates (PagerDuty notes + `#android-sdk-support`). Schedule war-room bridge if not already active, document mitigation ETA, and ensure Release Engineering (Alexei Morozov) is on standby to roll collector/SDK artifacts. | IC | Time-stamped updates plus decision logs stored in the incident file and summarized in `status.md` during the next weekly refresh. |
+| 0–5 分鐘 |確認 PagerDuty，分配事件指揮官 (IC)，並創建 `incident/YYYY-MM-DD-android-telemetry.md`。刪除 `#android-sdk-support` 中的鏈接加單線狀態。 |待命 SRE/支持工程師 | PagerDuty ack + 在其他事件日誌旁邊提交的事件存根的屏幕截圖。 |
+| 5–15 分鐘 |運行 `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status` 並將摘要粘貼到事件文檔中。 Ping Android 可觀測性 TL (Haruka Yamamoto) 和支持主管 (Priya Deshpande) 進行實時交接。 | IC + Android 可觀察性 TL |附加 CLI 輸出 JSON，記下打開的儀表板 URL，並標記誰擁有診斷。 |
+| 15–25 分鐘 |讓暫存集群所有者（負責可觀察性的 Haruka Yamamoto，負責 SRE 的 Liam O’Connor）在 `android-telemetry-stg` 上進行重現。使用 `scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg` 進行種子加載並從 Pixel + 模擬器捕獲隊列轉儲以確認症狀奇偶性。 |暫存集群所有者 |將清理後的 `pending.queue` + `PendingQueueInspector` 輸出上傳到事件文件夾。 |
+| 25–40 分鐘 |決定覆蓋、Torii 限製或 StrongBox 後備。如果懷疑 PII 暴露或非確定性哈希，請通過 `#compliance-alerts` 尋呼合規部（Sofia Martins、Daniel Park），並在同一事件線程中通知項目負責人。 | IC + 合規 + 項目主管 |鏈接覆蓋令牌、Norito 清單和批准註釋。 |
+| ≥40分鐘|提供 30 分鐘狀態更新（PagerDuty 註釋 + `#android-sdk-support`）。如果尚未激活，請安排作戰室橋，記錄緩解預計時間，並確保發布工程 (Alexei Morozov) 隨時待命以滾動收集器/SDK 工件。 |集成電路 |帶時間戳的更新以及存儲在事件文件中的決策日誌，並在下週刷新期間在 `status.md` 中進行匯總。 |- 所有升級都必須使用 Android 支持手冊中的“所有者/下次更新時間”表反映在事件文檔中。
+- 如果另一事件已經發生，請加入現有的作戰室並附加 Android 上下文，而不是啟動一個新的。
+- 當事件觸及運行手冊空白時，在 AND7 JIRA 史詩中創建後續任務並標記 `telemetry-runbook`。
 
-- All escalations must stay mirrored in the incident doc using the “Owner / Next update time” table from the Android Support Playbook.
-- If another incident is already open, join the existing war room and append Android context rather than spinning up a new one.
-- When the incident touches runbook gaps, create follow-up tasks in the AND7 JIRA epic and tag `telemetry-runbook`.
+## 5. 混沌與準備練習
 
-## 5. Chaos & Readiness Exercises
+- 執行詳細的場景
+  `docs/source/sdk/android/telemetry_chaos_checklist.md` 每季度及之前
+  主要版本。使用實驗室報告模板記錄結果。
+- 將證據（屏幕截圖、日誌）存儲在
+  `docs/source/sdk/android/readiness/screenshots/`。
+- 跟踪 AND7 史詩中帶有標籤 `telemetry-lab` 的補救票證。
+- 場景圖：C1（編輯故障）、C2（覆蓋）、C3（出口商限電）、C4
+  （使用具有漂移配置的 `run_schema_diff.sh` 的架構差異門），C5
+  （設備配置文件偏差通過 `generate_android_load.sh` 播種），C6（Torii 超時
+  + 隊列重播），C7（證明拒絕）。保持此編號與
+  `telemetry_lab_01.md` 和添加練習時的混亂清單。
 
-- Execute the scenarios detailed in
-  `docs/source/sdk/android/telemetry_chaos_checklist.md` quarterly and prior to
-  major releases. Log outcomes with the lab report template.
-- Store evidence (screenshots, logs) under
-  `docs/source/sdk/android/readiness/screenshots/`.
-- Track remediation tickets in the AND7 epic with label `telemetry-lab`.
-- Scenario map: C1 (redaction fault), C2 (override), C3 (exporter brownout), C4
-  (schema diff gate using `run_schema_diff.sh` with a drifted config), C5
-  (device-profile skew seeded via `generate_android_load.sh`), C6 (Torii timeout
-  + queue replay), C7 (attestation rejection). Keep this numbering aligned with
-  `telemetry_lab_01.md` and the chaos checklist when adding drills.
+### 5.1 編輯漂移和覆蓋演練（C1/C2）
 
-### 5.1 Redaction drift & override drill (C1/C2)
+1. 通過注入哈希失敗
+   `scripts/telemetry/inject_redaction_failure.sh` 並等待 PagerDuty
+   警報（`android.telemetry.redaction.failure`）。捕獲 CLI 輸出
+   `scripts/telemetry/check_redaction_status.py --status-url <collector>` 為
+   事件記錄。
+2. 使用 `--clear` 清除故障並確認警報在
+   10分鐘；附上鹽/權限面板的 Grafana 屏幕截圖。
+3. 使用以下命令創建簽名覆蓋請求
+   `docs/examples/android_override_request.json`，應用它
+   `scripts/android_override_tool.sh apply`，並通過以下方式驗證未散列的樣本
+   檢查暫存中的導出器有效負載（查找
+   `android.telemetry.redaction.override`）。
+4. 使用 `scripts/android_override_tool.sh revoke --token <token>` 撤銷覆蓋，
+   將覆蓋令牌哈希加上票證引用附加到
+   `docs/source/sdk/android/telemetry_override_log.md`，並創建摘要 JSON
+   在 `docs/source/sdk/android/readiness/override_logs/` 下。這將關閉
+   混亂清單中的 C2 場景並使治理證據保持新鮮。
 
-1. Inject a hashing failure via
-   `scripts/telemetry/inject_redaction_failure.sh` and wait for the PagerDuty
-   alert (`android.telemetry.redaction.failure`). Capture the CLI output from
-   `scripts/telemetry/check_redaction_status.py --status-url <collector>` for
-   the incident record.
-2. Clear the failure with `--clear` and confirm the alert resolves within
-   10 minutes; attach Grafana screenshots of the salt/authority panels.
-3. Create a signed override request using
-   `docs/examples/android_override_request.json`, apply it with
-   `scripts/android_override_tool.sh apply`, and verify the unhashed sample by
-   inspecting the exporter payload in staging (look for
-   `android.telemetry.redaction.override`).
-4. Revoke the override with `scripts/android_override_tool.sh revoke --token <token>`,
-   append the override token hash plus ticket reference to
-   `docs/source/sdk/android/telemetry_override_log.md`, and mint a digest JSON
-   under `docs/source/sdk/android/readiness/override_logs/`. This closes the
-   C2 scenario in the chaos checklist and keeps the governance evidence fresh.
+### 5.2 出口商限電和隊列重演演習（C3/C6）1. 縮小臨時收集器的規模（`kubectl scale
+   deploy/android-otel-collector --replicas=0`) 來模擬導出器
+   停電。通過狀態 CLI 跟踪緩衝區指標並確認警報觸發
+   15 分鐘標記。
+2. 恢復收集器，確認積壓排出，並將收集器日誌歸檔
+   顯示重播完成的片段。
+3. 在暫存 Pixel 和模擬器上，按照 ScenarioC6 操作：安裝
+   `examples/android/operator-console`，切換飛行模式，提交演示
+   傳輸，然後禁用飛行模式並觀察隊列深度指標。
+4. 拉取每個待處理隊列 (`adb shell run-as  cat files/pending.queue >
+   /tmp/.queue`), compile the inspector (`gradle -p java/iroha_android
+   ：核心：類> / dev / null`), and run `java -cp構建/類
+   org.hyperledger.iroha.android.tools.PendingQueueInspector --文件
+   /tmp/.queue --json > 隊列重播-.json`。附上解碼的
+   信封加上重放哈希值到實驗室日誌。
+5. 更新混亂報告，包括導出器中斷持續時間、之前/之後的隊列深度、
+   並確認 `android_sdk_offline_replay_errors` 仍為 0。
 
-### 5.2 Exporter brownout & queue replay drill (C3/C6)
+### 5.3 暫存集群混沌腳本 (android-telemetry-stg)
 
-1. Scale the staging collector down (`kubectl scale
-   deploy/android-otel-collector --replicas=0`) to simulate an exporter
-   brownout. Track buffer metrics via the status CLI and confirm alerts fire at
-   the 15-minute mark.
-2. Restore the collector, confirm backlog drain, and archive the collector log
-   snippet showing replay completion.
-3. On both the staging Pixel and emulator, follow Scenario C6: install
-   `examples/android/operator-console`, toggle airplane mode, submit the demo
-   transfers, then disable airplane mode and watch queue depth metrics.
-4. Pull each pending queue (`adb shell run-as <app-id> cat files/pending.queue >
-   /tmp/<serial>.queue`), compile the inspector (`gradle -p java/iroha_android
-   :core:classes >/dev/null`), and run `java -cp build/classes
-   org.hyperledger.iroha.android.tools.PendingQueueInspector --file
-   /tmp/<serial>.queue --json > queue-replay-<serial>.json`. Attach decoded
-   envelopes plus replay hashes to the lab log.
-5. Update the chaos report with exporter outage duration, queue depth before/after,
-   and confirmation that `android_sdk_offline_replay_errors` remained 0.
+暫存集群負責人 Haruka Yamamoto (Android Observability TL) 和 Liam O’Connor
+(SRE) 每當安排排練時都遵循此腳本。順序保持
+參與者與遙測混亂清單保持一致，同時保證
+捕獲人工製品以供治理。
 
-### 5.3 Staging cluster chaos script (android-telemetry-stg)
+**參與者**
 
-Staging cluster owners Haruka Yamamoto (Android Observability TL) and Liam O’Connor
-(SRE) follow this script whenever a rehearsal run is scheduled. The sequence keeps
-participants aligned with the telemetry chaos checklist while guaranteeing that
-artefacts are captured for governance.
+|角色 |職責|聯繫我們 |
+|------|--------------------|---------|
+| Android 隨叫隨到 IC |驅動鑽機、協調 PagerDuty 註釋、擁有命令日誌 | PagerDuty `android-telemetry-primary`、`#android-sdk-support` |
+|暫存集群所有者（Haruka、Liam）|門更改窗口，運行 `kubectl` 操作，快照集群遙測 | `#android-staging` |
+|文檔/支持經理 (Priya) |記錄證據、跟踪實驗室清單、發布後續通知單 | `#docs-support` |
 
-**Participants**
+**飛行前協調**
 
-| Role | Responsibilities | Contact |
-|------|------------------|---------|
-| Android on-call IC | Drives the drill, coordinates PagerDuty notes, owns command log | PagerDuty `android-telemetry-primary`, `#android-sdk-support` |
-| Staging cluster owners (Haruka, Liam) | Gate change windows, run `kubectl` actions, snapshot cluster telemetry | `#android-staging` |
-| Docs/Support manager (Priya) | Record evidence, track labs checklist, publish follow-up tickets | `#docs-support` |
+- 演習前 48 小時，提交變更請求，列出計劃的內容
+  方案 (C1–C7) 並將鏈接粘貼到 `#android-staging` 中，以便集群所有者
+  可以阻止衝突的部署。
+- 收集最新的 `ClientConfig` 哈希值和 `kubectl --context staging get pods
+  -n android-telemetry-stg` 輸出建立基線狀態，然後存儲
+  均位於 `docs/source/sdk/android/readiness/labs/reports/<date>/` 下。
+- 確認設備覆蓋範圍（Pixel + 模擬器）並確保
+  `ci/run_android_tests.sh` 編譯了實驗室使用的工具
+  （`PendingQueueInspector`，遙測注入器）。
 
-**Pre-flight coordination**
+**執行檢查點**
 
-- 48 hours before the drill, file a change request that lists the planned
-  scenarios (C1–C7) and paste the link in `#android-staging` so cluster owners
-  can block clashing deployments.
-- Collect the latest `ClientConfig` hash and `kubectl --context staging get pods
-  -n android-telemetry-stg` output to establish the baseline state, then store
-  both under `docs/source/sdk/android/readiness/labs/reports/<date>/`.
-- Confirm device coverage (Pixel + emulator) and ensure
-  `ci/run_android_tests.sh` compiled the tools used during the lab
-  (`PendingQueueInspector`, telemetry injectors).
+- 在`#android-sdk-support`中宣布“混亂開始”，開始橋接錄音，
+  並保持 `docs/source/sdk/android/telemetry_chaos_checklist.md` 可見，以便
+  每一條命令都是為抄寫員敘述的。
+- 讓暫存所有者鏡像每個注射器操作（`kubectl scale`，導出器
+  重新啟動，負載生成器），因此 Observability 和 SRE 都確認了該步驟。
+- 捕獲`scripts/telemetry/check_redaction_status.py 的輸出
+  --status-url https://android-telemetry-stg/api/redaction/status` 之後
+  場景並將其粘貼到事件文檔中。
 
-**Execution checkpoints**
+**恢復**- 在清除所有噴油器之前，請勿離開橋（`inject_redaction_failure.sh --clear`，
+  `kubectl scale ... --replicas=1`) 和 Grafana 儀表板顯示綠色狀態。
+- 文檔/支持存檔隊列轉儲、CLI 日誌和屏幕截圖
+  `docs/source/sdk/android/readiness/screenshots/<date>/` 並勾選存檔
+  變更請求關閉之前的清單。
+- 對於任何場景，使用 `telemetry-chaos` 標籤記錄後續票證
+  失敗或產生意外的指標，並在 `status.md` 中引用它們
+  在接下來的每週回顧期間。
 
-- Announce “chaos start” in `#android-sdk-support`, begin the bridge recording,
-  and keep `docs/source/sdk/android/telemetry_chaos_checklist.md` visible so
-  every command is narrated for the scribe.
-- Have a staging owner mirror each injector action (`kubectl scale`, exporter
-  restarts, load generators) so both Observability and SRE confirm the step.
-- Capture the output from `scripts/telemetry/check_redaction_status.py
-  --status-url https://android-telemetry-stg/api/redaction/status` after each
-  scenario and paste it into the incident doc.
-
-**Recovery**
-
-- Do not leave the bridge until all injectors are cleared (`inject_redaction_failure.sh --clear`,
-  `kubectl scale ... --replicas=1`) and Grafana dashboards show green status.
-- Docs/Support archives queue dumps, CLI logs, and screenshots under
-  `docs/source/sdk/android/readiness/screenshots/<date>/` and ticks the archive
-  checklist before the change request closes.
-- Log follow-up tickets with the `telemetry-chaos` label for any scenario that
-  failed or produced unexpected metrics, and reference them in `status.md`
-  during the next weekly review.
-
-| Time | Action | Owner(s) | Artefact |
+|時間 |行動|所有者 |文物 |
 |------|--------|----------|----------|
-| T−30 min | Verify `android-telemetry-stg` health: `kubectl --context staging get pods -n android-telemetry-stg`, confirm no pending upgrades, and note collector versions. | Haruka | `docs/source/sdk/android/readiness/screenshots/<date>/cluster-health.png` |
-| T−20 min | Seed baseline load (`scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg --duration 20m`) and capture stdout. | Liam | `readiness/labs/reports/<date>/load-generator.log` |
-| T−15 min | Copy `docs/source/sdk/android/readiness/incident/telemetry_chaos_template.md` to `docs/source/sdk/android/readiness/incident/<date>-telemetry-chaos.md`, list scenarios to run (C1–C7), and assign scribes. | Priya Deshpande (Support) | Incident markdown committed before rehearsal starts. |
-| T−10 min | Confirm Pixel + emulator online, latest SDK installed, and `ci/run_android_tests.sh` compiled the `PendingQueueInspector`. | Haruka, Liam | `readiness/screenshots/<date>/device-checklist.png` |
-| T−5 min | Start Zoom bridge, begin screen recording, and announce “chaos start” in `#android-sdk-support`. | IC / Docs/Support | Recording saved under `readiness/archive/<month>/`. |
-| +0 min | Execute the selected scenario from `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` (typically C2 + C6). Keep the lab guide visible and call out command invocations as they happen. | Haruka drives, Liam mirrors results | Logs attached to the incident file in real time. |
-| +15 min | Pause to collect metrics (`scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`) and grab Grafana screenshots. | Haruka | `readiness/screenshots/<date>/status-<scenario>.png` |
-| +25 min | Restore any injected failures (`inject_redaction_failure.sh --clear`, `kubectl scale ... --replicas=1`), replay queues, and confirm alerts close. | Liam | `readiness/labs/reports/<date>/recovery.log` |
-| +35 min | Debrief: update incident doc with pass/fail per scenario, list follow-ups, and push artefacts to git. Notify Docs/Support that the archive checklist can be completed. | IC | Incident doc updated, `readiness/archive/<month>/checklist.md` ticked. |
+| T−30 分鐘 |驗證 `android-telemetry-stg` 運行狀況：`kubectl --context staging get pods -n android-telemetry-stg`，確認沒有掛起的升級，並記錄收集器版本。 |遙 | `docs/source/sdk/android/readiness/screenshots/<date>/cluster-health.png` |
+| T−20分鐘|種子基線負載 (`scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg --duration 20m`) 並捕獲標準輸出。 |利亞姆| `readiness/labs/reports/<date>/load-generator.log` |
+| T−15 分鐘 |將 `docs/source/sdk/android/readiness/incident/telemetry_chaos_template.md` 複製到 `docs/source/sdk/android/readiness/incident/<date>-telemetry-chaos.md`，列出要運行的方案 (C1–C7)，並分配抄寫員。 | Priya Deshpande（支持）|排練開始前進行的事件降價。 |
+| T−10分鐘|確認Pixel+模擬器上線，安裝最新SDK，`ci/run_android_tests.sh`編譯出`PendingQueueInspector`。 |利亞姆遙 | `readiness/screenshots/<date>/device-checklist.png` |
+| T−5分鐘|啟動Zoom橋，開始屏幕錄製，並在`#android-sdk-support`中宣布“混亂開始”。 | IC / 文檔/支持 |錄音保存在 `readiness/archive/<month>/` 下。 |
+| +0 分鐘 |執行 `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` 中選定的場景（通常為 C2 + C6）。保持實驗室指南可見，並在發生命令調用時調出命令調用。 | Haruka 開車，Liam 反映結果 |日誌實時附加到事件文件中。 |
+| +15 分鐘 |暫停收集指標 (`scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`) 並抓取 Grafana 屏幕截圖。 |遙 | `readiness/screenshots/<date>/status-<scenario>.png` |
+| +25 分鐘 |恢復任何注入的故障（`inject_redaction_failure.sh --clear`、`kubectl scale ... --replicas=1`）、重播隊列並確認警報關閉。 |利亞姆| `readiness/labs/reports/<date>/recovery.log` |
+| +35 分鐘 |匯報：根據每個場景的通過/失敗情況更新事件文檔，列出後續行動，並將工件推送到 git。通知文檔/支持歸檔清單可以完成。 |集成電路 |事件文檔已更新，`readiness/archive/<month>/checklist.md` 已勾選。 |
 
-- Keep the staging owners on the bridge until exporters are healthy and all alerts have cleared.
-- Store raw queue dumps in `docs/source/sdk/android/readiness/labs/reports/<date>/queues/` and reference their hashes in the incident log.
-- If a scenario fails, immediately create a JIRA ticket labelled `telemetry-chaos` and cross-link it from `status.md`.
-- Automation helper: `ci/run_android_telemetry_chaos_prep.sh` wraps the load generator, status snapshots, and queue export plumbing. Set `ANDROID_TELEMETRY_DRY_RUN=false` when staging access is available and `ANDROID_PENDING_QUEUE_EXPORTS=pixel8=/tmp/pixel.queue,emulator=/tmp/emulator.queue` (etc.) so the script copies each queue file, emits `<label>.sha256`, and runs `PendingQueueInspector` to produce `<label>.json`. Use `ANDROID_PENDING_QUEUE_INSPECTOR=false` only when JSON emission must be skipped (e.g., no JDK available). **Always export the expected salt identifiers before running the helper** by setting `ANDROID_TELEMETRY_EXPECTED_SALT_EPOCH=<YYYYQ#>` and `ANDROID_TELEMETRY_EXPECTED_SALT_ROTATION=<id>` so the embedded `check_redaction_status.py` calls fail fast if the captured telemetry diverges from the Rust baseline.
+- 讓分期所有者留在橋上，直到出口商健康並且所有警報均已清除。
+- 將原始隊列轉儲存儲在 `docs/source/sdk/android/readiness/labs/reports/<date>/queues/` 中，並在事件日誌中引用它們的哈希值。
+- 如果方案失敗，請立即創建標記為 `telemetry-chaos` 的 JIRA 票證，並將其與 `status.md` 交叉鏈接。
+- 自動化助手：`ci/run_android_telemetry_chaos_prep.sh` 包裝負載生成器、狀態快照和隊列導出管道。當暫存訪問可用時設置 `ANDROID_TELEMETRY_DRY_RUN=false` 和 `ANDROID_PENDING_QUEUE_EXPORTS=pixel8=/tmp/pixel.queue,emulator=/tmp/emulator.queue`（等），以便腳本複制每個隊列文件，發出 `<label>.sha256`，並運行 `PendingQueueInspector` 以生成 `<label>.json`。僅當必須跳過 JSON 發射時（例如，沒有可用的 JDK），才使用 `ANDROID_PENDING_QUEUE_INSPECTOR=false`。 **在運行幫助程序之前始終通過設置 `ANDROID_TELEMETRY_EXPECTED_SALT_EPOCH=<YYYYQ#>` 和 `ANDROID_TELEMETRY_EXPECTED_SALT_ROTATION=<id>` 導出預期的鹽標識符**，這樣，如果捕獲的遙測數據偏離 Rust 基線，嵌入式 `check_redaction_status.py` 調用會快速失敗。
 
-## 6. Documentation & Enablement
+## 6. 文檔和支持- **操作員支持套件：** `docs/source/sdk/android/readiness/and7_operator_enablement.md`
+  鏈接運行手冊、遙測政策、實驗室指南、存檔清單和知識
+  簽入單個 AND7 就緒包。準備SRE的時候參考一下
+  治理預讀或安排季度刷新。
+- **啟用會議：** 2026 年 2 月 18 日進行 60 分鐘的啟用錄製
+  每季度刷新一次。材料生活在下面
+  `docs/source/sdk/android/readiness/`。
+- **知識檢查：** 員工必須通過準備表獲得 ≥90% 的分數。商店
+  結果為 `docs/source/sdk/android/readiness/forms/responses/`。
+- **更新：**每當遙測模式、儀表板或覆蓋策略時
+  更改，更新此 Runbook、支持 playbook 和 `status.md`
+  公關。
+- **每週審查：** 在每個 Rust 候選版本之後（或至少每週），驗證
+  `java/iroha_android/README.md` 和此操作手冊仍然反映了當前的自動化，
+  夾具輪換程序和治理期望。捕獲評論
+  `status.md`，因此基金會里程碑審核可以跟踪文檔的新鮮度。
 
-- **Operator enablement kit:** `docs/source/sdk/android/readiness/and7_operator_enablement.md`
-  links the runbook, telemetry policy, lab guide, archive checklist, and knowledge
-  checks into a single AND7-ready package. Reference it when preparing SRE
-  governance pre-reads or scheduling the quarterly refresh.
-- **Enablement sessions:** A 60-minute enablement recording runs on 2026-02-18
-  with quarterly refreshes. Materials live under
-  `docs/source/sdk/android/readiness/`.
-- **Knowledge checks:** Staff must score ≥90% via the readiness form. Store
-  results in `docs/source/sdk/android/readiness/forms/responses/`.
-- **Updates:** Whenever telemetry schemas, dashboards, or override policies
-  change, update this runbook, the support playbook, and `status.md` in the same
-  PR.
-- **Weekly review:** After each Rust release candidate (or at least weekly), verify
-  `java/iroha_android/README.md` and this runbook still reflect current automation,
-  fixture rotation procedures, and governance expectations. Capture the review in
-  `status.md` so the Foundations milestone audit can trace documentation freshness.
+## 7. StrongBox 證明工具- **目的：** 在將設備推廣到市場之前驗證硬件支持的證明捆綁包
+  StrongBox 池（AND2/AND6）。該工具使用捕獲的證書鏈並驗證它們
+  使用與生產代碼執行相同的策略來對抗受信任的根。
+- **參考：** 請參閱 `docs/source/sdk/android/strongbox_attestation_harness_plan.md` 了解完整信息
+  捕獲 API、別名生命週期、CI/Buildkite 連接和所有權矩陣。將該計劃視為
+  新實驗室技術人員入職或更新財務/合規工件時的真相來源。
+- **工作流程：**
+  1. 在設備上收集證明捆綁包（別名 `challenge.hex` 和 `chain.pem`，其中
+     leaf→root 命令）並將其複製到工作站。
+  2. 運行 `scripts/android_keystore_attestation.sh --bundle-dir  --trust-root 
+     [--trust-root-dir ] --require-strongbox --output ` 使用適當的
+     Google/Samsung root（目錄允許您加載整個供應商捆綁包）。
+  3. 將 JSON 摘要與原始證明材料一起存檔在
+     `artifacts/android/attestation/<device-tag>/`。
+- **捆綁包格式：** 遵循 `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
+  所需的文件佈局（`chain.pem`、`challenge.hex`、`alias.txt`、`result.json`）。
+- **可信根：** 從設備實驗室機密存儲中獲取供應商提供的 PEM；通過多個
+  `--trust-root` 參數或將 `--trust-root-dir` 指向保存錨點的目錄
+  該鏈以非 Google 錨點終止。
+- **CI 工具：** 使用 `scripts/android_strongbox_attestation_ci.sh` 批量驗證存檔的包
+  在實驗室機器或 CI 運行器上。該腳本掃描 `artifacts/android/attestation/**` 並調用
+  包含記錄文件的每個目錄的線束，寫入刷新的 `result.json`
+  總結到位。
+- **CI 通道：** 同步新包後，運行中定義的 Buildkite 步驟
+  `.buildkite/android-strongbox-attestation.yml` (`buildkite-agent pipeline upload --pipeline .buildkite/android-strongbox-attestation.yml`)。
+  該作業執行 `scripts/android_strongbox_attestation_ci.sh`，生成摘要
+  `scripts/android_strongbox_attestation_report.py`，將報告上傳到`artifacts/android_strongbox_attestation_report.txt`，
+  並將構建註釋為 `android-strongbox/report`。立即調查任何故障並
+  鏈接設備矩陣中的構建 URL。
+- **報告：** 將 JSON 輸出附加到治理審查並更新中的設備矩陣條目
+  `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` 以及認證日期。
+- **模擬演練：** 當硬件不可用時，運行 `scripts/android_generate_mock_attestation_bundles.sh`
+  （使用 `scripts/android_mock_attestation_der.py`）創建確定性測試包以及共享模擬根，以便 CI 和文檔可以端到端地運用該工具。
+- **代碼內護欄：** `ci/run_android_tests.sh --tests
+  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` 涵蓋空與挑戰
+  證明再生（StrongBox/TEE 元數據）並發出 `android.keystore.attestation.failure`
+  挑戰不匹配，因此在發送新包之前捕獲緩存/遙測回歸。
 
-## 7. StrongBox Attestation Harness
+## 8. 聯繫人
 
-- **Purpose:** Validate hardware-backed attestation bundles before promoting devices into the
-  StrongBox pool (AND2/AND6). The harness consumes captured certificate chains and verifies them
-  against trusted roots using the same policy that production code executes.
-- **Reference:** See `docs/source/sdk/android/strongbox_attestation_harness_plan.md` for the full
-  capture API, alias lifecycle, CI/Buildkite wiring, and ownership matrix. Treat that plan as the
-  source of truth when onboarding new lab technicians or updating finance/compliance artefacts.
-- **Workflow:**
-  1. Collect an attestation bundle on-device (alias, `challenge.hex`, and `chain.pem` with the
-     leaf→root order) and copy it to the workstation.
-  2. Run `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>
-     [--trust-root-dir <dir>] --require-strongbox --output <report.json>` using the appropriate
-     Google/Samsung root (directories allow you to load whole vendor bundles).
-  3. Archive the JSON summary alongside raw attestation material in
-     `artifacts/android/attestation/<device-tag>/`.
-- **Bundle format:** Follow `docs/source/sdk/android/readiness/android_strongbox_attestation_bundle.md`
-  for the required file layout (`chain.pem`, `challenge.hex`, `alias.txt`, `result.json`).
-- **Trusted roots:** Obtain vendor-supplied PEMs from the device lab secrets store; pass multiple
-  `--trust-root` arguments or point `--trust-root-dir` to the directory that holds the anchors when
-  the chain terminates in a non-Google anchor.
-- **CI harness:** Use `scripts/android_strongbox_attestation_ci.sh` to batch-verify archived bundles
-  on lab machines or CI runners. The script scans `artifacts/android/attestation/**` and invokes the
-  harness for every directory containing the documented files, writing refreshed `result.json`
-  summaries in place.
-- **CI lane:** After syncing new bundles, run the Buildkite step defined in
-  `.buildkite/android-strongbox-attestation.yml` (`buildkite-agent pipeline upload --pipeline .buildkite/android-strongbox-attestation.yml`).
-  The job executes `scripts/android_strongbox_attestation_ci.sh`, generates a summary with
-  `scripts/android_strongbox_attestation_report.py`, uploads the report to `artifacts/android_strongbox_attestation_report.txt`,
-  and annotates the build as `android-strongbox/report`. Investigate any failures immediately and
-  link the build URL from the device matrix.
-- **Reporting:** Attach the JSON output to governance reviews and update the device matrix entry in
-  `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` with the attestation date.
-- **Mock rehearsal:** When hardware is unavailable, run `scripts/android_generate_mock_attestation_bundles.sh`
-  (which uses `scripts/android_mock_attestation_der.py`) to mint deterministic test bundles plus a shared mock root so CI and docs can exercise the harness end-to-end.
-- **In-code guardrails:** `ci/run_android_tests.sh --tests
-  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` covers empty vs challenged
-  attestation regeneration (StrongBox/TEE metadata) and emits `android.keystore.attestation.failure`
-  on challenge mismatch so cache/telemetry regressions are caught before shipping new bundles.
+- **支持工程待命：** `#android-sdk-support`
+- **SRE 治理：** `#sre-governance`
+- **文檔/支持：** `#docs-support`
+- **升級樹：** 請參閱 Android 支持手冊 §2.1
 
-## 8. Contacts
+## 9. 故障排除場景路線圖項目 AND7-P2 列出了重複尋呼的三個事件類別
+Android 待命：Torii/網絡超時、StrongBox 認證失敗以及
+`iroha_config` 明顯漂移。提交前仔細核對相關清單
+Sev1/2 後續行動並將證據存檔於 `incident/<date>-android-*.md` 中。
 
-- **Support Engineering On-call:** `#android-sdk-support`
-- **SRE Governance:** `#sre-governance`
-- **Docs/Support:** `#docs-support`
-- **Escalation Tree:** See Android Support Playbook §2.1
+### 9.1 Torii 和網絡超時
 
-## 9. Troubleshooting Scenarios
+**信號**
 
-Roadmap item AND7-P2 calls out three incident classes that repeatedly page the
-Android on-call: Torii/network timeouts, StrongBox attestation failures, and
-`iroha_config` manifest drift. Work through the relevant checklist before filing
-Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
+- `android_sdk_submission_latency`、`android_sdk_pending_queue_depth` 上的警報，
+  `android_sdk_offline_replay_errors` 和 Torii `/v1/pipeline` 錯誤率。
+- `operator-console` 小部件（示例/android）顯示停滯的隊列耗盡或
+  重試陷入指數退避。
 
-### 9.1 Torii & Network Timeouts
+**立即響應**
 
-**Signals**
+1. 確認 PagerDuty (`android-networking`) 並啟動事件日誌。
+2. 捕獲 Grafana 快照（提交延遲 + 隊列深度），涵蓋
+   最後30分鐘。
+3. 記錄設備日誌中的活動 `ClientConfig` 哈希 (`ConfigWatcher`
+   每當重新加載成功或失敗時都會打印清單摘要）。
 
-- Alerts on `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`,
-  `android_sdk_offline_replay_errors`, and the Torii `/v1/pipeline` error rate.
-- `operator-console` widgets (examples/android) showing stalled queue drain or
-  retries stuck in exponential backoff.
+**診斷**
 
-**Immediate response**
-
-1. Acknowledge PagerDuty (`android-networking`) and start an incident log.
-2. Capture Grafana snapshots (Submission Latency + Queue Depth) covering the
-   last 30 minutes.
-3. Record the active `ClientConfig` hash from the device logs (`ConfigWatcher`
-   prints the manifest digest whenever a reload succeeds or fails).
-
-**Diagnostics**
-
-- **Queue health:** Pull the configured queue file from a staging device or the
-  emulator (`adb shell run-as <app-id> cat files/pending.queue >
-  /tmp/pending.queue`). Decode the envelopes with
-  `OfflineSigningEnvelopeCodec` as described in
-  `docs/source/sdk/android/offline_signing.md#4-queueing--replay` to confirm the
-  backlog matches operator expectations. Attach the decoded hashes to the
-  incident.
-- **Hash inventory:** After downloading the queue file, run the inspector helper
-  to capture canonical hashes/aliases for the incident artefacts:
+- **隊列運行狀況：** 從臨時設備或
+  模擬器（`adb shell run-as  cat files/pending.queue >
+  /tmp/pending.queue`）。解碼信封
+  `OfflineSigningEnvelopeCodec` 如中所述
+  `docs/source/sdk/android/offline_signing.md#4-queueing--replay` 確認
+  積壓符合運營商的預期。將解碼後的哈希值附加到
+  事件。
+- **哈希庫存：** 下載隊列文件後，運行檢查器助手
+  捕獲事件工件的規范哈希值/別名：
 
   ```bash
   gradle -p java/iroha_android :core:classes >/dev/null  # compiles classes if needed
@@ -698,187 +665,181 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
     --file /tmp/pending.queue --json > queue-inspector.json
   ```
 
-  Attach `queue-inspector.json` and the pretty-printed stdout to the incident
-  and link it from the AND7 lab report for Scenario D.
-- **Torii connectivity:** Run the HTTP transport harness locally to rule out SDK
-  regressions: `ci/run_android_tests.sh` exercises
-  `HttpClientTransportTests`, `HttpClientTransportHarnessTests`, and
-  `ToriiMockServerTests`. Failures here indicate a client bug rather than a
-  Torii outage.
-- **Fault injection rehearsal:** On the staging Pixel (StrongBox) and the AOSP
-  emulator, toggle connectivity to reproduce pending-queue growth:
-  `adb shell cmd connectivity airplane-mode enable` → submit two demo
-  transactions via operator-console → `adb shell cmd connectivity airplane-mode
-  disable` → verify the queue drains and `android_sdk_offline_replay_errors`
-  remains 0. Record hashes of the replayed transactions.
-- **Alert parity:** When tuning thresholds or after Torii changes, execute
-  `scripts/telemetry/test_torii_norito_rpc_alerts.sh` so Prometheus rules stay
-  aligned with the dashboards.
+  將 `queue-inspector.json` 和打印精美的標準輸出附加到事件中
+  並將其鏈接到場景 D 的 AND7 實驗室報告。
+- **Torii 連接：** 在本地運行 HTTP 傳輸工具以排除 SDK
+  回歸：`ci/run_android_tests.sh` 練習
+  `HttpClientTransportTests`、`HttpClientTransportHarnessTests` 和
+  `ToriiMockServerTests`。這裡的失敗表明客戶端錯誤而不是
+  Torii 中斷。
+- **故障注入演練：** 在暫存 Pixel (StrongBox) 和 AOSP 上
+  模擬器，切換連接以重現掛起隊列的增長：
+  `adb shell cmd connectivity airplane-mode enable` → 提交兩個演示
+  通過操作員控制台進行交易 → `adb shell cmd 連接飛行模式
+  禁用` → verify the queue drains and `android_sdk_offline_replay_errors`
+  保持為 0。記錄重放交易的哈希值。
+- **警報奇偶校驗：** 當調整閾值時或 Torii 更改後，執行
+  `scripts/telemetry/test_torii_norito_rpc_alerts.sh` 因此 Prometheus 規則保留
+  與儀表闆對齊。
 
-**Recovery**
+**恢復**
 
-1. If Torii is degraded, engage the Torii on-call and continue replaying the
-   queue once `/v1/pipeline` accepts traffic.
-2. Reconfigure affected clients only via signed `iroha_config` manifests. The
-   `ClientConfig` hot-reload watcher must emit a success log before the incident
-   can close.
-3. Update the incident with the queue size before/after replay plus hashes of
-   any dropped transactions.
+1. 如果 Torii 降級，請接聽 Torii 並繼續重放
+   一旦 `/v1/pipeline` 接受流量就排隊。
+2. 僅通過簽名的 `iroha_config` 清單重新配置受影響的客戶端。的
+   `ClientConfig` 熱重載觀察程序必須在事件發生之前發出成功日誌
+   可以關閉。
+3. 使用重播之前/之後的隊列大小以及以下的哈希值來更新事件
+   任何被丟棄的交易。
 
-### 9.2 StrongBox & Attestation Failures
+### 9.2 StrongBox 和證明失敗
 
-**Signals**
+**信號**- `android_sdk_strongbox_success_rate` 上的警報或
+  `android.keystore.attestation.failure`。
+- `android.keystore.keygen` 遙測現在記錄所請求的
+  `KeySecurityPreference` 和使用的路由（`strongbox`、`hardware`、
+  當 StrongBox 首選項登陸時，`software`）帶有 `fallback=true` 標誌
+  TEE/軟件。 STRONGBOX_REQUIRED 請求現在會快速失敗，而不是靜默失敗
+  返回 TEE 密鑰。
+- 支持引用 `KeySecurityPreference.STRONGBOX_ONLY` 設備的票證
+  回到軟件鍵。
 
-- Alerts on `android_sdk_strongbox_success_rate` or
-  `android.keystore.attestation.failure`.
-- `android.keystore.keygen` telemetry now records the requested
-  `KeySecurityPreference` and the route used (`strongbox`, `hardware`,
-  `software`) with a `fallback=true` flag when a StrongBox preference lands in
-  TEE/software. STRONGBOX_REQUIRED requests now fail fast instead of silently
-  returning TEE keys.
-- Support tickets referencing `KeySecurityPreference.STRONGBOX_ONLY` devices
-  falling back to software keys.
+**立即響應**
 
-**Immediate response**
+1. 確認 PagerDuty (`android-crypto`) 並捕獲受影響的別名標籤
+   （加鹽哈希）加上設備配置文件存儲桶。
+2. 檢查設備的證明矩陣條目
+   `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` 和
+   記錄最後一次驗證的日期。
 
-1. Acknowledge PagerDuty (`android-crypto`) and capture the affected alias label
-   (salted hash) plus device profile bucket.
-2. Check the attestation matrix entry for the device in
-   `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` and
-   record the last verified date.
+**診斷**
 
-**Diagnostics**
-
-- **Bundle verification:** Run
+- **捆綁包驗證：** 運行
   `scripts/android_keystore_attestation.sh --bundle-dir <bundle> --trust-root <root.pem>`
-  on the archived attestation to confirm whether the failure is due to device
-  misconfiguration or a policy change. Attach the generated `result.json`.
-- **Challenge regen:** Challenges are not cached. Each challenge request regenerates a fresh
-  attestation and caches by `(alias, challenge)`; challenge-less calls reuse the cache. Unsupported
-- **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` so every
-  stored bundle is revalidated; this guards against systemic issues introduced
-  by new trust anchors.
-- **Device drill:** On hardware without StrongBox (or by forcing the emulator),
-  set the SDK to require StrongBox only, submit a demo transaction, and confirm
-  the telemetry exporter emits the `android.keystore.attestation.failure` event
-  with the expected reason. Repeat on a StrongBox-capable Pixel to ensure the
-  happy path stays green.
-- **SDK regression check:** Run `ci/run_android_tests.sh` and pay
-  attention to the attestation-focused suites (`AndroidKeystoreBackendDetectionTests`,
+  在存檔的證明上確認故障是否是由於設備造成的
+  配置錯誤或策略更改。附上生成的 `result.json`。
+- **挑戰重新生成：** 挑戰不會被緩存。每個挑戰請求都會重新生成一個新的
+  `(alias, challenge)` 的證明和緩存；無挑戰的調用重用緩存。不支持
+- **CI 掃描：** 執行 `scripts/android_strongbox_attestation_ci.sh`，因此每隔
+  存儲的包被重新驗證；這可以防止引入系統性問題
+  通過新的信任錨。
+- **設備練習：** 在沒有 StrongBox 的硬件上（或通過強制使用模擬器），
+  將 SDK 設置為僅需要 StrongBox，提交演示交易並確認
+  遙測導出器發出 `android.keystore.attestation.failure` 事件
+  與預期的原因。在支持 StrongBox 的 Pixel 上重複此操作，以確保
+  幸福之路常綠。
+- **SDK回歸檢查：**運行`ci/run_android_tests.sh`並支付
+  注意以證明為中心的套件（`AndroidKeystoreBackendDetectionTests`，
   `AttestationVerifierTests`, `IrohaKeyManagerDeterministicExportTests`,
-  `KeystoreKeyProviderTests` for cache/challenge separation). Failures here
-  indicate a client-side regression.
+  `KeystoreKeyProviderTests` 用於緩存/挑戰分離）。失敗在這裡
+  表明客戶端回歸。
 
-**Recovery**
+**恢復**
 
-1. Regenerate attestation bundles if the vendor rotated certificates or if the
-   device recently received a major OTA.
-2. Upload the refreshed bundle to `artifacts/android/attestation/<device>/` and
-   update the matrix entry with the new date.
-3. If StrongBox is unavailable in production, follow the override workflow in
-   Section 3 and document the fallback duration; long-term mitigation requires
-   device replacement or a vendor fix.
+1. 如果供應商輪換了證書或者如果
+   設備最近收到了重大 OTA。
+2. 將刷新後的捆綁包上傳到 `artifacts/android/attestation/<device>/` 並
+   使用新日期更新矩陣條目。
+3. 如果 StrongBox 在生產中不可用，請按照以下中的覆蓋工作流程操作
+   第 3 節並記錄回退持續時間；長期緩解需要
+   設備更換或供應商修復。
 
-### 9.2a Deterministic Export Recovery
+### 9.2a 確定性出口恢復
 
-- **Formats:** Current exports are v3 (per-export salt/nonce + Argon2id, recorded as
-- **Passphrase policy:** v3 enforces ≥12 character passphrases. If users supply shorter
-  passphrases, instruct them to re-export with a compliant passphrase; v0/v1 imports are
-  exempt but should be rewrapped as v3 immediately after import.
-- **Tamper/reuse guards:** Decoders reject zero/short salt or nonce lengths and repeated
-  salt/nonce pairs surface as `salt/nonce reuse` errors. Regenerate the export to clear
-  the guard; do not attempt to force reuse.
-  `SoftwareKeyProvider.importDeterministic(...)` to rehydrate the key, then
-  `exportDeterministic(...)` to emit a v3 bundle so desktop tooling records the new KDF
-  parameters.
+- **格式：** 當前導出為 v3（每次導出 salt/nonce + Argon2id，記錄為
+- **密碼短語策略：** v3 強制執行 ≥12 個字符的密碼短語。如果用戶供應較短
+  密碼短語，指示他們使用合規的密碼短語重新導出； v0/v1 導入是
+  豁免，但應在導入後立即重新包裝為 v3。
+- **篡改/重用防護：** 解碼器拒絕零/短鹽或隨機數長度和重複
+  鹽/隨機數對錶面顯示為 `salt/nonce reuse` 錯誤。重新生成導出以清除
+  警衛；不要試圖強制重複使用。
+  `SoftwareKeyProvider.importDeterministic(...)` 補充密鑰，然後
+  `exportDeterministic(...)` 發出 v3 捆綁包，以便桌面工具記錄新的 KDF
+  參數。### 9.3 清單和配置不匹配
 
-### 9.3 Manifest & Config Mismatches
+**信號**
 
-**Signals**
+- `ClientConfig` 重新加載失敗、Torii 主機名或遙測不匹配
+  由 AND7 diff 工具標記的架構差異。
+- 操作員報告同一設備中的不同重試/退避旋鈕
+  艦隊。
 
-- `ClientConfig` reload failures, mismatched Torii hostnames, or telemetry
-  schema diffs flagged by the AND7 diff tool.
-- Operators reporting different retry/backoff knobs across devices in the same
-  fleet.
+**立即響應**
 
-**Immediate response**
+1. 捕獲 Android 日誌中打印的 `ClientConfig` 摘要和
+   發布清單中的預期摘要。
+2. 轉儲運行節點配置以進行比較：
+   `iroha_cli config show --actual > /tmp/iroha_config.actual.json`。
 
-1. Capture the `ClientConfig` digest printed in the Android logs and the
-   expected digest from the release manifest.
-2. Dump the running node configuration for comparison:
-   `iroha_cli config show --actual > /tmp/iroha_config.actual.json`.
+**診斷**
 
-**Diagnostics**
+- **架構差異：** 運行 `scripts/telemetry/run_schema_diff.sh --android-config
+   --rust-config  --textfile-dir /var/lib/node_exporter/textfile_collector`
+  要生成 Norito diff 報告，請刷新 Prometheus 文本文件，並附加
+  JSON 工件以及事件的指標證據和 AND7 遙測準備日誌。
+- **清單驗證：** 使用 `iroha_cli runtime capabilities` （或運行時
+  審計命令）來檢索節點的公佈的加密/ABI 哈希值並確保
+  它們與移動清單相匹配。不匹配確認節點已回滾
+  無需重新發布 Android 清單。
+- **SDK回歸檢查：** `ci/run_android_tests.sh` 涵蓋
+  `ClientConfigNoritoRpcTests`、`ClientConfig.ValidationTests` 和
+  `HttpClientTransportStatusTests`。失敗表明附帶的 SDK 無法
+  解析當前部署的清單格式。
 
-- **Schema diff:** Run `scripts/telemetry/run_schema_diff.sh --android-config
-  <android.json> --rust-config <rust.json> --textfile-dir /var/lib/node_exporter/textfile_collector`
-  to generate a Norito diff report, refresh the Prometheus textfile, and attach the
-  JSON artefact plus metrics evidence to the incident and AND7 telemetry readiness log.
-- **Manifest validation:** Use `iroha_cli runtime capabilities` (or the runtime
-  audit command) to retrieve the node’s advertised crypto/ABI hashes and ensure
-  they match the mobile manifest. A mismatch confirms the node was rolled back
-  without reissuing the Android manifest.
-- **SDK regression check:** `ci/run_android_tests.sh` covers
-  `ClientConfigNoritoRpcTests`, `ClientConfig.ValidationTests`, and
-  `HttpClientTransportStatusTests`. Failures signal that the shipped SDK cannot
-  parse the manifest format currently deployed.
+**恢復**
 
-**Recovery**
+1.通過授權管道重新生成清單（通常是
+   `iroha_cli runtime Capabilities` → 簽名的 Norito 清單 → 配置包）和
+   通過運營商渠道重新部署。切勿編輯 `ClientConfig`
+   覆蓋設備上的。
+2. 更正後的艙單登陸後，請注意 `ConfigWatcher`“重新加載正常”
+   每個艦隊層上的消息並僅在遙測後關閉事件
+   模式差異報告奇偶性。
+3. 將清單哈希、架構差異工件路徑和事件鏈接記錄在
+   Android 部分下的 `status.md` 用於審核。
 
-1. Regenerate the manifest via the authorized pipeline (usually
-   `iroha_cli runtime Capabilities` → signed Norito manifest → config bundle) and
-   redeploy it through the operator channel. Never edit `ClientConfig`
-   overrides on-device.
-2. Once a corrected manifest lands, watch for the `ConfigWatcher` “reload ok”
-   message on each fleet tier and close the incident only after the telemetry
-   schema diff reports parity.
-3. Record the manifest hash, schema diff artefact path, and incident link in
-   `status.md` under the Android section for auditability.
+## 10. 操作員支持課程
 
-## 10. Operator enablement curriculum
+路線圖項目 **AND7** 需要可重複的培訓包，以便操作員，
+支持工程師，SRE 可以採用遙測/編輯更新，而無需
+猜測。將此部分與
+`docs/source/sdk/android/readiness/and7_operator_enablement.md`，其中包含
+詳細的清單和工件鏈接。
 
-Roadmap item **AND7** requires a repeatable training package so operators,
-support engineers, and SRE can adopt the telemetry/redaction updates without
-guesswork. Pair this section with
-`docs/source/sdk/android/readiness/and7_operator_enablement.md`, which contains
-the detailed checklist and artefact links.
+### 10.1 會議模塊（60 分鐘簡報）
 
-### 10.1 Session modules (60-minute briefing)
+1. **遙測架構（15分鐘）。 ** 遍歷導出器緩衝區，
+   編輯過濾器和模式差異工具。演示
+   `scripts/telemetry/run_schema_diff.sh --textfile-dir /var/lib/node_exporter/textfile_collector` 加
+   `scripts/telemetry/check_redaction_status.py` 讓與會者了解平價如何
+   強制執行。
+2. **運行手冊 + 混沌實驗室（20 分鐘）。 ** 突出顯示本運行手冊的第 2-9 節，
+   演練 `readiness/labs/telemetry_lab_01.md` 中的一個場景，並展示如何
+   將文物歸檔到 `readiness/labs/reports/<stamp>/` 下。
+3. **覆蓋 + 合規工作流程（10 分鐘）。 ** 查看第 3 節覆蓋，
+   演示 `scripts/android_override_tool.sh`（應用/撤銷/摘要），以及
+   更新 `docs/source/sdk/android/telemetry_override_log.md` 加上最新的
+   摘要 JSON。
+4. **問答/知識檢查（15 分鐘）。 ** 使用快速參考卡
+   `readiness/cards/telemetry_redaction_qrc.md` 錨定問題，然後
+   在 `readiness/and7_operator_enablement.md` 中捕穫後續內容。### 10.2 資產節奏和所有者
 
-1. **Telemetry architecture (15 min).** Walk through the exporter buffer,
-   redaction filter, and schema diff tooling. Demo
-   `scripts/telemetry/run_schema_diff.sh --textfile-dir /var/lib/node_exporter/textfile_collector` plus
-   `scripts/telemetry/check_redaction_status.py` so attendees see how parity is
-   enforced.
-2. **Runbook + chaos labs (20 min).** Highlight Sections 2–9 of this runbook,
-   rehearse one scenario from `readiness/labs/telemetry_lab_01.md`, and show how
-   to archive artefacts under `readiness/labs/reports/<stamp>/`.
-3. **Override + compliance workflow (10 min).** Review Section 3 overrides,
-   demonstrate `scripts/android_override_tool.sh` (apply/revoke/digest), and
-   update `docs/source/sdk/android/telemetry_override_log.md` plus the latest
-   digest JSON.
-4. **Q&A / knowledge check (15 min).** Use the quick-reference card in
-   `readiness/cards/telemetry_redaction_qrc.md` to anchor questions, then
-   capture follow-ups in `readiness/and7_operator_enablement.md`.
+|資產|節奏|所有者 |存檔位置 |
+|--------|---------|----------|--------------------|
+|錄製的演練（縮放/團隊）|每季度或每次鹽輪換前 | Android Observability TL + 文檔/支持管理器 | `docs/source/sdk/android/readiness/archive/<YYYY-MM>/`（錄音+清單）|
+|幻燈片和快速參考卡|每當政策/操作手冊發生變化時進行更新 |文檔/支持經理 | `docs/source/sdk/android/readiness/deck/` 和 `/cards/`（導出 PDF + Markdown）|
+|知識檢查+考勤表|每次直播結束後 |支持工程| `docs/source/sdk/android/readiness/forms/responses/` 和 `and7_operator_enablement.md` 考勤塊 |
+|問答積壓/行動日誌 |滾動；每次會議後更新|法學碩士（代理 DRI）| `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 |
 
-### 10.2 Asset cadence & owners
+### 10.3 證據和反饋循環
 
-| Asset | Cadence | Owner(s) | Archive location |
-|-------|---------|----------|------------------|
-| Recorded walkthrough (Zoom/Teams) | Quarterly or before every salt rotation | Android Observability TL + Docs/Support manager | `docs/source/sdk/android/readiness/archive/<YYYY-MM>/` (recording + checklist) |
-| Slide deck & quick-reference card | Update whenever policy/runbook changes | Docs/Support manager | `docs/source/sdk/android/readiness/deck/` and `/cards/` (export PDF + Markdown) |
-| Knowledge check + attendance sheet | After each live session | Support engineering | `docs/source/sdk/android/readiness/forms/responses/` and `and7_operator_enablement.md` attendance block |
-| Q&A backlog / action log | Rolling; updated after every session | LLM (acting DRI) | `docs/source/sdk/android/readiness/and7_operator_enablement.md` §6 |
-
-### 10.3 Evidence & feedback loop
-
-- Store session artefacts (screenshots, incident drills, quiz exports) in the
-  same dated directory used for chaos rehearsals so governance can audit both
-  readiness tracks together.
-- When a session completes, update `status.md` (Android section) with links to
-  the archive directory and note any open follow-ups.
-- Outstanding questions from the live Q&A must be turned into issues or doc
-  pull requests within one week; reference the roadmap epics (AND7/AND8) in the
-  ticket description so owners stay aligned.
-- SRE syncs review the archive checklist plus the schema diff artefact listed in
-  Section 2.3 before declaring the curriculum closed for the quarter.
+- 將會話工件（屏幕截圖、事件演習、測驗導出）存儲在
+  用於混亂排練的相同日期目錄，以便治理可以審計兩者
+  準備情況一起跟踪。
+- 會話完成後，更新 `status.md`（Android 部分），其中包含以下鏈接：
+  存檔目錄並記下任何打開的後續內容。
+- 現場問答中的未決問題必須轉化為問題或文檔
+  一周內拉取請求；參考路線圖史詩（AND7/AND8）
+  票證說明，以便業主保持一致。
+- SRE 同步檢查存檔清單以及列出的架構差異工件
+  第 2.3 節在宣布本季度課程結束之前。

@@ -4,56 +4,58 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Informe de soak de acumulación de capacidad SF-2c
+# Информация о впитывании емкости SF-2c
 
-Fecha: 2026-03-21
+Феча: 21 марта 2026 г.
 
-## Alcance
+## Альканс
 
-Este informe registra las pruebas determinísticas de soak de acumulación de capacidad SoraFS y pagos
+Это информация о регистрации определений впитывания емкости SoraFS на страницах
 solicitadas bajo la hoja de ruta SF-2c.
 
-- **Soak multi-provider de 30 días:** Ejecutado por
-  `capacity_fee_ledger_30_day_soak_deterministic` en
+- **Включить поддержку нескольких поставщиков в течение 30 дней:** Добавлено
+  `capacity_fee_ledger_30_day_soak_deterministic` ru
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  El harness instancia cinco providers, abarca 30 ventanas de settlement y
-  valida que los totales del ledger coincidan con una proyección de referencia
-  calculada de forma independiente. La prueba emite un digest Blake3
-  (`capacity_soak_digest=...`) para que CI pueda capturar y comparar el snapshot
-  canónico.
-- **Penalizaciones por subentrega:** Impuestas por
+  Поставщики услуг El Harvest Instancia cinco, Abarca 30 Ventanas de Settlement y
+  действительность того, что общие суммы в бухгалтерской книге совпадают с ссылочным проецированием
+  расчет независимой формы. La Prueba излучает дайджест Blake3
+  (`capacity_soak_digest=...`), чтобы CI мог захватить и сравнить снимок
+  канонико.
+- **Наказания за нарушение:** Наказания за нарушение
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (mismo archivo). La prueba confirma que los umbrales de strikes, cooldowns,
-  slashes de collateral y contadores del ledger permanecen determinísticos.
+  (архив мисмо). Подтверждение того, что удары, кулдауны, тени,
+  сокращение залога и постоянное детерминирование реестра.
 
-## Ejecución
+## Выброс
 
-Ejecuta las validaciones de soak localmente con:
+Выведите локальные подтверждения замачивания:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Las pruebas completan en menos de un segundo en un portátil estándar y no requieren
-fixtures externas.
+Las pruebas Completen en menos de un segundo en un portátil estándar y no requieren
+внешние светильники.
 
-## Observabilidad
+## Наблюдательность
 
-Torii ahora expone snapshots de crédito de providers junto a fee ledgers para que los dashboards
-puedan gatear sobre saldos bajos y penalty strikes:
+Torii теперь отображает снимки кредитов поставщиков вместе с регистрами комиссий для информационных панелей
+Пуэдан ворота собре сальдос бахос и пенальти:
 
-- REST: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
-  reflejan los campos del ledger verificados en la prueba de soak. Ver
+- ОСТАЛЬНОЕ: `GET /v1/sorafs/capacity/state` развить входы `credit_ledger[*]` que
+  Отобразить проверенные кампос-дель-леджер в проверке замачивания. Вер
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Importación de Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` grafica los
-  contadores de strikes exportados, totales de penalizaciones y collateral en garantía para que el
-  equipo on-call pueda comparar los baselines de soak con entornos en vivo.
+- Импорт Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` графический
+  контрадоры экспортированных забастовок, общие суммы штрафов и залога для того, чтобы
+  Оборудование по вызову позволяет сравнить базовые показатели замачивания в условиях окружающей среды.
 
-## Seguimiento
+## Сегимиенто
 
-- Programar ejecuciones de gate semanales en CI para reejecutar la prueba de soak (smoke-tier).
-- Extender el tablero de Grafana con objetivos de scrape de Torii cuando las exportaciones de
-  telemetry de producción estén disponibles.
+- Программируйте выбросы семантических ворот в CI для повторного запуска замачивания (уровень дыма).
+- Расширитель таблицы Grafana с объектами очистки Torii при экспорте
+  телеметрия производства доступна.

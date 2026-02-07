@@ -11,25 +11,26 @@ id: preview-host-exposure
 title: Preview host exposure guide
 sidebar_label: Preview host exposure
 description: Publish and verify the beta preview host before sending invites.
+translator: machine-google-reviewed
 ---
 
-The DOCS‑SORA roadmap requires every public preview to ride on the same
-checksum‑verified bundle that reviewers exercise locally. Use this runbook
-after reviewer onboarding (and the invite approval ticket) are complete to put
-the beta preview host online.
+DOCS‐I18NT0000000004X юл картаһы һәр йәмәғәт алдан ҡарауҙы талап итә, шул уҡ атлау өсөн .
+тикшерелгән сумма тикшерелгән өйөм, тип рецензенттар урындағы күнекмәләр. Был runbook ҡулланыу .
+Һуңынан рецензент onboarding (һәм саҡырыу раҫлау билет) тулы ҡуйырға
+бета алдан ҡарау хост онлайн.
 
-## Prerequisites
+## Алдан шарттар
 
-- Reviewer onboarding wave approved and logged in the preview tracker.
-- Latest portal build present under `docs/portal/build/` and checksum
-  verified (`build/checksums.sha256`).
-- SoraFS preview credentials (Torii URL, authority, private key, submitted
-  epoch) stored either in environment variables or a JSON config such as
-  [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- DNS change ticket opened with the desired hostname (`docs-preview.sora.link`,
-  `docs.iroha.tech`, etc.) plus on-call contacts.
+- Рецензент onboarding тулҡыны раҫланған һәм алдан ҡарау трекеры теркәлде.
+- Һуңғы порталь төҙөү `docs/portal/build/` һәм чемпион
+  тикшерелгән (`build/checksums.sha256`).
+- I18NT00000000000Х алдан ҡарау ышаныс ҡағыҙҙары (I18NT00000000003X URL, власть, шәхси асҡыс, тапшырылған
+  эпоха) йәки тирә-яҡ мөхит үҙгәртеүселәрендә һаҡлана йәки JSON конфигурациялау, мәҫәлән,
+  [`docs/examples/sorafs_preview_publish.json`] (../../../examples/sorafs_preview_publish.json).
+- DNS үҙгәртеү билеты теләкле хост-исем менән асылды (`docs-preview.sora.link`,
+  `docs.iroha.tech`, һ.б.) плюс шылтыратыуҙа контакттар.
 
-## Step 1 – Build and verify the bundle
+## 1-се аҙым – төҙөү һәм раҫлау өйөм
 
 ```bash
 cd docs/portal
@@ -39,13 +40,13 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-The verify script refuses to continue when the checksum manifest is missing or
-tampered with, keeping every preview artefact audited.
+Тикшеренеүҙең сценарийы дауам итеүҙән баш тарта, ҡасан тикшерелгән сумма манифест юҡ йәки
+үҙгәртелә, һәр алдан ҡарау артефакт аудит һаҡлау.
 
-## Step 2 – Package the SoraFS artefacts
+## 2-се аҙым – I18NT000000001X артефакттары пакеты
 
-Convert the static site into a deterministic CAR/manifest pair. `ARTIFACT_DIR`
-defaults to `docs/portal/artifacts/`.
+Статик сайтты детерминистик CAR/манифест парына әйләндерегеҙ. `ARTIFACT_DIR`
+ғәҙәттәгесә I18NI000000019X.
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -61,13 +62,13 @@ node scripts/generate-preview-descriptor.mjs \
   --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Attach the generated `portal.car`, `portal.manifest.*`, descriptor, and checksum
-manifest to the preview wave ticket.
+Беркетелгән генерацияланған I18NI000000020X, I18NI000000021X, дескриптор, һәм чемпионат
+алдан ҡарау тулҡын билетына күренә.
 
-## Step 3 – Publish the preview alias
+## 3-сө аҙым – алдан ҡарау псевдонимын баҫтырып сығарыу
 
-Re-run the pin helper **without** `--skip-submit` once you are ready to expose
-the host. Supply either the JSON config or explicit CLI flags:
+Ҡабаттан йүгерә булавка ярҙамсыһы **һыҙ ** I18NI000000022X бер тапҡыр һеҙ әҙер фашларға
+хужа. Йәки йәки JSON конфигурация йәки асыҡ CLI флагтары менән тәьмин итеү:
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -78,11 +79,11 @@ the host. Supply either the JSON config or explicit CLI flags:
   --config ~/secrets/sorafs_preview_publish.json
 ```
 
-The command writes `portal.pin.report.json`,
-`portal.manifest.submit.summary.json`, and `portal.submit.response.json`, which
-must ship with the invite evidence bundle.
+Команда I18NI000000023X, 1990 й.
+I18NI000000024X, һәм I18NI000000025X, улар
+саҡырыу дәлилдәре менән ебәрергә тейеш.
 
-## Step 4 – Generate the DNS cutover plan
+## 4-се аҙым – DNS өҙөү планын генерациялау
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs \
@@ -95,13 +96,13 @@ node scripts/generate-dns-cutover-plan.mjs \
   --cache-purge-endpoint https://cache.api/purge \
   --cache-purge-auth-env CACHE_PURGE_TOKEN \
   --out artifacts/sorafs/portal.dns-cutover.json
-```
+``` X
 
-Share the resulting JSON with Ops so the DNS switch references the exact
-manifest digest. When reusing an earlier descriptor as the rollback source,
-append `--previous-dns-plan path/to/previous.json`.
+Һөҙөмтәлә JSON менән бүлешергә Ops шулай DNS коммутатор һылтанмалар теүәл .
+асыҡ һеңдерелгән. Ҡасан ҡабаттан ҡулланғанда, элекке дескриптор булараҡ, кире ҡайтарыу сығанағы,
+ҡушымта `--previous-dns-plan path/to/previous.json`.
 
-## Step 5 – Probe the deployed host
+## 5-се аҙым – зондлау таратыусы хост .
 
 ```bash
 npm run probe:portal -- \
@@ -109,23 +110,23 @@ npm run probe:portal -- \
   --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-The probe confirms the served release tag, CSP headers, and signature metadata.
-Repeat the command from two regions (or attach curl output) so auditors can see
-that the edge cache is warm.
+Зонд раҫлай хеҙмәтләндерелгән релиз тег, CSP башлыҡтары, һәм ҡултамға метамағлүмәттәре.
+Ҡабатлау командаһы ике төбәктән (йәки беркетергә ҡойроҡ сығарыу), шулай итеп, аудиторҙар күрә ала
+тип, сит кэш йылы.
 
-## Evidence bundle
+## Дәлилдәр өйөмө
 
-Include the following artefacts in the preview wave ticket and refer to them in
-the invite email:
+Алдан ҡарау тулҡын билетында түбәндәге артефакттарҙы индерегеҙ һәм уларҙы 1990 йылда мөрәжәғәт итегеҙ.
+саҡырыу электрон почтаһы:
 
-| Artefact | Purpose |
-|----------|---------|
-| `build/checksums.sha256` | Proves the bundle matches the CI build. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Canonical SoraFS payload + manifest. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Shows the manifest submission + alias binding succeeded. |
-| `artifacts/sorafs/portal.dns-cutover.json` | DNS metadata (ticket, window, contacts), route promotion (`Sora-Route-Binding`) summary, the `route_plan` pointer (plan JSON + header templates), cache purge info, and rollback instructions for Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Signed descriptor tying the archive + checksum together. |
-| `probe` output | Confirms the live host advertises the expected release tag. |
+| Артефакт | Маҡсат |
+|---------|----------|
+| `build/checksums.sha256` | Ҡалып иҫбатлай өйөм тура килә CI төҙөү. |
+| `artifacts/sorafs/portal.tar.gz` + I18NI000000029X X | Canonical SoraFS файҙалы йөк + манифест. |
+| I18NI000000030X, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Күрһәтте, асыҡ тапшырыу + псевдоним бәйләү уңышлы булды. |
+| `artifacts/sorafs/portal.dns-cutover.json` | DNS метамағлүмәттәр (билет, тәҙрә, контакттар), маршруттарҙы пропагандалау (`Sora-Route-Binding`) резюме, I18NI000000035X күрһәткесе (план JSON + баш ҡалыптары), кэш таҙартыу мәғлүмәте, һәм Ops өсөн кире инструкциялар. |
+| `artifacts/sorafs/preview-descriptor.json` | Ҡул ҡуйылған дескриптор бәйләү архив + тикшерелгән суммаһы бергә. |
+| I18NI000000037X сығыш | Тере алып барыусы раҫлай реклама көтөлгән релиз тег. |
 
-Once the host is live, follow the [preview invite playbook](./public-preview-invite.md)
-to distribute the link, log invites, and monitor telemetry.
+Бер тапҡыр алып барыусы йәшәй, эйәреп [предвидение саҡырыу плейбук](./public-preview-invite.md)
+һылтанманы таратыу, журнал саҡыра, һәм телеметрия күҙәтеү.

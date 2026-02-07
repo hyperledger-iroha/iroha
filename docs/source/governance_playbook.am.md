@@ -7,169 +7,164 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9201c0027f05b1ab2c83fa6b3e1a1e6dad3ff9660a8ed23bac7667408d421ada
 source_last_modified: "2026-01-22T14:35:37.551676+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Governance Playbook
+# የአስተዳደር ጨዋታ መጽሐፍ
 
-This playbook captures the day-to-day rituals that keep the Sora Network
-governance council aligned. It aggregates the authoritative references from the
-repository so individual ceremonies can remain concise, while operators always
-have a single entry point for the broader process.
+ይህ የመጫወቻ መጽሐፍ የሶራ ኔትወርክን የሚጠብቁ የዕለት ተዕለት የአምልኮ ሥርዓቶችን ይይዛል
+አስተዳደር ምክር ቤት ተሰልፏል. የስልጣን ማጣቀሻዎችን ከ
+ማከማቻ ስለዚህ የግለሰብ ሥነ ሥርዓቶች አጭር ሆነው እንዲቆዩ ኦፕሬተሮች ሁልጊዜ
+ለሰፋፊው ሂደት አንድ ነጠላ የመግቢያ ነጥብ ይኑርዎት.
 
-## Council Ceremonies
+## የምክር ቤት ሥርዓቶች
 
-- **Fixture governance** – See [Sora Parliament Fixture Approval](sorafs/signing_ceremony.md)
-  for the on-chain approval flow that the Parliament’s Infrastructure Panel now
-  follows when reviewing SoraFS chunker updates.
-- **Vote tally publication** – Refer to
-  [Governance Vote Tally](governance_vote_tally.md) for the step-by-step CLI
-  workflow and reporting template.
+- ** ቋሚ አስተዳደር *** - [የሶራ ፓርላማ ቋሚ ማጽደቅን ይመልከቱ](sorafs/signing_ceremony.md)
+  የፓርላማው የመሠረተ ልማት ፓነል አሁን ላለው በሰንሰለት ማጽደቂያ ፍሰት
+  የ SoraFS chunker ዝመናዎችን ሲገመግም ይከተላል።
+- ** የድምጽ መጠን ህትመት *** - ይመልከቱ
+  [የመንግስት ድምጽ ታሊ](governance_vote_tally.md) ለደረጃ-በደረጃ CLI
+  የስራ ፍሰት እና የሪፖርት አብነት.
 
-## Operational Runbooks
+## ተግባራዊ Runbooks
 
-- **API integrations** – [Governance API reference](governance_api.md) lists the
-  REST/gRPC surfaces exposed by council services, including authentication
-  requirements and pagination rules.
-- **Telemetry dashboards** – The Grafana JSON definitions under
-  `docs/source/grafana_*` define the “Governance Constraints” and “Scheduler
-  TEU” boards. Export the JSON into Grafana after each release to stay aligned
-  with the canonical layout.
+- ** የኤፒአይ ውህደት *** - [የመንግስት ኤፒአይ ማጣቀሻ](governance_api.md) ይዘረዝራል
+  REST/gRPC ንጣፎች በካውንስሉ አገልግሎቶች ተጋልጠዋል፣ ማረጋገጫን ጨምሮ
+  መስፈርቶች እና pagination ደንቦች.
+- ** የቴሌሜትሪ ዳሽቦርዶች *** - የ Grafana JSON ትርጓሜዎች በስር
+  `docs/source/grafana_*` "የአስተዳደር ገደቦች" እና "መርሐግብር አውጪ" ይገልፃል.
+  TEU" ሰሌዳዎች. እንደተሰለፉ ለመቆየት ከእያንዳንዱ ከተለቀቀ በኋላ JSON ወደ Grafana ይላኩ።
+  ከቀኖናዊ አቀማመጥ ጋር.
 
-## Data Availability Oversight
+## የውሂብ ተገኝነት ቁጥጥር
 
-### Retention classes
+### የማቆያ ክፍሎች
 
-Parliament panels approving DA manifests must reference the enforced retention
-policy before voting. The table below mirrors the defaults enforced via
-`torii.da_ingest.replication_policy` so reviewers can spot mismatches without
-hunting for the source TOML.【docs/source/da/replication_policy.md:1】
+የDA መግለጫዎችን የሚያፀድቁ የፓርላማ ፓነሎች የግዳጅ ማቆየትን መጥቀስ አለባቸው
+ከመምረጥዎ በፊት ፖሊሲ. ከታች ያለው ሰንጠረዥ በ በኩል የሚተገበሩትን ነባሪዎች ያንጸባርቃል
+`torii.da_ingest.replication_policy` ስለዚህ ገምጋሚዎች ያለተዛማጅነት መለየት ይችላሉ።
+የ TOML ምንጭን ማደን።【docs/source/da/replication_policy.md:1】
 
-| Governance tag | Blob class | Hot retention | Cold retention | Required replicas | Storage class |
-|----------------|------------|---------------|----------------|-------------------|---------------|
-| `da.taikai.live` | `taikai_segment` | 24 h | 14 d | 5 | `hot` |
-| `da.sidecar` | `nexus_lane_sidecar` | 6 h | 7 d | 4 | `warm` |
-| `da.governance` | `governance_artifact` | 12 h | 180 d | 3 | `cold` |
-| `da.default` | _all other classes_ | 6 h | 30 d | 3 | `warm` |
+| አስተዳደር መለያ | የብሎብ ክፍል | ትኩስ ማቆየት | ቀዝቃዛ ማቆየት | የሚፈለጉ ቅጂዎች | የማከማቻ ክፍል |
+|------------------|------------|
+| `da.taikai.live` | `taikai_segment` | 24 ሰአት | 14d | 5 | `hot` |
+| `da.sidecar` | `nexus_lane_sidecar` | 6 ሰ | 7d | 4 | `warm` |
+| `da.governance` | `governance_artifact` | 12 ሰ | 180d | 3 | `cold` |
+| `da.default` | _ሁሉም ሌሎች ክፍሎች_ | 6 ሰ | 30d | 3 | `warm` |
 
-The Infrastructure Panel should attach the filled template from
-`docs/examples/da_manifest_review_template.md` to every ballot so the manifest
-digest, retention tag, and Norito artefacts remain linked in the governance
-record.
+የመሠረተ ልማት ፓነል የተሞላውን አብነት ከ
+`docs/examples/da_manifest_review_template.md` ለእያንዳንዱ ድምጽ መስጫ አንጸባራቂ
+መፍጨት፣ ማቆየት መለያ እና Norito ቅርሶች በአስተዳደር ውስጥ ተሳስረዋል
+መዝገብ.
 
-### Signed manifest audit trail
+### የተፈረመ የሰነድ ኦዲት መንገድ
 
-Before a ballot reaches the agenda, council staff must prove that the manifest
-bytes under review match the Parliament envelope and the SoraFS artefact. Use
-the existing tooling to collect that evidence:
-
-1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
-   or the equivalent SDK helper) so everyone hashes the same bytes that reached
-   the gateways.
-2. Run the manifest stub verifier with the signed envelope:
+የምርጫ ካርድ ወደ አጀንዳው ከመድረሱ በፊት የምክር ቤቱ ሰራተኞች አንጸባራቂው መሆኑን ማረጋገጥ አለባቸው
+በግምገማ ላይ ያሉ ባይቶች ከፓርላማው ፖስታ እና ከSoraFS አርቴፌክት ጋር ይዛመዳሉ። ተጠቀም
+ያንን ማስረጃ ለመሰብሰብ አሁን ያለው መሳሪያ፡-1. የሰነድ ቅርቅቡን ከTorii (`iroha app da get-blob --storage-ticket <hex>` ያውጡ
+   ወይም ተመጣጣኝ የኤስዲኬ አጋዥ) ስለዚህ ሁሉም ሰው የደረሰውን ተመሳሳይ ባይት ያጭዳል
+   በሮች.
+2. አንጸባራቂ ስቶብ አረጋጋጭ በተፈረመበት ፖስታ ያሂዱ፡-
    ```
    cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```
-   This recomputes the BLAKE3 manifest digest, validates the
-   `chunk_digest_sha3_256`, and checks every Ed25519 signature embedded in
-   `manifest_signatures.json`. See `docs/source/sorafs/manifest_pipeline.md`
-   for additional CLI options.
-3. Copy the digest, `chunk_digest_sha3_256`, profile handle, and signer list into
-   the review template. NOTE: if the verifier reports “profile mismatch” or a
-   missing signature, halt the vote and request a corrected envelope.
-4. Store the verifier output (or CI artefact from
-   `ci/check_sorafs_fixtures.sh`) alongside the Norito `.to` payload so auditors
-   can replay the evidence without accessing internal gateways.
+   ይህ የBLAKE3 አንጸባራቂ መፍጨትን እንደገና ያሰላል፣ ያረጋግጣል
+   `chunk_digest_sha3_256`፣ እና በ ውስጥ የተካተተውን እያንዳንዱን የ Ed25519 ፊርማ ያረጋግጣል።
+   `manifest_signatures.json`. `docs/source/sorafs/manifest_pipeline.md` ይመልከቱ
+   ለተጨማሪ የ CLI አማራጮች.
+3. የምግብ መፍጫውን ፣ `chunk_digest_sha3_256` ፣ የመገለጫ እጀታ እና የፈራሚ ዝርዝሩን ወደ ውስጥ ይቅዱ
+   የግምገማ አብነት. ማሳሰቢያ፡ አረጋጋጩ “የመገለጫ አለመመጣጠን” ወይም ሀ
+   ፊርማ ጠፍቷል፣ ድምጹን ያቁሙ እና የተስተካከለ ፖስታ ይጠይቁ።
+4. የማረጋገጫ ውጤቱን (ወይም CI artefact from
+   `ci/check_sorafs_fixtures.sh`) ከ Norito `.to` ጭነት ጋር ስለዚህ ኦዲተሮች
+   የውስጥ መግቢያ መንገዶችን ሳይደርሱ ማስረጃውን እንደገና ማጫወት ይችላል.
 
-The resulting audit pack should let Parliament recreate every hash and signature
-check even after the manifest is rotated out of hot storage.
+የተገኘው የኦዲት ጥቅል ፓርላማው እያንዳንዱን ሃሽ እና ፊርማ እንዲፈጥር መፍቀድ አለበት።
+አንጸባራቂው ከትኩስ ማከማቻ ውጭ ከተሽከረከረ በኋላም ያረጋግጡ።
 
-### Review checklist
+### የፍተሻ ዝርዝርን ይገምግሙ
 
-1. Pull the Parliament-approved manifest envelope (see
-   `docs/source/sorafs/signing_ceremony.md`) and record the BLAKE3 digest.
-2. Verify the manifest’s `RetentionPolicy` block matches the tag in the table
-   above; Torii will reject mismatches, but the council must capture the
-   evidence for auditors.【docs/source/da/replication_policy.md:32】
-3. Confirm that the submitted Norito payload references the same retention tag
-   and blob class that appears in the intake ticket.
-4. Attach proof of the policy check (CLI output, `torii.da_ingest.replication_policy`
-   dump, or CI artefact) to the review packet so SRE can replay the decision.
-5. Record planned subsidy taps or rent adjustments when the proposal depends on
+1. በፓርላማ የጸደቀውን አንጸባራቂ ኤንቨሎፕ ይጎትቱ (ይመልከቱ
+   `docs/source/sorafs/signing_ceremony.md`) እና የ BLAKE3 መፍጨት ይቅዱ።
+2. የአንጸባራቂው `RetentionPolicy` ብሎክ በሰንጠረዡ ላይ ካለው መለያ ጋር መዛመዱን ያረጋግጡ
+   በላይ; Torii አለመዛመጃዎችን ውድቅ ያደርጋል፣ ግን ምክር ቤቱ እነዚህን መያዝ አለበት።
+   ማስረጃ ለኦዲተሮች።【docs/source/da/replication_policy.md:32】
+3. የገባው Norito ክፍያ ጭነት ተመሳሳይ የማቆያ መለያ እንደሚያመለክት ያረጋግጡ
+   እና በመግቢያ ትኬቱ ላይ የሚታየው የብሎብ ክፍል።
+4. የፖሊሲ ቼክ ማረጋገጫን ያያይዙ (የ CLI ውጤት፣ `torii.da_ingest.replication_policy`
+   dump, or CI artefact) ወደ የግምገማ ፓኬት ስለዚህ SRE ውሳኔውን እንደገና ማጫወት ይችላል።
+5. ሃሳቡ በሚወሰንበት ጊዜ የታቀዱ ድጎማ ቧንቧዎችን ወይም የኪራይ ማስተካከያዎችን ይመዝግቡ
    `docs/source/sorafs_reserve_rent_plan.md`.
 
-### Escalation matrix
+### Escalation ማትሪክስ
 
-| Request type | Owning panel | Evidence to attach | Deadlines & telemetry | References |
-|--------------|--------------|--------------------|-----------------------|------------|
-| Subsidy / rent adjustment | Infrastructure + Treasury | Filled DA packet, rent delta from `reserve_rentd`, updated reserve projection CSV, council vote minutes | Note rent impact before submitting the Treasury update; include rolling 30 d buffer telemetry so Finance can reconcile within the next settlement window | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
-| Moderation takedown / compliance action | Moderation + Compliance | Compliance ticket (`ComplianceUpdateV1`), proof tokens, signed manifest digest, appeal status | Follow the gateway compliance SLA (acknowledge within 24 h, full removal ≤72 h). Attach `TransparencyReportV1` excerpt showing the action. | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
-| Emergency freeze / rollback | Parliament moderation panel | Prior approval packet, new freeze order, rollback manifest digest, incident log | Publish freeze notice immediately and schedule the rollback referendum within the next governance slot; include buffer saturation + DA replication telemetry to justify the emergency. | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| የጥያቄ አይነት | የባለቤትነት ፓነል | ለማያያዝ ማስረጃ | የጊዜ ገደብ እና ቴሌሜትሪ | ዋቢዎች |
+|-------------|-------------|--------|
+| ድጎማ / ኪራይ ማስተካከያ | መሠረተ ልማት + ግምጃ ቤት | የተሞላ DA ፓኬት፣ ዴልታ ከ`reserve_rentd` ይከራዩ፣ የዘመነ የመጠባበቂያ ትንበያ CSV፣ የምክር ቤት ድምጽ ደቂቃዎች | የግምጃ ቤት ማሻሻያውን ከማስገባትዎ በፊት የኪራይ ተፅእኖን ያስተውሉ; በሚቀጥለው የሰፈራ መስኮት ውስጥ ፋይናንስ እንዲታረቅ 30d buffer telemetry ያካትቱ | `docs/source/sorafs_reserve_rent_plan.md`, `docs/examples/da_manifest_review_template.md` |
+| አወያይነት የማውረድ / የማክበር እርምጃ | ልከኝነት + ተገዢነት | የታዛዥነት ትኬት (`ComplianceUpdateV1`)፣ የማረጋገጫ ቶከኖች፣ የተፈረመ የማሳያ መግለጫ፣ የይግባኝ ሁኔታ | የመግቢያ መንገዱን ማክበር SLA ይከተሉ (በ24 ሰአት ውስጥ እውቅና ይስጡ፣ ሙሉ በሙሉ መወገድ ≤72 ሰ)። ድርጊቱን የሚያሳይ የ`TransparencyReportV1` ቅንጭብ ያያይዙ። | `docs/source/sorafs_gateway_compliance_plan.md`, `docs/source/sorafs_moderation_panel_plan.md` |
+| የአደጋ ጊዜ መቀዝቀዝ/መመለስ | የፓርላማ አወያይ ፓነል | ቅድመ ማጽደቂያ ፓኬት፣ አዲስ የማሰር ትእዛዝ፣ የመመለሻ አንጸባራቂ መፍጨት፣ የአደጋ መዝገብ | የቀዘቀዘ ማስታወቂያ ወዲያውኑ ያትሙ እና የድጋሚ ህዝበ ውሳኔ በሚቀጥለው የአስተዳደር ክፍተት ውስጥ ያቅዱ። የአደጋ ጊዜን ትክክለኛነት ለማረጋገጥ ቋት ሙሌት + DA ማባዛት ቴሌሜትሪን ያካትቱ። | `docs/source/sorafs/signing_ceremony.md`, `docs/source/sorafs_moderation_panel_plan.md` |የመግቢያ ትኬቶችን በሚወስኑበት ጊዜ ሰንጠረዡን ይጠቀሙ ስለዚህ እያንዳንዱ ፓነል ትክክለኛውን ይቀበላል
+ተልእኮውን ለማስፈጸም የሚያስፈልጉ ቅርሶች።
 
-Use the table when triaging intake tickets so every panel receives the exact
-artefacts required to execute its mandate.
+### የሚቀርቡትን ሪፖርት ማድረግ
 
-### Reporting deliverables
+እያንዳንዱ የ DA-10 ውሳኔ ከሚከተሉት ቅርሶች ጋር መላክ አለበት (ከ
+የአስተዳደር DAG ግቤት በድምጽ የተጠቀሰው፡-
 
-Every DA-10 decision must ship with the following artefacts (attach them to the
-Governance DAG entry referenced in the vote):
+- የተጠናቀቀው የማርከርድ ፓኬት ከ
+  `docs/examples/da_manifest_review_template.md` (አሁን ፊርማ እና
+  የማሳደጊያ ክፍሎች).
+- የተፈረመው Norito አንጸባራቂ (`.to`) እና የ `manifest_signatures.json` ፖስታ
+  ወይም የ CI አረጋጋጭ ምዝግብ ማስታወሻዎች ማምጣትን የሚያረጋግጡ።
+- በድርጊቱ የተቀሰቀሱ ማንኛቸውም ግልጽነት ዝመናዎች፡-
+  - `TransparencyReportV1` ዴልታ ለማውረድ ወይም ተገዢነት የሚነዱ በረዶዎች።
+  - ለድጎማዎች ደብተር ይከራዩ/ያያዙ ወይም `ReserveSummaryV1` ቅጽበታዊ ገጽ እይታ።
+- በግምገማው ወቅት ከተሰበሰቡ የቴሌሜትሪ ቅጽበተ-ፎቶዎች ጋር አገናኞች (የመድገም ጥልቀት ፣
+  ታዛቢዎች ሁኔታዎችን መሻገር ይችላሉ።
+  ከእውነታው በኋላ.
 
-- The completed Markdown packet from
-  `docs/examples/da_manifest_review_template.md` (now including signature and
-  escalation sections).
-- The signed Norito manifest (`.to`) plus the `manifest_signatures.json` envelope
-  or CI verifier logs that prove the fetch digest.
-- Any transparency updates triggered by the action:
-  - `TransparencyReportV1` delta for takedowns or compliance-driven freezes.
-  - Rent/reserve ledger delta or `ReserveSummaryV1` snapshot for subsidies.
-- Links to telemetry snapshots collected during the review (replication depth,
-  buffer headroom, moderation backlog) so observers can cross-check conditions
-  after the fact.
+## ልከኝነት እና መጨመር
 
-## Moderation & Escalation
+የጌትዌይ መውረጃዎች፣ የድጎማ መጨናነቅ ወይም የ DA በረዶዎች ተገዢነትን ይከተላሉ
+የቧንቧ መስመር በ `docs/source/sorafs_gateway_compliance_plan.md` እና በ
+የይግባኝ መሣሪያ በ `docs/source/sorafs_moderation_panel_plan.md`። ፓነሎች የሚከተሉትን ማድረግ አለባቸው:
 
-Gateway takedowns, subsidy clawbacks, or DA freezes follow the compliance
-pipeline described in `docs/source/sorafs_gateway_compliance_plan.md` and the
-appeal tooling in `docs/source/sorafs_moderation_panel_plan.md`. Panels should:
+1. መነሻውን የማክበር ትኬት (`ComplianceUpdateV1` ወይም
+   `ModerationAppealV1`) እና ተያያዥ ማስረጃዎችን ያያይዙ።【docs/source/sorafs_gateway_compliance_plan.md:20】
+2. ጥያቄው የአማካኝነት ይግባኝ መንገድን የሚጠይቅ መሆኑን ያረጋግጡ (የዜጋ ፓነል
+   ድምጽ) ወይም የአደጋ ጊዜ ፓርላማ መቆም; ሁለቱም ፍሰቶች አንጸባራቂውን መጥቀስ አለባቸው
+   መፈጨት እና ማቆየት መለያ በአዲሱ አብነት ተይዟል።【docs/source/sorafs_moderation_panel_plan.md:1】
+3. የመጨመር ቀነ-ገደቦችን ይዘርዝሩ (ይግባኝ መፈጸም/መግለጥ መስኮቶች፣ ድንገተኛ አደጋ
+   የፍሪዝ ቆይታ) እና የትኛው ምክር ቤት ወይም ፓነል የክትትሉ ባለቤት እንደሆነ ይግለጹ።
+4. ጥቅም ላይ የዋለውን የቴሌሜትሪ ቅጽበታዊ ገጽ እይታን ያንሱ
+   የታችኛው ተፋሰስ ኦዲቶች ከውሳኔው በቀጥታ ጋር እንዲዛመዱ ድርጊቱን ማጽደቅ
+   ሁኔታ.
 
-1. Log the originating compliance ticket (`ComplianceUpdateV1` or
-   `ModerationAppealV1`) and attach the associated proof tokens.【docs/source/sorafs_gateway_compliance_plan.md:20】
-2. Confirm whether the request invokes the moderation appeal path (citizen panel
-   vote) or an emergency Parliament freeze; both flows must cite the manifest
-   digest and retention tag captured in the new template.【docs/source/sorafs_moderation_panel_plan.md:1】
-3. Enumerate escalation deadlines (appeal commit/reveal windows, emergency
-   freeze duration) and state which council or panel owns the follow-up.
-4. Capture the telemetry snapshot (buffer headroom, moderation backlog) used to
-   justify the action so downstream audits can match the decision to the live
-   state.
+የማክበር እና የአወያይ ፓነሎች ሳምንታዊ ግልጽነት ሪፖርቶቻቸውን ማመሳሰል አለባቸው
+ከሰፈራ ራውተር ኦፕሬተሮች ጋር ስለዚህ ማውረዶች እና ድጎማዎች ተመሳሳይ ተጽዕኖ ያሳድራሉ።
+የመገለጥ ስብስብ.
 
-The compliance and moderation panels must sync their weekly transparency reports
-with the settlement router operators so takedowns and subsidies affect the same
-set of manifests.
+## ሪፖርት ማድረጊያ አብነቶች
 
-## Reporting Templates
+ሁሉም የDA-10 ግምገማዎች አሁን የተፈረመ ማርክ ማድረጊያ ፓኬት ያስፈልጋቸዋል። ቅዳ
+`docs/examples/da_manifest_review_template.md`፣ አንጸባራቂውን ሜታዳታ ይሞላል፣
+የማቆያ ማረጋገጫ ሠንጠረዥ፣ እና የፓነል ድምጽ ማጠቃለያ፣ ከዚያ የተጠናቀቀውን ይሰኩት
+ሰነድ (በተጨማሪም Norito/JSON artefacts ተጠቃሽ) ወደ አስተዳደር DAG ግቤት።
+ፓነሎች ፓኬጁን በአስተዳደር ደቂቃዎች ውስጥ ማገናኘት አለባቸው ስለዚህ ወደፊት ለማውረድ ወይም
+ድጎማ እድሳት እንደገና ሳያስኬድ ዋናውን አንጸባራቂ መፍጨት ሊጠቅስ ይችላል።
+መላው ሥነ ሥርዓት.
 
-All DA-10 reviews now require a signed Markdown packet. Copy
-`docs/examples/da_manifest_review_template.md`, populate the manifest metadata,
-retention verification table, and panel vote summary, then pin the completed
-document (plus referenced Norito/JSON artefacts) to the Governance DAG entry.
-Panels should link the packet in the governance minutes so future takedowns or
-subsidy renewals can cite the original manifest digest without re-running the
-entire ceremony.
+## ክስተት እና መሻር የስራ ፍሰት
 
-## Incident & Revocation Workflow
+የአደጋ ጊዜ እርምጃዎች አሁን በሰንሰለት ላይ ይከሰታሉ። ቋሚ መለቀቅ ሲያስፈልግ
+ወደ ኋላ ተመለሰ፣ የአስተዳደር ትኬት አስመዝግቡ እና የፓርላማ መመለሻ ፕሮፖዛል ክፈት።
+ቀደም ሲል የጸደቀውን አንጸባራቂ መፍጨት ላይ በመጠቆም። የመሠረተ ልማት ፓነል
+ድምጹን ያስተናግዳል፣ እና አንዴ እንደተጠናቀቀ የNexus የሩጫ ጊዜ መልሶ ማሰራጫውን ያትማል።
+የታችኛው ተፋሰስ ደንበኞች የሚጠቀሙበት ክስተት። ምንም የሀገር ውስጥ የJSON ቅርሶች አያስፈልጉም።
 
-Emergency actions now happen on-chain. When a fixture release needs to be
-rolled back, file a governance ticket and open a Parliament revert proposal
-pointing at the previously approved manifest digest. The Infrastructure Panel
-handles the vote, and once finalized the Nexus runtime publishes the rollback
-event that downstream clients consume. No local JSON artefacts are required.
-
-## Keeping the Playbook Current
-
-- Update this file whenever a new governance-facing runbook lands in the
-  repository.
-- Cross-link new ceremonies here so the council index remains discoverable.
-- If a referenced document moves (for example, a new SDK path), update the link
-  as part of the same pull request to avoid stale pointers.
+## የመጫወቻ ደብተሩን ወቅታዊ ማድረግ- አዲስ አስተዳደርን የሚመለከት runbook በ ውስጥ በገባ ቁጥር ይህንን ፋይል ያዘምኑ
+  ማከማቻ.
+የምክር ቤቱ መረጃ ጠቋሚ ሊገኝ የሚችል ሆኖ እንዲቆይ እዚህ ጋር ተሻጋሪ አዲስ ሥነ ሥርዓቶች።
+- የተጠቀሰ ሰነድ ከተንቀሳቀሰ (ለምሳሌ አዲስ የኤስዲኬ መንገድ) አገናኙን ያዘምኑ
+  የቆዩ ጠቋሚዎችን ለማስወገድ እንደ ተመሳሳይ የመሳብ ጥያቄ አካል።

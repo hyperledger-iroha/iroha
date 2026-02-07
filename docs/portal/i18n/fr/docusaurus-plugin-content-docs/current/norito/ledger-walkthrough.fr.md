@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Parcours du registre
-description: Reproduisez un flux deterministe register -> mint -> transfer avec le CLI `iroha` et verifiez l'etat du ledger resultant.
-slug: /norito/ledger-walkthrough
+titre : Parcours du registre
+description : Reproduisez un flux déterministe register -> mint -> transfer avec le CLI `iroha` et vérifiez l'état du grand livre résultant.
+slug : /norito/ledger-walkthrough
 ---
 
-Ce parcours complete le [quickstart Norito](./quickstart.md) en montrant comment modifier et inspecter l'etat du ledger avec le CLI `iroha`. Vous enregistrerez une nouvelle definition d'actif, minterez des unites sur le compte operateur par defaut, transfererez une partie du solde vers un autre compte et verifierez les transactions et avoirs resultants. Chaque etape reflete les flux couverts par les quickstarts SDK Rust/Python/JavaScript afin de confirmer la parite entre le CLI et le comportement des SDK.
+Ce parcours complet le [quickstart Norito](./quickstart.md) en affichant comment modifier et inspecter l'état du grand livre avec le CLI `iroha`. Vous enregistrez une nouvelle définition d'actif, mintez des unités sur le compte opérateur par défaut, transférez une partie du solde vers un autre compte et vérifiez les transactions et avoirs résultants. Chaque étape reflète les flux couverts par les quickstarts SDK Rust/Python/JavaScript afin de confirmer la parité entre la CLI et le comportement du SDK.
 
-## Prerequis
+## Prérequis
 
-- Suivez le [quickstart](./quickstart.md) pour demarrer le reseau mono-pair via
+- Suivez le [quickstart](./quickstart.md) pour démarrer le réseau mono-paire via
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Assurez-vous que `iroha` (le CLI) est construit ou telecharge et que vous pouvez
+- Assurez-vous que `iroha` (le CLI) est construit ou téléchargé et que vous pouvez
   joindre le peer avec `defaults/client.toml`.
-- Outils optionnels : `jq` (formatage des reponses JSON) et un shell POSIX pour les
-  snippets de variables d'environnement ci-dessous.
+- Outils optionnels : `jq` (formatage des réponses JSON) et un shell POSIX pour les
+  extraits de variables d'environnement ci-dessous.
 
 Tout au long du guide, remplacez `$ADMIN_ACCOUNT` et `$RECEIVER_ACCOUNT` par les
-IDs de compte que vous comptez utiliser. Le bundle par defaut inclut deja deux comptes
-issus des cles de demo :
+ID de compte que vous comptez utiliser. Le bundle par défaut inclut déjà deux comptes
+issue des clés de démo :
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
@@ -36,9 +38,7 @@ Confirmez les valeurs en listant les premiers comptes :
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
-```
-
-## 1. Inspecter l'etat genesis
+```## 1. Inspecter l'état Genèse
 
 Commencez par explorer le ledger cible par le CLI :
 
@@ -55,12 +55,12 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-Ces commandes reposent sur des reponses Norito, donc le filtrage et la pagination sont
- deterministes et correspondent a ce que recoivent les SDK.
+Ces commandes reposent sur des réponses Norito, donc le filtrage et la pagination sont
+ déterministes et correspondant à ce que recoivent les SDK.
 
-## 2. Enregistrer une definition d'actif
+## 2. Enregistrer une définition d'actif
 
-Creez un nouvel actif infiniment mintable appele `coffee` dans le domaine
+Créez un nouvel actif infiniment mintable appele `coffee` dans le domaine
 `wonderland` :
 
 ```sh
@@ -68,13 +68,13 @@ iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-Le CLI affiche le hash de transaction soumis (par exemple, `0x5f...`). Conservez-le
+La CLI affiche le hash de transaction soumis (par exemple, `0x5f...`). Conservez-le
 pour consulter le statut plus tard.
 
-## 3. Minter des unites sur le compte operateur
+## 3. Minter des unités sur le compte opérateur
 
-Les quantites d'actifs vivent sous la paire `(asset definition, account)`. Mintez 250
-unites de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
+Les quantités d'actifs vivent sous la paire `(asset definition, account)`. Mintez 250
+unit de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -82,8 +82,8 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Encore une fois, recuperez le hash de transaction (`$MINT_HASH`) depuis la sortie du CLI. Pour
-verifier le solde, executez :
+Encore une fois, récupérez le hash de transaction (`$MINT_HASH`) depuis la sortie du CLI. Verser
+vérifier le solde, exécuter :
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
@@ -97,9 +97,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transferer une partie du solde vers un autre compte
+## 4. Transférer une partie du solde vers un autre compte
 
-Deplacez 50 unites du compte operateur vers `$RECEIVER_ACCOUNT` :
+Déplacez 50 unités du compte opérateur vers `$RECEIVER_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -109,7 +109,7 @@ iroha --config defaults/client.toml asset transfer \
 ```
 
 Sauvegardez le hash de transaction comme `$TRANSFER_HASH`. Interrogez les avoirs des deux comptes
-pour verifier les nouveaux soldes :
+pour vérifier les nouvelles ventes :
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -119,16 +119,14 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verifier les preuves du ledger
+## 5. Vérifier les preuves du grand livre
 
-Utilisez les hashes sauvegardes pour confirmer que les deux transactions ont ete committees :
+Utilisez les hashes sauvegardes pour confirmer que les deux transactions ont été comités :
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
-```
-
-Vous pouvez aussi streamer les blocs recents pour voir quel bloc a inclus le transfert :
+```Vous pouvez aussi streamer les blocs récents pour voir quel bloc a inclus le transfert :
 
 ```sh
 # Stream depuis le dernier bloc et arretez apres ~5 secondes
@@ -137,17 +135,17 @@ iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 
 Toutes les commandes ci-dessus utilisent les memes payloads Norito que les SDK. Si vous
 reproduisez ce flux via du code (voir les quickstarts SDK ci-dessous), les hashes et
-soldes seront alignes tant que vous ciblez le meme reseau et les memes defaults.
+les ventes seront alignées tant que vous ciblez le meme reseau et les memes defaults.
 
-## Liens de parite SDK
+## Liens de parité SDK
 
 - [Rust SDK quickstart](../sdks/rust) - montre l'enregistrement d'instructions,
-  la soumission de transactions et le polling de statut depuis Rust.
-- [Python SDK quickstart](../sdks/python) - montre les memes operations register/mint
-  avec des helpers JSON adosses a Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) - couvre les requetes Torii,
-  les helpers de gouvernance et les wrappers de requetes typees.
+  la soumission de transactions et le sondage de statut depuis Rust.
+- [Démarrage rapide du SDK Python](../sdks/python) - montre les opérations memes registre/mint
+  avec des helpers JSON adosse un Norito.
+- [JavaScript SDK quickstart](../sdks/javascript) - couvre les requêtes Torii,
+  les helpers de gouvernance et les wrappers de requêtes types.
 
-Executez d'abord le walkthrough CLI, puis repetez le scenario avec votre SDK
-prefere pour vous assurer que les deux surfaces s'accordent sur les hashes de
-transactions, les soldes et les resultats de requetes.
+Exécutez d'abord la CLI pas à pas, puis répétez le scénario avec votre SDK
+préférez pour vous assurer que les deux surfaces s'accordent sur les hashes de
+transactions, les ventes et les résultats de requêtes.

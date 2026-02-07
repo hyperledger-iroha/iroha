@@ -8,114 +8,116 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview invite flow
 sidebar_label: Preview invite flow
 description: Sequencing, evidence, and communications plan for the docs portal public preview waves.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Purpose
+## དགོས༌དོན
 
-Roadmap item **DOCS-SORA** calls out reviewer onboarding and the public preview
-invite program as the final blockers before the portal can exit beta. This page
-describes how to open each invite wave, which artefacts must ship before
-invites go out, and how to prove the flow is auditable. Use it alongside:
+རོ་ཌི་མེཔ་རྣམ་གྲངས་ **DOCS-I1NT00000004X** གིས་ བསྐྱར་ཞིབ་འབད་མི་ བརྡ་བཀོད་དང་ མི་མང་སྔོན་ལྟ་ལུ་ འབོད་བརྡ་འབདཝ་ཨིན།
+ལས་རིམ་འདི་ དྲྭ་རྒྱ་འདི་གི་ཧེ་མ་ མཐའ་མཇུག་བཀག་ཆ་འབད་མི་ཚུ་གིས་ བེ་ཊ་ལས་ཐོན་འགྱོ་ཚུགསཔ་ལས་ འབོད་བརྡ་འབདཝ་ཨིན། ཤོག་ངོས།
+འདྲེན་བྱེད་ཀྱི་རླབས་རེ་རེ་བཞིན་ཁ་ཕྱེ་ཐངས་འགྲེལ་བཤད་བརྒྱབ་ཡོད།
+འབོད་བརྡ་ཚུ་ ཕྱི་ཁར་འགྱོ་ཞིནམ་ལས་ རྒྱུན་འགྲུལ་འདི་ ག་དེ་སྦེ་ བདེན་དཔང་འབད་ནི་ཨིན་ན་ རྩིས་ཞིབ་འབད་ཚུགསཔ་ཨིན། མཉམ་དུ་ལག་ལེན་འཐབ།
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) for
-  per-reviewer handling.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) for checksum
-  guarantees.
-- [`devportal/observability`](./observability.md) for telemetry exports and
-  alerting hooks.
+- [I18NI0000011X](./reviewer-onboarding.md)
+  བསྐྱར་ཞིབ་པ་རེ་ལུ་འཛིན་སྐྱོང་འཐབ་ནི།
+- [I18NI0000012X](I18NU000000007X) ཞིབ་དཔྱད་བསྡོམས་རྩིས་ཀྱི་དོན་ལུ་
+  ཁས་ལེན་འབད་ནི།
+- [`devportal/observability`](./observability.md) བརྒྱུད་འཕྲིན་ཕྱིར་གཏོང་དང་།
+  ཉེན་བརྡ་འབད་མི་ ཧུཀ་ཚུ།
 
-## Wave plan
+## རླབས་ཀྱི་འཆར་གཞི།
 
-| Wave | Audience | Entry criteria | Exit criteria | Notes |
+| རླབས་ | ལྟདམོ་ལྟ་ | ནང་འཛུལ་ཚད་གཞི། | ཁྱད་ཚད་ | དྲན་ཐོ། |
 | --- | --- | --- | --- | --- |
-| **W0 – Core maintainers** | Docs/SDK maintainers validating day-one content. | `docs-portal-preview` GitHub team populated, `npm run serve` checksum gate green, Alertmanager quiet for 7 days. | All P0 docs reviewed, backlog tagged, no blocking incidents. | Used to validate the flow; no invite email, just share the preview artefacts. |
-| **W1 – Partners** | SoraFS operators, Torii integrators, governance reviewers under NDA. | W0 exited, legal terms approved, Try-it proxy staged. | Collected partner sign-off (issue or signed form), telemetry shows ≤10 concurrent reviewers, no security regressions for 14 days. | Enforce invite template + request tickets. |
-| **W2 – Community** | Selected contributors from the community waitlist. | W1 exited, incident drills rehearsed, public FAQ updated. | Feedback digested, ≥2 documentation releases shipped via preview pipeline without rollback. | Cap concurrent invites (≤25) and batch weekly. |
+| **W0 – གཞི་རྟེན་བདག་འཛིན་པ་** | ཡིག་ཆ་/ཨེསི་ཌི་ཀེ་ རྒྱུན་སྐྱོང་པ་ཚུ་གིས་ ཉིནམ་གཅིག་གི་ནང་དོན་བདེན་དཔྱད་འབད་ཡོདཔ། | I18NI0000000000014X གི་ཊི་ཧབ་སྡེ་ཚན་འདི་ I18NI000000015X checksum gate ལྗང་ཁུ་དང་ ཉིན་གྲངས་༧ གྱི་རིང་ལུ་ ཉེན་བརྡ་མ་ནར་ ཁུ་སིམ་སིམ། | པི་༠ ཡིག་ཆ་ཚུ་ཆ་མཉམ་བསྐྱར་ཞིབ་འབད་ཡོདཔ་ རྒྱབ་ལོག་རྟགས་བཀལ་ཡོདཔ་ བཀག་ཆ་མ་བྱུང་། | རྒྱུན་འགྲུལ་འདི་བདེན་དཔྱད་འབད་ནི་ལུ་ལག་ལེན་འཐབ་ཨིན། འདྲེན་བྱེད་ཀྱི་གློག་འཕྲིན་མེད་པ། སྔོན་ལྟ་གི་ཅ་མཛོད་ཚུ་བརྗེ་སོར་འབད། |
+| **W1 – མཉམ་འབྲེལ་པ་** | SoraFS བཀོལ་སྤྱོད་པ་ཚུ་, Torii མཉམ་བསྡོམས་འབད་མི་, NDA གི་འོག་ལུ་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་པ། | W0 ཕྱིར་ཐོན་པའི་ཁྲིམས་དོན་གྱི་ཐ་སྙད་ཆ་འཇོག་འབད་ , ངོ་ཚབ་གནས་རིམ་གྱི་འབད་རྩོལ་བསྐྱེད། | བསྡུ་སྒྲིག་འབད་ཡོད་པའི་མཉམ་འབྲེལ་པ་མིང་རྟགས་བཀོད་ (གནད་དོན་དང་ ཡང་ན་ མཚན་རྟགས་བཀོད་ཡོད་པའི་འབྲི་ཤོག་) ཊེ་ལི་མི་ཊི་རི་གིས་ ≤༡༠ དུས་མཉམ་བསྐྱར་ཞིབ་འབད་མི་ཚུ་སྟོནམ་ཨིན། | ཕོརསི་ ཊེམ་པེལེཊི་ + ཞུ་བ་ཤོག་བྱང་ཚུ་ མགྲོན་བརྡ་འབད། |
+| **W2 – མི་སྡེ་** | མི་སྡེ་བསྒུག་ཐོ་ནང་ལས་ སེལ་འཐུ་འབད་ཡོད་པའི་ ཕན་འདེབས་འབད་མི་ཚུ། | W1 exited, བྱུང་རྐྱེན་གྱི་སྦྱོང་བརྡར་བསྐྱར་སྦྱོང་འབད་ཡོདཔ། མི་མང་ FAQ དུས་མཐུན་བཟོ་ཡོདཔ། | བསམ་འཆར་བརྗེ་སྒྱུར་འབད་ཡོདཔ་ ≥2 ཡིག་ཆ་གིས་ སྔོན་ལྟའི་མདོང་ལམ་བརྒྱུད་དེ་ བཤུད་བརྡར་མེད་པར་ བཏོནམ་ཨིན། | བདུན་ཕྲག་རེ་ནང་ མཉམ་དུ་འབོད་བརྡ་ (≤25) དང་ བདུན་ཕྲག་རེ་ནང་ བརྡབ་གསིག་འབད་ནི། |
 
-Document which wave is active inside `status.md` and in the preview request
-tracker so governance can see where the program sits at a glance.
+I18NI0000016X དང་ སྔོན་ལྟ་ཞུ་བ་ནང་ རླབས་ག་འདི་ ཤུགས་ལྡན་ཡོདཔ་ཨིན་ན་ ཡིག་ཆ།
+བརྟག་ཞིབ་པ་དེ་ གཞུང་སྐྱོང་གིས་ ལས་རིམ་འདི་ ག་ཏེ་སྡོད་དོ་ཡོདཔ་ཨིན་ན་ བལྟ་ཚུགས།
 
-## Preflight checklist
+## སྔོན་མའི་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-Complete these actions **before** scheduling invites for a wave:
+བྱ་བ་འདི་ཚུ་ *** གིས་ དུས་ཚོད་བཀོད་ནི་ རླབས་ཅིག་གི་དོན་ལུ་ མགྲོན་བརྡ་འབདཝ་ཨིན།
 
-1. **CI artefacts available**
-   - Latest `docs-portal-preview` + descriptor uploaded by
+1. **CI ཅ་རྙིང་ཚུ་འཐོབ་ཚུགསཔ་**
+   - མཐའ་མའི་ `docs-portal-preview` + སྐྱེལ་བཙུགས་འབད་ཡོདཔ།
      `.github/workflows/docs-portal-preview.yml`.
-   - SoraFS pin noted in `docs/portal/docs/devportal/deploy-guide.md`
-     (cutover descriptor present).
-2. **Checksum enforcement**
-   - `docs/portal/scripts/serve-verified-preview.mjs` invoked through
+   - I18NT000000002X པིན་རྟགས་བཀོད་ཡོད།
+     (cutover འགྲེལ་བཤད་ད་ལྟོ་)།
+2. ** ཅེག་སུམ་ བསྟར་སྤྱོད་**
+   - I18NI000000020X བརྒྱུད་དེ་འབོད་བཀུག་བྱས།
      `npm run serve`.
-   - `scripts/preview_verify.sh` instructions tested on macOS + Linux.
-3. **Telemetry baseline**
-   - `dashboards/grafana/docs_portal.json` shows healthy Try it traffic and
-     `docs.preview.integrity` alert is green.
-   - Latest `docs/portal/docs/devportal/observability.md` appendix updated with
-     Grafana links.
-4. **Governance artefacts**
-   - Invite tracker issue ready (one issue per wave).
-   - Reviewer registry template copied (see
-     [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Legal- and SRE-required approvals attached to the issue.
+   - མེཀ་ཨོ་ཨེསི་ + ལི་ནགསི་གུ་བརྟག་དཔྱད་འབད་མི་ I18NI00000022 བརྡ་བཀོད་ཚུ།
+3.*Telemetry གཞི་རིམ་**།
+   - I18NI0000000023X ནད་མེད་ཀྱི་འགྲུལ་བསྐྱོད་དང་འགྲིམ་འགྲུལ་དང་།
+     `docs.preview.integrity` ཉེན་བརྡ་ལྗང་ཁུ་ཡོད།
+   - མཐའ་མའི་ I18NI0000025X མཉམ་དུ་དུས་མཐུན་བཟོ་ཡོད།
+     Grafana འབྲེལ་མཐུད།
+4. **གཞུང་སྐྱོང་གི་ཅ་ལག་**།
+   - མགྲོན་བརྡ་འབད་མི་གི་གནད་དོན་འདི་ གྲ་སྒྲིག་ཡོདཔ་ཨིན་ (རླབས་རེ་ལུ་གནད་དོན་གཅིག་)།
+   - བསྐྱར་ཞིབ་པ་ཐོ་བཀོད་ཊེམ་པེལེཊི་འདྲ་བཤུས་རྐྱབས་ཡོདཔ་ (see
+     [I18NI0000026X](I18NU0000009X)).
+   - ཁྲིམས་དོན་དང་ ཨེསི་ཨར་ཨི་-གནད་དོན་ལུ་མཉམ་སྦྲགས་འབད་ཡོད་པའི་ཆ་འཇོག་ཚུ།
 
-Record preflight completion in the invite tracker before sending any mail.
+ཡིག་འཕྲིན་ག་ནི་ཡང་མ་གཏང་པའི་ཧེ་མ་ མགྲོན་བརྡ་འཚོལ་ཞིབ་འབད་མི་ནང་ སྔོན་འགྲོའི་འཕུར་འགྲུལ་མཇུག་བསྡུ་འདི་དྲན་ཐོ་བཀོད།
 
-## Flow steps
+## གོམ་པ།
 
-1. **Select candidates**
-   - Pull from the waitlist spreadsheet or partner queue.
-   - Ensure each candidate has a completed request template.
-2. **Approve access**
-   - Assign an approver to the invite tracker issue.
-   - Verify prerequisites (CLA/contract, acceptable use, security brief).
-3. **Send invites**
-   - Fill in the
-     [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-     placeholders (`<preview_tag>`, `<request_ticket>`, contacts).
-   - Attach the descriptor + archive hash, Try it staging URL, and support
-     channels.
-   - Store the final email (or Matrix/Slack transcript) in the issue.
-4. **Track onboarding**
-   - Update the invite tracker with `invite_sent_at`, `expected_exit_at`, and
-     status (`pending`, `active`, `complete`, `revoked`).
-   - Link to the reviewer’s intake request for auditability.
-5. **Monitor telemetry**
-   - Watch `docs.preview.session_active` and `TryItProxyErrors` alerts.
-   - File an incident if telemetry deviates from the baseline and record the
-     outcome next to the invite entry.
-6. **Collect feedback & exit**
-   - Close invites once feedback lands or `expected_exit_at` passes.
-   - Update the wave issue with a short summary (findings, incidents, next
-     actions) before moving to the next cohort.
+༡ **འདེམས་ངོ་ཚུ་སེལ་འཐུ་འབད།**
+   - བསྒུག་ཐོ་ཡིག་ཤོག་ཁྲམ་ཡང་ན་ མཉམ་འབྲེལ་གྲལ་ཐིག་ལས་འཐེན་འབད།
+   - འདེམས་ངོ་རེ་རེ་ལུ་ ཞུ་བ་ཊེམ་པེལེཊི་མཇུག་བསྡུ་ཡོདཔ་ངེས་གཏན་བཟོ།
+2.*འགྲིག་ཐུབ་པའི་***
+   - འདྲེན་བྱེད་འཚོལ་ཞིབ་ཀྱི་གནད་དོན་ལུ་ ཆ་འཇོག་འབད་མི་ཅིག་འགན་སྤྲོད་འབད།
+   - སྔོན་སྒྲིག་དགོས་མཁོ་ཚུ་བདེན་དཔྱད་འབད་ (སི་ཨེལ་ཨེ་/ཁ་འབག་དང་ ངོས་ལེན་འབད་བཏུབ་པའི་ལག་ལེན་ ཉེན་སྲུང་གི་མདོར་བསྡུས་)།
+3. **Send འབོད་བརྡ་ཚུ་**
+   - བཀང་ནི།
+     [I18NI0000027X](I18NU0000010X)
+     ས་གནས་འཛིན་མི་ (`<preview_tag>`, `<request_ticket>`, འབྲེལ་འཐུད་ཚུ།)
+   - འགྲེལ་བཤད་ + གཏན་མཛོད་ཧེཤ་ འདི་ ཡུ་ཨར་ཨེལ་ རིམ་སྒྲིག་འབད་ཞིནམ་ལས་ རྒྱབ་སྐྱོར་འབད།
+     རྒྱུན་ལམ་ཚུ།
+   - གནད་དོན་འདི་ནང་ མཐའ་མཇུག་གི་གློག་འཕྲིན་ (ཡང་ན་ མེ་ཊིགསི་/སི་ལེག་ཡིག་བསྒྱུར་) ​​གསོག་འཇོག་འབད།
+4. **འགྲུལ་བཞུད་འགོ་བཙུགས་**།
+   - I18NI000000030X, I18NI000000031X, དང་བཅས་ མགྲོན་བརྡ་འཚོལ་ཞིབ་འབད་མི་འདི་ དུས་མཐུན་བཟོ།
+     གནས་ཚད་ (`pending`, `active`, I18NI000000034X, I18NI000000035X,
+   - བསྐྱར་ཞིབ་པ་གིས་ རྩིས་ཞིབ་འབད་ནི་གི་དོན་ལུ་ ཞུ་བ་འབད་མི་ལུ་ འབྲེལ་མཐུད་འབད།
+༥ **བལྟ་རྟོག་པ་བརྒྱུད་འཕྲིན་**།
+   - `docs.preview.session_active` དང་ I18NI000000037X ཉེན་བརྡ།
+   - གཞི་རྟེན་ལས་ ཊེ་ལི་མི་ཊི་རི་ ཐ་དད་སྦེ་ བྱུང་རྐྱེན་ཅིག་ ཕུལ་ཞིནམ་ལས་ ཐོ་བཀོད་འབད།
+     འདྲེན་བྱེད་ཐོ་བཀོད་ཀྱི་ཤུལ་ལས་ གྲུབ་འབྲས་ཐོན་།
+༦ **བསམ་འཆར་དང་ཕྱིར་ཐོན་** བསྡུ་ལེན་འབད།
+   - བསམ་ལན་ས་ཆ་ཚུ་ ཚར་གཅིག་ ཡང་ན་ `expected_exit_at` ཆོག་ཡིག་ཚུ་ འབོཝ་ཨིན།
+   - རླབས་ཀྱི་གནད་དོན་འདི་ བཅུད་བསྡུས་ཐུང་ཀུ་ཅིག་གིས་ དུས་མཐུན་བཟོ་དགོ།
+     mead) ཤུལ་མམ་གྱི་སྡེ་ཚན་ལུ་མ་འགྱོ་བའི་ཧེ་མ་ལུ།
 
-## Evidence & reporting
+## སྒྲུབ་བྱེད་དང་སྙན་ཞུ།
 
-| Artefact | Where to store | Refresh cadence |
+| ཅ་ཆས། | གང་དུ་བསག་དགོས་ | གསར་བསྐྲུན་འབད་ནི། |
 | --- | --- | --- |
-| Invite tracker issue | `docs-portal-preview` GitHub project | Update after each invite. |
-| Reviewer roster export | `docs/portal/docs/devportal/reviewer-onboarding.md` linked registry | Weekly. |
-| Telemetry snapshots | `docs/source/sdk/android/readiness/dashboards/<date>/` (reuse telemetry bundle) | Per wave + after incidents. |
-| Feedback digest | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (create folder per wave) | Within 5 days of wave exit. |
-| Governance meeting note | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Populate before each DOCS-SORA governance sync. |
+| མགྲོན་བརྡ་འཚོལ་ཞིབ་ཀྱི་གནད་དོན་ | `docs-portal-preview` གི་ཊི་ཧབ་ལས་གཞི། | མགྲོན་བརྡ་རེ་རེ་གི་ཤུལ་ལས་ དུས་མཐུན་བཟོ་དགོ། |
+| བསྐྱར་ཞིབ་པ་ཐོ་ཡིག་ཕྱིར་འདྲེན་ | `docs/portal/docs/devportal/reviewer-onboarding.md` འབྲེལ་མཐུད་ཡོད་པའི་ཐོ་བཀོད་ | བདུན་ཕྲག་རེ། |
+| ཊེ་ལི་མི་ཊི་པར་རིས། | I18NI0000041X (བསྐྱར་ལག་ལེན་གྱི་བརྡ་འཕྲིན་བང་སྒྲིག) | Per wave + བྱུང་རྐྱེན་གྱི་ཤུལ་ལས་། |
+| བསམ་འཆར། བཞུ་ནི། | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (རླབས་རེ་ལུ་སྣོད་འཛིན་གསར་བསྐྲུན་འབད།) | ཉིནམ་༥ གི་ནང་འཁོད་ལུ་ རླབས་རྒྱུན་ཐོན་ཡོདཔ། |
+| གཞུང་སྐྱོང་ཞལ་འཛོམས་ཀྱི་དྲན་ཐོ། | I18NI0000043X | ཌི་ཨོ་སི་-I1NT0000005X གཞུང་སྐྱོང་མཉམ་མཐུན་རེ་རེ་གི་ཧེ་མ་ མི་རློབས་བཏོན། |
 
-Run `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-after each batch to produce a machine-readable event digest. Attach the rendered
-JSON to the wave issue so governance reviewers can confirm invite counts without
-replaying the entire log.
+`cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json` གཡོག་བཀོལ།
+འཕྲུལ་ཆས་ལྷག་ཚུགས་པའི་ བྱུང་རིམ་ བཞུ་བཅུག་ནིའི་དོན་ལུ་ བེཆ་རེ་རེ་གི་ཤུལ་ལས་ འཇལཝ་ཨིན། བཀོད་སྒྲིག་འབད་ཡོད་མི་དེ་མཉམ་སྦྲགས་འབད།
+JSON ལུ་ རླབས་ཀྱི་གནད་དོན་འདི་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ མགྲོན་བརྡ་གྱངས་ཁ་ཚུ་ མེད་པར་ ངེས་གཏན་བཟོ་ཚུགས།
+དྲན་ཐོ་ཧྲིལ་བུ་འདི་སླར་གཏང་དོ།
 
-Attach the evidence list to `status.md` whenever a wave ends so the roadmap
-entry can be updated quickly.
+རླབས་འདི་མཇུག་བསྡུ་བའི་སྐབས་ སྒྲུབ་བྱེད་ཐོ་ཡིག་འདི་ `status.md` ལུ་མཉམ་སྦྲགས་འབད་ཞིནམ་ལས་ ལམ་སྟོན་གྱི་ས་ཁྲ་འདི་ ས་ཁྲ་འདི་ ས་ཁྲ་འདི་ཨིན།
+ཐོ་བཀོད་འདི་མགྱོགས་པ་རང་དུས་མཐུན་བཟོ་ཚུགས།
 
-## Rollback & pause criteria
+## བསྐོར་རྒྱབ་དང་བར་མཚམས་ཀྱི་ཁྱད་ཚད།
 
-Pause the invite flow (and notify governance) when any of the following occur:
+གཤམ་གསལ་ལས་གང་རུང་ཅིག་བྱུང་པའི་སྐབས་ མགྲོན་བརྡ་འབད་ནིའི་རྒྱུན་འགྲུལ་ (དང་གཞུང་སྐྱོང་) འདི་བཀག་བཞག།
 
-- A Try it proxy incident that required rollback (`npm run manage:tryit-proxy`).
-- Alert fatigue: >3 alert pages for preview-only endpoints within 7 days.
-- Compliance gap: invite sent without signed terms or without logging the
-  request template.
-- Integrity risk: checksum mismatch detected by `scripts/preview_verify.sh`.
+- ལོག་སྟེ་བསྐོར་དགོ་པའི་ ངོ་ཚབ་བྱུང་རྐྱེན་ (I18NI0000046X) ཅིག།
+- ཉེན་བརྡ་: ཉིནམ་༧ གྱི་ནང་འཁོད་ལུ་ སྔོན་ལྟ་རྐྱངམ་ཅིག་མཐའ་མཇུག་ཚུ་གི་དོན་ལུ་ ཉེན་བརྡ་ཤོག་ལེབ་༣ འབད་དགོ།
+- བསྟར་སྤྱོད་ཀྱི་བར་སྟོང་: མཚན་རྟགས་མེད་པའི་གནས་ཚིག་མེད་པར་ འབོད་བཀུག་འབད་ཡོདཔ་ ཡང་ན་ ནང་བསྐྱོད་མ་འབད་བ་ཅིན།
+  ཞུ་བ་ཊེམ་པེལེཊི་།
+- ཆིག་སྒྲིལ་གྱི་ཉེན་ཁ་: I18NI0000047X བརྟག་དཔྱད་འབད་མི་ ཅེག་སམ་མི་མཐུན་པ།
 
-Resume only after documenting the remediation in the invite tracker and
-confirming the telemetry dashboard is stable for at least 48 hours.
+མགྲོན་བརྡ་འཚོལ་ཞིབ་ནང་ བཅོ་ཁ་འདི་ཡིག་ཐོག་ལུ་བཀོད་པའི་ཤུལ་ལས་རྐྱངམ་ཅིག་ བསྐྱར་བཟོ།
+བརྡ་འཕྲིན་བཀོད་སྒྲིག་འདི་ ཉུང་མཐའ་ཆུ་ཚོད་༤༨ གི་རིང་ལུ་ བརྟན་ཏོག་ཏོ་སྦེ་ཡོདཔ་ཨིན།

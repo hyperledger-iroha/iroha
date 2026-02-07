@@ -7,54 +7,55 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8bb3e19ca5eb661d202b5e3b9cd118207ded277e8ff717e16a342b71e7a67857
 source_last_modified: "2025-12-29T18:16:35.926037+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# AND6 EU Legal Sign-off Memo Template
+#AND6 အီးယူတရားဝင် ဆိုင်းဘုတ်ပိတ်မှတ်စု နမူနာပုံစံ
 
-This memo records the legal review required by roadmap item **AND6** before the
-EU (ETSI/GDPR) artefact packet is submitted to regulators. Counsel should clone
-this template per release, populate the fields below, and store the signed copy
-alongside the immutable artefacts referenced in the memo.
+ဤမှတ်စုတိုသည် လမ်းပြမြေပုံပါ အကြောင်းအရာ **AND6** မှ လိုအပ်သော ဥပဒေဆိုင်ရာ ပြန်လည်သုံးသပ်မှုကို မှတ်တမ်းတင်ပါသည်။
+EU (ETSI/GDPR) artefact packet ကို စည်းကမ်းထိန်းသိမ်းရေးအဖွဲ့ထံ တင်ပြပါသည်။ မွေးထုတ်သင့်သော အကြံ
+ဤပုံစံပလိတ်ကို ထုတ်ဝေလိုက်တိုင်း၊ အောက်ဖော်ပြပါ ကွက်လပ်များကို ဖြည့်သွင်းပြီး လက်မှတ်ထိုးထားသော မိတ္တူကို သိမ်းဆည်းပါ။
+မှတ်စုတိုတွင် ဖော်ပြထားသော မပြောင်းလဲနိုင်သော ပစ္စည်းများနှင့်အတူ။
 
-## Summary
+## အကျဉ်းချုပ်
 
-- **Release / Train:** `<e.g., 2026.1 GA>`
-- **Review date:** `<YYYY-MM-DD>`
-- **Counsel / Reviewer:** `<name + organisation>`
-- **Scope:** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
-- **Associated tickets:** `<governance or legal issue IDs>`
+- **ဖြန့်ချိရေး/ရထား-** `<e.g., 2026.1 GA>`
+- **ပြန်လည်သုံးသပ်သည့်ရက်စွဲ-** `<YYYY-MM-DD>`
+- **အကြံပေး/သုံးသပ်သူ-** `<name + organisation>`
+- **Scope-** `ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation`
+- **ဆက်စပ်လက်မှတ်များ-** `<governance or legal issue IDs>`
 
 ## Artefact Checklist
 
-| Artefact | SHA-256 | Location / Link | Notes |
-|----------|---------|-----------------|-------|
-| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + governance archive | Confirm release identifiers & threat model adjustments. |
-| `gdpr_dpia_summary.md` | `<hash>` | Same directory / localization mirrors | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
-| `sbom_attestation.md` | `<hash>` | Same directory + cosign bundle in evidence bucket | Verify CycloneDX + provenance signatures. |
-| Evidence log row | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | Row number `<n>` |
-| Device-lab contingency bundle | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Confirms failover rehearsal tied to this release. |
+| Artefact | SHA-256 | တည်နေရာ/လင့်ခ် | မှတ်စုများ |
+|----------|---------|-----------------|--------|
+| `security_target.md` | `<hash>` | `docs/source/compliance/android/eu/security_target.md` + အုပ်ချုပ်ရေးမော်ကွန်း | ထုတ်ဝေမှုသတ်မှတ်စနစ်များနှင့် ခြိမ်းခြောက်မှုပုံစံ ချိန်ညှိမှုများကို အတည်ပြုပါ။ |
+| `gdpr_dpia_summary.md` | `<hash>` | တူညီသောလမ်းညွှန် / ဒေသသတ်မှတ်မှုကြေးမုံ | ပြန်လည်တုံ့ပြန်ရေးမူဝါဒ ရည်ညွှန်းချက်များ `sdk/android/telemetry_redaction.md` နှင့် ကိုက်ညီကြောင်း သေချာပါစေ။ |
+| `sbom_attestation.md` | `<hash>` | အထောက်အထားပုံး | CycloneDX+ သက်သေလက်မှတ်များကို အတည်ပြုပါ။ |
+| မှတ်တမ်းအတန်း | `<hash>` | `docs/source/compliance/android/evidence_log.csv` | အတန်းနံပါတ် `<n>` |
+| စက်ပစ္စည်း-ဓာတ်ခွဲခန်း အရေးပေါ်အစုအဝေး | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | ဤထုတ်ဝေမှုနှင့် ဆက်နွှယ်နေသည့် ပျက်ကွက်မှု အစမ်းလေ့ကျင့်မှုကို အတည်ပြုသည်။ |
 
-> Attach additional rows if the packet contains more files (for example, privacy
-> appendices or DPIA translations). Every artefact must reference its immutable
-> upload target and the Buildkite job that produced it.
+> Packet တွင် ဖိုင်များ ပိုမိုပါဝင်နေပါက (ဥပမာ၊ privacy
+> နောက်ဆက်တွဲများ သို့မဟုတ် DPIA ဘာသာပြန်များ)။ ပစ္စည်းတိုင်းသည် ၎င်း၏ မပြောင်းလဲနိုင်သော အရာများကို ကိုးကားရပါမည်။
+> ပစ်မှတ်ကို အပ်လုဒ်လုပ်ရန်နှင့် ၎င်းကိုထုတ်လုပ်သည့် Buildkite အလုပ်။
 
-## Findings & Exceptions
+## တွေ့ရှိမှုနှင့် ခြွင်းချက်
 
-- `None.` *(Replace with bullet list covering residual risks, compensating
-  controls, or required follow-up actions.)*
+- `None.` *(ကျန်နေသောအန္တရာယ်များကို အကျုံးဝင်သည့် ကျည်ဆန်စာရင်းဖြင့် အစားထိုးခြင်း၊ လျော်ကြေးပေးခြင်း
+  ထိန်းချုပ်မှုများ သို့မဟုတ် လိုအပ်သော နောက်ဆက်တွဲလုပ်ဆောင်မှုများ။)*
 
-## Approval
+## ခွင့်ပြုချက်
 
-- **Decision:** `<Approved / Approved with conditions / Blocked>`
-- **Signature / Timestamp:** `<digital signature or email reference>`
-- **Follow-up owners:** `<team + due date for any conditions>`
+- **ဆုံးဖြတ်ချက်-** `<Approved / Approved with conditions / Blocked>`
+- **လက်မှတ်/အချိန်တံဆိပ်တုံး-** `<digital signature or email reference>`
+- **နောက်ဆက်တွဲပိုင်ရှင်များ-** `<team + due date for any conditions>`
 
-Upload the final memo to the governance evidence bucket, copy the SHA-256 into
-`docs/source/compliance/android/evidence_log.csv`, and link the upload path in
-`status.md`. If the decision is “Blocked,” escalate to the AND6 steering
-committee and document remediation steps in both the roadmap hot-list and the
-device-lab contingency log.
+နောက်ဆုံးမှတ်စုတိုကို အုပ်ချုပ်မှုအထောက်အထားပုံးထဲသို့ အပ်လုဒ်လုပ်ပါ၊ SHA-256 ထဲသို့ ကူးထည့်ပါ။
+`docs/source/compliance/android/evidence_log.csv` နှင့် အပ်လုဒ်လမ်းကြောင်းကို ချိတ်ဆက်ပါ။
+`status.md`။ ဆုံးဖြတ်ချက်သည် “ပိတ်ဆို့ထားသည်” ဆိုလျှင် AND6 စတီယာရင်သို့ အရှိန်မြှင့်ပါ။
+လမ်းပြမြေပုံ Hot-list နှစ်ခုလုံးတွင် ကော်မတီနှင့် စာရွက်စာတမ်း ပြန်လည်ပြင်ဆင်ရေး အဆင့်များ
+စက်ပစ္စည်း-ဓာတ်ခွဲခန်း အရေးပေါ်မှတ်တမ်း။

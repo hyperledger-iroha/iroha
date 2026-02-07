@@ -7,14 +7,15 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c5c959bd6654d095d2b3785a02e9c2ec162e699ad985b342760b952e38766a66
 source_last_modified: "2025-12-29T18:16:35.069812+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Data Availability Manifest Governance Packet (Template)
+# གནད་སྡུད་ཐོབ་ཚུགསཔ་ ངོ་མཚར་ཅན་གྱི་གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ (Teplate)
 
-Use this template when Parliament panels review DA manifests for subsidies,
-takedowns, or retention changes (roadmap DA-10). Copy the Markdown into the
-governance ticket, fill in the placeholders, and attach the completed file
-alongside the signed Norito payloads and CI artefacts referenced below.
+སྤྱི་ཚོགས་ཀྱི་པེ་ནཱལ་ཚུ་གིས་ གྲོགས་རམ་གྱི་དོན་ལུ་ གསལ་སྟོན་ཚུ་ བསྐྱར་ཞིབ་འབད་བའི་སྐབས་ ཊེམ་པེལེཊི་འདི་ལག་ལེན་འཐབ།
+བླུག་སའི་ཡང་ན་ བཀག་འཛིན་གྱི་འགྱུར་བ་ (ལམ་སབ་ཁྲ་ DA-10)། མརཀ་ཌའོན་འདི་ འདྲ་བཤུས་རྐྱབས།
+གཞུང་སྐྱོང་གི་ཤོག་འཛིན་དང་ ས་གནས་འཛིན་མི་ཚུ་བཀང་ཞིནམ་ལས་ ཡིག་སྣོད་མཇུག་བསྡུ་ཡོད་མི་དེ་ མཉམ་སྦྲགས་འབད་ནི།
+འདི་དང་གཅིག་ཁར་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ I18NT0000001X གླ་ཆ་དང་ CI ཅ་རྙིང་ཚུ་ གཤམ་གསལ་ལྟར་ཨིན།
 
 ```markdown
 ## Manifest Metadata
@@ -73,6 +74,6 @@ alongside the signed Norito payloads and CI artefacts referenced below.
 - [ ] Buffer telemetry snapshot (`iroha_settlement_buffer_xor`)
 ```
 
-Archive every completed packet under the Governance DAG entry for the vote so
-subsequent reviews can reference the manifest digest without repeating the full
-ceremony.【docs/source/governance_playbook.md:24】
+ཚོགས་རྒྱན་བཙུགས་ནིའི་དོན་ལུ་ གཞུང་སྐྱོང་ DAG འཛུལ་བའི་འོག་ལུ་ ཐུམ་སྒྲིལ་མཇུག་བསྡུ་ཡོད་པའི་ ཐུམ་སྒྲིལ་ཚུ་ག་ར་ གཏན་མཛོད་འབད་ནི།
+ཤུལ་མམ་གྱི་བསྐྱར་ཞིབ་ཚུ་གིས་ གསལ་སྟོན་འདི་ ཆ་ཚང་སྦེ་བསྐྱར་ལོག་མ་འབད་བར་ གསལ་སྟོན་འབད་ཚུགས།
+མཛད་སྒོ།【dcs/souvernance_playbook.md:24】

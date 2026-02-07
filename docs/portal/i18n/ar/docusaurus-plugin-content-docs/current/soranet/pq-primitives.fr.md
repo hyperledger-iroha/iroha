@@ -4,28 +4,30 @@ direction: rtl
 source: docs/portal/docs/soranet/pq-primitives.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-primitives
-title: Primitives post-quantiques SoraNet
-sidebar_label: Primitives PQ
-description: Vue d'ensemble du crate `soranet_pq` et de la maniere dont le handshake SoraNet consomme les helpers ML-KEM/ML-DSA.
+المعرف: pq-الأوليات
+العنوان: البدائيات بعد الكميات SoraNet
+Sidebar_label: البدائيات PQ
+الوصف: عرض مجموعة الصندوق `soranet_pq` وطريقة عدم المصافحة SoraNet تستهلك المساعدين ML-KEM/ML-DSA.
 ---
 
-:::note Source canonique
+:::ملاحظة المصدر الكنسي
 :::
 
-Le crate `soranet_pq` contient les briques post-quantiques sur lesquelles reposent tous les relays, clients et composants de tooling SoraNet. Il encapsule les suites Kyber (ML-KEM) et Dilithium (ML-DSA) adossees a PQClean et ajoute des helpers HKDF et RNG hedged adaptes au protocole afin que toutes les surfaces partagent des implementations identiques.
+يحتوي الصندوق `soranet_pq` على قوالب لاحقة الكميات على جميع المرحلات والعملاء ومكونات أدوات SoraNet. تتضمن مجموعة Kyber (ML-KEM) و Dilithium (ML-DSA) PQClean وإضافة مساعدين HKDF و RNG محميين يتكيفان مع بروتوكول لجميع الأسطح التي تشارك في تطبيقات متطابقة.
 
 ## Ce qui est livre dans `soranet_pq`
 
-- **ML-KEM-512/768/1024:** generation deterministe de cles, encapsulation et decapsulation avec propagation d'erreurs en temps constant.
-- **ML-DSA-44/65/87:** signature/verif detachee avec transcriptions a separation de domaine.
-- **HKDF etiquete:** `derive_labeled_hkdf` applique un namespace a chaque derivation via l'etape du handshake (`DH/es`, `KEM/1`, ...) afin que les transcriptions hybrides restent sans collision.
-- **Aleatoire hedged:** `hedged_chacha20_rng` combine des seeds deterministes avec l'entropie du systeme et zeroise l'etat intermediaire a la destruction.
+- **ML-KEM-512/768/1024:** تحديد العناصر والتغليف وإلغاء التغليف مع انتشار الأخطاء في وقت ثابت.
+- **ML-DSA-44/65/87:** التوقيع/التحقق من الفصل مع النسخ وفصل المجال.
+- **آداب HKDF:** `derive_labeled_hkdf` يطبق مساحة اسم على كل اشتقاق عبر شريط المصافحة (`DH/es`، `KEM/1`، ...) حتى تبقى النسخ الهجينة دون تصادم.
+- **Aleatoire Hedge:** `hedged_chacha20_rng` يجمع بين العناصر المحددة مع إنتروبيا النظام وإلغاء الحالة الوسيطة للتدمير.
 
-Tous les secrets vivent dans des conteneurs `Zeroizing` et CI exerce les bindings PQClean sur toutes les plateformes supportees.
+جميع الأسرار حية في الحاويات `Zeroizing` et CI تمارس الروابط PQClean على جميع اللوحات المدعومة.
 
 ```rust
 use soranet_pq::{
@@ -46,21 +48,19 @@ let okm = derive_labeled_hkdf(
     b"soranet-transcript",
     32,
 ).unwrap();
-```
+```## تعليق على المستعمل
 
-## Comment l'utiliser
-
-1. **Ajoutez la dependance** aux crates en dehors de la racine du workspace:
+1. **إضافة التبعية** إلى الصناديق داخل مسار مساحة العمل:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **Selectionnez la suite correcte** aux points d'appel. Pour le travail initial du handshake hybride, utilisez `MlKemSuite::MlKem768` et `MlDsaSuite::MlDsa65`.
+2. **تحديد المجموعة الصحيحة** نقاط الاتصال. لبدء العمل الأولي للمصافحة الهجينة، استخدم `MlKemSuite::MlKem768` و`MlDsaSuite::MlDsa65`.
 
-3. **Derivez les cles avec labels.** Utilisez `HkdfDomain::soranet("KEM/1")` (et equivalents) pour que l'enchainement des transcriptions reste deterministe entre les noeuds.
+3. **اشتقاق العناصر ذات التصنيفات.** استخدم `HkdfDomain::soranet("KEM/1")` (وما يعادله) حتى يتم تحديد سلسلة النسخ بين الأحداث الجديدة.
 
-4. **Utilisez le RNG hedged** pour echantillonner les secrets de repli:
+4. **استخدم RNG المتحوط** لتحديث أسرار الرد:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -68,11 +68,11 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-Le handshake central de SoraNet et les helpers de blindage de CID (`iroha_crypto::soranet`) utilisent directement ces utilitaires, ce qui signifie que les crates downstream heritent des memes implementations sans lier les bindings PQClean eux-memes.
+يستخدم مركز المصافحة في SoraNet ومساعدي CID (`iroha_crypto::soranet`) هذه الأدوات مباشرة، مما يعني أن الصناديق المتدفقة ترث تطبيقات الميمات بدون روابط PQClean eux-memes.
 
-## Checklist de validation
+## قائمة التحقق من الصحة
 
-- `cargo test -p soranet_pq --offline`
-- `cargo fmt --package soranet_pq`
-- Auditez les exemples d'usage du README (`crates/soranet_pq/README.md`)
-- Mettez a jour le document de conception du handshake SoraNet lorsque les hybrides arriveront
+-`cargo test -p soranet_pq --offline`
+-`cargo fmt --package soranet_pq`
+- قم بمراجعة أمثلة استخدام README (`crates/soranet_pq/README.md`)
+- Mettez a jour le document de conception du handshake SoraNet عند وصول الهجينة

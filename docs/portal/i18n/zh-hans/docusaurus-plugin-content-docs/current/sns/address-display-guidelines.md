@@ -8,113 +8,115 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Address Display Guidelines
 sidebar_label: Address display
 description: UX and CLI requirements for IH58 vs compressed (`sora`) Sora address presentation (ADDR-6).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
+从 '@site/src/components/ExplorerAddressCard' 导入 ExplorerAddressCard；
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
-as the canonical portal copy. The source file sticks around for translation PRs.
+:::注意规范来源
+此页面镜像 `docs/source/sns/address_display_guidelines.md`，现在提供服务
+作为规范门户副本。源文件会保留下来用于翻译 PR。
 :::
 
-Wallets, explorers, and SDK samples must treat account addresses as immutable
-payloads. The Android retail wallet sample in
-`examples/android/retail-wallet` now demonstrates the required UX pattern:
+钱包、浏览器和 SDK 示例必须将帐户地址视为不可变
+有效负载。 Android 零售钱包示例位于
+`examples/android/retail-wallet` 现在演示所需的 UX 模式：
 
-- **Dual copy targets.** Ship two explicit copy buttons—IH58 (preferred) and the
-  compressed Sora-only form (`sora…`, second-best). IH58 is always safe to share externally
-  and powers the QR payload. The compressed variant must include an inline
-  warning because it only works inside Sora-aware apps. The Android retail
-  wallet sample wires both Material buttons and their tooltips in
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and
-  the iOS SwiftUI demo mirrors the same UX via `AddressPreviewCard` inside
-  `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, selectable text.** Render both strings with a monospace font and
-  `textIsSelectable="true"` so users can inspect values without invoking an IME.
-  Avoid editable fields: IMEs can rewrite kana or inject zero-width code points.
-- **Implicit default domain hints.** When the selector points at the implicit
-  `default` domain, surface a caption reminding operators no suffix is required.
-  Explorers should also highlight the canonical domain label when the selector
-  encodes a digest.
-- **IH58 QR payloads.** QR codes must encode the IH58 string. If QR generation
-  fails, display an explicit error instead of a blank image.
-- **Clipboard messaging.** After copying the compressed form, emit a toast or
-  snackbar reminding users that it is Sora-only and prone to IME mangling.
+- **双复制目标。** 提供两个显式复制按钮 - IH58（首选）和
+  仅压缩的 Sora 形式（`sora…`，第二好）。 IH58 始终安全地对外共享
+  并为 QR 有效负载供电。压缩变体必须包含内联
+  警告，因为它仅适用于 Sora 感知的应用程序。 Android 零售
+  钱包示例将 Material 按钮及其工具提示连接到
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`，和
+  iOS SwiftUI 演示通过内部 `AddressPreviewCard` 镜像相同的 UX
+  `examples/ios/NoritoDemo/Sources/ContentView.swift`。
+- **等宽，可选文本。** 使用等宽字体渲染两个字符串并
+  `textIsSelectable="true"`，以便用户无需调用 IME 即可检查值。
+  避免可编辑字段：IME 可以重写假名或注入零宽度代码点。
+- **隐式默认域提示。**当选择器指向隐式
+  `default` 域名，表面有标题提醒操作员无需后缀。
+  当选择器时，浏览器还应该突出显示规范域标签
+  编码摘要。
+- **IH58 QR 有效负载。** QR 代码必须对 IH58 字符串进行编码。如果二维码生成
+  失败，显示明确的错误而不是空白图像。
+- **剪贴板消息传递。** 复制压缩表单后，发出祝酒词或
+  小吃栏提醒用户它仅适用于 Sora，并且容易出现 IME 损坏。
 
-Following these guardrails prevents Unicode/IME corruption and satisfies the
-ADDR-6 roadmap acceptance criteria for wallet/explorer UX.
+遵循这些护栏可以防止 Unicode/IME 损坏并满足
+钱包/浏览器用户体验的 ADDR-6 路线图接受标准。
 
-## Screenshot fixtures
+## 截图装置
 
-Use the following fixtures during localization reviews to ensure button labels,
-tooltips, and warnings stay aligned across platforms:
+在本地化审查期间使用以下固定装置以确保按钮标签，
+工具提示和警告在各个平台上保持一致：
 
-- Android reference: `/img/sns/address_copy_android.svg`
+- Android参考：`/img/sns/address_copy_android.svg`
 
-  ![Android dual copy reference](/img/sns/address_copy_android.svg)
+  ![Android双拷参考](/img/sns/address_copy_android.svg)
 
-- iOS reference: `/img/sns/address_copy_ios.svg`
+- iOS 参考号：`/img/sns/address_copy_ios.svg`
 
-  ![iOS dual copy reference](/img/sns/address_copy_ios.svg)
+  ![iOS双副本参考](/img/sns/address_copy_ios.svg)
 
-## SDK helpers
+## SDK 帮助程序
 
-Each SDK exposes a convenience helper that returns the IH58 (preferred) and compressed (`sora`, second-best)
-forms alongside the warning string so UI layers can stay consistent:
+每个 SDK 都公开了一个方便的助手，可返回 IH58（首选）和压缩的（`sora`，第二好）
+与警告字符串一起形成，以便 UI 层可以保持一致：
 
-- JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
-  (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` returns the compressed warning
-  string and appends it to `warnings` whenever callers provide a `sora…`
-  literal, so explorers/wallet dashboards can surface the Sora-only notice
-  during paste/validation flows instead of only when they generate the
-  compressed form themselves.
-- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
-  (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
+- JavaScript：`AccountAddress.displayFormats(networkPrefix?: number)`
+  （`javascript/iroha_js/src/address.js`）
+- JavaScript 检查器：`inspectAccountId(...)` 返回压缩警告
+  字符串并在调用者提供 `sora…` 时将其附加到 `warnings`
+  字面意思，因此浏览器/钱包仪表板可以显示仅限 Sora 的通知
+  在粘贴/验证流程期间而不是仅在它们生成时
+  压缩形式本身。
+- Python：`AccountAddress.display_formats(network_prefix: int = 753)`
+- 斯威夫特：`AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Java/Kotlin：`AccountAddress.displayFormats(int networkPrefix = 753)`
+  （`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`）
 
-Use these helpers instead of reimplementing the encode logic in UI layers.
-The JavaScript helper also exposes a `selector` payload on `domainSummary`
-(`tag`, `digest_hex`, `registry_id`, `label`) so UIs can indicate whether a
-selector is Local-12 or registry-backed without re-parsing the raw payload.
+使用这些帮助器而不是在 UI 层中重新实现编码逻辑。
+JavaScript 帮助程序还在 `domainSummary` 上公开了 `selector` 有效负载
+（`tag`、`digest_hex`、`registry_id`、`label`），因此 UI 可以指示是否
+选择器是 Local-12 或注册表支持的，无需重新解析原始有效负载。
 
-## Explorer instrumentation demo
+## Explorer 仪器演示
 
-<ExplorerAddressCard />
+<浏览器地址卡/>
 
-Explorers should mirror the wallet telemetry and accessibility work:
+探索者应该镜像钱包遥测和可访问性工作：
 
-- Apply `data-copy-mode="ih58|compressed|qr"` to copy buttons so front-ends can emit usage counters
-  alongside the Torii-side `torii_address_format_total` metric. The demo component above dispatches
-  an `iroha:address-copy` event with `{mode,timestamp}`—wire this into your analytics/telemetry
-  pipeline (e.g., push to Segment or a NORITO-backed collector) so dashboards can correlate server
-  address-format usage with client copy behaviour. Also mirror the Torii domain counters
-  (`torii_address_domain_total{domain_kind}`) in the same feed so Local-12 retirement reviews can
-  export a 30-day `domain_kind="local12"` zero-usage proof directly from the `address_ingest`
-  Grafana board.
-- Pair every control with distinct `aria-label`/`aria-describedby` hints that explain whether a
-  literal is safe to share (`IH58`) or Sora-only (compressed `sora`). Include the implicit-domain caption in
-  the description so assistive technology surfaces the same context shown visually.
-- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
-  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
+- 应用 `data-copy-mode="ih58|compressed|qr"` 复制按钮，以便前端可以发出使用计数器
+  与 Torii 侧 `torii_address_format_total` 指标一起。上面的演示组件调度
+  带有 `{mode,timestamp}` 的 `iroha:address-copy` 事件 - 将其连接到您的分析/遥测中
+  管道（例如，推送到 Segment 或 NORITO 支持的收集器），以便仪表板可以关联服务器
+  地址格式与客户端复制行为的使用。同时镜像 Torii 域计数器
+  (`torii_address_domain_total{domain_kind}`) 在同一个 feed 中，以便 Local-12 退休评论可以
+  直接从 `address_ingest` 导出 30 天 `domain_kind="local12"` 零使用证明
+  Grafana 板。
+- 将每个控件与不同的 `aria-label`/`aria-describedby` 提示配对，以解释是否
+  文字可以安全地共享（`IH58`）或仅限 Sora（压缩的 `sora`）。将隐式域标题包含在
+  辅助技术的描述表面与视觉上显示的上下文相同。
+- 公开实时区域（例如 `<output aria-live="polite">…</output>`），宣布复制结果并
+  警告，与现在连接到 Swift/Android 示例中的 VoiceOver/TalkBack 行为相匹配。
 
-This instrumentation satisfies ADDR-6b by proving operators can observe both Torii ingestion and
-client-side copy modes before Local selectors are disabled.
+该仪器通过证明操作员可以观察 Torii 摄取和
+禁用本地选择器之前的客户端复制模式。
 
-## Local → Global migration toolkit
+## 本地→全局迁移工具包
 
-Use the [Local → Global toolkit](local-to-global-toolkit.md) to automate
-JSON audit report and the converted preferred IH58 / second-best compressed (`sora`) list that operators attach
-to readiness tickets, while the accompanying runbook links the Grafana
-dashboards and Alertmanager rules that gate the strict-mode cutover.
+使用[本地→全局工具包](local-to-global-toolkit.md)来自动化
+JSON 审核报告和操作员附加的转换后的首选 IH58/第二最佳压缩 (`sora`) 列表
+到准备票，而随附的操作手册链接 Grafana
+控制严格模式切换的仪表板和 Alertmanager 规则。
 
-## Binary layout quick reference (ADDR-1a)
+## 二进制布局快速参考 (ADDR-1a)
 
-When SDKs surface advanced address tooling (inspectors, validation hints,
-manifest builders), point developers at the canonical wire format captured in
-`docs/account_structure.md`. The layout is always
-`header · selector · controller`, where the header bits are:
+当 SDK 提供高级地址工具（检查器、验证提示、
+清单构建器），让开发人员了解在中捕获的规范传输格式
+`docs/account_structure.md`。布局始终是
+`header · selector · controller`，其中标头位为：
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -123,14 +125,14 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-- `addr_version = 0` (bits 7‑5) today; non-zero values are reserved and must
-  raise `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class` distinguishes single (`0`) vs multisig (`1`) controllers.
-- `norm_version = 1` encodes the Norm v1 selector rules. Future norms will reuse
-  the same 2-bit field.
-- `ext_flag` is always `0`—set bits indicate unsupported payload extensions.
+- 今天 `addr_version = 0`（位 7-5）；非零值被保留并且必须
+  提高 `AccountAddressError::InvalidHeaderVersion`。
+- `addr_class` 区分单个 (`0`) 与多重签名 (`1`) 控制器。
+- `norm_version = 1` 编码 Normv1 选择器规则。未来的规范将被重用
+  相同的 2 位字段。
+- `ext_flag` 始终为 `0` — 设置位指示不支持的有效负载扩展。
 
-The selector immediately follows the header:
+选择器紧跟在标题后面：
 
 ```
 ┌──────────┬──────────────────────────────────────────────┐
@@ -138,35 +140,35 @@ The selector immediately follows the header:
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-UI and SDK surfaces should be ready to display the selector kind:
+UI 和 SDK 表面应该准备好显示选择器类型：
 
-- `0x00` = implicit default domain (no payload).
-- `0x01` = local digest (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = global registry entry (big-endian `registry_id:u32`).
+- `0x00` = 隐式默认域（无负载）。
+- `0x01` = 本地摘要（12 字节 `blake2s_mac("SORA-LOCAL-K:v1", label)`）。
+- `0x02` = 全局注册表项（大端 `registry_id:u32`）。
 
-Canonical hex examples that wallet tooling can link or embed in docs/tests:
+钱包工具可以链接或嵌入文档/测试的规范十六进制示例：
 
-| Selector kind | Canonical hex |
-|---------------|---------------|
-| Implicit default | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Global registry (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
+|选择器种类|规范六角 |
+|----------------|---------------|
+|隐式默认| `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+|本地摘要 (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
+|全局注册表 (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
-Refer to `docs/source/references/address_norm_v1.md` for the full selector/state
-table and `docs/account_structure.md` for the complete byte diagram.
+请参阅 `docs/source/references/address_norm_v1.md` 了解完整的选择器/状态
+表和 `docs/account_structure.md` 为完整的字节图。
 
-## Enforcing canonical forms
+## 强制执行规范形式
 
-strings must follow the CLI workflow documented under ADDR-5:
+字符串必须遵循 ADDR-5 下记录的 CLI 工作流程：
 
-1. `iroha tools address inspect` now emits a structured JSON summary with IH58,
-   compressed, and canonical hex payloads. The summary also includes a `domain`
-   object with `kind`/`warning` fields and echoes any provided domain via the
-   `input_domain` field. When `kind` is `local12`, the CLI prints a warning to
-   stderr and the JSON summary echoes the same guidance so CI pipelines and SDKs
-   can surface it. Pass `--append-domain` whenever you want the converted
-   encoding replayed as `<ih58>@<domain>`.
-2. SDKs can surface the same warning/summary via the JavaScript helper:
+1. `iroha tools address inspect` 现在使用 IH58 发出结构化 JSON 摘要，
+   压缩的、规范的十六进制有效负载。摘要还包括 `domain`
+   具有 `kind`/`warning` 字段的对象，并通过以下方式回显任何提供的域
+   `input_domain` 字段。当 `kind` 为 `local12` 时，CLI 会打印一条警告
+   stderr 和 JSON 摘要呼应相同的指导，因此 CI 管道和 SDK
+   可以将其浮现出来。每当您需要转换时传递 `--append-domain`
+   编码重播为 `<ih58>@<domain>`。
+2. SDK 可以通过 JavaScript 帮助程序显示相同的警告/摘要：
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -177,69 +179,67 @@ strings must follow the CLI workflow documented under ADDR-5:
    }
    console.log(summary.ih58.value, summary.compressed);
    ```
-  The helper preserves the IH58 prefix detected from the literal unless you
-  explicitly provide `networkPrefix`, so summaries for non-default networks do
-  not silently re-render with the default prefix.
+  帮助器保留从文字中检测到的 IH58 前缀，除非您
+  明确提供 `networkPrefix`，因此非默认网络的摘要不会
+  不会使用默认前缀默默地重新渲染。
 
-3. Convert the canonical payload by reusing the `ih58.value` or `compressed`
-   fields from the summary (or request another encoding via `--format`). These
-   strings are already safe to share externally.
-4. Update manifests, registries, and customer-facing documents with the
-   canonical form and notify counterparties that Local selectors will be
-   rejected once the cutover completes.
-5. For bulk data sets, run
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
-   reads newline-separated literals (comments starting with `#` are ignored, and
-   `--input -` or no flag uses STDIN), emits a JSON report with
-   canonical/preferred IH58/second-best compressed (`sora`) summaries for every entry, and counts both parse
-   dumps that contain junk rows, and gate automation with `--fail-on-warning`
-   once operators are ready to block Local selectors in CI.
-6. When you need a newline-to-newline rewrite, use
-  For Local-selector remediation spreadsheets, use
-  to export a `input,status,format,…` CSV that highlights canonical encodings, warnings, and parse failures in one pass.
-   The helper skips non-Local rows by default, converts every remaining entry
-   into the requested encoding (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the
-   original domain when `--append-domain` is set. Pair it with `--allow-errors`
-   to keep scanning even when a dump contains malformed literals.
-7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts
-   the Local selectors from `fixtures/account/address_vectors.json`, converts
-   them via `iroha tools address normalize`, and replays
-   `iroha tools address audit --fail-on-warning` to prove releases no longer emit
-   Local digests.
+3. 通过重用 `ih58.value` 或 `compressed` 转换规范负载
+   摘要中的字段（或通过 `--format` 请求其他编码）。这些
+   字符串已经可以安全地与外部共享。
+4. 使用以下内容更新清单、注册表和面向客户的文档
+   规范形式并通知交易对手本地选择器将是
+   切换完成后被拒绝。
+5. 对于批量数据集，运行
+   `iroha tools address audit --input addresses.txt --network-prefix 753`。命令
+   读取换行符分隔的文字（以 `#` 开头的注释将被忽略，并且
+   `--input -` 或无标志使用 STDIN），发出 JSON 报告
+   每个条目的规范/首选 IH58/第二最佳压缩 (`sora`) 摘要，并对两个解析进行计数
+   包含垃圾行的转储以及带有 `--fail-on-warning` 的门自动化
+   一旦操作员准备好阻止 CI 中的本地选择器。
+6. 当需要换行符到换行符重写时，使用
+  对于本地选择器修复电子表格，请使用
+  导出 `input,status,format,…` CSV，一次性突出显示规范编码、警告和解析失败。
+   默认情况下，助手会跳过非本地行，转换每个剩余的条目
+   到请求的编码（IH58首选/压缩（`sora`）第二好/十六进制/JSON），并保留
+   设置 `--append-domain` 时的原始域。与 `--allow-errors` 配对
+   即使转储包含格式错误的文字也可以继续扫描。
+7. CI/lint 自动化可以运行 `ci/check_address_normalize.sh`，它提取
+   来自 `fixtures/account/address_vectors.json` 的本地选择器，转换
+   通过 `iroha tools address normalize` 进行回放
+   `iroha tools address audit --fail-on-warning` 证明版本不再发出
+   本地摘要。`torii_address_local8_total{endpoint}`加
+`torii_address_collision_total{endpoint,kind="local12_digest"}`，
+`torii_address_collision_domain_total{endpoint,domain}`，以及
+Grafana 板 `dashboards/grafana/address_ingest.json` 提供执行
+信号：一旦生产仪表板显示零合法的本地提交和
+连续 30 天零 Local-12 冲突，Torii 将翻转 Local-8
+主网上出现硬故障，一旦全局域出现故障，则 Local-12 紧随其后
+匹配的注册表项。将 CLI 输出视为面向操作员的通知
+对于此冻结 - SDK 工具提示使用相同的警告字符串，并且
+自动化以与路线图退出标准保持一致。 Torii 现在默认为
+当诊断回归时。保持镜像 `torii_address_domain_total{domain_kind}`
+进入 Grafana (`dashboards/grafana/address_ingest.json`) 所以 ADDR-7 证据包
+可以证明 `domain_kind="local12"` 在之前所需的 30 天窗口内保持为零
+(`dashboards/alerts/address_ingest_rules.yml`)增加了三个护栏：
 
-`torii_address_local8_total{endpoint}` plus
-`torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, and the
-Grafana board `dashboards/grafana/address_ingest.json` provide the enforcement
-signal: once production dashboards show zero legitimate Local submissions and
-zero Local-12 collisions for 30 consecutive days, Torii will flip the Local-8
-gate to hard-fail on mainnet, followed by Local-12 once global domains have
-matching registry entries. Consider the CLI output the operator-facing notice
-for this freeze—the same warning string is used across SDK tooltips and
-automation to keep parity with the roadmap exit criteria. Torii now defaults to
-when diagnosing regressions. Keep mirroring `torii_address_domain_total{domain_kind}`
-into Grafana (`dashboards/grafana/address_ingest.json`) so the ADDR-7 evidence pack
-can prove `domain_kind="local12"` stayed at zero for the required 30-day window before
-(`dashboards/alerts/address_ingest_rules.yml`) adds three guardrails:
+- 每当上下文报告新的 Local-8 时，`AddressLocal8Resurgence` 页面
+  增量。停止严格模式推出，在
+  直到信号返回到零，然后恢复默认值 (`true`)。
+- 当两个 Local-12 标签散列到相同的值时，`AddressLocal12Collision` 会触发
+  消化。暂停清单促销，运行本地 → 全局工具包进行审核
+  摘要映射，并在重新发布之前与 Nexus 治理进行协调
+  注册表项或重新启用下游部署。
+- `AddressInvalidRatioSlo` 当车队范围内的无效比率（不包括
+  本地 8/严格模式拒绝）超过 0.1% SLO 十分钟。使用
+  `torii_address_invalid_total` 查明负责任的背景/原因和
+  在重新启用严格模式之前与所属 SDK 团队协调。
 
-- `AddressLocal8Resurgence` pages whenever a context reports a fresh Local-8
-  increment. Halt strict-mode rollouts, locate the offending SDK surface in the
-  until the signal returns to zero—then restore the default (`true`).
-- `AddressLocal12Collision` fires when two Local-12 labels hash to the same
-  digest. Pause manifest promotions, run the Local → Global toolkit to audit
-  the digest mapping, and coordinate with Nexus governance before reissuing the
-  registry entry or re-enabling downstream rollouts.
-- `AddressInvalidRatioSlo` warns when the fleet-wide invalid ratio (excluding
-  Local-8/strict-mode rejections) exceeds the 0.1 % SLO for ten minutes. Use
-  `torii_address_invalid_total` to pinpoint the responsible context/reason and
-  coordinate with the owning SDK team before re-enabling strict mode.
+### 发行说明片段（钱包和浏览器）
 
-### Release note snippet (wallet & explorer)
+发货时，请在钱包/浏览器发行说明中包含以下项目符号
+切换：
 
-Include the following bullet in the wallet/explorer release notes when shipping
-the cutover:
-
-> **Addresses:** Added the `iroha tools address normalize --only-local --append-domain`
-> helper and wired it into CI (`ci/check_address_normalize.sh`) so wallet/explorer
-> before Local-8/Local-12 are blocked on mainnet. Update any custom exports to
-> run the command and attach the normalized list to the release evidence bundle.
+> **地址：** 添加了 `iroha tools address normalize --only-local --append-domain`
+> helper 并将其连接到 CI (`ci/check_address_normalize.sh`) 所以钱包/资源管理器
+> 在主网上阻止 Local-8/Local-12 之前。将任何自定义导出更新为
+> 运行命令并将规范化列表附加到发布证据包中。

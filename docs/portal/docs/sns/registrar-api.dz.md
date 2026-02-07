@@ -11,146 +11,74 @@ id: registrar-api
 title: Sora Name Service Registrar API & Governance Hooks
 sidebar_label: Registrar API
 description: Torii REST/gRPC surfaces, Norito DTOs, and governance artifacts for SNS registrations (SN-2b).
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registrar_api.md` and now serves as the
-canonical portal copy. The source file remains for translation workflows.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ལེབ་འདི་གིས་ I18NI000000030X ལུ་མེ་ལོང་དང་ ད་ལྟོ་འདི་ ༡ བཟུམ་སྦེ་ལཱ་འབདཝ་ཨིན།
+ཀེ་ནོ་ནིག་ དྲྭ་ཚིགས་ཀྱི་འདྲ་བཤུས། འབྱུང་ཁུངས་ཡིག་སྣོད་འདི་ སྐད་སྒྱུར་ལཱ་གི་རྒྱུན་རིམ་ཚུ་གི་དོན་ལུ་ ལུས་ཡོདཔ་ཨིན།
 :::
 
-# SNS Registrar API & Governance Hooks (SN-2b)
+# SNS ཐོ་བཀོད་ཨེ་པི་ཨའི་ & གཞུང་སྐྱོང་ཧུཀ་ (SN-2b)
 
-**Status:** Drafted 2026-03-24 -- under Nexus Core review  
-**Roadmap link:** SN-2b “Registrar API & governance hooks”  
-**Prerequisites:** Schema definitions in [`registry-schema.md`](./registry-schema.md)
+**Status:** ཟིན་བྲིས་འབད་ཡོདཔ། -- Nexus འོག་ལུ་ ཀོར་བསྐྱར་ཞིབ།  
+**ལམ་མེཔ་འབྲེལ་མཐུད་:** SN-2b “ཐོ་བཀོད་ཨེ་པི་ཨའི་ & གཞུང་སྐྱོང་ཧུཀ་”  
+**སྔོན་འགྲོའི་ཆ་རྐྱེན:** [`registry-schema.md`](./registry-schema.md)ནང་ལུ་ ལས་རིམ་ངེས་ཚིག་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-This note specifies the Torii endpoints, gRPC services, request/response DTOs, and governance artifacts required to operate the Sora Name Service (SNS) registrar. It is the authoritative contract for SDKs, wallets, and automation that need to register, renew, or manage SNS names.
+དྲན་འཛིན་འདི་གིས་ I18NT0000009X མཐའ་མཇུག་དང་ ཇི་ཨར་པི་སི་ཞབས་ཏོག་ ཞུ་བ་/ལན་འདེབས་ ཌི་ཊི་ཨོ་ དེ་ལས་ སོ་ར་མིང་ཞབས་ཏོག་ (ཨེསི་ཨེན་ཨེསི་) རེག་ཊར་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ གཞུང་སྐྱོང་ཅ་ར་ཚུ་ གསལ་བཀོད་འབདཝ་ཨིན། འདི་ཡང་ ཨེསི་ཌི་ཀེ་ཨེསི་དང་ དངུལ་ཁུག་ དེ་ལས་ རང་བཞིན་གྱིས་ ཨེསི་ཨེན་ཨེསི་མིང་ཚུ་ ཐོ་བཀོད་འབད་ནི་དང་ བསྐྱར་གསོ་འབད་ནི་ ཡང་ན་ འཛིན་སྐྱོང་འཐབ་དགོ་པའི་ དབང་ཚད་ཅན་གྱི་ གན་རྒྱ་ཅིག་ཨིན།
 
-## 1. Transport & Authentication
+## 1. སྐྱེལ་འདྲེན་དང་བདེན་དཔང་།
 
-| Requirement | Detail |
-|-------------|--------|
-| Protocols | REST under `/v1/sns/*` and gRPC service `sns.v1.Registrar`. Both accept Norito-JSON (`application/json`) and Norito-RPC binary (`application/x-norito`). |
-| Auth | `Authorization: Bearer` tokens or mTLS certificates issued per suffix steward. Governance-sensitive endpoints (freeze/unfreeze, reserved assignments) require `scope=sns.admin`. |
-| Rate limits | Registrars share the `torii.preauth_scheme_limits` buckets with JSON callers plus per-suffix burst caps: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
-| Telemetry | Torii exposes `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` for the registrar handlers (filter on `scheme="norito_rpc"`); the API also increments `sns_registrar_status_total{result, suffix_id}`. |
+| དགོས་མཁོ། | ཁ་གསལ་ |
+|-----------------|-------------------------------------------------------------------------------------------------
+| མཐུན་སྒྲིག | REST གི་འོག་ལུ་ `/v1/sns/*` དང་ gRPC ཞབས་ཏོག་ `sns.v1.Registrar` གི་འོག་ལུ་ཨིན། གཉིས་ཆ་ར་གིས་ I18NT0000000000X-JSON (I18NI000000034X) དང་ Norito-RPC གཉིས་ལྡན་ (I18NI0000000035X) དང་ལེན་འབདཝ་ཨིན། |
+| Auth | `Authorization: Bearer` ཊོ་ཀེན་ཡང་ན་ ཨེམ་ཊི་ཨེལ་ཨེསི་ལག་ཁྱེར་ཚུ་ རྗེས་འཇུག་ བདག་འཛིན་རེ་ལུ་ བཏོན་ཡོདཔ། གཞུང་སྐྱོང་-ཚོར་ཤུགས་ཅན་གྱི་མཇུག་བསྡུའི་ས་ཚིགས་ (འཁྱགས་བཞག་/གྲང་མེད་དང་ བཀག་བཞག་ཡོད་པའི་ལས་འགན་ཚུ་) ལུ་ I18NI000000037X དགོཔ་ཨིན། |
+| རིན་ཚད་ | ཐོ་བཀོད་འབད་མི་ཚུ་གིས་ `torii.preauth_scheme_limits` འདི་ JSON འབོད་བརྡ་གཏང་མི་དང་ རྗེས་འཇུག་གི་ བརྡ་རྟགས་ཚུ་དང་གཅིག་ཁར་ བརྗེ་སོར་འབདཝ་ཨིན། |
+| བརྒྱུད་འཕྲིན་ | Torii གིས་ `torii_request_duration_seconds{scheme}` ཕྱིར་བཏོན་འབདཝ་ཨིན་ registrar འཛིན་སྐྱོང་པའི་དོན་ལུ་ (I18NI000000444X) (`scheme="norito_rpc"` གུ་ཚགས་མ་བཏོན); the API ཡང་ཡར་འཕར་ `sns_registrar_status_total{result, suffix_id}` ཡིན། |
 
-## 2. DTO Overview
+## 2. DTO སྤྱིར་བཏང་ལྟ་ཚུལ།
 
-Fields reference the canonical structs defined in [`registry-schema.md`](./registry-schema.md). All payloads embed `NameSelectorV1` + `SuffixId` to avoid ambiguous routing.
+ས་སྒོ་ཚུ་གིས་ [I18NI0000004X](./registry-schema.md)ནང་ལུ་ངེས་འཛིན་འབད་ཡོད་པའི་ ཁྲིམས་ལུགས་ཀྱི་སྒྲིག་བཀོད་ཚུ་ལུ་གཞི་བསྟུན་འབདཝ་ཨིན། ཆ་ཚང་བཙུགས་ཡོད་པའི་ I18NI0000048X + `SuffixId` གིས་ གསལ་ཏོག་ཏོ་མེད་པའི་འགྲུལ་ལམ་བཀག་ཐབས་ལུ་ཨིན།
 
-```text
-Struct RegisterNameRequestV1 {
-    selector: NameSelectorV1,
-    owner: AccountId,
-    controllers: Vec<NameControllerV1>,
-    term_years: u8,                     // 1..=max_term_years
-    pricing_class_hint: Option<u8>,     // steward-advertised tier id
-    payment: PaymentProofV1,
-    governance: GovernanceHookV1,
-    metadata: Metadata,
-}
+I18NF0000022X
 
-Struct RegisterNameResponseV1 {
-    name_record: NameRecordV1,
-    registry_event: RegistryEventV1,
-    revenue_accrual: RevenueAccrualEventV1,
-}
+## 3. REST མཇུག་བསྡུ།
 
-Struct PaymentProofV1 {
-    asset_id: AssetId,
-    gross_amount: TokenValue,
-    net_amount: TokenValue,
-    settlement_tx: Hash,
-    payer: AccountId,
-    signature: Signature,               // steward/treasury cosign
-}
+| མཐའ་མཇུག་ | ཐབས་ལམ་ | གླ་ཆ་ | འགྲེལ་བཤད་ |
+|--------------------------------------------- |
+| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | མིང་ཅིག་ཐོ་བཀོད་འབད་ནི་ཡང་ན་ ལོག་སྒོ་ཕྱེ་ནི། ལོགས་སུ་བཟོ་ནི། གོང་ཚད་རིམ་པ་ གླ་ཆ་/གཞུང་གི་བདེན་ཁུངས་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། |
+| I18NI0000002X | POST | I18NI0000003X | ཐ་སྙད་རྒྱ་བསྐྱེད་འབད། སྲིད་བྱུས་ལས་ བྱིན་རླབས་/རྒྱབ་སྐྱོར་སྒོ་སྒྲིག་ཚུ་ བསྟར་སྤྱོད་འབདཝ་ཨིན། |
+| `/v1/sns/registrations/{selector}/transfer` | POST | I18NI0000005X | གཞུང་སྐྱོང་གནང་བ་ཚར་གཅིག་ སྤོ་བཤུད་ཀྱི་བདག་དབང་། |
+| I18NI0000005X | PUT | I18NI0000007X | ཚབ་མ་ཚད་འཛིན་འབད་ནི། བདེན་དཔྱད་ཚུ་ མཚན་རྟགས་བཀོད་ཡོད་པའི་རྩིས་ཐོ་ཁ་བྱང་ཚུ། |
+| I18NI0000008X | POST | `FreezeNameRequestV1` | གཱར་ཌི་ཡན་/ཀོའུན་སིལ་ འཁྱགས་རོམ། ལྟ་རྟོག་པ་གི་ཤོག་འཛིན་དང་ གཞུང་སྐྱོང་ཡིག་ཆ་ལུ་ གཞི་བསྟུན་དགོཔ་ཨིན། |
+| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | བཅོ་ཁ་རྐྱབ་པའི་ཤུལ་ལས་ གྱང་ཤུགས་མེདཔ་བཟོ། ཚོགས་སྡེའི་བཀག་དམ་ཐོ་བཀོད་འབད་ཡོདཔ་ངེས་གཏན་བཟོ། |
+| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | བཀག་བཞག་ཡོད་པའི་མིང་ཚུ་ སི་ཊི་ཝརཌ་/ཚོགས་སྡེ་གི་འགན་འཁྲི། |
+| `/v1/sns/policies/{suffix_id}` | GET | — | ད་ལྟོའི་ `SuffixPolicyV1` (cacheable). |
+| I18NI0000006X | GET | — | ད་ལྟོའི་ `NameRecordV1` སླར་ལོག་འབདཝ་ཨིན། |
 
-Struct GovernanceHookV1 {
-    proposal_id: String,
-    council_vote_hash: Hash,
-    dao_vote_hash: Hash,
-    steward_ack: Signature,
-    guardian_clearance: Option<Signature>,
-}
+**འདེམས་ངོ་ཨིན་ཀོ་ཌིང་:** IH58 (དགའ་གདམ་) དང་བསྡམས་ཡོད་པའི་ (`sora`, གཉིས་པ་) ཡང་ན་ ADDR-5 རེ་ལུ་ ཀེ་ནོ་ནིག་ཧེགསི་འདི་ ངོས་ལེན་འབདཝ་ཨིན། Torii I18NI000000070X བརྒྱུད་དེ་ སྤྱིར་བཏང་བཟོཝ་ཨིན།
 
-Struct RenewNameRequestV1 {
-    selector: NameSelectorV1,
-    term_years: u8,
-    payment: PaymentProofV1,
-}
+**འཛོལ་བའི་དཔེ་ཚད་:** མཐའ་མཚམས་ཆ་མཉམ་ I18NT0000002X JSON དང་གཅིག་ཁར་ I18NI0000000071X, I18NI00000000072X, I18NI00000000073X. གསང་ཡིག་ཚུ་ནང་ I18NI000000074X, I18NI0000000075X, I18NI00000000076X, I18NI000000077X,
 
-Struct TransferNameRequestV1 {
-    selector: NameSelectorV1,
-    new_owner: AccountId,
-    governance: GovernanceHookV1,
-}
+### 3.1 CLI རོགས་རམ་ (N0 ལག་ཐོག་ཐོ་བཀོད་དགོས་མཁོ།)
 
-Struct UpdateControllersRequestV1 {
-    selector: NameSelectorV1,
-    controllers: Vec<NameControllerV1>,
-}
+ད་ལྟོ་ སྒོ་བསྡམ་ཡོད་པའི་ བེ་ཊ་གི་བདག་འཛིན་པ་ཚུ་གིས་ ལག་བཟོའི་ JSON མེད་པར་ CLI བརྒྱུད་དེ་ ཐོ་བཀོད་འདི་ ལག་ལེན་འཐབ་ཚུགས།
 
-Struct FreezeNameRequestV1 {
-    selector: NameSelectorV1,
-    reason: String,
-    until: Timestamp,
-    guardian_ticket: Signature,
-}
+I18NF0000023X
 
-Struct ReservedAssignmentRequestV1 {
-    selector: NameSelectorV1,
-    reserved_label: ReservedNameV1,
-    governance: GovernanceHookV1,
-}
-```
+- I18NI000000078X སྔོན་སྒྲིག་ཚུ་ སི་ཨེལ་ཨའི་ རིམ་སྒྲིག་རྩིས་ཐོ་ལུ་; ཁ་སྐོང་ཚད་འཛིན་རྩིས་ཐོ་ཚུ་ (སྔོན་སྒྲིག་ I18NI0000080X) ལུ་ I18NI000000079X ལུ་ བསྐྱར་ལོག་འབད།
+- ནང་ཐིག་སྤྲོད་ལེན་གྱི་དར་ཆ་ཚུ་ ཐད་ཀར་དུ་ `PaymentProofV1` ལུ་ཡོདཔ་ཨིན། ཁྱོད་ཀྱིས་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་བྱུང་འཛིན་ཧེ་མ་ལས་ `--payment-json PATH` ལུ་ ཆ་འཇོག་འབད། མེ་ཊ་ཌེ་ཊ་ (`--metadata-json`) དང་ གཞུང་སྐྱོང་ཧུཀ་ (`--governance-json`) གིས་ དཔེ་རིས་གཅིག་པ་ལུ་ གཞི་བཞག་སྟེ་ཨིན།
 
-## 3. REST Endpoints
-
-| Endpoint | Method | Payload | Description |
-|----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Register or reopen a name. Resolves pricing tier, validates payment/governance proofs, emits registry events. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Extend term. Enforces grace/redemption windows from policy. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Transfer ownership once governance approvals attach. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Replace controller set; validates signed account addresses. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Guardian/council freeze. Requires guardian ticket and reference to governance docket. |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze after remediation; ensures council override recorded. |
-| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Steward/council assignment of reserved names. |
-| `/v1/sns/policies/{suffix_id}` | GET | — | Fetch current `SuffixPolicyV1` (cacheable). |
-| `/v1/sns/registrations/{selector}` | GET | — | Returns current `NameRecordV1` + effective state (Active, Grace, etc.). |
-
-**Selector encoding:** the `{selector}` path segment accepts IH58 (preferred), compressed (`sora`, second-best), or canonical hex per ADDR-5; Torii normalises it via `NameSelectorV1`.
-
-**Error model:** all endpoints return Norito JSON with `code`, `message`, `details`. Codes include `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
-
-### 3.1 CLI helpers (N0 manual registrar requirement)
-
-Closed-beta stewards can now exercise the registrar via the CLI without hand-crafting JSON:
-
-```bash
-iroha sns register \
-  --label makoto \
-  --suffix-id 1 \
-  --term-years 2 \
-  --payment-asset-id xor#sora \
-  --payment-gross 240 \
-  --payment-settlement '"settlement-tx-hash"' \
-  --payment-signature '"steward-signature"'
-```
-
-- `--owner` defaults to the CLI config account; repeat `--controller` to attach additional controller accounts (default `[owner]`).
-- Inline payment flags map directly to `PaymentProofV1`; pass `--payment-json PATH` when you already have a structured receipt. Metadata (`--metadata-json`) and governance hooks (`--governance-json`) follow the same pattern.
-
-Read-only helpers round out rehearsals:
+བསྐྱར་སྦྱོང་གི་སྐོར་རིམ་སྐོར་ར་ལྷག་པའི་གྲོགས་རམ་པ་ཚུ།
 
 ```bash
 iroha sns registration --selector makoto.sora
 iroha sns policy --suffix-id 1
 ```
 
-See `crates/iroha_cli/src/commands/sns.rs` for the implementation; the commands reuse the Norito DTOs described in this document so CLI output matches Torii responses byte-for-byte.
+ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ `crates/iroha_cli/src/commands/sns.rs` ལུ་བལྟ། བརྡ་བཀོད་ཚུ་གིས་ ཡིག་ཆ་འདི་ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ Norito DTOs འདི་ལོག་སྟེ་ལག་ལེན་འཐབ་ཡོདཔ་ལས་ CLI ཐོན་འབྲས་ Torii ལན་ཚུ་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
-Additional helpers cover renewals, transfers, and guardian actions:
+བསྐྱར་གསོ་དང་ སྤོ་བཤུད་ དེ་ལས་ སྲུང་སྐྱོབ་ཀྱི་ བྱ་སྤྱོད་ཚུ་ ཁ་སྐོང་འབད་མི་ གྲོགས་རམ་འབད་མི་ཚུ།
 
 ```bash
 # Renew an expiring name
@@ -180,9 +108,9 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` must contain a valid `GovernanceHookV1` record (proposal id, vote hashes, steward/guardian signatures). Each command simply mirrors the corresponding `/v1/sns/registrations/{selector}/…` endpoint so beta operators can rehearse the exact Torii surfaces SDKs will call.
+`--governance-json` ནང་ ནུས་ཅན་ `GovernanceHookV1` དྲན་ཐོ་ (གྲོས་འཆར་གྱི་ id, ཚོགས་རྒྱན་བཙུགས་མི་ བདག་འཛིན་/ལྟ་རྟོག་པའི་མཚན་རྟགས་) ཡོད་དགོ། བརྡ་བཀོད་རེ་རེ་གིས་ མཐུན་སྒྲིག་ཡོད་པའི་ I18NI0000088X མཐའ་མཚམས་འདི་ མེ་ལོང་ནང་འབདཝ་ལས་ བེ་ཊ་བཀོལ་སྤྱོད་པ་ཚུ་གིས་ Torii ཁ་ཐོག་འདི་ བསྐྱར་སྦྱོང་འབད་ཚུགས།
 
-## 4. gRPC Service
+## 4. gRPC ཞབས་ཞུ།
 
 ```text
 service Registrar {
@@ -198,83 +126,83 @@ service Registrar {
 }
 ```
 
-Wire-format: compile-time Norito schema hash recorded under
-`fixtures/norito_rpc/schema_hashes.json` (rows `RegisterNameRequestV1`,
-`RegisterNameResponseV1`, `NameRecordV1`, etc.).
+ཝའིར་-རྩ་སྒྲིག་: བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ I18NT0000004X ལས་འཆར་གྱི་ཧེཤ་འདི་ འོག་ལུ་ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན།
+`fixtures/norito_rpc/schema_hashes.json` (གྱལ་རིམ་`RegisterNameRequestV1`,
+`RegisterNameResponseV1`, I18NI0000092X, ལ་སོགས་པ།).
 
-## 5. Governance Hooks & Evidence
+## 5. གཞུང་སྐྱོང་ཧུཀ་དང་སྒྲུབ་བྱེད།
 
-Every mutating call must attach evidence suitable for replay:
+འགྱུར་བཅོས་ཀྱི་འབོད་བརྡ་རེ་རེ་གིས་ བསྐྱར་རྩེད་ཀྱི་དོན་ལུ་འོས་འབབ་ཡོད་པའི་སྒྲུབ་བྱེད་ཚུ་ མཉམ་སྦྲགས་འབད་དགོ།
 
-| Action | Required governance data |
-|--------|-------------------------|
-| Standard register/renew | Payment proof referencing a settlement instruction; no council vote needed unless tier requires steward approval. |
-| Premium tier register / reserved assignment | `GovernanceHookV1` referencing proposal id + steward acknowledgement. |
-| Transfer | Council vote hash + DAO signal hash; guardian clearance when transfer triggered by dispute resolution. |
-| Freeze/Unfreeze | Guardian ticket signature plus council override (unfreeze). |
+| བྱ་བ་ | དགོས་མཁོའི་གཞུང་སྐྱོང་གནས་སྡུད་ |
+|---------------------------------------- |
+| ཚད་ལྡན་ཐོ་བཀོད་/བསྐྱར་གསོ་ | གཞིས་ཆགས་སློབ་སྟོན་ལུ་ གཞི་བསྟུན་འབད་ནི། གནས་རིམ་བདག་འཛིན་གྱི་གནང་བ་མ་ཐོབ་ཚུན་ཚོད་ ཚོགས་སྡེའི་ཚོགས་རྒྱན་ཡང་མ་ཐོབ། |
+| མཐོ་རིམ་གནས་རིམ་ཐོ་བཀོད་ / བཀག་བཞག་ཡོད་པའི་ལས་འགན། | `GovernanceHookV1` གྲོས་འཆར་གྱི་ id + བདག་འཛིན་ངོས་ལེན། |
+| སྤོ་བཤུད་འབད། | ཚོགས་སྡེའི་ཚོགས་རྒྱན་ hash + DAO བརྡ་རྟགས་ hash; རྩོད་རྙོགས་སེལ་ཐབས་ཀྱིས་ སྤོ་བཤུད་འབད་བའི་སྐབས་ ལྟ་རྟོག་པ་ ཆ་མེད་གཏང་ནི། |
+| གྱང་ཁོག་/ འཁྱེག་མེད་ | གཱར་ཌི་ཡན་གྱི་ཤོག་འཛིན་མིང་རྟགས་དང་ ཚོགས་སྡེ་གིས་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན། |
 
-Torii verifies proofs by checking:
+Torii ཞིབ་དཔྱད་འབད་དེ་ བདེན་ཁུངས་ཚུ་བདེན་བཤད་འབདཝ་ཨིན།
 
-1. Proposal id exists in governance ledger (`/v1/governance/proposals/{id}`) and status is `Approved`.
-2. Hashes match the recorded vote artifacts.
-3. Steward/guardian signatures reference the expected public keys from `SuffixPolicyV1`.
+༡ གྲོས་འཆར་འདི་ གཞུང་སྐྱོང་རྩིས་ཁྲ་ (I18NI0000094X) དང་ གནས་རིམ་འདི་ `Approved` ནང་ལུ་ཡོདཔ་ཨིན།
+༢ Hashes གིས་ ཐོ་བཀོད་འབད་ཡོད་པའི་ཚོགས་རྒྱན་གྱི་ ཅ་ཆས་ཚུ་དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+༣ སི་ཊི་ཝརཌ་/ལྟ་རྟོག་པའི་མིང་རྟགས་ཚུ་གིས་ `SuffixPolicyV1` ལས་ རེ་བ་བསྐྱེད་མི་ མི་མང་ལྡེ་མིག་ཚུ་ གཞི་བསྟུན་འབདཝ་ཨིན།
 
-Failed checks return `sns_err_governance_missing`.
+འཐུས་ཤོར་ཅན་གྱི་ཞིབ་དཔྱད་ཚུ་ `sns_err_governance_missing` སླར་ལོག་འབདཝ་ཨིན།
 
-## 6. Workflow Examples
+## 6. ལཱ་གི་རྒྱུན་རིམ་དཔེ།
 
-### 6.1 Standard Registration
+### ༦.༡ ཚད་ལྡན་གྱི་ཐོ་འགོད།
 
-1. Client queries `/v1/sns/policies/{suffix_id}` to fetch pricing, grace, and available tiers.
-2. Client builds `RegisterNameRequestV1`:
-   - `selector` derived from the preferred IH58 or second-best compressed (`sora`) label.
-   - `term_years` within policy bounds.
-   - `payment` referencing the treasury/steward splitter transfer.
-3. Torii validates:
-   - Label normalisation + reserved list.
-   - Term/gross price vs `PriceTierV1`.
-   - Payment proof amount >= computed price + fees.
-4. On success Torii:
-   - Persists `NameRecordV1`.
-   - Emits `RegistryEventV1::NameRegistered`.
-   - Emits `RevenueAccrualEventV1`.
-   - Returns the new record + events.
+༡ གོང་ཚད་དང་ བྱིན་རླབས་ དེ་ལས་ འཐོབ་ཚུགས་པའི་ རིམ་པ་ཚུ་ ཐོབ་ནིའི་དོན་ལུ་ མཁོ་མངགས་འབད་མི་ འདྲི་དཔྱད་ཚུ་ I18NI0000098X ལུ།
+2. མཁོ་སྤྲོད་འབད་མི་ཚུ་གིས་ `RegisterNameRequestV1` བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+   - IH58 ཡང་ན་ གཉིས་པ་ བསྡམ་བཞག་ཡོད་པའི་ (I18NI0000010101010) ཁ་ཡིག་ལས་ ཐོན་མི་ I18NI000000100X ཁ་ཡིག་ལས་ ཐོན་ཡོདཔ་ཨིན།
+   - སྲིད་བྱུས་མཐའ་མཚམས་ཀྱི་ནང་འཁོད་ལུ་ `term_years` ཨིན།
+   - `payment` དངུལ་ཁང་/ལྕགས་རིགས་ཀྱི་ བགོ་བཤའ་སྤོ་བཤུད་ལུ་གཞི་བསྟུན་འབད་ནི།
+3. Torii བདེན་དཔང་འབདཝ་ཨིན།
+   - ཁ་ཡིག་སྤྱིར་བཏང་བཟོ་ནི་ + གསོག་འཇོག་ཐོ་ཡིག་།
+   - Term/ཡོངས་བསྡོམས་ཀྱི་གོང་ཚད་ vs `PriceTierV1`.
+   - དངུལ་སྤྲོད་བདེན་ཁུངས་དངུལ་འབོར་ >= རྩིས་འཕྲུལ་གྱི་གོང་ཚད་ + འཐུས་ཚུ།
+༤ མཐར་འཁྱོལ་གྱི་ཐོག་ལུ་ Torii:
+   - པར་ལེན་ `NameRecordV1`.
+   - ཨི་མིཊིས་ `RegistryEventV1::NameRegistered`.
+   - Itims `RevenueAccrualEventV1`.
+   - དྲན་ཐོ་ + བྱུང་ལས་གསརཔ་སླར་ལོག་འབདཝ་ཨིན།
 
-### 6.2 Renewal During Grace
+### ༦.༢ བསྐྱར་གསོ་འབད་ནི།
 
-Grace renewals include the standard request plus penalty detection:
+གེ་རེསི་བསྐྱར་གསོ་ནང་ ཚད་ལྡན་གྱི་ཞུ་བ་དང་ ཉེས་ཆད་བརྟག་དཔྱད་ཚུ་ཚུདཔ་ཨིན།
 
-- Torii checks `now` vs `grace_expires_at` and adds surcharge tables from `SuffixPolicyV1`.
-- Payment proof must cover surcharge. Failure => `sns_err_payment_mismatch`.
-- `RegistryEventV1::NameRenewed` records the new `expires_at`.
+- I18NT000000017X ཞིབ་དཔྱད་ཚུ་ `now` vs `grace_expires_at` དང་ I18NI000000109X ལས་ ཁ་སྐོང་ཐིག་ཁྲམ་ཚུ་ཁ་སྐོང་འབདཝ་ཨིན།
+- དངུལ་སྤྲོད་བདེན་ཁུངས་འདི་གིས་ ཁ་སྐོང་བཀོད་དགོ། འཐུས་ཤོར་ => I 18NI00000111X.
+- I18NI000000112X གིས་ I18NI000000113X གསརཔ་འདི་ཐོ་བཀོད་འབདཝ་ཨིན།
 
-### 6.3 Guardian Freeze & Council Override
+### ༦.༣ གཱར་ཌི་ཡན་གྱི་རང་དབང་དང་ ཚོགས་སྡེ་ལས་ བཀག་ཆ་འབད་ནི།
 
-1. Guardian submits `FreezeNameRequestV1` with ticket referencing incident id.
-2. Torii moves record to `NameStatus::Frozen`, emits `NameFrozen`.
-3. After remediation, council issues override; operator sends DELETE `/v1/sns/registrations/{selector}/freeze` with `GovernanceHookV1`.
-4. Torii validates override, emits `NameUnfrozen`.
+༡ གཱར་ཌི་ཡན་གྱིས་ `FreezeNameRequestV1` གིས་ བྱུང་རྐྱེན་གྱི་ བྱུང་རྐྱེན་ id གི་ཐོག་ལས་ ཤོག་བྱང་ཐོག་ལས་ ཕུལ་ཡོདཔ་ཨིན།
+2. I18NT000000018X གིས་ I18NI000000115X ལུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
+༣ བཅོ་ཁ་རྐྱབ་པའི་ཤུལ་ལས་ ཚོགས་སྡེའི་གནད་དོན་ཚུ་ ཁྱབ་ཆེཝ་སྦེ་ཡོདཔ་ཨིན། བཀོལ་སྤྱོད་པ་གིས་ `GovernanceHookV1` དང་གཅིག་ཁར་ DELET `/v1/sns/registrations/{selector}/freeze` གཏངམ་ཨིན།
+4. Torii གིས་ བཀག་ཆ་འབད་དེ་ `NameUnfrozen` ཕྱིར་བཏོན་འབདཝ་ཨིན།
 
-## 7. Validation & Error Codes
+## 7. བདེན་དཔྱད་དང་འཛོལ་བའི་ཨང་རྟགས།
 
-| Code | Description | HTTP |
-|------|-------------|------|
-| `sns_err_reserved` | Label is reserved or blocked. | 409 |
-| `sns_err_policy_violation` | Term, tier, or controller set violates policy. | 422 |
-| `sns_err_payment_mismatch` | Payment proof value or asset mismatch. | 402 |
-| `sns_err_governance_missing` | Required governance artifacts absent/invalid. | 403 |
-| `sns_err_state_conflict` | Operation not allowed in current lifecycle state. | 409 |
+| ཨང་རྟགས་ | འགྲེལ་བཤད་ | HTTP |
+|--------|-----------------------|----------|
+| `sns_err_reserved` | ཁ་ཡིག་འདི་ བཀག་བཞག་ཡོདཔ་ ཡང་ན་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན། | ༤༠༩ |
+| `sns_err_policy_violation` | ཐ་སྙད་དང་ རིམ་པ་ ཡང་ན་ ཚད་འཛིན་པ་གིས་ སྲིད་བྱུས་ལུ་འགལ་འཛོལ་འབདཝ་ཨིན། | ༤༢༢ |
+| `sns_err_payment_mismatch` | དངུལ་སྤྲོད་བདེན་དཔང་གནས་གོང་ ཡང་ན་ རྒྱུ་དངོས་མི་མཐུན་པ། | ༤༠༢ |
+| `sns_err_governance_missing` | དགོས་མཁོའི་གཞུང་སྐྱོང་གི་ཅ་རྙིང་ཚུ་ མེདཔ་སྦེ་/ནུས་མེད་ཨིན། | ༤༠༣ |
+| `sns_err_state_conflict` | ད་ལྟོའི་མི་ཚེ་འཁོར་ལོའི་གནས་སྟངས་ནང་ ཆ་འཇོག་འབད་མ་ཆོག་པའི་ལས་བཀོད། | ༤༠༩ |
 
-All codes surface via `X-Iroha-Error-Code` and structured Norito JSON/NRPC envelopes.
+གསང་ཡིག་ཆ་མཉམ་ I18NI000000125X དང་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ Norito JSON/NRPC གི་ཡིག་ཤུབས་ཚུ་བརྒྱུད་དེ་ ཁ་ཐོག་ལུ་ཐོན་དོ་ཡོདཔ་ཨིན།
 
-## 8. Implementation Notes
+## 8. ལག་བསྟར་དྲན་ཐོ།
 
-- Torii stores pending auctions under `NameRecordV1.auction` and rejects direct registration attempts while `PendingAuction`.
-- Payment proofs reuse Norito ledger receipts; treasury services provide helper APIs (`/v1/finance/sns/payments`).
-- SDKs should wrap these endpoints with strongly typed helpers so wallets can present clear error reasons (`ERR_SNS_RESERVED`, etc.).
+- I18NT000000020X གིས་ `NameRecordV1.auction` གི་འོག་ལུ་ རིན་བསྡུར་ཚུ་ འབད་ཚར་ཞིནམ་ལས་ ཐད་ཀར་ཐོ་བཀོད་འབད་ནི་གི་དཔའ་བཅམ་མི་ཚུ་ ངོས་ལེན་འབདཝ་ཨིནམ་ད་ I18NI000000127X གིས་ ངོས་ལེན་འབདཝ་ཨིན།
+- དངུལ་སྤྲོད་བདེན་ཁུངས་ཚུ་ ལོག་ལག་ལེན་འཐབ་པ་ཅིན་ Norito ལེཌ་ཇར་གྱི་འོང་འབབ་ཚུ། དངུལ་ཁང་ཞབས་ཏོག་ཚུ་གིས་ གྲོགས་རམ་ཨེ་པི་ཨའི་ (`/v1/finance/sns/payments`) བྱིནམ་ཨིན།
+- SDKs ཚུ་གིས་ མཇུག་བསྡུའི་ས་ཚིགས་ཚུ་ ཡིག་དཔར་རྐྱབས་ཡོད་པའི་གྲོགས་རམ་པ་ཚུ་དང་བཅས་ བཀབ་དགོཔ་ལས་ འཛོལ་བ་གི་རྒྱུ་མཚན་གསལ་ཏོག་ཏོ་ (`ERR_SNS_RESERVED`, etc.) གིས་ གསལ་སྟོན་འབད་ཚུགས།
 
-## 9. Next Steps
+## 9. རྗེས་འབྲེལ།
 
-- Wire the Torii handlers to the actual registry contract once SN-3 auctions land.
-- Publish SDK-specific guides (Rust/JS/Swift) referencing this API.
-- Extend [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) with cross-links to the governance hook evidence fields.
+- ཨེསི་ཨེན་-༣ རིན་བསྡུར་གྱི་ས་ཆ་ ཚར་གཅིག་ ཐོ་བཀོད་ཀྱི་གན་རྒྱ་ངོ་མ་ལུ་ Torii འཛིན་སྐྱོང་པ་ཚུ་ དཀྲུགས།
+- ཨེསི་ཌི་ཀེ་-དམིགས་བསལ་ལམ་སྟོན་ (Rust/JS/Swift) འདི་ ཨེ་པི་ཨའི་འདི་ལུ་གཞི་བསྟུན་འབད་ནི།
+- [`sns_suffix_governance_charter.md`](I18NU000000029X) གཞུང་སྐྱོང་ཧུཀ་སྒྲུབ་བྱེད་ཀྱི་ས་སྒོ་ཚུ་དང་ འབྲེལ་མཐུད་ཚུ་དང་གཅིག་ཁར་ རྒྱ་བསྐྱེད་འབད།

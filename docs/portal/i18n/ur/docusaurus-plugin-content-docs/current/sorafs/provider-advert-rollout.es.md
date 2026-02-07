@@ -4,139 +4,137 @@ direction: rtl
 source: docs/portal/docs/sorafs/provider-advert-rollout.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "Plan de despliegue de adverts de proveedores SoraFS"
+عنوان: "وینڈر ایڈورٹائزمنٹ تعیناتی منصوبہ SoraFS"
 ---
 
-> Adaptado de [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).
+> [`docs/source/sorafs/provider_advert_rollout.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md) سے موافقت پذیر۔
 
-# Plan de despliegue de adverts de proveedores SoraFS
+# فروش اشتہار کی تعیناتی کا منصوبہ SoraFS
 
-Este plan coordina el cut-over desde adverts permisivos de providers hacia la
-superficie gobernada `ProviderAdvertV1` requerida para la recuperacion multi-origen
-de chunks. Se centra en tres deliverables:
+یہ منصوبہ اجازت فراہم کرنے والے اشتہارات سے کٹ اوور کو مربوط کرتا ہے
+`ProviderAdvertV1` کثیر نوادرات کی بازیابی کے لئے درکار سطح کی حکومت کی سطح
+ٹکڑوں کی اس میں تین فراہمی پر توجہ دی گئی ہے:
 
-- **Guia de operadores.** Acciones paso a paso que los storage providers deben
-  completar antes de cada gate.
-- **Cobertura de telemetria.** Dashboards y alerts que Observabilidad y Ops usan
-  para confirmar que la red solo acepta adverts conformes.
-  para que los equipos de SDK y tooling planifiquen sus releases.
+-** آپریٹر گائیڈ۔ ** مرحلہ وار اقدامات جو اسٹوریج فراہم کرنے والوں کو لازمی ہے
+  ہر گیٹ سے پہلے مکمل کریں۔
+- ** ٹیلی میٹری کوریج۔ ** ڈیش بورڈز اور الرٹس جو مشاہدہ اور اوپس استعمال کرتے ہیں
+  اس بات کی تصدیق کرنے کے لئے کہ نیٹ ورک صرف تعمیل اشتہارات کو قبول کرتا ہے۔
+  ایس ڈی کے اور ٹولنگ ٹیموں کو ان کی ریلیز کی منصوبہ بندی کرنے کے لئے۔
 
-El rollout se alinea con los hitos SF-2b/2c del
-[roadmap de migracion de SoraFS](./migration-roadmap) y asume que la politica de
-admision del [provider admission policy](./provider-admission-policy) ya esta en
-vigor.
+رول آؤٹ SF-2B/2C سنگ میل کے ساتھ منسلک ہے
+۔
+[فراہم کنندہ داخلہ پالیسی] (./provider-admission-policy) کا داخلہ پہلے ہی موجود ہے
+جوش
 
-## Cronograma de fases
+## فیز شیڈول
 
-| Fase | Ventana (objetivo) | Comportamiento | Acciones del operador | Enfoque de observabilidad |
-|-------|-----------------|-----------|------------------|-------------------|
+| مرحلہ | ونڈو (ہدف) | سلوک | آپریٹر کے اعمال | مشاہدہ کرنے کا نقطہ نظر |
+| ------- | ------------------- | ----------- | --------------------- | ----- |
 
-## Checklist de operadores
+## آپریٹر چیک لسٹ
 
-1. **Inventariar adverts.** Lista cada advert publicado y registra:
-   - Ruta del governing envelope (`defaults/nexus/sorafs_admission/...` o equivalente en produccion).
-   - `profile_id` y `profile_aliases` del advert.
-   - Lista de capabilities (se espera al menos `torii_gateway` y `chunk_range_fetch`).
-   - Flag `allow_unknown_capabilities` (requerido cuando hay TLVs reservados por vendor).
-2. **Regenerar con tooling de providers.**
-   - Reconstruye el payload con tu publisher de provider advert, asegurando:
+1. ** انوینٹری اشتہارات۔ ** ہر شائع شدہ اشتہار اور ریکارڈ کی فہرست بنائیں:
+   - گورننگ لفافے کا راستہ (`defaults/nexus/sorafs_admission/...` یا پیداوار میں مساوی)۔
+   - `profile_id` اور `profile_aliases` انتباہ کا۔
+   - صلاحیتوں کی فہرست (کم از کم `torii_gateway` اور `chunk_range_fetch` کی توقع کی جاتی ہے)۔
+   - پرچم `allow_unknown_capabilities` (جب TLVS موجود ہوتا ہے تو وینڈر کے ذریعہ محفوظ ہوتا ہے)۔
+2. ** فراہم کنندگان کے ٹولنگ کے ساتھ دوبارہ تخلیق کریں۔ **
+   - اپنے فراہم کنندہ کے اشتہار پبلشر کے ساتھ پے لوڈ کو دوبارہ تعمیر کریں ، اس بات کو یقینی بنائیں:
      - `profile_id=sorafs.sf1@1.0.0`
-     - `capability=chunk_range_fetch` con un `max_span` definido
-     - `allow_unknown_capabilities=<true|false>` cuando haya TLVs GREASE
-   - Valida via `/v1/sorafs/providers` y `sorafs_fetch`; las advertencias sobre
-     capabilities desconocidas deben ser triageadas.
-3. **Validar readiness multi-origen.**
-   - Ejecuta `sorafs_fetch` con `--provider-advert=<path>`; el CLI ahora falla
-     cuando falta `chunk_range_fetch` y muestra advertencias para capabilities
-     desconocidas ignoradas. Captura el reporte JSON y archivelo con los logs
-     de operaciones.
-4. **Preparar renovaciones.**
-   - Envia envelopes `ProviderAdmissionRenewalV1` al menos 30 dias antes de
-     enforcement en gateway (R2). Las renovaciones deben conservar el handle
-     canonico y el set de capabilities; solo stake, endpoints o metadata deben
-     cambiar.
-5. **Comunicar a los equipos dependientes.**
-   - Los owners de SDK deben liberar versiones que expongan advertencias a los
-     operadores cuando los adverts sean rechazados.
-   - DevRel anuncia cada transicion de fase; incluir enlaces a dashboards y la
-     logica de umbral de abajo.
-6. **Instalar dashboards y alerts.**
-   - Importa el export de Grafana y colocalo bajo **SoraFS / Provider
-     Rollout** con el UID `sorafs-provider-admission`.
-   - Asegura que las reglas de alertas apunten al canal compartido
-     `sorafs-advert-rollout` en staging y produccion.
+     - `capability=chunk_range_fetch` ایک متعین `max_span` کے ساتھ
+     - `allow_unknown_capabilities=<true|false>` جب چکنائی TLVs موجود ہیں
+   - `/v1/sorafs/providers` اور `sorafs_fetch` کے ذریعے توثیق کرتا ہے۔ کے بارے میں انتباہ
+     نامعلوم صلاحیتوں کو بھی سہارا دیا جانا چاہئے۔
+3. ** کثیر اوریگین تیاری کی توثیق کریں۔ **
+   - `sorafs_fetch` کو `--provider-advert=<path>` کے ساتھ چلائیں ؛ سی ایل آئی اب گر کر تباہ ہوگیا
+     جب `chunk_range_fetch` غائب ہو اور صلاحیتوں کے لئے انتباہ دکھا رہا ہو
+     نامعلوم نامعلوم۔ JSON رپورٹ پر قبضہ کریں اور اسے لاگ ان کے ساتھ محفوظ کریں
+     آپریشنز کی
+4. ** تجدیدات تیار کریں۔ **
+   - کم از کم 30 دن پہلے لفافے `ProviderAdmissionRenewalV1` بھیجیں
+     گیٹ وے (R2) پر نفاذ۔ تجدیدات کو کنٹرول برقرار رکھنا چاہئے
+     کیننیکل اور صلاحیتوں کا مجموعہ ؛ صرف داؤ ، اختتامی نکات یا میٹا ڈیٹا ہونا چاہئے
+     تبدیل کریں۔
+5. ** منحصر ٹیموں سے بات چیت کریں۔ **
+   - ایس ڈی کے مالکان کو ایسے ورژن جاری کرنا ہوں گے جو صارفین کو انتباہات کو بے نقاب کریں۔
+     آپریٹرز جب اشتہارات مسترد کردیئے جاتے ہیں۔
+   - ڈیوریل ہر مرحلے کی منتقلی کا اعلان کرتا ہے۔ ڈیش بورڈز اور دی کے لنک شامل کریں
+     نیچے تھریشولڈ منطق۔
+6. ** ڈیش بورڈز اور الرٹس انسٹال کریں۔ **
+   - Grafana کی برآمد درآمد کریں اور اسے ** SoraFS / فراہم کنندہ کے تحت رکھیں
+     رول آؤٹ ** UID `sorafs-provider-admission` کے ساتھ۔
+   - یقینی بناتا ہے کہ انتباہ کے قواعد مشترکہ چینل کی طرف اشارہ کریں
+     اسٹیجنگ اور پروڈکشن میں `sorafs-advert-rollout`۔
 
-## Telemetria y dashboards
+## ٹیلی میٹری اور ڈیش بورڈزمندرجہ ذیل میٹرکس پہلے ہی `iroha_telemetry` کے ذریعے بے نقاب ہوچکے ہیں:
 
-Las siguientes metricas ya estan expuestas via `iroha_telemetry`:
+- `torii_sorafs_admission_total{result,reason}` - اکاؤنٹ قبول ، مسترد کردیا گیا
+  اور انتباہ کے ساتھ نتائج۔ وجوہات میں `missing_envelope` ، `unknown_capability` ،
+  `stale` اور `policy_violation`۔
 
-- `torii_sorafs_admission_total{result,reason}` — cuenta aceptados, rechazados
-  y resultados con advertencias. Las razones incluyen `missing_envelope`, `unknown_capability`,
-  `stale` y `policy_violation`.
+Grafana کی برآمد: [`docs/source/grafana_sorafs_admission.json`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json)۔
+فائل کو مشترکہ ڈیش بورڈ ذخیرہ میں درآمد کریں (`observability/dashboards`)
+اور اشاعت سے پہلے صرف ڈیٹا سورس کے UID کو اپ ڈیٹ کریں۔
 
-Export de Grafana: [`docs/source/grafana_sorafs_admission.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/grafana_sorafs_admission.json).
-Importa el archivo en el repositorio compartido de dashboards (`observability/dashboards`)
-y actualiza solo el UID del datasource antes de publicar.
+ڈیش بورڈ Grafana ** SoraFS / فراہم کنندہ رول آؤٹ ** فولڈر کے تحت شائع ہوا ہے
+مستحکم UID `sorafs-provider-admission`۔ الرٹ قواعد
+`sorafs-admission-warn` (انتباہ) اور `sorafs-admission-reject` (تنقیدی) ہیں
+نوٹیفکیشن پالیسی `sorafs-advert-rollout` کو استعمال کرنے کے لئے پہلے سے تشکیل شدہ ؛
+اگر منزل کی فہرست میں ترمیم کرنے کے بجائے منزل کی فہرست تبدیل ہوتی ہے تو اس رابطہ نقطہ کو ایڈجسٹ کریں
+ڈیش بورڈ کے JSON.
 
-El tablero se publica bajo la carpeta de Grafana **SoraFS / Provider Rollout** con
-el UID estable `sorafs-provider-admission`. Las reglas de alertas
-`sorafs-admission-warn` (warning) y `sorafs-admission-reject` (critical) estan
-preconfiguradas para usar la politica de notificacion `sorafs-advert-rollout`;
-ajusta ese contact point si la lista de destino cambia en lugar de editar el
-JSON del dashboard.
+تجویز کردہ Grafana پینل:
 
-Paneles Grafana recomendados:
+| ڈیش بورڈ | استفسار | نوٹ |
+| ------- | ------- | ------- |
+| ** داخلے کے نتائج کی شرح ** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | اسٹیک چارٹ کو تصور کرنے کے لئے قبول کریں بمقابلہ وارن بمقابلہ مسترد کریں۔ انتباہ کریں جب انتباہ> 0.05 * کل (انتباہ) یا مسترد> 0 (تنقیدی)۔ |
+| ** انتباہی تناسب ** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | سنگل لائن ٹائمریز جو پیجر کی دہلیز کو کھانا کھلاتی ہیں (5 ٪ انتباہی شرح 15 منٹ میں گھوم رہی ہے)۔ |
+| ** مسترد ہونے کی وجوہات ** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | گائیڈ رن بک ٹریج ؛ تخفیف کے مراحل سے لنک منسلک کرتا ہے۔ |
+| ** ریفریش قرض ** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | ان فراہم کنندگان کی نشاندہی کرتا ہے جو ریفریش ڈیڈ لائن کو پورا نہیں کرتے ہیں۔ دریافت کیشے کے نوشتہ جات کے ساتھ عبور کرتا ہے۔ |
 
-| Panel | Query | Notes |
-|-------|-------|-------|
-| **Admission outcome rate** | `sum by(result)(rate(torii_sorafs_admission_total[5m]))` | Stack chart para visualizar accept vs warn vs reject. Alerta cuando warn > 0.05 * total (warning) o reject > 0 (critical). |
-| **Warning ratio** | `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))` | Timeseries de una sola linea que alimenta el umbral del pager (5% warning rate rolling 15 minutos). |
-| **Rejection reasons** | `sum by(reason)(rate(torii_sorafs_admission_total{result="reject"}[5m]))` | Guia el triage del runbook; adjunta enlaces a pasos de mitigacion. |
-| **Refresh debt** | `sum(rate(torii_sorafs_admission_total{reason="stale"}[1h]))` | Indica providers que no cumplen el refresh deadline; cruza con logs de discovery cache. |
+دستی ڈیش بورڈز کے لئے سی ایل آئی نمونے:
 
-Artefactos de CLI para dashboards manuales:
+- `sorafs_fetch --provider-metrics-out` کاؤنٹرز `failures` ، `successes` اور
+  `disabled` بذریعہ فراہم کنندہ۔ نگرانی کے لئے ایڈہاک ڈیش بورڈز میں درآمد کریں
+  پروڈکشن میں فراہم کنندگان کو تبدیل کرنے سے پہلے آرکسٹریٹر خشک رنز بناتا ہے۔
+- JSON رپورٹ کے فیلڈز `chunk_retry_rate` اور `provider_failure_rate`
+  تھروٹلنگ یا پے لوڈ باسی علامات کو اجاگر کریں جو عام طور پر مسترد ہونے سے پہلے ہوتے ہیں
+  داخلے کی
 
-- `sorafs_fetch --provider-metrics-out` escribe contadores `failures`, `successes` y
-  `disabled` por provider. Importa en dashboards ad-hoc para monitorear
-  dry-runs de orchestrator antes de cambiar providers en produccion.
-- Los campos `chunk_retry_rate` y `provider_failure_rate` del reporte JSON
-  resaltan throttling o sintomas de payloads stale que suelen preceder rechazos
-  de admision.
+### Grafana ڈیش بورڈ لے آؤٹ
 
-### Layout del dashboard de Grafana
+مشاہدہ ایک سرشار بورڈ شائع کرتا ہے - ** SoraFS فراہم کنندہ داخلہ
+رول آؤٹ ** (`sorafs-provider-admission`) - کے تحت ** SoraFS / فراہم کنندہ رول آؤٹ **
+مندرجہ ذیل کیننیکل پینل IDs کے ساتھ:
 
-Observability publica un board dedicado — **SoraFS Provider Admission
-Rollout** (`sorafs-provider-admission`) — bajo **SoraFS / Provider Rollout**
-con los siguientes IDs canonicos de panel:
+- پینل 1 - * داخلے کے نتائج کی شرح * (اسٹیکڈ ایریا ، یونٹ "اوپس/منٹ")۔
+- پینل 2 - * انتباہی تناسب * (سنگل سیریز) ، اظہار کو خارج کرتے ہوئے
+  `رقم (شرح (torii_sorafs_admission_total {نتیجہ =" انتباہ "} [5m])) /
+   رقم (شرح (torii_sorafs_admission_total [5m])) `.
+- پینل 3 - * مسترد ہونے کی وجوہات * (ٹائم سیریز `reason` کے ذریعہ گروپ کردہ)
+  `rate(...[5m])`۔
+- پینل 4 - * ریفریش قرض * (STAT) ، پچھلے ٹیبل کے استفسار کی عکاسی کرتا ہے اور
+  منتقلی لیجر سے نکالے گئے اشتہارات کی ریفریش ڈیڈ لائن کے ساتھ تشریح کی گئی۔
 
-- Panel 1 — *Admission outcome rate* (stacked area, unidad "ops/min").
-- Panel 2 — *Warning ratio* (single series), emitiendo la expresion
-  `sum(rate(torii_sorafs_admission_total{result="warn"}[5m])) /
-   sum(rate(torii_sorafs_admission_total[5m]))`.
-- Panel 3 — *Rejection reasons* (series de tiempo agrupada por `reason`), ordenada por
-  `rate(...[5m])`.
-- Panel 4 — *Refresh debt* (stat), reflejando la query de la tabla anterior y
-  anotada con los refresh deadlines de adverts extraidos del migration ledger.
+انفراسٹرکچر ڈیش بورڈز ریپو میں JSON کنکال کو کاپی (یا تخلیق کریں)
+`observability/dashboards/sorafs_provider_admission.json` ، پھر صرف اپ ڈیٹ کریں
+ڈیٹا سورس UID ؛ پینل IDs اور الرٹ کے قواعد کا حوالہ دیا گیا ہے
+ذیل میں رن بکس ، لہذا اس دستاویزات کا جائزہ لینے کے بغیر ان کی بازیافت سے گریز کریں۔سہولت کے ل the ، ذخیرے میں پہلے ہی ڈیش بورڈ کی تعریف شامل ہے۔
+`docs/source/grafana_sorafs_admission.json` میں حوالہ ؛ اسے اپنے فولڈر میں کاپی کریں
+Grafana اگر آپ کو مقامی جانچ کے لئے نقطہ آغاز کی ضرورت ہو۔
 
-Copia (o crea) el esqueleto JSON en el repo de dashboards de infraestructura en
-`observability/dashboards/sorafs_provider_admission.json`, luego actualiza solo el
-UID del datasource; los IDs de panel y las reglas de alertas se referencian en
-los runbooks de abajo, asi que evita renumerarlos sin revisar esta documentacion.
+####Prometheus الرٹ قواعد
 
-Para conveniencia el repositorio ya incluye una definicion de dashboard de
-referencia en `docs/source/grafana_sorafs_admission.json`; copiala en tu carpeta
-Grafana si necesitas un punto de partida para pruebas locales.
-
-### Reglas de alertas de Prometheus
-
-Agrega el siguiente grupo de reglas a
-`observability/prometheus/sorafs_admission.rules.yml` (crea el archivo si este es
-el primer grupo de reglas SoraFS) e incluyelo desde tu configuracion de
-Prometheus. Reemplaza `<pagerduty>` con la etiqueta de enrutamiento real para tu
-rotacion on-call.
+مندرجہ ذیل قواعد کا سیٹ شامل کریں
+`observability/prometheus/sorafs_admission.rules.yml` (اگر فائل ہے تو فائل بنائیں
+قواعد SoraFS کا پہلا گروپ) اور اسے اپنی تشکیل سے شامل کریں
+Prometheus۔ اپنے لئے اصل روٹنگ لیبل کے ساتھ `<pagerduty>` کو تبدیل کریں
+آن کال گردش
 
 ```yaml
 groups:
@@ -150,7 +148,7 @@ groups:
           severity: warning
           route: <pagerduty>
         annotations:
-          summary: "SoraFS provider adverts generating warnings"
+          summary: "Grafana provider adverts generating warnings"
           description: |
             Warn outcomes exceeded 5% of all admissions for 15 minutes.
             Inspect panel 3 on the sorafs/provider-admission dashboard and
@@ -162,52 +160,52 @@ groups:
           severity: critical
           route: <pagerduty>
         annotations:
-          summary: "SoraFS provider adverts rejected"
+          summary: "Grafana provider adverts rejected"
           description: |
             Provider adverts have been rejected for the last five minutes.
             Check panel 4 (rejection reasons) and rotate envelopes before
             the refresh deadline elapses.
 ```
 
-Ejecuta `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
-antes de subir cambios para asegurar que la sintaxis pase `promtool check rules`.
+`scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml` چلائیں
+تبدیلیوں کو اپ لوڈ کرنے سے پہلے یہ یقینی بنانے کے لئے کہ نحو `promtool check rules` سے گزرتا ہے۔
 
-## Matriz de rollout
+## رول آؤٹ سرنی
 
-| Caracteristicas del advert | R0 | R1 | R2 | R3 |
-|------------------------|----|----|----|----|
-| `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` presente, aliases canonicos, `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
-| Carece de la capability `chunk_range_fetch` | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
-| TLVs de capability desconocida sin `allow_unknown_capabilities=true` | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| `refresh_deadline` expirado | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
-| `signature_strict=false` (fixtures de diagnostico) | ✅ (solo desarrollo) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
+| اشتہار کی خصوصیات | R0 | R1 | R2 | R3 |
+| ----------------------------- | ---- | ---- | ---- | ---- | ---- |
+| `profile_id = sorafs.sf1@1.0.0` ، `chunk_range_fetch` موجود ، کیننیکل عرفی ، `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
+| صلاحیت کا فقدان `chunk_range_fetch` | ⚠ انتباہ (انجشن + ٹیلی میٹری) | ⚠ وارن | ❌ مسترد (`reason="missing_capability"`) | ❌ ریجیکٹ |
+| `allow_unknown_capabilities=true` کے بغیر نامعلوم صلاحیت کے TLVs | ✅ | ⚠ انتباہ (`reason="unknown_capability"`) | ❌ ریجیکٹ | ❌ ریجیکٹ |
+| `refresh_deadline` کی میعاد ختم | ❌ ریجیکٹ | ❌ ریجیکٹ | ❌ ریجیکٹ | ❌ ریجیکٹ |
+| `signature_strict=false` (تشخیصی فکسچر) | ✅ (صرف ترقی) | ⚠ وارن | ⚠ وارن | ❌ ریجیکٹ |
 
-Todos los horarios usan UTC. Las fechas de enforcement se reflejan en el migration
-ledger y no se moveran sin un voto del council; cualquier cambio requiere actualizar
-este archivo y el ledger en el mismo PR.
+ہر وقت UTC کا استعمال کرتے ہیں۔ نفاذ کی تاریخیں ہجرت میں جھلکتی ہیں
+لیجر اور کونسل کے ووٹ کے بغیر منتقل نہیں ہوگا۔ کسی بھی تبدیلی کے لئے تازہ کاری کی ضرورت ہوتی ہے
+یہ فائل اور اسی PR میں لیجر۔
 
-> **Nota de implementacion:** R1 introduce la serie `result="warn"` en
-> `torii_sorafs_admission_total`. El patch de ingesta Torii que agrega la nueva
-> etiqueta se sigue junto con las tareas de telemetria SF-2; hasta que llegue,
+> ** عمل درآمد نوٹ: ** R1 `result="warn"` سیریز میں متعارف کراتا ہے
+> `torii_sorafs_admission_total`۔ Torii Ingesion پیچ جو نیا شامل کرتا ہے
+> SF-2 ٹیلی میٹری کے کاموں کے ساتھ ٹیگ کی پیروی کی جاتی ہے۔ جب تک یہ نہ پہنچے ،
 
-## Comunicacion y manejo de incidentes
+## مواصلات اور واقعہ کا انتظام
 
-- **Mailer semanal de estado.** DevRel circula un resumen breve de metricas de
-  admision, advertencias pendientes y deadlines proximos.
-- **Respuesta a incidentes.** Si los alerts `reject` se activan, on-call:
-  1. Recupera el advert ofensivo via discovery de Torii (`/v1/sorafs/providers`).
-  2. Re-ejecuta la validacion del advert en el pipeline del provider y compara con
-     `/v1/sorafs/providers` para reproducir el error.
-  3. Coordina con el provider la rotacion del advert antes del siguiente refresh
-     deadline.
-- **Congelamientos de cambios.** No se aplican cambios de schema de capabilities
-  durante R1/R2 a menos que el comite de rollout lo apruebe; los trials GREASE deben
-  programarse durante la ventana semanal de mantenimiento y registrarse en el
-  migration ledger.
+- ** ہفتہ وار اسٹیٹس میلر۔ ** ڈیوریل نے کارکردگی کی پیمائش کا ایک مختصر خلاصہ گردش کیا۔
+  داخلہ ، زیر التواء انتباہات اور آنے والی ڈیڈ لائن۔
+- ** واقعہ کا جواب۔ ** اگر `reject` انتباہات چالو ہوجائیں تو ، آن کال:
+  1. Torii (`/v1/sorafs/providers`) کی دریافت کے ذریعے جارحانہ اشتہار کی بازیافت کریں۔
+  2. فراہم کنندہ پائپ لائن میں اشتہار کی توثیق کو دوبارہ عمل کریں اور اس کے ساتھ موازنہ کریں
+     `/v1/sorafs/providers` غلطی کو دوبارہ پیش کرنے کے لئے۔
+  3. فراہم کنندہ کے ساتھ ہم آہنگی کے ساتھ اگلے ریفریش سے پہلے اشتہار کی گردش
+     آخری تاریخ
+- ** تبدیلی جم جاتی ہے۔ ** صلاحیتوں کے اسکیما میں کوئی تبدیلی نہیں کی جاتی ہے
+  R1/R2 کے دوران جب تک کہ رول آؤٹ کمیٹی کے ذریعہ منظور نہ ہو۔ چکنائی کی آزمائشیں لازمی ہیں
+  ہفتہ وار بحالی ونڈو کے دوران شیڈول اور میں ریکارڈ کیا گیا
+  ہجرت لیجر۔
 
-## Referencias
+## حوالہ جات
 
-- [SoraFS Node/Client Protocol](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
-- [Provider Admission Policy](./provider-admission-policy)
-- [Migration Roadmap](./migration-roadmap)
-- [Provider Advert Multi-Source Extensions](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)
+- [SoraFS نوڈ/کلائنٹ پروٹوکول] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/sorafs_node_client_protocol.md)
+- [فراہم کنندہ داخلہ پالیسی] (./provider-admission-policy)
+- [ہجرت روڈ میپ] (./migration-roadmap)
+- [فراہم کنندہ ایڈورٹ ملٹی سورس ایکسٹینشن] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md)

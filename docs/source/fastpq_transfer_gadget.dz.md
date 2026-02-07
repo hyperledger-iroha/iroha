@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% FastPQ Transfer Gadget Design
+% FastPQ སྤོ་བཤུད་གེཇ་ཊི་བཟོ་བཀོད།
 
-# Overview
+# ལྟ་ཚུལ།
 
-The current FASTPQ planner records every primitive operation involved in a `TransferAsset` instruction, which means each transfer pays for balance arithmetic, hash rounds, and SMT updates separately. To reduce trace rows per transfer we introduce a dedicated gadget that verifies only the minimal arithmetic/commitment checks while the host continues to execute the canonical state transition.
+ད་རེས་ནངས་པའི་ FASTPQ འཆར་གཞི་བརྩམ་མི་འདི་གིས་ `TransferAsset` གི་བཀོད་རྒྱ་ནང་ འབྲེལ་གཏོགས་ཡོད་པའི་ གནའ་དུས་ཀྱི་ལག་ལེན་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན། སྤོ་བཤུད་རེ་ལུ་ གྲལ་ཐིག་ཚུ་མར་ཕབ་འབད་ནི་ལུ་ ང་བཅས་ཀྱིས་ ཧོསིཊི་གིས་ ཀེ་ནོ་ནིག་གནས་སྟངས་འགྱུར་བ་འདི་ འཕྲོ་མཐུད་དེ་རང་ ལག་ལེན་འཐབ་པའི་སྐབས་ ཨང་རྩིས་/ཁས་བླངས་ཞིབ་དཔྱད་ཚུ་ ཉུང་ཤོས་ཅིག་རྐྱངམ་ཅིག་ བདེན་དཔྱད་འབད་མི་ བརྩོན་ཤུགས་ཅན་གྱི་གེཌ་གེཊི་ཅིག་ ངོ་སྤྲོད་འབདཝ་ཨིན།
 
-- **Scope**: single transfers and small batches emitted via the existing Kotodama/IVM `TransferAsset` syscall surface.
-- **Goal**: cut FFT/LDE column footprint for high-volume transfers by sharing lookup tables and collapsing per-transfer arithmetic into a compact constraint block.
+- **Scope**: ད་ལྟོ་ཡོད་པའི་ Kotodama/IVM `TransferAsset` syscall ཁ་ཐོག་ལས་བཏོན་ཡོདཔ་ཨིན།
+- **Goal**: བཏོག་ཡོད་པའི་ FFT/LDE ཐིག་རིས་མཐོ་དྲགས་ཚུ་ མཐོ་བའི་སྐད་ཤུགས་སྤོ་སོར་གྱི་དོན་ལུ་ འཚོལ་ཞིབ་ཐིག་ཁྲམ་ཚུ་བརྗེ་སོར་འབད་དེ་ བརྡ་སྤྲོད་འབད་མི་རེ་ལུ་ རྩིས་རིག་འདི་ བསྡམ་བཞག་པའི་བཀག་ཆ་ནང་ བརྡལ་བཤིག་གཏང་ནི།
 
-# Architecture
+# བཟོ༌བཀོད༌རིག༌པ
 
 ```
 Kotodama builder → IVM syscall (transfer_v1 / transfer_v1_batch)
@@ -33,9 +34,9 @@ Kotodama builder → IVM syscall (transfer_v1 / transfer_v1_batch)
                         └─ Authority digest equality
 ```
 
-## Transcript Format
+## ཡིག་བསྐུར་རྩ་སྒྲིག་།
 
-The host emits a `TransferTranscript` per syscall invocation:
+ཧོསཊི་གིས་ སི་སི་ཀཱལ་འབོད་བརྡ་རེ་ལུ་ `TransferTranscript` ཅིག་བཏོནམ་ཨིན།
 
 ```rust
 struct TransferTranscript {
@@ -59,55 +60,51 @@ struct TransferDeltaTranscript {
 }
 ```
 
-- `batch_hash` ties the transcript to the transaction entrypoint hash for replay protection.
-- `authority_digest` is the host’s hash over sorted signers/quorum data; the gadget checks equality but does not redo signature verification. Concretely the host Norito-encodes the `AccountId` (which already embeds the canonical multisig controller) and hashes `b"iroha:fastpq:v1:authority|" || encoded_account` with Blake2b-256, storing the resulting `Hash`.
-- `poseidon_preimage_digest` = Poseidon(account_from || account_to || asset || amount || batch_hash); ensures the gadget recomputes the same digest as the host. The preimage bytes are constructed as `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` using bare Norito encoding before passing them through the shared Poseidon2 helper. This digest is present for single-delta transcripts and omitted for multi-delta batches.
+- `batch_hash` གིས་ བསྐྱར་རྩེད་སྲུང་སྐྱོབ་ཀྱི་དོན་ལུ་ ཚོང་འབྲེལ་འཛུལ་སྤྱོད་ཀྱི་ཧེ་ཤི་ལུ་ ཡིག་བསྒྱུར་འདི་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
+- `authority_digest` འདི་ མཚན་རྟགས་བཀོད་མི་/ཀོར་རམ་གནས་སྡུད་ལས་ ཧོསིཊི་གི་ཧེཤ་ཨིན། གེཌི་གེཊི་གིས་ འདྲ་མཉམ་ཞིབ་དཔྱད་འབདཝ་ཨིན་རུང་ མཚན་རྟགས་བདེན་དཔྱད་འབད་ནི་འདི་ ལོག་མི་འབད། འདི་དང་འཁྲིལ་ཏེ་ ཧོསིཊ་ Norito-I1coNI00000029X (ཧེ་མ་ལས་རང་ ཀེ་ནོ་ནིག་མལ་ཊི་སིག་ཚད་འཛིན་འདི་བཙུགས་ཡོདཔ་ཨིན་) དང་ ཧ་ཤེ་ `b"iroha:fastpq:v1:authority|" || encoded_account` དང་གཅིག་ཁར་ Blake2b-256 དང་ཅིག་ཁར་ `Hash` གསོག་འཇོག་འབདཝ་ཨིན།
+- `poseidon_preimage_digest` = པོ་སི་ཌོན་(རྩིས་ཁྲ་ལས་"ལས་ | རྩིས་ཐོ་_| to to || བདོད || བསྡོམས་ || batch_hahas); འཕྲུལ་ཆས་འདི་ ཧོསིཊི་བཟུམ་སྦེ་ བཞུ་བཅོས་འདི་ ལོག་བཙུགས་དགོཔ་ཨིན། སྔོན་འགྲོའི་བཱའིཊི་ཚུ་ བརྗེ་སོར་འབད་ཡོད་པའི་པོ་སི་ཌོན་༢ གྲོགས་རམ་འབད་མི་བརྒྱུད་དེ་ མ་སྤྲོད་པའི་ཧེ་མ་ `norito(from_account) || norito(to_account) || norito(asset_definition) || norito(amount) || batch_hash` གིས་ Norito ཨིན་ཀོ་ཌིང་སྦེ་ བཟོ་བསྐྲུན་འབད་ཡོདཔ་ཨིན། འ་ནི་ཟས་བཅུད་འདི་ delta གི་ཡིག་ཆ་ཚུ་གི་དོན་ལུ་ཡོདཔ་མ་ཚད་ delta གི་དོན་ལུ་ བཏོན་བཏང་ཡོདཔ་ཨིན།
 
-All fields are serialized via Norito so existing determinism guarantees hold.
-Both `from_path` and `to_path` are emitted as Norito blobs using the
-`TransferMerkleProofV1` schema: `{ version: 1, path_bits: Vec<u8>, siblings: Vec<Hash> }`.
-Future versions can extend the schema while the prover enforces the version tag
-before decoding. `TransitionBatch` metadata embeds the Norito-encoded transcript
-vector under the `transfer_transcripts` key so the prover can decode the witness
-without performing out-of-band queries. Public inputs (`dsid`, `slot`, roots,
-`perm_root`, `tx_set_hash`) are carried in `FastpqTransitionBatch.public_inputs`,
-leaving metadata for entry hash/transcript count bookkeeping. Until host plumbing
-lands, the prover synthetically derives proofs from the key/balance pairs so rows
-always include a deterministic SMT path even when the transcript omits the optional fields.
+ས་སྒོ་ཆ་མཉམ་ Norito བརྒྱུད་དེ་ རིམ་སྒྲིག་འབད་ཡོདཔ་ལས་ ད་ལྟོ་ཡོད་པའི་ གཏན་འབེབས་བཟོ་ནིའི་ འགན་ལེན་ཚུ་ བཀག་བཞགཔ་ཨིན།
+`from_path` དང་ Kotodama གཉིས་ཆ་ར་ Norito bobbbs ལག་ལེན་འཐབ་སྟེ་ བཏོན་ཡོདཔ་ཨིན།
+`TransferMerkleProofV1` ལས་འཆར་: `{ version: 1, path_bits: Vec<u8>, siblings: Vec<Hash> }`.
+མ་འོངས་ཐོན་རིམ་ཚུ་གིས་ ལས་འཆར་འདི་རྒྱ་སྐྱེད་འབད་ཚུགསཔ་ཨིནམ་ད་ དཔེ་སྟོན་འདི་གིས་ ཐོན་རིམ་ངོ་རྟགས་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+བརྡ་བཀོད་མ་འབད་བའི་ཧེ་མ། `TransitionBatch` མེ་ཊ་ཌེ་ཊ་གིས་ Norito-encoded ཡིག་བསྒྱུར་འདི་ བཙུགསཔ་ཨིན།
+`transfer_transcripts` ལྡེ་མིག་འོག་ལུ་ vector
+ཕྱི་རོལ་གྱི་འདྲི་དཔྱད་ཚུ་འབད་མ་བཏུབ། མི་མང་ཨིན་པུཊི་ (`dsid`, `slot`, རྩ་བརྒྱུད།
+`perm_root`, `tx_set_hash`) འདི་ `FastpqTransitionBatch.public_inputs`, ནང་ འབག་འོང་།
+ཐོ་བཀོད་འབད་ནིའི་དོན་ལུ་ མེ་ཊ་ཌེ་ཊ་བཞག་ཡོདཔ། ཧོསིཊི་ཆུ་གཡུར་མ་རིམ།
+ས་གཞི་ཚུ་ ལྡེ་མིག་/འདྲ་མཉམ་ཆ་ལས་ གྲལ་ཐིག་ཚུ་ལས་ བཅོས་མའི་ཐོག་ལས་ འབྱུང་ཁུངས་བདེན་ཁུངས་ཚུ་ བཏོནམ་ཨིན།
+ཨ་རྟག་ར་ ཡིག་བསྒྱུར་གྱིས་ གདམ་ཁའི་ས་སྒོ་ཚུ་ བཏོན་གཏང་པའི་སྐབས་ལུ་ཡང་ གཏན་འབེབས་ཨེསི་ཨེམ་ཊི་འགྲུལ་ལམ་ཅིག་ གྲངས་སུ་བཙུགསཔ་ཨིན།
 
-## Gadget Layout
+## གེཌ་གེཊི་བཀོད་སྒྲིག་།
 
-1. **Balance Arithmetic Block**
-   - Inputs: `from_balance_before`, `amount`, `to_balance_before`.
-   - Checks:
-     - `from_balance_before >= amount` (range gadget with shared RNS decomposition).
+1. **འདྲ་མཉམ་ཨང་རྩིས་བཀག་སྡོམ།**
+   - ཨིན་པུཊ་: `from_balance_before`, `amount`, `to_balance_before`.
+   - ཞིབ་དཔྱད་ཚུ་:
+     - `from_balance_before >= amount` (RNS བརྡལ་བཤིག་ཡོད་པའི་ ཁྱབ་ཚད་ཅན་གྱི་ཅ་ཆས་)
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - Packed into a custom gate so all three equations consume one row group.
+   - སྲོལ་སྒྲིག་གི་སྒོ་ཅིག་ནང་ བསྡུ་སྒྲིག་འབད་དེ་ སྙོམ་རྩིས་གསུམ་ཆ་ར་གིས་ གྱལ་རིམ་སྡེ་ཚན་ཅིག་ ཟ་སྤྱོད་འབདཝ་ཨིན།2. **པོ་སི་ཌོན་ཁས་བླངས་བཀག་སྡོམ།**
+   - བརྗེ་སོར་འབད་ཡོད་པའི་པོ་སི་ཌོན་འཚོལ་ཞིབ་ཐིག་ཁྲམ་ལག་ལེན་འཐབ་སྟེ་ `poseidon_preimage_digest` འདི་ གཞན་མི་ཅ་ཆས་ཚུ་ནང་ ཧེ་མ་ལས་ལག་ལེན་འཐབ་ཡོད་པའི་ བརྗེ་སོར་འབདཝ་ཨིན། བརྡ་རྟགས་ནང་ པོ་སི་ཌོན་སྐོར་རིམ་ཚུ་ བརྗེ་སོར་མེད།
 
-2. **Poseidon Commitment Block**
-   - Recomputes `poseidon_preimage_digest` using the shared Poseidon lookup table already used in other gadgets. No per-transfer Poseidon rounds in the trace.
+3. **ཚོང་ལམ་གྱི་བཀག་ཆ་**།
+   - ད་ལྟོ་ཡོད་པའི་ ཀའི་གི་ཨེསི་ཨེམ་ཊི་གེཌི་ཊི་འདི་ "paired update" ཐབས་ལམ་དང་གཅིག་ཁར་ རྒྱ་སྐྱེད་འབདཝ་ཨིན། འདབ་མ་གཉིས་ (གཏང་མི་ ལེན་མི་) གིས་ སྤུན་ཆ་ ཧའི་ཤེ་ཚུ་གི་དོན་ལུ་ ཀེར་ཐིག་གཅིགཔོ་འདི་ བགོ་བཤའ་རྐྱབ་སྟེ་ གྱལ་རིམ་ཚུ་ མར་ཕབ་འབདཝ་ཨིན།
 
-3. **Merkle Path Block**
-   - Extends the existing Kaigi SMT gadget with a "paired update" mode. Two leaves (sender, receiver) share the same column for sibling hashes, reducing duplicated rows.
+4. *རྩོམ་པ་པོ། བརྟག་དཔྱད་**།
+   - ཧོསིཊི་བྱིན་ཡོད་པའི་ ཌའི་ཇེསཊ་དང་ དཔང་པོ་གནས་གོང་གི་བར་ན་ འདྲ་མཉམ་གྱི་ བདེ་སྒྲིག་བཀག་ཆ་འབད། མཚན་རྟགས་ཚུ་ ཁོང་རའི་ བློ་གཏད་ཅན་གྱི་ཅ་ཆས་ནང་ ལུས་ཡོདཔ་ཨིན།
 
-4. **Authority Digest Check**
-   - Simple equality constraint between the host-provided digest and the witness value. Signatures remain in their dedicated gadget.
+5. **བེཆ་ལུཔ་**
+   - ལས་རིམ་ཚུ་གིས་ `transfer_v1_batch_begin()` ལུ་ `transfer_asset` གི་བསྐྱར་འཁོར་ཅིག་གི་ཧེ་མ་དང་ དེ་གི་ཤུལ་ལས་ `transfer_v1_batch_end()` ལུ་ འབོད་བརྡ་འབདཝ་ཨིན། ཁྱབ་ཚད་འདི་ ཤུགས་ལྡན་སྦེ་ཡོད་པའི་སྐབས་ ཧོསིཊི་གི་བཱ་ཕར་རེ་རེ་གིས་ སྤོ་བཤུད་རེ་རེ་བཞིན་དུ་ Kotodama གཅིག་སྦེ་ བསྐྱར་རྩེད་འབདཝ་ཨིནམ་དང་ འདི་ Poseidon/SMT སྐབས་དོན་འདི་ ཚར་རེ་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཨིན། ཁ་སྐོང་ཌེལ་ཊ་རེ་རེ་གིས་ ཨང་རྩིས་རིག་པ་དང་ འདབ་མའི་ཞིབ་དཔྱད་གཉིས་རྐྱངམ་ཅིག་ཁ་སྐོང་འབདཝ་ཨིན། ད་ལྟོ་ ཡིག་བསྒྱུར་གྱི་ ཌི་ཀོ་ཌར་གྱིས་ སྣ་མང་ཌེལ་ཊ་གི་སྡེ་ཚན་ཚུ་ ངོས་ལེན་འབད་དེ་ Norito ཟེར་ ཕྱིར་བཏོན་འབདཝ་ཨིནམ་ལས་ འཆར་གཞི་བརྩམ་མི་འདི་གིས་ Norito ལོག་སྟེ་མ་ལྷག་པར་ དཔང་པོ་ཚུ་ བཀབ་ཚུགས། ཧེ་མ་ལས་ Norito paload ལག་ལེན་འཐབ་ཚུགས་པའི་ ཁག་འབག་ཚུ་གིས་ (དཔེར་ན་ CLI/SDKs) `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` ཟེར་སླབ་སྟེ་ གོ་སྐབས་འདི་ ཡོངས་རྫོགས་སྦེ་ བརྒལ་ཚུགས།
 
-5. **Batch Loop**
-   - Programs call `transfer_v1_batch_begin()` before a loop of `transfer_asset` builders and `transfer_v1_batch_end()` afterwards. While the scope is active the host buffers each transfer and replays them as a single `TransferAssetBatch`, reusing the Poseidon/SMT context once per batch. Each additional delta adds only the arithmetic and two leaf checks. The transcript decoder now accepts multi-delta batches and surfaces them as `TransferGadgetInput::deltas` so the planner can fold witnesses without re-reading Norito. Contracts that already have a Norito payload handy (e.g., CLI/SDKs) can skip the scope entirely by calling `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`, which hands the host a fully encoded batch in one syscall.
+# ཧོསཊི་དང་ བསྒྱུར་བཅོས།| བང་རིམ་ | བསྒྱུར་བཅོས་ཚུ་ |
+|--------|--------------------------------------------------------
+| Norito | `transfer_v1_batch_begin` (Kotodama) ཁ་སྐོང་བརྐྱབ་སྟེ་ ལས་རིམ་ཚུ་གིས་ བར་མཚམས་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཨའི་སིསི་ཀཱལ་ཚུ་ ལེ་ཤ་ཅིག་ལུ་གུག་ཤད་འབད་ཚུགས། (`0x2B`) སྔོན་སྒྲིག་བཀོད་སྒྲིག་འབད་ཡོད་པའི་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ཨིན། |
+| Norito & བརྟག་དཔྱད། | ཀོར་/སྔོན་སྒྲིག་ཧོསཊི་ཚུ་གིས་ ཁྱབ་ཚད་འདི་ ཤུགས་ལྡན་སྦེ་ཡོད་པའི་སྐབས་ བེཆ་ཨེཔ་ཌི་སྦེ་བརྩི་འཇོག་འབདཝ་ཨིན། ཁ་ཐོག་ལུ་ `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, དང་ འགྱུར་ལྡོག་བརྟག་དཔྱད་ཀྱིས་ ཁས་བླངས་མ་འབད་བའི་ཧེ་མ་ ཌབ་ལུ་ཨེསི་ཝི་གི་ཐོ་བཀོད་ཚུ་ ཆ་མེད་བཏང་ཚུགས། དུས་མཐུན་བཟོ་ནི།【ཀར/ཨེ་ཝི་ཨེམ་/སི་ཨར་སི/ཀོར་_ཧོསིཊི་.1001】】】】】】】】】】】】【ཀྲེ་རེཊས/སརསི/ཧོསཏྲ་སི།:451】  】  】          】  】  】  】 ། :3713】【【【【【【【【【【བརྟག་པ/བརྟག་དཔྱད/ཝས་ཝི་_པོའིནཊར་_ཊལ་ཝརས:༢༡༩】 】  】 ཨེ་སི/ཨཝ་ཨེམ/བརྟག་དཔྱད་/ཝསི་_ཧོསཊི་_པོའིནཊར་_ཀྲལ་ཝརས:༢༨༧】།
+| `iroha_core` | མངའ་སྡེ་འགྱུར་བ་གི་ཤུལ་ལས་ Kotodama འདི་ `FastpqTransitionBatch` དྲན་ཐོ་ཚུ་ གསལ་ཏོག་ཏོ་ `StateBlock::capture_exec_witness` དང་གཅིག་ཁར་ བཟོ་བསྐྲུན་འབད་དེ་ `StateBlock::capture_exec_witness` གི་སྐབས་ལུ་ `StateBlock::capture_exec_witness` གི་སྐབས་ལུ་ `StateBlock::capture_exec_witness` གི་སྐབས་ལུ་ `StateBlock::capture_exec_witness` གི་སྐབས་ལུ་ `StateBlock::capture_exec_witness` འདི་གཡོག་བཀོལ་དགོ། `TransitionBatch` ཨིན་པུཊི་ཚུ། `TransferAssetBatch`སྡེ་ཚན་འདི་ ཡིག་བསྒྱུར་འདི་ ཡིག་བསྒྱུར་གཅིག་ནང་ལུ་ སྤོ་བཤུད་འབད་དེ་ delta batchesགི་དོན་ལུ་ poseidon བཞུ་བཅུག་མི་འདི་ བཏོན་བཏང་སྟེ་ ཅ་ཆས་འདི་གིས་ ཐོ་བཀོད་ཚུ་ནང་ལུ་ བསྐྱར་ལོག་འབད་ཚུགས། |
+| `fastpq_prover` | `gadgets::transfer` གིས་ ད་རེས་ སྣ་མང་ཌེལ་ཊ་གི་ཡིག་ཆ་ ༼འདྲ་མཉམ་ཨང་རྩིས་+ པོ་སི་ཌོན་ བཞུ་བཅུག་ནི་༽ དང་ ཁ་ཐོག་ལུ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ དཔང་པོ་ཚུ་ ༼ས་གནས་འཛིན་མི་ ཆ་གཅིག་འབད་མི་ SMT blobbs རྩིས་ཏེ་༽ འཆར་གཞི་བརྩམ་མི་ (Norito) གི་དོན་ལུ་ བདེན་དཔྱད་འབདཝ་ཨིན། Norito གིས་ ཡིག་ཆ་འདི་ཚུ་ བེཆ་མེ་ཊ་ཌེ་ཊ་ལས་ བརྡ་སྟོན་འབདཝ་ཨིན། དེ་ལས་ Kotodama མེད་པའི་ སྤོ་བཤུད་ཀྱི་བེཆ་ཚུ་ ངོས་ལེན་མ་འབད་བར་ བདེན་དཔྱད་འབད་ཡོད་པའི་ དཔང་པོ་ཚུ་ `Trace::transfer_witnesses`, དང་ `TracePolynomialData::transfer_plan()` གིས་ འཆར་གཞི་བརྩམ་མི་གིས་ གླ་ཆ་སྤྲོད་མ་ཚུགས་ཚུན་ཚོད་ འཆར་གཞི་ཚུ་ མཉམ་བསྡོམས་འབད་ནི་གི་འཆར་གཞི་ཚུ་ མཉམ་བསྡོམས་འབདཝ་ཨིན། (I 18NI00000083X). ད་རེས་ `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) བརྒྱུད་དེ་ གྱལ་རིམ་༦༥༥༣༦ ཚུན་ཚོད་ སྐྱེལ་འདྲེན་འབད་དོ་ཡོདཔ་ད་ ཆ་སྒྲིག་འབད་མི་ SMT གི་གློག་ཐག་འདི་ TF-3 གི་དམྱལ་བ་གི་རྒྱབ་ཁར་ལུས་ཡོདཔ་ད་ མཐོ་སྒང་གི་ མཐོ་ཚད་འདི་ ས་ཞིང་བརྗེ་སོར་མ་འབད་ཚུན་ཚོད་ ས་གནས་འཛིན་མི་ཚུ་གིས་ ས་ཁར་སྡོད་སའི་ས་ཁྲ་འདི་ བརྟན་ཏོག་ཏོ་སྦེ་བཞག་སྟེ་ཡོདཔ་ཨིན། |
+| Kotodama | `transfer_batch((from,to,asset,amount), …)` གྲོགས་རམ་འབད་མི་འདི་ `transfer_v1_batch_begin` རིམ་མཐུན་དང་ Norito འབོད་བརྡ་ དེ་ལས་ `transfer_v1_batch_end` ནང་ལུ་ མར་ཕབ་འབདཝ་ཨིན། ཊུཔ་པཱལ་སྒྲུབ་བྱེད་རེ་རེ་གིས་ `(AccountId, AccountId, AssetDefinitionId, int)` དབྱིབས་ལུ་རྗེས་སུ་འཇུག་དགོ། རྐྱང་པ་སྤོ་བཤུད་ཚུ་གིས་ ད་ལྟོ་ཡོད་པའི་བཟོ་བསྐྲུན་པ་འདི་བཞགཔ་ཨིན། |
 
-# Host & Prover Changes
-
-| Layer | Changes |
-|-------|---------|
-| `ivm::syscalls` | Add `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) so programs can bracket multiple `transfer_v1` syscalls without emitting intermediate ISIs, plus `transfer_v1_batch_apply` (`0x2B`) for pre-encoded batches. |
-| `ivm::host` & tests | Core/Default hosts treat `transfer_v1` as a batch append while the scope is active, surface `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, and the mock WSV host buffers entries before committing so regression tests can assert deterministic balance updates.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs:3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
-| `iroha_core` | Emit `TransferTranscript` after the state transition, build `FastpqTransitionBatch` records with explicit `public_inputs` during `StateBlock::capture_exec_witness`, and run the FASTPQ prover lane so both Torii/CLI tooling and the Stage 6 backend receive canonical `TransitionBatch` inputs. `TransferAssetBatch` groups sequential transfers into a single transcript, omitting the poseidon digest for multi-delta batches so the gadget can iterate across entries deterministically. |
-| `fastpq_prover` | `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest) and surfaces structured witnesses (including placeholder paired SMT blobs) for the planner (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` decodes those transcripts out of batch metadata, rejects transfer batches missing the `transfer_transcripts` payload, attaches the validated witnesses to `Trace::transfer_witnesses`, and `TracePolynomialData::transfer_plan()` keeps the aggregated plan alive until the planner consumes the gadget (`crates/fastpq_prover/src/trace.rs`). The row-count regression harness now ships via `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`), covering scenarios up to 65 536 padded rows, while the paired SMT wiring remains behind the TF-3 batch-helper milestone (placeholders keep the trace layout stable until that swap lands). |
-| Kotodama | Lowers the `transfer_batch((from,to,asset,amount), …)` helper into `transfer_v1_batch_begin`, sequential `transfer_asset` calls, and `transfer_v1_batch_end`. Each tuple argument must follow the `(AccountId, AccountId, AssetDefinitionId, int)` shape; single transfers keep the existing builder. |
-
-Example Kotodama usage:
+དཔེར་ན་ Kotodama ལག་ལེན་:
 
 ```text
 fn pay(a: AccountId, b: AccountId, asset: AssetDefinitionId, x: int) {
@@ -115,11 +112,11 @@ fn pay(a: AccountId, b: AccountId, asset: AssetDefinitionId, x: int) {
 }
 ```
 
-`TransferAssetBatch` executes the same permission and arithmetic checks as individual `Transfer::asset_numeric` calls, but records all deltas inside a single `TransferTranscript`. Multi-delta transcripts elide the poseidon digest until per-delta commitments land in a follow-up. The Kotodama builder now emits the begin/end syscalls automatically, so contracts can deploy batched transfers without hand-encoding Norito payloads.
+`TransferAssetBatch` གིས་ གནང་བ་གཅིག་མཚུངས་དང་ ཨང་རྩིས་ཞིབ་དཔྱད་ཚུ་ མི་ངོ་རྐྱང་གི་ `Transfer::asset_numeric` འབོད་བརྡ་ཚུ་བཟུམ་སྦེ་ ལག་ལེན་འཐབ་ཨིན་རུང་ `TransferTranscript` གི་ནང་ན་ ཌེལ་ཊེསི་ཆ་མཉམ་ཐོ་བཀོད་འབདཝ་ཨིན། ཁས་བླངས་འདི་ ཁས་བླངས་ཚུ་ རྗེས་སྙེག་འབད་ཚུན་ཚོད་ མ་ལྷོད་ཚུན་ཚོད་ སྣ་མང་ཌེལ་ཊ་གི་ཡིག་ཆ་ཚུ་གིས་ བཞུ་བཅུག་དོ་ཡོདཔ་ཨིན་མས། Kotodama གིས་ ད་ལྟོ་ རང་བཞིན་གྱིས་ འགོ་བཙུགས་/མཇུག་གི་ syscalls ཚུ་ བཏོནམ་ཨིནམ་ལས་ གན་རྒྱ་ཚུ་གིས་ ལགཔ་གི་ཨེན་ཀོ་ཌིང་ Norito པེ་ལོཌ་ཚུ་ མེད་པར་ བེཆ་ སྤོ་བཤུད་འབད་ཚུགས།
 
-## Row-count Regression Harness
+## གྲལ་ཐིག་-གྲངས་རྩིས་ཀྱི་ ཧྲེའུ་སྲུངས།
 
-`fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) synthesizes FASTPQ transition batches with configurable selector counts and reports the resulting `row_usage` summary (`total_rows`, per-selector counts, ratio) alongside the padded length/log₂. Capture benchmarks for the 65 536-row ceiling with:
+`fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) གིས་ FASTPQ འགྱུར་བའི་སྡེ་ཚན་ཚུ་ རིམ་སྒྲིག་འབད་བཏུབ་པའི་ སེལ་འཐུ་འབད་མི་གྱངས་ཁ་ཚུ་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་འབདཝ་ཨིནམ་དང་ གྲུབ་འབྲས་ `row_usage` བཅུད་བསྡུས་ (`total_rows`, གདམ་ཁའི་གྱངས་ཁ་ཚུ་ གྱངས་ཁ་ ཆ་ཚད་, མཐུད་ཡོད་པའི་རིང་ཚད་₂. གྱལ་རིམ་༦༥༣༦ འབད་མི་ ཐོག་ཚད་ཚུ་ བཟུང་།
 
 ```bash
 cargo run -p fastpq_prover --bin fastpq_row_bench -- \
@@ -128,22 +125,20 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```
+```འདི་ཡང་ འཕྲུལ་ཆས་འདི་གིས་ བདེན་དཔྱད་འབད་བའི་སྐབས་ལུ་ སྔོན་སྒྲིག་འབད་དེ་ `iroha_cli audit witness` གིས་ ད་ལྟོ་ `iroha_cli audit witness` གིས་ ཕྱིར་འཐེན་འབད་མི་ FASTPQ batch artifacts ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
-The emitted JSON mirrors the FASTPQ batch artifacts that `iroha_cli audit witness` now emits by default (pass `--no-fastpq-batches` to suppress them), so `scripts/fastpq/check_row_usage.py` and the CI gate can diff the synthetic runs against prior snapshots when validating planner changes.
+# རྒྱུན་ལས་འཆར་གཞི།
 
-# Rollout Plan
+1. **TF-1 (Transcript plumbing)**: ✅ `StateTransaction::record_transfer_transcripts` གིས་ ད་ལྟོ་ `TransferAsset`/batch, `sumeragi::witness::record_fastpq_transcript` གིས་ འཛམ་གླིང་དཔང་པོ་ནང་ལུ་ གསོག་འཇོག་འབདཝ་ཨིནམ་དང་ `StateBlock::capture_exec_witness` གིས་ `StateBlock::capture_exec_witness` sgorsss ཚུ་ གསོག་འཇོག་འབདཝ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ `fastpq_batches` གསལ་ཏོག་ཏོ་ `public_inputs` དང་ དཔེ་སྟོན་ལེན་ (ཁྱོད་ལུ་ ཕྲང་ཏང་ཏ་དགོ་པ་ཅིན་ `--no-fastpq-batches` ལག་ལེན་འཐབ། ཐོན་འབྲས་)【【ཧ་_ཀོར།/src/state.rs:8801】【ཀྲེ་རེཊས/ཨི་རོ་ཧ་_ཀོར།/src/sumragi/དཔང་པོ། .srs:280】【ཧ་ཀོར་/སྲོར་/སརཆ/ཕསཊ་པི་ཀ/མོཌ:༡༥༧】 ཨི་རོ་ཧ་_ཀླི་/སྲི་/ཨའུ་དིཏ།:༡༨༥】
+2. **TF-2 (Gadget ལག་ལེན་འཐབ་ཐངས་)**: ✅ `gadgets::transfer` གིས་ ད་ལྟོ་ སྣ་མང་ཌེལ་ཊ་ཡིག་བསྒྱུར་ཚུ་ བདེན་དཔྱད་འབདཝ་ཨིན། `trace::build_trace` གིས་ དཔང་པོ་དེ་ཚུ་ བདེན་ཁུངས་ཚུ་ལས་ ཨེསི་ཨེམ་ཊི་ ཀེར་ཐིག་ཚུ་ འབོད་བཀུག་འབད་བའི་སྐབས་ Kotodama ནང་ལུ་ ཐིག་ཚད་བཟོཝ་ཨིན། `fastpq_row_bench` གིས་ ༦༥༣༦-གྱལ་རིམ་གྱི་ འགྱུར་ལྡོག་འདི་ བཟུང་ཡོདཔ་ལས་ འཆར་གཞི་བརྩམ་མི་ཚུ་གིས་ Norito བསྐྱར་རྩེད་མ་འབད་བར་ གྲལ་ཐིག་ལག་ལེན་འཐབ་ནི་ལུ་ བརྟག་ཞིབ་འབདཝ་ཨིན། payloads.【crates/fastpq_prover/src/gadgets/transfer.rs:1】【crates/fastpq_prover/src/trace.rs:1】【crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1】
+3. **TF-3 (batch གྲོགས་རམ་པ་)**: ཧོསིཊི་གནས་རིམ་གྱི་གློག་རིམ་དང་ གེཇེཊི་བསྐྱར་ལོག་ཚུ་རྩིས་ཏེ་ བེཊི་སི་སི་ཀཱལ་ + Kotodama བཟོ་མི་འདི་ལྕོགས་ཅན་བཟོ།
+4. **TF-4 (Telemetry & docs)**:: `fastpq_plan.md`, `fastpq_migration_guide.md`, དང་ ཌེཤ་བོརཌི་འཆར་གཞི་ཚུ་ སྤོ་བཤུད་གྲལ་ཐིག་ཚུ་གི་ཁ་ཐོག་བགོ་བཀྲམ་དང་ གཞན་མི་གེཌ་ཊི་ཚུ་ དུས་མཐུན་བཟོ་ནི་ལུ་ དུས་མཐུན་བཟོ་ནི།
 
-1. **TF-1 (Transcript plumbing)**: ✅ `StateTransaction::record_transfer_transcripts` now emits Norito transcripts for every `TransferAsset`/batch, `sumeragi::witness::record_fastpq_transcript` stores them inside the global witness, and `StateBlock::capture_exec_witness` builds `fastpq_batches` with explicit `public_inputs` for operators and the prover lane (use `--no-fastpq-batches` if you need a slimmer output).【crates/iroha_core/src/state.rs:8801】【crates/iroha_core/src/sumeragi/witness.rs:280】【crates/iroha_core/src/fastpq/mod.rs:157】【crates/iroha_cli/src/audit.rs:185】
-2. **TF-2 (Gadget implementation)**: ✅ `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest), synthesises paired SMT proofs when hosts omit them, exposes structured witnesses via `TransferGadgetPlan`, and `trace::build_trace` threads those witnesses into `Trace::transfer_witnesses` while populating SMT columns from the proofs. `fastpq_row_bench` captures the 65 536-row regression harness so planners track row usage without replaying Norito payloads.【crates/fastpq_prover/src/gadgets/transfer.rs:1】【crates/fastpq_prover/src/trace.rs:1】【crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1】
-3. **TF-3 (Batch helper)**: Enable the batch syscall + Kotodama builder, including host-level sequential application and gadget loop.
-4. **TF-4 (Telemetry & docs)**: Update `fastpq_plan.md`, `fastpq_migration_guide.md`, and dashboard schemas to surface allocation of transfer rows vs other gadgets.
+# དྲི་བ་ཁ་ཕྱེ་བ།
 
-# Open Questions
-
-- **Domain limits**: current FFT planner panics for traces beyond 2¹⁴ rows. TF-2 should either raise the domain size or document a reduced benchmark target.
-- **Multi-asset batches**: initial gadget assumes the same asset ID per delta. If we need heterogeneous batches, we must ensure the Poseidon witness includes the asset each time to prevent cross-asset replay.
-- **Authority digest reuse**: long term we can reuse the same digest for other permissioned operations to avoid recomputing signer lists per syscall.
+- **མངའ་ཁོངས་ཚད་***: ད་ལྟོའི་ཨེཕ་ཨེཕ་ཊི་འཆར་གཞི་བརྩམ་མི་གིས་ གྲལ་ཐིག་ ༢-གྲལ་ཐིག་ཚུ་ལས་ལྷག་སྟེ་ འཚོལ་ཞིབ་འབད་ནིའི་དོན་ལུ་ འདྲོག་བྱེལ་འཐབ་ཨིན། ཊི་ཨེཕ་-༢ གིས་ མངའ་ཁོངས་ཚད་ཡར་སེང་འབད་ནི་དང་ ཡང་ན་ མར་ཕབ་འབད་ཡོད་པའི་ བེང་ཀ་མཱརཀ་དམིགས་གཏད་ཅིག་ ཡིག་ཆ་བཟོ་དགོ།
+- ** Multi-asset batches**: འགོ་ཐོག་གེཌི་ཊི་གིས་ ཌེལ་ཊ་རེ་ལུ་ སྦྱར་བརྩེགས་ཨའི་ཌི་གཅིགཔོ་འདི་ བསམ་ཞིབ་འབདཝ་ཨིན། གལ་སྲིད་ ང་བཅས་ལུ་ རིགས་མ་འདྲཝ་དགོ་པ་ཅིན་ ང་བཅས་ཀྱིས་ པོ་སི་ཌོན་གྱི་དཔང་པོ་ལུ་ དུས་ཚོད་རེ་ལུ་ རྒྱུ་དངོས་ཚུ་ བསྐྱར་རྩེད་འབད་ནི་ལས་ བཀག་ཐབས་ལུ་ དུས་ཚོད་རེ་ལུ་ རྒྱུ་དངོས་ཚུ་ བཙུགས་དགོཔ་ཨིན།
+- **རྩོམ་སྒྲིག་པ་ ཟས་བཅུད་ལོག་སྤྱོད་**: ཡུན་རིང་གིས་ གནང་བ་གཅིག་པའི་ བཞུ་བཅོས་འདི་ གཞན་མི་གནང་བ་ཡོད་པའི་བཀོལ་སྤྱོད་ཚུ་གི་དོན་ལུ་ ལོག་ལག་ལེན་འཐབ་ཚུགས།
 
 
-This document tracks design decisions; keep it in sync with roadmap entries when milestones land.
+ཡིག་ཆ་འདི་གིས་ བཟོ་བཀོད་ཀྱི་གྲོས་ཐག་ཚུ་ བརྟག་ཞིབ་འབདཝ་ཨིན། མཐོ་རིམ་གྱི་ས་ཆ་ཡོད་པའི་སྐབས་ ལམ་ཐིག་ཐོ་བཀོད་ཚུ་དང་མཉམ་སྒྲིག་སྦེ་བཞག།

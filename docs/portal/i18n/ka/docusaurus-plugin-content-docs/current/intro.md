@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/intro.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# კეთილი იყოს თქვენი მობრძანება SORA Nexus დეველოპერის პორტალზე
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository. The landing page now carries
-themed Norito/SoraFS entry points, signed OpenAPI snapshots, and a dedicated
-Norito Streaming reference so contributors can find the streaming control-plane
-contract without digging through the root spec.
+SORA Nexus დეველოპერის პორტალი აერთიანებს ინტერაქტიულ დოკუმენტაციას, SDK
+გაკვეთილები და API ცნობები Nexus ოპერატორებისთვის და Hyperledger Iroha
+კონტრიბუტორები. ის ავსებს დოკუმენტების მთავარ საიტს პრაქტიკული მეგზურებით
+და გენერირებული სპეციფიკაციები პირდაპირ ამ საცავიდან. სადესანტო გვერდი ახლა ახორციელებს
+თემატური Norito/SoraFS შესვლის წერტილები, ხელმოწერილი OpenAPI კადრები და გამოყოფილი
+Norito სტრიმინგის მითითება, რათა კონტრიბუტორებმა იპოვონ ნაკადის საკონტროლო თვითმფრინავი
+კონტრაქტი ძირეული სპეციფიკაციის გათხრების გარეშე.
 
-## What you can do here
+## რისი გაკეთება შეგიძლიათ აქ
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- **ისწავლეთ Norito** – დაიწყეთ მიმოხილვით და სწრაფი დაწყების გასაგებად
+  სერიალიზაციის მოდელი და ბაიტეკოდის ინსტრუმენტები.
+- **Bootstrap SDKs** – მიჰყევით JavaScript-ისა და Rust-ის სწრაფ დაწყებას დღეს; პითონი,
+  Swift და Android-ის სახელმძღვანელოები შეუერთდებიან მათ რეცეპტების მიგრაციის შემდეგ.
+- **API ცნობების დათვალიერება** – Torii OpenAPI გვერდი აჩვენებს უახლეს REST-ს
+  სპეციფიკაციები და კონფიგურაციის ცხრილები უკავშირდება კანონიკურ Markdown-ს
+  წყაროები.
+- ** მოამზადეთ განლაგება ** - ოპერაციული წიგნები (ტელემეტრია, ანგარიშსწორება, Nexus
+  გადაფარვები) პორტირებულია `docs/source/`-დან და დაეშვება ამ საიტზე, როგორც
+  მიგრაცია პროგრესირებს.
 
-## Current status
+## ამჟამინდელი მდგომარეობა
 
-- ✅ Themed Docusaurus v3 landing with refreshed typography, gradient-driven
-  hero/cards, and resource tiles that include the Norito Streaming summary.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`, with signed snapshot
-  checks and CSP guards enforced by `buildSecurityHeaders`.
-- ✅ Preview and probe coverage run in CI (`docs-portal-preview.yml` +
-  `scripts/portal-probe.mjs`), now gating the streaming doc, SoraFS quickstarts,
-  and the reference checklists before artifacts are published.
-- ✅ Norito, SoraFS, and SDK quickstarts plus reference sections are live in the
-  sidebar; new imports from `docs/source/` (streaming, orchestration, runbooks)
-  land here as they are authored.
+- ✅ თემატური Docusaurus v3 დაშვება განახლებული ტიპოგრაფიით, გრადიენტზე ორიენტირებული
+  გმირის/ბარათების და რესურსების ფილები, რომლებიც მოიცავს Norito სტრიმინგის შეჯამებას.
+- ✅ Torii OpenAPI მოდული ჩართული `npm run sync-openapi`-ზე, ხელმოწერილი სნეპშოტით
+  ჩეკები და CSP მცველები აღსრულებულია `buildSecurityHeaders`-ით.
+- ✅ გადახედვისა და ზონდის დაფარვის გაშვება CI-ში (`docs-portal-preview.yml` +
+  `scripts/portal-probe.mjs`), ახლა სტრიმინგის დოკუმენტის კარიბჭე, SoraFS ჩქარდება,
+  და საცნობარო სიები არტეფაქტების გამოქვეყნებამდე.
+- ✅ Norito, SoraFS და SDK სწრაფი დაწყების პლუს საცნობარო სექციები პირდაპირ ეთერშია
+  გვერდითი ზოლი; ახალი იმპორტი `docs/source/`-დან (სტრიმინგი, ორკესტრირება, რენტბუქები)
+  მიწა აქ, როგორც ისინი დაწერილია.
 
-## Getting involved
+## ჩაერთო
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
+- იხილეთ `docs/portal/README.md` ლოკალური განვითარების ბრძანებებისთვის (`npm install`,
   `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- კონტენტის მიგრაციის ამოცანები თვალყურს ადევნებენ `DOCS-*` საგზაო რუქის ელემენტებს.
+  მისასალმებელია წვლილი — პორტის სექციები `docs/source/`-დან და დაამატეთ გვერდი
+  გვერდითი ზოლისკენ.
+- თუ დაამატებთ გენერირებულ არტეფაქტს (სპეციფიკაციები, კონფიგურაციის ცხრილები), დააკონკრეტეთ კონსტრუქცია
+  ბრძანება, რათა მომავალ კონტრიბუტორებს შეეძლოთ მისი მარტივად განახლება.

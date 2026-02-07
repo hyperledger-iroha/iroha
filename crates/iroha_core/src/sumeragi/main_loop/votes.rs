@@ -80,6 +80,22 @@ const VOTE_VERIFY_POP_CACHE_MAX: usize = 64;
 const VOTE_VERIFY_TOPOLOGY_CACHE_MAX: usize = 64;
 
 impl Actor {
+    fn align_roster_to_active_membership(
+        &self,
+        roster: Vec<PeerId>,
+        active: &[PeerId],
+    ) -> Vec<PeerId> {
+        if roster.len() != active.len() {
+            return roster;
+        }
+        let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+        let active_set: BTreeSet<_> = active.iter().cloned().collect();
+        if roster_set != active_set {
+            return roster;
+        }
+        active.to_vec()
+    }
+
     pub(super) fn cached_vote_verify_pops(
         &mut self,
         roster: &Vec<PeerId>,
@@ -1392,10 +1408,13 @@ impl Actor {
         mode_tag: &str,
         signature_result: Option<Result<(), VoteSignatureError>>,
     ) -> bool {
+        let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
         let roster_len = u32::try_from(signature_topology.as_ref().len()).unwrap_or(u32::MAX);
         let roster_hash = iroha_crypto::HashOf::new(&signature_topology.as_ref().to_vec());
-        let canonical_roster =
-            super::roster::canonicalize_roster(signature_topology.as_ref().to_vec());
+        let canonical_roster = super::roster::canonicalize_roster_for_mode(
+            signature_topology.as_ref().to_vec(),
+            consensus_mode,
+        );
         let membership_hash = iroha_crypto::HashOf::new(&canonical_roster);
         let peer_id = usize::try_from(vote.signer)
             .ok()
@@ -2079,10 +2098,11 @@ impl Actor {
         let parent_height = height.checked_sub(1)?;
         let cert = super::status::commit_qc_history()
             .into_iter()
-            .find(|candidate| {
+            .filter(|candidate| {
                 candidate.height == parent_height
                     && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
-            })?;
+            })
+            .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)))?;
         if cert.validator_set.is_empty() {
             return None;
         }
@@ -2099,6 +2119,8 @@ impl Actor {
             return None;
         }
         roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+        let active = self.active_topology_with_genesis_fallback(&view, consensus_mode);
+        roster = self.align_roster_to_active_membership(roster, &active);
         Some(roster)
     }
 
@@ -2145,20 +2167,22 @@ impl Actor {
             .and_then(|target_hash| {
                 super::status::commit_qc_history()
                     .into_iter()
-                    .find(|candidate| {
+                    .filter(|candidate| {
                         candidate.height == target_parent
                             && candidate.subject_block_hash == target_hash
                             && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
                     })
+                    .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)))
             })
             .or_else(|| {
                 super::status::commit_qc_history()
                     .into_iter()
-                    .find(|candidate| {
+                    .filter(|candidate| {
                         candidate.height <= target_parent
                             && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
                             && candidate_matches_known_chain(candidate)
                     })
+                    .max_by(|a, b| a.height.cmp(&b.height).then_with(|| a.view.cmp(&b.view)))
             })?;
         if cert.validator_set.is_empty() {
             return None;
@@ -2198,6 +2222,8 @@ impl Actor {
                     return None;
                 }
                 roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+                let active = self.active_topology_with_genesis_fallback(&view, consensus_mode);
+                roster = self.align_roster_to_active_membership(roster, &active);
                 return Some(roster);
             }
             current_hash = hash_for_height(current_height)?;

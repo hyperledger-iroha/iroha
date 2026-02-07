@@ -11,29 +11,30 @@ id: repair-plan
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+:::note Կանոնական աղբյուր
+Հայելիներ `docs/source/sorafs_repair_plan.md`. Պահպանեք երկու տարբերակները համաժամեցված, մինչև Sphinx հավաքածուն դուրս գա:
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## Կառավարման որոշման կենսացիկլը
+1. Աճող վերանորոգումը ստեղծում է շեղ առաջարկի նախագիծ և բացում վեճի պատուհանը:
+2. Կառավարության ընտրողները վեճի պատուհանի ընթացքում ներկայացնում են հավանություն/մերժման ձայներ:
+3. `escalated_at_unix + dispute_window_secs`-ում որոշումը հաշվարկվում է դետերմինիստորեն. նվազագույն ընտրողները, հաստատումները գերազանցում են մերժումները, և հաստատման հարաբերակցությունը համապատասխանում է քվորումի շեմին:
+4. Հաստատված որոշումները բացում են բողոքարկման պատուհան. `approved_at_unix + appeal_window_secs`-ից առաջ գրանցված բողոքները նշում են որոշումը որպես բողոքարկված:
+5. Տույժերի չափերը կիրառվում են բոլոր առաջարկների վրա. շեմից բարձր ներկայացումները մերժվում են:
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## Կառավարման ընդլայնման քաղաքականություն
+Էսկալացիայի քաղաքականությունը բխում է `governance.sorafs_repair_escalation`-ից՝ `iroha_config`-ից և կիրառվում է յուրաքանչյուր վերանորոգման կտրվածքի առաջարկի համար:
 
-| Setting | Default | Meaning |
+| Կարգավորում | Կանխադրված | Իմաստը |
 |---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `quorum_bps` | 6667 | Հաշվարկված ձայների միջև հաստատման նվազագույն հարաբերակցությունը (հիմնական միավորները): |
+| `minimum_voters` | 3 | Որոշումը որոշելու համար պահանջվող հստակ ընտրողների նվազագույն թիվը: |
+| `dispute_window_secs` | 86400 | Ժամանակ՝ էսկալացիայից հետո, մինչև քվեարկությունները վերջնական տեսքի բերվեն (վայրկյաններ): |
+| `appeal_window_secs` | 604800 | Հաստատումից հետո ժամանակ, որի ընթացքում բողոքներն ընդունվում են (վայրկյաններ): |
+| `max_penalty_nano` | 1,000,000,000 | Վերանորոգման սրացումների համար թույլատրելի շեղման առավելագույն տույժ (nano-XOR): |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- Ժամանակացույցի կողմից ստեղծված առաջարկները սահմանվում են `max_penalty_nano`-ով; Աուդիտորական սահմանաչափից բարձր ներկայացումները մերժվում են:
+- Քվեարկության գրառումները պահվում են `repair_state.to`-ում՝ դետերմինիստական ​​դասավորությամբ (`voter_id` տեսակավորում), այնպես որ բոլոր հանգույցները ստանում են նույն որոշման ժամանակացույցը և արդյունքը:

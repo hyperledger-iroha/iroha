@@ -4,78 +4,76 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/orchestrator-ga-parity.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS Orchestrator GA برابری رپورٹ
+# SoraFS Orchestrator GA للتقرير
 
-Deterministic multi-fetch برابری اب ہر SDK کے حساب سے ٹریک کی جاتی ہے تاکہ ریلیز انجینئرز یہ تصدیق کر سکیں کہ
-payload bytes، chunk receipts، provider reports اور scoreboard کے نتائج مختلف implementations کے درمیان ہم آہنگ رہیں۔
-ہر harness `fixtures/sorafs_orchestrator/multi_peer_parity_v1/` کے تحت canonical multi-provider bundle استعمال کرتا ہے،
-جو SF1 plan، provider metadata، telemetry snapshot اور orchestrator options کو پیک کرتا ہے۔
+حتمية الجلب المتعدد للاختبار باستخدام حساب SDK لبوابات الإنترنت وتتيح للمهندسين وبحثًا عن الألعاب
+بايتات الحمولة، وإيصالات القطع، وتقارير الموفر، ولوحة النتائج هي نتائج مختلفة لتطبيقات الأجهزة.
+تسخير `fixtures/sorafs_orchestrator/multi_peer_parity_v1/` تحت استخدام حزمة موفر متعددة الكنسي كرتا،
+خطة SF1، وبيانات تعريف الموفر، ولقطات القياس عن بعد، وخيارات المنسق.
 
-## Rust بیس لائن
+## الصدأ عبر الإنترنت
 
-- **کمانڈ:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
-- **اسکوپ:** `MultiPeerFixture` plan کو in-process orchestrator کے ذریعے دو بار چلاتا ہے، assembled payload bytes،
-  chunk receipts، provider reports اور scoreboard کے نتائج کی توثیق کرتا ہے۔ انسٹرومنٹیشن peak concurrency اور
-  موثر working-set سائز (`max_parallel x max_chunk_length`) کو بھی ٹریک کرتی ہے۔
-- **Performance guard:** ہر رن CI ہارڈویئر پر 2 s کے اندر مکمل ہونا چاہیے۔
-- **Working set ceiling:** SF1 پروفائل کے ساتھ harness `max_parallel = 3` نافذ کرتا ہے، جس سے ونڈو <= 196608 bytes بنتی ہے۔
+- **مانڈ:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
+- **التسجيل:** خطة `MultiPeerFixture` هي المنسق قيد التشغيل الذي يبلغ طوله ذرتين، بايتات الحمولة المجمعة،
+  إيصالات القطع وتقارير المزود ولوحة النتائج هي النتائج الحقيقية. انسٹرومنتٹیشن ذروة التزامن و
+  أكثر مجموعة عمل ممتازة (`max_parallel x max_chunk_length`) هي الأفضل.
+- **Performance Guard:** يتم تشغيل CI لمدة ثانيتين بواسطة اندر مكمل.
+- **سقف مجموعة العمل:** حزام الأمان SF1 SF1 `max_parallel = 3` نافذ كرتا ہے، جس سے ونڈو <= 196608 بايت بنتی ہے.
 
-نمونہ لاگ آؤٹ پٹ:
+التضخيم:
 
 ```
 Rust orchestrator parity: duration_ms=142.63 total_bytes=1048576 max_inflight=3 peak_reserved_bytes=196608
 ```
 
-## JavaScript SDK Harness
+## أداة JavaScript SDK
 
-- **کمانڈ:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
-- **اسکوپ:** اسی fixture کو `iroha_js_host::sorafsMultiFetchLocal` کے ذریعے دوبارہ چلاتا ہے، اور مسلسل رنز کے درمیان
-  payloads، receipts، provider reports اور scoreboard snapshots کا موازنہ کرتا ہے۔
-- **Performance guard:** ہر اجرا 2 s میں مکمل ہونا چاہیے؛ harness ماپی گئی مدت اور reserved-bytes ceiling
-  (`max_parallel = 3`, `peak_reserved_bytes <= 196608`) پرنٹ کرتا ہے۔
-
-مثالی خلاصہ لائن:
+- **مانڈ:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
+- **السكوب:** هذه التركيبة `iroha_js_host::sorafsMultiFetchLocal` تتكرر مرة أخرى، ومسلسل تحاليل طبية
+  الحمولات والإيصالات وتقارير المزودين ولقطات لوحة النتائج ذات أبعاد متوازية.
+- **حارس الأداء:** آخر 2 ثانية مكتملة؛ تسخير ماپی گئی مدت وسقف البايتات المحجوزة
+  (`max_parallel = 3`, `peak_reserved_bytes <= 196608`) پرنٹ كرتا ہے.مثال على خلاصة الإنترنت:
 
 ```
 JS orchestrator parity: duration_ms=187.42 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Swift SDK Harness
+## تسخير سويفت SDK
 
-- **کمانڈ:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
-- **اسکوپ:** `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift` میں تعریف کردہ parity suite چلاتا ہے،
-  Norito bridge (`sorafsLocalFetch`) کے ذریعے SF1 fixture کو دو بار ری پلے کرتا ہے۔ harness payload bytes، chunk receipts،
-  provider reports اور scoreboard entries کو اسی deterministic provider metadata اور telemetry snapshots کے ساتھ ویریفائی کرتا ہے
-  جو Rust/JS suites میں ہیں۔
-- **Bridge bootstrap:** harness ضرورت کے مطابق `dist/NoritoBridge.xcframework.zip` کو unpack کرتا ہے اور `dlopen` کے ذریعے
-  macOS slice لوڈ کرتا ہے۔ جب xcframework غائب ہو یا SoraFS bindings موجود نہ ہوں تو یہ
-  `cargo build -p connect_norito_bridge --release` پر fallback کرتا ہے اور
-  `target/release/libconnect_norito_bridge.dylib` کے ساتھ لنک کرتا ہے، اس لئے CI میں دستی سیٹ اپ درکار نہیں۔
-- **Performance guard:** ہر اجرا CI ہارڈویئر پر 2 s میں مکمل ہونا چاہیے؛ harness ماپی گئی مدت اور reserved-bytes ceiling
-  (`max_parallel = 3`, `peak_reserved_bytes <= 196608`) پرنٹ کرتا ہے۔
+- **مانڈ:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
+- **السكوب:** `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift` عرض تكافؤ جناح التكافؤ،
+  جسر Norito (`sorafsLocalFetch`) مثبت على SF1 مثبت مرتين. تسخير بايت الحمولة، إيصالات قطعة،
+  تقارير الموفر وإدخالات لوحة النتائج هي بيانات تعريف الموفر الحتمية ولقطات القياس عن بعد التي يتم إجراؤها يوميًا
+  توجد أجنحة Gu Rust/JS.
+- **Bridge bootstrap:** الحزام ضروري بما يتوافق مع `dist/NoritoBridge.xcframework.zip` لتفريغ الحزمة و`dlopen`.
+  تنزيل شريحة macOS. لم يتم العثور على روابط xcframework غدًا أو SoraFS الموجودة
+  `cargo build -p connect_norito_bridge --release` للرجوع الاحتياطي و
+  `target/release/libconnect_norito_bridge.dylib` لا يوجد اتصال به، ولا يوجد به CI على هذا الموقع.
+- **Performance Guard:** يتم تشغيل CI لمدة ثانيتين فقط؛ تسخير ماپی گئی مدت وسقف البايتات المحجوزة
+  (`max_parallel = 3`, `peak_reserved_bytes <= 196608`) پرنٹ كرتا ہے.
 
-مثالی خلاصہ لائن:
+مثال على خلاصة الإنترنت:
 
 ```
 Swift orchestrator parity: duration_ms=183.54 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Python Bindings Harness
+## تسخير ربط بايثون- **مانڈ:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
+- **السكوب:** المجمع العالمي `iroha_python.sorafs.multi_fetch_local` وفئات البيانات المكتوبة التي تستخدم كرتا
+  يتم استخدام أداة التثبيت المتعارف عليها API باستخدام عجلة جيس. ٹیستٹ `providers.json` هو البيانات الوصفية لموفر الخدمة مرة أخرى،
+  حقن لقطة القياس عن بعد، وبايتات الحمولة، وإيصالات القطع، وتقارير الموفر، ومحتويات لوحة النتائج في مجموعات Rust/JS/Swift
+  هذه خطة فائضة للكرتا.
+- **الطلب المسبق:** `maturin develop --release` ملزمة (أو عجلة عجلة) حتى `_crypto` `sorafs_multi_fetch_local` ملزمة؛
+  إذا لم يكن هناك جهاز ربط، فلا يمكنك استخدام الحزام للتخطي أو التخطي.
+- **حارس الأداء:** جناح الصدأ جیسا <= 2 ق بجٹ؛ pytest عدد البايتات المجمعة وملخص مشاركة المزود وإصدار قطعة أثرية
+  کے لئے لاگ كرتا ہے۔
 
-- **کمانڈ:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
-- **اسکوپ:** اعلی سطحی `iroha_python.sorafs.multi_fetch_local` wrapper اور اس کے typed dataclasses کو استعمال کرتا ہے تاکہ
-  canonical fixture اسی API سے گزرے جسے wheel صارفین استعمال کرتے ہیں۔ ٹیسٹ `providers.json` سے provider metadata دوبارہ بناتا ہے،
-  telemetry snapshot inject کرتا ہے، اور payload bytes، chunk receipts، provider reports اور scoreboard مواد کو Rust/JS/Swift suites
-  کی طرح ویریفائی کرتا ہے۔
-- **Pre-req:** `maturin develop --release` چلائیں (یا wheel انسٹال کریں) تاکہ `_crypto` `sorafs_multi_fetch_local` binding ظاہر کرے؛
-  اگر binding دستیاب نہ ہو تو harness خودکار طور پر skip ہو جاتا ہے۔
-- **Performance guard:** Rust suite جیسا <= 2 s بجٹ؛ pytest assembled byte count اور provider participation summary کو release artefact
-  کے لئے لاگ کرتا ہے۔
-
-ریلیز گیٹنگ کو ہر harness (Rust, Python, JS, Swift) کی summary output محفوظ کرنی چاہیے تاکہ محفوظ شدہ رپورٹ build کو promote
-کرنے سے پہلے payload receipts اور metrics کو یکساں طور پر compare کر سکے۔ تمام parity suites (Rust, Python bindings, JS, Swift)
-کو ایک پاس میں چلانے کے لئے `ci/sdk_sorafs_orchestrator.sh` چلائیں؛ CI artifacts کو اس helper سے لاگ کا اقتباس اور تیار کردہ
-`matrix.md` (SDK/status/duration جدول) ریلیز ٹکٹ کے ساتھ جوڑنا چاہیے تاکہ reviewers لوکل پر دوبارہ چلائے بغیر parity matrix کا audit
-کر سکیں۔
+ريليز گیٹنگ کو ہر تسخير (Rust، Python، JS، Swift) ملخص الإخراج محفوظات کرنی چاہیے محفوظات تم نشرها بناء کو تعزيز
+يمكن مقارنة إيصالات ومقاييس الحمولة الصافية بالكامل. تمام مجموعات التكافؤ (Rust، Python Bindings، JS، Swift)
+الذي يحتوي على رقم واحد `ci/sdk_sorafs_orchestrator.sh`؛ عناصر CI التي هي بمثابة مساعد للكابلات والسجلات
+`matrix.md` (SDK/جدول الحالة/المدة) يبرز عدد كبير من المراجعين الذين قاموا بتدقيق مصفوفة التكافؤ للتكرار المنخفض
+كر سكي.

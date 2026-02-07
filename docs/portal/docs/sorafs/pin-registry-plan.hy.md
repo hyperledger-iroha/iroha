@@ -11,136 +11,137 @@ id: pin-registry-plan
 title: SoraFS Pin Registry Implementation Plan
 sidebar_label: Pin Registry Plan
 description: SF-4 implementation plan covering registry state machine, Torii facade, tooling, and observability.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::note Կանոնական աղբյուր
 :::
 
-# SoraFS Pin Registry Implementation Plan (SF-4)
+# SoraFS Pin ռեեստրի իրականացման պլան (SF-4)
 
-SF-4 delivers the Pin Registry contract and supporting services that store
-manifest commitments, enforce pin policies, and expose APIs to Torii, gateways,
-and orchestrators. This document expands the validation plan with concrete
-implementation tasks, covering on-chain logic, host-side services, fixtures,
-and operational requirements.
+SF-4-ը տրամադրում է Pin Registry պայմանագիրը և աջակցող ծառայությունները, որոնք պահում են
+դրսևորել պարտավորությունները, կիրառել կապի քաղաքականություն և բացահայտել API-ները Torii-ին, դարպասներին,
+և նվագախմբեր։ Այս փաստաթուղթը ընդլայնում է վավերացման պլանը կոնկրետով
+իրականացման առաջադրանքներ, որոնք ներառում են շղթայական տրամաբանությունը, հյուրընկալող կողմի ծառայությունները, հարմարանքները,
+և գործառնական պահանջները:
 
-## Scope
+## Շրջանակ
 
-1. **Registry state machine**: Norito-defined records for manifests, aliases,
-   successor chains, retention epochs, and governance metadata.
-2. **Contract implementation**: deterministic CRUD operations for pin lifecycle
-   (`ReplicationOrder`, `Precommit`, `Completion`, eviction).
-3. **Service facade**: gRPC/REST endpoints backed by the registry that Torii
-   and SDKs consume, including pagination and attestation.
-4. **Tooling & fixtures**: CLI helpers, test vectors, and documentation to keep
-   manifests, aliases, and governance envelopes in sync.
-5. **Telemetry & ops**: metrics, alerts, and runbooks for registry health.
+1. **Ռեեստրի պետական մեքենա**.
+   հաջորդող շղթաներ, պահպանման դարաշրջաններ և կառավարման մետատվյալներ:
+2. **Պայմանագրի իրականացում**. դետերմինիստական CRUD գործողություններ փին կյանքի ցիկլի համար
+   (`ReplicationOrder`, `Precommit`, `Completion`, վտարում):
+3. **Ծառայության ճակատը**. gRPC/REST վերջնակետեր ապահովված ռեեստրի կողմից, որը Torii
+   և SDK-ները սպառում են, ներառյալ էջադրումը և ատեստավորումը:
+4. **Գործիքներ և հարմարանքներ**. CLI օգնականներ, փորձարկման վեկտորներ և փաստաթղթեր, որոնք պետք է պահպանվեն
+   դրսևորումները, կեղծանունները և կառավարման ծրարները համաժամանակյա:
+5. **Հեռաչափություն և օպերացիա**. չափումներ, ծանուցումներ և ռեեստրի առողջության համար նախատեսված գրքույկներ:
 
-## Data Model
+## Տվյալների մոդել
 
-### Core Records (Norito)
+### Հիմնական գրառումներ (Norito)
 
-| Struct | Description | Fields |
+| Կառուցվածք | Նկարագրություն | Դաշտեր |
 |--------|-------------|--------|
-| `PinRecordV1` | Canonical manifest entry. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
-| `AliasBindingV1` | Maps alias -> manifest CID. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
-| `ReplicationOrderV1` | Instruction for providers to pin manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
-| `ReplicationReceiptV1` | Provider acknowledgement. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
-| `ManifestPolicyV1` | Governance policy snapshot. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
+| `PinRecordV1` | Կանոնական մանիֆեստի մուտք. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, I18NI0000000030X, I18NI0000000030X `governance_envelope_hash`. |
+| `AliasBindingV1` | Քարտեզներ alias -> manifest CID: | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`: |
+| `ReplicationOrderV1` | Հրահանգ մատակարարների համար՝ ամրացնել մանիֆեստը: | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`: |
+| `ReplicationReceiptV1` | Մատակարարի հաստատում: | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`: |
+| `ManifestPolicyV1` | Կառավարման քաղաքականության ակնարկ. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`: |
 
-Implementation reference: see `crates/sorafs_manifest/src/pin_registry.rs` for the
-Rust Norito schemas and validation helpers backing these records. Validation
-mirrors the manifest tooling (chunker registry lookup, pin policy gating) so the
-contract, Torii facades, and CLI share identical invariants.
+Իրականացման տեղեկանք. տես `crates/sorafs_manifest/src/pin_registry.rs`
+Rust Norito սխեմաներ և վավերացման օգնականներ, որոնք աջակցում են այս գրառումներին: Վավերացում
+արտացոլում է մանիֆեստի գործիքավորումը (չունկերի ռեեստրի որոնում, փին քաղաքականության մուտք), այնպես որ
+պայմանագիրը, Torii ֆասադները և CLI-ն ունեն նույնական ինվարիանտներ:
 
-Tasks:
-- Finalise Norito schemas in `crates/sorafs_manifest/src/pin_registry.rs`.
-- Generate code (Rust + other SDKs) using Norito macros.
-- Update docs (`sorafs_architecture_rfc.md`) once schemas land.
+Առաջադրանքներ.
+- Վերջնականացրեք Norito սխեմաները `crates/sorafs_manifest/src/pin_registry.rs`-ում:
+- Ստեղծեք կոդ (Rust + այլ SDK-ներ)՝ օգտագործելով Norito մակրոները:
+- Թարմացրեք փաստաթղթերը (`sorafs_architecture_rfc.md`), երբ սխեմաները վայրէջք կատարեն:
 
-## Contract Implementation
+## Պայմանագրի իրականացում
 
-| Task | Owner(s) | Notes |
+| Առաջադրանք | Սեփականատեր(ներ) | Ծանոթագրություններ |
 |------|----------|-------|
-| Implement registry storage (sled/sqlite/off-chain) or smart contract module. | Core Infra / Smart Contract Team | Provide deterministic hashing, avoid floating point. |
-| Entry points: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | Leverage `ManifestValidator` from validation plan. Alias binding now flows through `RegisterPinManifest` (Torii DTO surfacing) while dedicated `bind_alias` remains planned for successive updates. |
-| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness. | Governance Council / Core Infra | Alias uniqueness, retention limits, and predecessor approval/retirement checks now live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection and replication bookkeeping remain open. |
-| Governed parameters: load `ManifestPolicyV1` from config/governance state; allow updates via governance events. | Governance Council | Provide CLI for policy updates. |
-| Event emission: emit Norito events for telemetry (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | Define event schema + logging. |
+| Իրականացնել ռեեստրի պահեստավորում (sled/sqlite/off-chain) կամ խելացի պայմանագրի մոդուլ: | Core Infra / Smart Contract Team | Ապահովեք դետերմինիստական ​​հեշինգ, խուսափեք լողացող կետից: |
+| Մուտքի կետերը՝ `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`: | Core Infra | Օգտագործեք `ManifestValidator` վավերացման պլանից: Այլանիշների կապն այժմ հոսում է `RegisterPinManifest`-ի միջոցով (Torii DTO մակերեսով), մինչդեռ հատուկ `bind_alias`-ը մնում է պլանավորված հաջորդական թարմացումների համար: |
+| Վիճակների անցումներ. իրավահաջորդություն (դրսևորվում է A -> B), պահման դարաշրջաններ, յուրահատկություն կեղծանունով: | Կառավարման խորհուրդ / Core Infra | Այլանունների եզակիությունը, պահպանման սահմանաչափերը և նախորդների հաստատման/թոշակի անցնելու ստուգումները այժմ գործում են `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`-ում; Multi-Hop իրավահաջորդության հայտնաբերումը և կրկնօրինակման հաշվապահությունը մնում են բաց: |
+| Կառավարվող պարամետրեր. բեռնել `ManifestPolicyV1` կոնֆիգուրացիայի/կառավարման վիճակից; թույլատրել թարմացումներ կառավարման միջոցառումների միջոցով: | Կառավարման խորհուրդ | Տրամադրեք CLI քաղաքականության թարմացումների համար: |
+| Իրադարձությունների արտանետում. հեռարձակել Norito իրադարձություններ հեռաչափության համար (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`): | Դիտորդականություն | Սահմանեք իրադարձությունների սխեման + գրանցում: |
 
-Testing:
-- Unit tests for each entry point (positive + rejection).
-- Property tests for succession chain (no cycles, monotonic epochs).
-- Fuzz validation by generating random manifests (bounded).
+Փորձարկում:
+- Միավոր թեստեր յուրաքանչյուր մուտքի կետի համար (դրական + մերժում):
+- Սեփականության թեստեր իրավահաջորդության շղթայի համար (առանց ցիկլերի, միատոն դարաշրջանների):
+- Fuzz վավերացում՝ ստեղծելով պատահական դրսևորումներ (սահմանափակված):
 
-## Service Facade (Torii/SDK Integration)
+## Ծառայության ճակատ (Torii/SDK ինտեգրում)
 
-| Component | Task | Owner(s) |
+| Բաղադրիչ | Առաջադրանք | Սեփականատեր(ներ) |
 |-----------|------|----------|
-| Torii Service | Expose `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Provide pagination + filtering. | Networking TL / Core Infra |
-| Attestation | Include registry height/hash in responses; add Norito attestation struct consumed by SDKs. | Core Infra |
-| CLI | Extend `sorafs_manifest_stub` or new `sorafs_pin` CLI with `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | Generate client bindings (Rust/Go/TS) from Norito schema; add integration tests. | SDK Teams |
+| Torii Ծառայություն | Բացահայտեք `/v1/sorafs/pin` (ներկայացնել), `/v1/sorafs/pin/{cid}` (որոնում), `/v1/sorafs/aliases` (ցուցակ/կապում), `/v1/sorafs/replication` (պատվերներ/անդորրագրեր): Տրամադրել էջադրում + զտում: | Ցանցային TL / Core Infra |
+| Ատեստավորում | Պատասխանների մեջ ներառել ռեեստրի բարձրությունը/հեշը; ավելացնել Norito ատեստավորման կառուցվածքը, որն օգտագործվում է SDK-ների կողմից: | Core Infra |
+| CLI | Ընդլայնել `sorafs_manifest_stub` կամ նոր `sorafs_pin` CLI `pin submit`, `alias bind`, `order issue`, `registry export`-ով: | Գործիքավորում WG |
+| SDK | Ստեղծեք հաճախորդի կապեր (Rust/Go/TS) Norito սխեմայից; ավելացնել ինտեգրման թեստեր: | SDK թիմեր |
 
-Operations:
-- Add caching layer/ETag for GET endpoints.
-- Provide rate limiting / auth consistent with Torii policies.
+Գործողություններ:
+- Ավելացնել քեշավորման շերտ/ETag GET վերջնակետերի համար:
+- Տրամադրել տոկոսադրույքի սահմանափակում / հաստատում, որը համապատասխանում է Torii քաղաքականությանը:
 
-## Fixtures & CI
+## Հարմարանքներ և CI
 
-- Fixtures directory: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` stores signed manifest/alias/order snapshots regenerated by `cargo run -p iroha_core --example gen_pin_snapshot`.
-- CI step: `ci/check_sorafs_fixtures.sh` regenerates the snapshot and fails if diffs appear, keeping CI fixtures aligned.
-- Integration tests (`crates/iroha_core/tests/pin_registry.rs`) exercise the happy path plus duplicate-alias rejection, alias approval/retention guards, mismatched chunker handles, replica-count validation, and successor-guard failures (unknown/pre-approved/retired/self pointers); see `register_manifest_rejects_*` cases for coverage details.
-- Unit tests now cover alias validation, retention guards, and successor checks in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection once state machine lands.
-- Golden JSON for events used by observability pipelines.
+- Սարքավորումների գրացուցակ. `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` խանութներում ստորագրված մանիֆեստներ/փոխանուն/պատվերի նկարներ, որոնք վերականգնվել են `cargo run -p iroha_core --example gen_pin_snapshot`-ի կողմից:
+- CI քայլ. `ci/check_sorafs_fixtures.sh`-ը վերականգնում է լուսանկարը և ձախողվում է, եթե տարբերություններ հայտնվեն՝ պահելով CI սարքերը հավասարեցված:
+- Ինտեգրման թեստերը (`crates/iroha_core/tests/pin_registry.rs`) իրականացնում են երջանիկ ուղին, գումարած կրկնօրինակների մերժումը, կեղծանունների հաստատման/պահպանման պահակները, չհամապատասխանող բլոկների բռնակները, կրկնօրինակների քանակի վավերացումը և իրավահաջորդների պահակային ձախողումները (անհայտ/նախապես հաստատված/թոշակի անցած/ինքնացուցիչներ); Ծածկույթի մանրամասների համար տես `register_manifest_rejects_*` պատյանները:
+- Միավորի թեստերն այժմ ներառում են կեղծանունների վավերացումը, պահպանման պահակները և իրավահաջորդների ստուգումները `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`-ում; բազմակի հոպ հաջորդականության հայտնաբերում, երբ պետական ​​մեքենան վայրէջք կատարի:
+- Ոսկե JSON իրադարձությունների համար, որոնք օգտագործվում են դիտելիության խողովակաշարերի կողմից:
 
-## Telemetry & Observability
+## Հեռաչափություն և դիտելիություն
 
-Metrics (Prometheus):
+Չափումներ (Prometheus):
 - `torii_sorafs_registry_manifests_total{status="pending|approved|retired"}`
 - `torii_sorafs_registry_aliases_total`
 - `torii_sorafs_registry_orders_total{status="pending|completed|expired"}`
 - `torii_sorafs_replication_sla_total{outcome="met|missed|pending"}`
 - `torii_sorafs_replication_completion_latency_epochs{stat="avg|p95|max|count"}`
 - `torii_sorafs_replication_deadline_slack_epochs{stat="avg|p95|max|count"}`
-- Existing provider telemetry (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) remains in scope for end-to-end dashboards.
+- Գոյություն ունեցող մատակարարի հեռաչափությունը (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) մնում է ծայրից ծայր վահանակների շրջանակում:
 
-Logs:
-- Structured Norito event stream for governance audits (signed?).
+Տեղեկամատյաններ:
+- Կառուցվածքային Norito իրադարձությունների հոսք կառավարման աուդիտի համար (ստորագրված է?):
 
-Alerts:
-- Pending replication orders exceeding SLA.
-- Alias expiry < threshold.
-- Retention violations (manifest not renewed before expiry).
+Զգուշացումներ.
+- Սպասվող կրկնօրինակման պատվերները գերազանցում են SLA-ը:
+- Alias ​​expiry < շեմ.
+- Պահպանման խախտումներ (դրսևորվում է, որ ժամկետը լրանալուց առաջ չի երկարաձգվել):
 
-Dashboards:
-- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` tracks manifest lifecycle totals, alias coverage, backlog saturation, SLA ratio, latency vs slack overlays, and missed-order rates for on-call review.
+Վահանակներ.
+- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json`-ը հետագծում է կյանքի ցիկլի բացահայտումների ընդհանուր գումարները, ծածկանունների ծածկույթը, կուտակվածության հագեցվածությունը, SLA հարաբերակցությունը, հետաձգումը ընդդեմ անփույթ ծածկույթների և բաց թողնված պատվերի դրույքաչափերը՝ ժամանակի ընթացքում վերանայման համար:
 
 ## Runbooks & Documentation
 
-- Update `docs/source/sorafs/migration_ledger.md` to include registry status updates.
-- Operator guide: `docs/source/sorafs/runbooks/pin_registry_ops.md` (now published) covering metrics, alerting, deployment, backup, and recovery flows.
-- Governance guide: describe policy parameters, approval workflow, dispute handling.
-- API reference pages for each endpoint (Docusaurus docs).
+- Թարմացրեք `docs/source/sorafs/migration_ledger.md`՝ ներառելու ռեեստրի կարգավիճակի թարմացումները:
+- Օպերատորի ուղեցույց. `docs/source/sorafs/runbooks/pin_registry_ops.md` (այժմ հրապարակված) ընդգրկում է չափումները, ահազանգերը, տեղակայումը, պահուստավորումը և վերականգնման հոսքերը:
+- Կառավարման ուղեցույց. նկարագրեք քաղաքականության պարամետրերը, հաստատման աշխատանքների ընթացքը, վեճերի լուծումը:
+- API տեղեկատու էջեր յուրաքանչյուր վերջնակետի համար (Docusaurus փաստաթղթեր):
 
-## Dependencies & Sequencing
+## Կախվածություններ և հաջորդականություն
 
-1. Complete validation plan tasks (ManifestValidator integration).
-2. Finalise Norito schema + policy defaults.
-3. Implement contract + service, wire telemetry.
-4. Regenerate fixtures, run integration suites.
-5. Update docs/runbooks and mark roadmap items complete.
+1. Լրացրեք վավերացման պլանի առաջադրանքները (ManifestValidator ինտեգրում):
+2. Վերջնականացրեք Norito սխեման + քաղաքականության լռելյայն:
+3. Իրականացնել պայմանագիր + սպասարկում, լարային հեռաչափություն։
+4. Վերականգնել հարմարանքները, գործարկել ինտեգրացիոն սյուիտները:
+5. Թարմացրեք փաստաթղթերը/վազքագրքերը և նշեք ճանապարհային քարտեզի տարրերը ավարտված:
 
-Each roadmap checklist item under SF-4 should reference this plan when progress is made.
-The REST façade now ships with attested listing endpoints:
+Ճանապարհային քարտեզի ստուգաթերթի յուրաքանչյուր կետ SF-4-ում պետք է հղում կատարի այս պլանին, երբ առաջընթաց լինի:
+REST ճակատն այժմ առաքվում է վավերացված ցուցակման վերջնակետերով.
 
-- `GET /v1/sorafs/pin` and `GET /v1/sorafs/pin/{digest}` return manifests with
-  alias bindings, replication orders, and an attestation object derived from the
-  latest block hash.
-- `GET /v1/sorafs/aliases` and `GET /v1/sorafs/replication` expose the active
-  alias catalogue and replication order backlog with consistent pagination and
-  status filters.
+- `GET /v1/sorafs/pin` և `GET /v1/sorafs/pin/{digest}` վերադարձը դրսևորվում է
+  alias bindings, replication orders և atestation object-ը, որը ստացվում է
+  վերջին բլոկի հեշը:
+- `GET /v1/sorafs/aliases` և `GET /v1/sorafs/replication` ցուցադրում են ակտիվը
+  alias catalog և replication order backlog՝ հետևողական էջադրմամբ և
+  կարգավիճակի զտիչներ:
 
-The CLI wraps these calls (`iroha app sorafs pin list`, `pin show`, `alias list`,
-`replication list`) so operators can script registry audits without touching
-lower-level APIs.
+CLI-ն ավարտում է այս զանգերը (`iroha app sorafs pin list`, `pin show`, `alias list`,
+`replication list`), որպեսզի օպերատորները կարողանան սկրիպտի ռեեստրի աուդիտներ առանց դիպչելու
+ցածր մակարդակի API-ներ:

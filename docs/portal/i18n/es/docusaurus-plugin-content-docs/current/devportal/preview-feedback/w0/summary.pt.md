@@ -4,61 +4,59 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w0-summary
-title: Resumo de feedback do meio do W0
-sidebar_label: Feedback W0 (meio)
-description: Checkpoints, achados e acoes de meio de onda para a onda de preview de mantenedores core.
+id: vista previa-comentarios-w0-resumen
+título: Resumen de feedback do meio do W0
+sidebar_label: Comentarios W0 (meio)
+descripción: Puntos de control, achados y acoes de meio de onda para a onda de vista previa de mantenedores core.
 ---
 
-| Item | Detalhes |
+| Artículo | Detalles |
 | --- | --- |
-| Onda | W0 - Mantenedores core |
-| Data do resumo | 2025-03-27 |
+| Onda | W0 - Núcleo de mantenedores |
+| Datos del currículum | 2025-03-27 |
 | Janela de revisao | 2025-03-25 -> 2025-04-08 |
-| Participantes | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Tag de artefato | `preview-2025-03-24` |
+| Participantes | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observabilidad-01 |
+| Etiqueta de artefato | `preview-2025-03-24` |
 
 ## Destaques
 
-1. **Fluxo de checksum** - Todos os reviewers confirmaram que `scripts/preview_verify.sh`
-   teve sucesso contra o par descriptor/archive compartilhado. Nenhum override manual foi
-   necessario.
-2. **Feedback de navegacao** - Dois problemas menores de ordenacao do sidebar foram
-   registrados (`docs-preview/w0 #1-#2`). Ambos foram encaminhados para Docs/DevRel e nao
-   bloqueiam a onda.
+1. **Fluxo de checksum** - Todos los revisores confirman que `scripts/preview_verify.sh`
+   teve sucesso contra o par descriptor/archive compartilhado. Nenhum anular manual foi
+   necesario.
+2. **Comentarios de navegación** - Dois problemas menores de ordenacao do sidebar foram
+   registrados (`docs-preview/w0 #1-#2`). Ambos foros encaminados para Docs/DevRel y nao
+   bloqueiam una onda.
 3. **Paridade de runbooks SoraFS** - sorafs-ops-01 pediu links cruzados mais claros entre
-   `sorafs/orchestrator-ops` e `sorafs/multi-source-rollout`. Issue de acompanhamento aberta;
+   `sorafs/orchestrator-ops` e `sorafs/multi-source-rollout`. Edición de acompañamiento abierto;
    tratar antes de W1.
 4. **Revisao de telemetria** - observability-01 confirmou que `docs.preview.integrity`,
-   `TryItProxyErrors` e os logs do proxy Try-it ficaram verdes; nenhum alerta disparou.
+   `TryItProxyErrors` y los registros del sistema operativo hacen proxy Pruébelo ficaram verdes; nenhum alerta disparou.
 
-## Itens de acao
-
-| ID | Descricao | Responsavel | Status |
+## Artículos de acao| identificación | Descripción | Responsavel | Estado |
 | --- | --- | --- | --- |
-| W0-A1 | Reordenar entradas do sidebar do devportal para destacar docs focados em reviewers (`preview-invite-*` agrupados). | Docs-core-01 | Concluido - o sidebar agora lista os docs de reviewers de forma contigua (`docs/portal/sidebars.js`). |
-| W0-A2 | Adicionar link cruzado explicito entre `sorafs/orchestrator-ops` e `sorafs/multi-source-rollout`. | Sorafs-ops-01 | Concluido - cada runbook agora aponta para o outro para que operadores vejam ambos os guias durante rollouts. |
-| W0-A3 | Compartilhar snapshots de telemetria + bundle de queries com o tracker de governanca. | Observability-01 | Concluido - bundle anexado ao `DOCS-SORA-Preview-W0`. |
+| W0-A1 | Reordenar las entradas de la barra lateral del portal de desarrollo para destacar los documentos enfocados en los revisores (`preview-invite-*` agrupados). | Documentos-core-01 | Concluido - la barra lateral ahora lista los documentos de revisores de forma continua (`docs/portal/sidebars.js`). |
+| W0-A2 | Enlace adicional cruzado explícito entre `sorafs/orchestrator-ops` e `sorafs/multi-source-rollout`. | Sorafs-ops-01 | Concluido: cada runbook ahora está disponible para el final para que los operadores vean ambas guías durante los lanzamientos. |
+| W0-A3 | Compartilhar instantáneas de telemetría + paquete de consultas con o rastreador de gobierno. | Observabilidad-01 | Concluido - paquete anexo a `DOCS-SORA-Preview-W0`. |
 
-## Resumo de encerramento (2025-04-08)
+## Resumen de encerramento (2025-04-08)
 
-- Todos os cinco reviewers confirmaram a conclusao, limparam builds locais e sairam da janela
-  de preview; as revogacoes de acesso ficaram registradas em `DOCS-SORA-Preview-W0`.
-- Nenhum incidente ou alerta ocorreu durante a onda; os dashboards de telemetria ficaram
-  verdes durante todo o periodo.
-- As acoes de navegacao + links cruzados (W0-A1/A2) estao implementadas e refletidas nos docs
-  acima; a evidencia de telemetria (W0-A3) esta anexada ao tracker.
-- Bundle de evidencia arquivado: screenshots de telemetria, confirmacoes de convite e este
-  resumo estao linkados no issue do tracker.
+- Todos los cinco revisores confirmaron una conclusión, limpiaron builds locais y sairam da janela
+  vista previa; as revogacoes de acesso ficaram registradas em `DOCS-SORA-Preview-W0`.
+- Nenhum incidente ou alerta ocorreu durante una onda; os paneles de telemetría ficaram
+  verdes durante todo el periodo.
+- As acoes de navegacao + links cruzados (W0-A1/A2) estaso implementadas e refletidas nos docs
+  ácima; a evidencia de telemetria (W0-A3) esta anexada al tracker.
+- Paquete de evidencia archivado: capturas de pantalla de telemetría, confirmacoes de convite e este
+  resumen estos vinculados no hay problema con el rastreador.
 
-## Proximos passos
+## Próximos pasos- Implementar los elementos de acao do W0 antes de abrir W1.
+- Obtenga la aprobación legal y un espacio de preparación para el proxy, después de seguir los pasos de verificación previa
+  da onda de parceiros descritos no [vista previa del flujo de invitación](../../preview-invite-flow.md).
 
-- Implementar os itens de acao do W0 antes de abrir W1.
-- Obter aprovacao legal e um slot de staging para o proxy, depois seguir os passos de preflight
-  da onda de parceiros descritos no [preview invite flow](../../preview-invite-flow.md).
-
-_Este resumo esta linkado a partir do [preview invite tracker](../../preview-invite-tracker.md) para
-manter o roadmap DOCS-SORA rastreavel._
+_Este resumen está vinculado desde [preview invite tracker](../../preview-invite-tracker.md) para
+manter o hoja de ruta DOCS-SORA rastreavel._

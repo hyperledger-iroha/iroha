@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W2 community feedback & status
 sidebar_label: W2 summary
 description: Live digest for the community preview wave (W2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| རྣམ་གྲངས་ | ཁ་གསལ་ |
 | --- | --- |
-| Wave | W2 — Community reviewers |
-| Invite window | 2025‑06‑15 → 2025‑06‑29 |
-| Artefact tag | `preview-2025-06-15` |
-| Tracker issue | `DOCS-SORA-Preview-W2` |
-| Participants | comm-vol-01 … comm-vol-08 |
+| རླབས་ | W2 — མི་སྡེ་བསྐྱར་ཞིབ་པ་ |
+| མགྲོན་འབོད་སྒོ་སྒྲིག་ | ༢༠༢༥‐༠༦‐༡༥ → ༢༠༢༥‐༠༦‐༢༩ |
+| ཅ་རྙིང་ངོ་རྟགས། | I18NI0000004X |
+| བརྟག་ཞིབ་ཀྱི་གནད་དོན་ | I18NI0000000X |
+| བཅའ་མར་གཏོགས་མི་ཚུ་ | ཀཱན་-ཝོལ་-༠༡ ... ཀོམ་-ཝོལ་-༠༨ |
 
-## Highlights
+## གཙོ་བསྟེན།
 
-1. **Governance & tooling** — Community intake policy unanimously approved on 2025‑05‑20; updated request template with motivation/timezone fields lives under `docs/examples/docs_preview_request_template.md`.
-2. **Preflight evidence** — Try it proxy change `OPS-TRYIT-188` ran 2025‑06‑09, Grafana dashboards captured, and `preview-2025-06-15` descriptor/checksum/probe outputs archived under `artifacts/docs_preview/W2/`.
-3. **Invite wave** — Eight community reviewers invited 2025‑06‑15, with acknowledgements logged in the tracker invite table; all completed checksum verification before browsing.
-4. **Feedback** — `docs-preview/w2 #1` (tooltip wording) and `#2` (localization sidebar order) were filed on 2025‑06‑18 and resolved by 2025‑06‑21 (Docs-core-04/05); no incidents occurred during the wave.
+1. **གཞུང་སྐྱོང་དང་ ལག་ཆས་** — ༢༠༢༥‐༠༥‐༢༠ ལུ་ མོས་མཐུན་ཐོག་ལས་ མི་སྡེ་ནང་ སྲིད་བྱུས་བརྩམས་ཡོདཔ། དུས་མཐུན་བཟོ་ཡོད་པའི་ཞུ་བ་ཊེམ་པེལེཊི་འདི་ སེམས་ཤུགས་/དུས་ཚོད་ས་ཁོངས་ཀྱི་ས་ཁོངས་ཚུ་ `docs/examples/docs_preview_request_template.md` གི་འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+༢. `artifacts/docs_preview/W2/`.
+3. **མགྲོན་བརྡ་རླབས་** — མི་སྡེ་བསྐྱར་ཞིབ་པ་༨ གིས་ 2025‐06‐15, བརྟག་ཞིབ་པ་ མགྲོན་བརྡ་ཐིག་ཁྲམ་ནང་ ངོས་ལེན་ཚུ་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན། བརྡ་འཚོལ་མ་འབད་བའི་ཧེ་མ་ མཇུག་བསྡུ་ཡོད་པའི་ ཅེག་སམ་བདེན་དཔྱད་ཆ་མཉམ་ཡོདཔ།
+4. **Teedback*** — I18NI000000010X (ལག་ཆས་མིང་ཚིག་) དང་ I18NI000000011X (ས་གནས་ཀྱི་ཟུར་ཁའི་གོ་རིམ་) ཚུ་ ༢༠༢༥‐༡༨‑༡༨ ལུ་བཙུགས་ཏེ་ ༢༠༢༥‐༡༧ (Docs-core-Core-༠༤/༠༥) གིས་ ཐག་བཅད་ཡོདཔ་ཨིན། རྦ་རླབས་སྐབས་ལུ་ བྱུང་རྐྱེན་ག་ནི་ཡང་མ་བྱུང་པས།
 
-## Action items
+## བྱ་བ་རྣམ་གྲངས།
 
-| ID | Description | Owner | Status |
+| ID | འགྲེལ་བཤད་ | ཇོ་བདག་ | གནས་ཚད་ |
 | --- | --- | --- | --- |
-| W2-A1 | Address `docs-preview/w2 #1` (tooltip wording). | Docs-core-04 | ✅ Completed 2025‑06‑21 |
-| W2-A2 | Address `docs-preview/w2 #2` (localization sidebar). | Docs-core-05 | ✅ Completed 2025‑06‑21 |
-| W2-A3 | Archive exit evidence + update roadmap/status. | Docs/DevRel lead | ✅ Completed 2025‑06‑29 |
+| W2-A1 | ཁ་བྱང་ `docs-preview/w2 #1` (ལག་ཆས་བསླབ་བྱའི་མིང་ཚིག་)། | ཡིག་ཆ་-ཀོར་-༠༤ | ✅ མཇུག་བསྡུ་ ༢༠༢༥‐༠༦‐༢༡ |
+| W2-A2 | ཁ་བྱང་ `docs-preview/w2 #2` (ས་གནས་ཀྱི་ཟུར་ཕྲན)། | ཡིག་ཆ་-ཀོར་-༠༥ | ✅ མཇུག་བསྡུ་ ༢༠༢༥‐༠༦‐༢༡ |
+| W2-A3 | གཏན་མཛོད་ཀྱི་ཕྱིར་ཐོན་སྒྲུབ་བྱེད་ + ལམ་སྟོན་/གནས་ཚད་དུས་མཐུན་བཟོ་ནི། | ཡིག་ཆ་/ཌི་ཝི་རེལ་ལིཌ་ | ✅ མཇུག་བསྡུ་ ༢༠༢༥‐༠༦‐༢༩ |
 
-## Exit summary (2025-06-29)
+## བཅུད་བསྡུས་ (༢༠༢༥-༠༦-༢༩)
 
-- All eight community reviewers confirmed completion and had preview access revoked; acknowledgements recorded in the tracker invite log.
-- Final telemetry snapshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) remained green; logs plus Try it proxy transcripts attached to `DOCS-SORA-Preview-W2`.
-- Evidence bundle (descriptor, checksum log, probe output, link report, Grafana screenshots, invite acknowledgements) archived under `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- Tracker W2 checkpoint log updated through exit, ensuring the roadmap keeps an auditable record before W3 planning begins.
+- མི་སྡེ་བསྐྱར་ཞིབ་པ་༨ ཆ་མཉམ་གྱིས་ མཇུག་བསྡུ་ཡོདཔ་སྦེ་ ངེས་གཏན་བཟོ་སྟེ་ སྔོན་ལྟ་འབད་ནི་གི་ འཛུལ་སྤྱོད་ཆ་མེད་བཏང་ཡོདཔ་ཨིན། བརྟག་ཞིབ་པ་ མགྲོན་བརྡ་དྲན་ཐོ་ནང་ ཐོ་བཀོད་འབད་ཡོད་པའི་ ངོས་ལེན་ཚུ།
+- མཐའ་མའི་བརྡ་འཕྲིན་པར་རིས་ (I18NI0000000014X, `TryItProxyErrors`, I18NI000000016X) ལྗང་ཁུ་ལུས་ཡོད། logs དང་ `DOCS-SORA-Preview-W2` ལུ་མཉམ་སྦྲགས་འབད་དེ་ཡོད་པའི་ ངོ་ཚབ་ཀྱི་ཡིག་ཆ་ཚུ་ ཚོད་བརྟག་འབད།
+- གསལ་སྟོན་གྱི་ བང་རིམ་ (འགྲེལ་བཤད་པ་ དྲན་ཐོ་ འཚོལ་ཞིབ་ཨའུཊི་པུཊི་, འབྲེལ་མཐུད་སྙན་ཞུ་ I18NT0000001Xhots, softangels, bactive) ཚུ་ ངོས་ལེན་ཅན་ཚུ་) ཡིག་སྡེབ་འབད་ཡོདཔ། I18NI000000018X.
+- ཕྱིར་ཐོན་བརྒྱུད་དེ་ དུས་མཐུན་བཟོ་ཡོད་པའི་ བརྟག་ཞིབ་པ་ W2 བརྟག་ཞིབ་དྲན་ཐོ་འདི་གིས་ ལམ་སྟོན་འདི་ W3 འཆར་གཞི་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ རྩིས་ཞིབ་འབད་བཏུབ་པའི་དྲན་ཐོ་ཅིག་ བཞག་དགོཔ་ཨིན།

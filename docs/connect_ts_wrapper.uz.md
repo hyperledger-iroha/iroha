@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d8194c964c8c4d0592db6f119593b79ff768d40f2c55a219ab50e714832d362
 source_last_modified: "2026-01-05T18:22:23.397739+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 ## TypeScript Connect Wrapper (WS join + tokens)
@@ -41,6 +42,6 @@ export async function joinWs(node: string, sid: string, role: 'app'|'wallet', to
 // // After deriving keys and building a ConnectFrameV1 (Norito-encoded), send:
 // ws.send(noritoEncodedBinaryFrame);
 ```
-// Sealing SignResultOk (payload only; Norito framing not shown):
-// const signResult = new TextEncoder().encode(JSON.stringify({ SignResultOk: { signature: { algorithm: 'ed25519', signature_hex: 'deadbeef' } } }));
-// const { aead } = await sealEnvelope(kWallet, sidBytes, 'W2A', 1n, signResult);
+// Sealing SignResultOk (faqat foydali yuk; Norito ramkasi ko'rsatilmagan):
+// const signResult = new TextEncoder().encode(JSON.stringify({ SignResultOk: { imzo: { algoritm: 'ed25519', signature_hex: 'deadbeef' } } }));
+// const { aead } = sealEnvelopeni kutish (kWallet, sidBytes, 'W2A', 1n, signResult);

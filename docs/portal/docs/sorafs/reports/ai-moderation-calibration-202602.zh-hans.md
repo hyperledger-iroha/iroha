@@ -9,64 +9,65 @@ source_last_modified: "2025-12-29T18:16:35.199423+00:00"
 translation_last_reviewed: 2026-02-07
 title: AI Moderation Calibration Report (2026-02)
 summary: Baseline calibration dataset, thresholds, and scoreboard for the first MINFO-1 governance release.
+translator: machine-google-reviewed
 ---
 
-# AI Moderation Calibration Report - February 2026
+# AI 审核校准报告 - 2026 年 2 月
 
-This report packages the inaugural calibration artefacts for **MINFO-1**. The
-dataset, manifest, and scoreboard were produced on 2026-02-05, reviewed by the
-Ministry council on 2026-02-10, and anchored in the governance DAG at height
-`912044`.
+本报告打包了 **MINFO-1** 的首次校准工件。的
+数据集、清单和记分板于 2026 年 2 月 5 日制作，并由
+2026年2月10日召开部委理事会，并扎根于治理DAG的高度
+`912044`。
 
-## Dataset Manifest
+## 数据集清单
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **数据集参考：** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **子弹：** `ai-moderation-calibration-202602`
+- **条目：** 清单 480、块 12,800、元数据 920、音频 160
+- **标签组合：**安全 68%，可疑 19%，升级 13%
+- **文物摘要：** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- **分布：** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-The full manifest lives in `docs/examples/ai_moderation_calibration_manifest_202602.json`
-and contains the governance signature plus runner hash captured at release
-time.
+完整清单位于 `docs/examples/ai_moderation_calibration_manifest_202602.json` 中
+并包含治理签名以及发布时捕获的运行者哈希值
+时间。
 
-## Scoreboard Summary
+## 记分板摘要
 
-Calibrations ran with opset 17 and the deterministic seed pipeline. The
-complete scoreboard JSON (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
-records the hashes and telemetry digests; the table below highlights the most
-important metrics.
+校准使用 opset 17 和确定性种子管道运行。的
+完整记分板 JSON (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
+记录哈希值和遥测摘要；下表突出显示了最
+重要指标。
 
-| Model (family) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
-| -------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+|模特（家庭）|荆棘|欧洲经委会 |奥罗克 |精准@检疫|召回@升级 |
+| -------------- | -----| ---| -----| -------------------- | ---------------- |
+| ViT-H/14 安全（视觉）| 0.141 | 0.141 0.031 | 0.031 0.987 | 0.987 0.964 | 0.964 0.912 | 0.912
+| LLaVA-1.6 34B 安全（多式联运）| 0.118 | 0.118 0.028 | 0.028 0.978 | 0.978 0.942 | 0.942 0.904 | 0.904
+|知觉整体（知觉） | 0.162 | 0.162 0.047 | 0.047 0.953 | 0.953 0.883 | 0.883 0.861 | 0.861
 
-Combined metrics: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. The verdict
-distribution across the calibration window was pass 91.2%, quarantine 6.8%,
-escalate 2.0%, matching the policy expectations recorded in the manifest
-summary. False-positive backlog remained at zero, and the drift score (7.1%)
-fell well below the 20% alert threshold.
+组合指标：`Brier = 0.126`、`ECE = 0.034`、`AUROC = 0.982`。判决结果
+整个校准窗口的分布通过率为 91.2%，隔离率为 6.8%，
+升级2.0%，符合清单中记录的政策预期
+总结。假阳性积压保持为零，漂移分数 (7.1%)
+远低于 20% 的警报阈值。
 
-## Thresholds & Sign-off
+## 阈值和签核
 
 - `thresholds.quarantine = 0.42`
 - `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+- 治理动议：`MINFO-2026-02-07`
+- 由 `ministry-council-seat-03` 在 `2026-02-10T11:33:12Z` 签名
 
-CI stored the signed bundle in `artifacts/ministry/ai_moderation/2026-02/`
-alongside the moderation runner binaries. The manifest digest and scoreboard
-hashes above must be referenced during audits and appeals.
+CI 将签名包存储在 `artifacts/ministry/ai_moderation/2026-02/` 中
+与审核运行程序二进制文件一起。清单摘要和记分板
+在审核和上诉期间必须引用上述哈希值。
 
-## Dashboards & Alerts
+## 仪表板和警报
 
-Moderation SREs should import the Grafana dashboard at
-`dashboards/grafana/ministry_moderation_overview.json` and the matching
-Prometheus alert rules in `dashboards/alerts/ministry_moderation_rules.yml`
-(test coverage lives under `dashboards/alerts/tests/ministry_moderation_rules.test.yml`).
-These artifacts emit alerts for ingest stalls, drift spikes, and quarantine
-queue growth, satisfying the monitoring requirements called out in
-the [AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+审核 SRE 应导入 Grafana 仪表板：
+`dashboards/grafana/ministry_moderation_overview.json` 及其匹配
+`dashboards/alerts/ministry_moderation_rules.yml` 中的 Prometheus 警报规则
+（测试覆盖范围位于 `dashboards/alerts/tests/ministry_moderation_rules.test.yml` 下）。
+这些工件会针对摄取停滞、漂移尖峰和隔离发出警报
+队列增长，满足中提出的监控要求
+[AI 审核运行器规范](../../ministry/ai-moderation-runner.md)。

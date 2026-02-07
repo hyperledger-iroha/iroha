@@ -4,31 +4,33 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # Начало работы с Norito
 
-Это краткое руководство показывает минимальный рабочий процесс компиляции контракта Kotodama, проверки сгенерированного байткода Norito, локального запуска и деплоя на узел Iroha.
+Este é um processo de compilação de contrato mínimo Kotodama, provado Verifique a bateria Norito, feche a tampa local e instale-a no Iroha.
 
-## Требования
+## Treino
 
-1. Установите Rust toolchain (1.76 или новее) и клонируйте этот репозиторий.
-2. Соберите или скачайте вспомогательные бинарники:
-   - `koto_compile` - компилятор Kotodama, который генерирует байткод IVM/Norito
-   - `ivm_run` и `ivm_tool` - утилиты локального запуска и инспекции
-   - `iroha_cli` - используется для деплоя контрактов через Torii
+1. Configure o conjunto de ferramentas Rust (1.76 ou novo) e clone este repositório.
+2. Verifique ou baixe os binários:
+   - `koto_compile` - compilador Kotodama, gerador de bateria IVM/Norito
+   - `ivm_run` e `ivm_tool` - use verificação e inspeção local
+   - `iroha_cli` - usado para a implementação do contrato de trabalho Torii
 
-   Makefile репозитория ожидает эти бинарники в `PATH`. Вы можете скачать готовые артефакты или собрать их из исходников. Если вы компилируете toolchain локально, укажите Makefile хелперам путь к бинарникам:
+   O repositório Makefile foi instalado em `PATH`. Você pode encontrar artefatos originais ou desmontá-los. Se você compilar o conjunto de ferramentas localmente, use o Makefile para ajudá-lo com o binário:
 
    ```sh
    KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
    ```
 
-3. Убедитесь, что узел Iroha запущен к моменту шага деплоя. Примеры ниже предполагают, что Torii доступен по URL из профиля `iroha_cli` (`~/.config/iroha/cli.toml`).
+3. Verifique se o Iroha foi usado durante o tempo de execução. Por exemplo, não há necessidade de usar o Torii fornecido no URL do perfil `iroha_cli` (`~/.config/iroha/cli.toml`).
 
-## 1. Скомпилировать контракт Kotodama
+## 1. Contrato de compilação Kotodama
 
-В репозитории есть минимальный контракт "hello world" в `examples/hello/hello.ko`. Скомпилируйте его в байткод Norito/IVM (`.to`):
+No repositório há um contrato mínimo "olá mundo" em `examples/hello/hello.ko`. Скомпилируйте его в байткод Norito/IVM (`.to`):
 
 ```sh
 mkdir -p target/examples
@@ -38,34 +40,34 @@ koto_compile examples/hello/hello.ko \
   -o target/examples/hello.to
 ```
 
-Ключевые флаги:
+Bandeiras de sucesso:
 
-- `--abi 1` фиксирует контракт на ABI версии 1 (единственная поддерживаемая версия на момент написания).
-- `--max-cycles 0` запрашивает неограниченное выполнение; установите положительное число, чтобы ограничить padding циклов для zero-knowledge доказательств.
+- `--abi 1` contrato de atualização na versão 1 da ABI (é possível usar a versão no momento da atualização).
+- `--max-cycles 0` é uma falha negativa; Use um código de segurança para usar ciclos de preenchimento para documentos de conhecimento zero.
 
-## 2. Проверить артефакт Norito (опционально)
+## 2. Prover o artefato Norito (opcional)
 
-Используйте `ivm_tool`, чтобы проверить заголовок и встроенные метаданные:
+Use `ivm_tool`, isso fornecerá a configuração e o metadado padrão:
 
 ```sh
 ivm_tool inspect target/examples/hello.to
 ```
 
-Вы увидите версию ABI, включенные флаги и экспортированные entrypoints. Это быстрый sanity check перед деплоем.
+Você pode verificar a versão ABI, configurar pontos de entrada e exportar pontos de entrada. Esta é a verificação de sanidade antes da conclusão.
 
-## 3. Запустить контракт локально
+## 3. Fechar contrato local
 
-Запустите байткод через `ivm_run`, чтобы подтвердить поведение без обращения к узлу:
+Para abrir a bateria `ivm_run`, você pode obter o seguinte resultado:
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-Пример `hello` пишет приветствие в лог и вызывает syscall `SET_ACCOUNT_DETAIL`. Локальный запуск полезен при итерации логики контракта до публикации on-chain.
+O exemplo `hello` é exibido no log e executa o syscall `SET_ACCOUNT_DETAIL`. A transação local é possível através da iteração do contrato de lógica para publicação na cadeia.
 
 ## 4. Деплой через `iroha_cli`
 
-Когда контракт вас устраивает, задеплойте его на узел через CLI. Укажите аккаунт-авторитет, его ключ подписи и либо файл `.to`, либо Base64 payload:
+Para que você possa usar o contrato, instale-o na CLI. Use uma conta-autorizada, este é um arquivo de registro e um arquivo `.to`, uma carga útil Base64 gratuita:
 
 ```sh
 iroha_cli app contracts deploy \
@@ -74,26 +76,24 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-Команда отправляет bundle манифеста Norito + байткода через Torii и печатает статус транзакции. После коммита показанный в ответе хэш кода можно использовать для получения манифестов или списка инстансов:
+O comando отправляет pacote манифеста Norito + байткода через Torii e печатает статус tranзакции. После коммита показанный ответе хэш кода можно использовать для получения манифестов или списка instantes:
 
 ```sh
 iroha_cli app contracts manifest get --code-hash 0x<hash>
 iroha_cli app contracts instances --namespace apps --table
 ```
 
-## 5. Запуск через Torii
+## 5. Verifique a configuração Torii
 
-После регистрации байткода вы можете вызывать его, отправляя инструкцию, которая ссылается на сохраненный код (например, через `iroha_cli ledger transaction submit` или ваш клиент приложения). Убедитесь, что права аккаунта разрешают нужные syscalls (`set_account_detail`, `transfer_asset` и т.д.).
+Ao registrar o banco de dados, você pode usá-lo também, abrindo as instruções e escolhendo a opção de proteção código (por exemplo, digite `iroha_cli ledger transaction submit` ou seu cliente cliente). Claro, esta conta está gerando novos syscalls (`set_account_detail`, `transfer_asset` e etc.).
 
-## Советы и устранение проблем
+## Problema de solução e operação- Use `make examples-run`, isso é feito e iniciado primeiro. Verifique a configuração do `KOTO`/`IVM`, exceto o binário não instalado no `PATH`.
+- Если `koto_compile` отклоняет ABI версию, проверьте, что компилятор e узел нацелены на ABI v1 (запустите `koto_compile --abi` Não há argumentos que possam ser encontrados).
+- CLI cria chaves em hexadecimal ou Base64. Para o teste, você pode usar um teclado, use `iroha_cli tools crypto keypair`.
+- Ao usar cargas úteis Norito, use o comando `ivm_tool disassemble`, que contém instruções e isolações Kotodama.
 
-- Используйте `make examples-run`, чтобы собрать и выполнить примеры одним запуском. Переопределите переменные окружения `KOTO`/`IVM`, если бинарники не находятся в `PATH`.
-- Если `koto_compile` отклоняет ABI версию, проверьте, что компилятор и узел нацелены на ABI v1 (запустите `koto_compile --abi` без аргументов, чтобы увидеть поддержку).
-- CLI принимает ключи подписи в hex или Base64. Для тестов можно использовать ключи, выданные `iroha_cli tools crypto keypair`.
-- При отладке Norito payloads полезна команда `ivm_tool disassemble`, которая помогает сопоставлять инструкции с исходниками Kotodama.
+Isso pode ser feito usando CI e testes integrados. Para melhor usar a gramática Kotodama, mapear syscalls e conectar Norito sim.:
 
-Этот поток отражает шаги, используемые в CI и интеграционных тестах. Для более глубокого изучения грамматики Kotodama, маппинга syscalls и внутренностей Norito см.:
-
-- `docs/source/kotodama_grammar.md`
-- `docs/source/kotodama_examples.md`
-- `norito.md`
+-`docs/source/kotodama_grammar.md`
+-`docs/source/kotodama_examples.md`
+-`norito.md`

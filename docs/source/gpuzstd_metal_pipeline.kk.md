@@ -7,115 +7,114 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 019b3aa25ae224c1595467ac809f2c53290813e91a78b78b94ca71c3dd950264
 source_last_modified: "2026-01-31T19:25:45.072449+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# GPU Zstd (Metal) Pipeline
+# GPU Zstd (металл) құбыры
 
-This document describes the deterministic GPU pipeline used by the Metal helper
-for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
-for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
-byte parity with the CPU compressor is not required because sequence generation
-differs.
+Бұл құжат Металл көмекшісі пайдаланатын детерминирленген GPU құбырын сипаттайды
+zstd қысу үшін. Ол үшін жобалау және іске асыру жөніндегі нұсқаулық болып табылады
+Стандартты zstd кадрларын және детерминирленген байттарды шығаратын `gpuzstd_metal` көмекшісі
+берілген реттілік ағыны үшін. Шығыстар CPU декодерлерімен айналмалы болуы керек; байт үшін-
+CPU компрессорымен байт паритеті талап етілмейді, себебі тізбекті құру
+ерекшеленеді.
 
-## Goals
+## Мақсаттар
 
-- Emit standard zstd frames that decode identically with CPU zstd; byte parity
-  with the CPU compressor is not required.
-- Deterministic outputs across hardware, drivers, and thread scheduling.
-- Explicit bounds checks and predictable buffer lifetimes.
+- CPU zstd-мен бірдей декодталатын стандартты zstd кадрларын шығару; байт паритеті
+  процессор компрессорымен қажет емес.
+- Аппараттық құралдар, драйверлер және ағынды жоспарлау бойынша анықтаушы нәтижелер.
+- Айқын шектерді тексеру және болжалды буфердің қызмет ету мерзімі.
 
-## Current implementation note
+## Ағымдағы енгізу ескертпесі
 
-- Match finding and sequence generation run on GPU.
-- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
-  yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
-  full GPU block decode remains in progress.
+- GPU жүйесінде сәйкестікті табу және реттілік генерациялау.
+- Жақтау құрастыру және энтропия кодтау (Huffman/FSE) қазіргі уақытта хостта орындалады
+  қорап ішіндегі кодтаушыны пайдалану; GPU Huffman/FSE ядролары паритеттік тексерілген, бірақ жоқ
+  әлі толық кадр жолына жалғанған.
+- Декод қолдау көрсетілмейтін кадрлар үшін CPU zstd резерві бар жәшік ішіндегі кадр декодерін пайдаланады;
+  толық GPU блогының декодтауы орындалуда.
 
-## Encoding pipeline (high level)
+## Кодтау құбыры (жоғары деңгей)
 
-1. Input staging
-   - Copy the input into a device buffer.
-   - Partition into fixed-size chunks (for sequence generation) and blocks (for
-     zstd frame assembly).
-2. Match finding and sequence emission
-   - GPU kernels scan each chunk and emit sequences (literal length, match
-     length, offset).
-   - Sequence ordering is stable and deterministic.
-3. Literal preparation
-   - Collect literals referenced by sequences.
-   - Build literal histograms and select literal block mode (raw, RLE, or
-     Huffman) deterministically.
-4. Huffman tables (literals)
-   - Generate code lengths from the histogram.
-   - Build canonical tables with deterministic tie-breaking that matches CPU
-     zstd output.
-5. FSE tables (LL/ML/OF)
-   - Normalize frequency counts.
-   - Build FSE decoding/encoding tables deterministically.
-6. Bitstream writer
-   - Pack bits little-endian (LSB-first).
-   - Flush on byte boundaries; pad with zeros only.
-   - Mask values to declared bit widths and enforce capacity checks.
-7. Block and frame assembly
-   - Emit block headers (type, size, last-block flag).
-   - Serialize literals and sequences into compressed blocks.
-   - Emit standard zstd frame headers and optional checksums.
+1. Енгізу кезеңдері
+   - Енгізуді құрылғы буферіне көшіріңіз.
+   - Тіркелген өлшемді бөліктерге (тізбекті құру үшін) және блоктарға (үшін
+     zstd жақтау жинағы).
+2. Сәйкестікті табу және реттілік эмиссиясы
+   - GPU ядролары әрбір бөлікті сканерлейді және тізбектерді шығарады (сөзбе-сөз ұзындық, сәйкестік
+     ұзындығы, ығысу).
+   - реттілік реті тұрақты және детерминирленген.
+3. Сөзбе-сөз дайындық
+   - Тізбектерге сілтеме жасалған әріптерді жинаңыз.
+   - Литералдық гистограммаларды құрастырыңыз және әріптік блок режимін таңдаңыз (raw, RLE немесе
+     Хаффман) детерминистикалық.
+4. Хаффман кестелері (литералдар)
+   - гистограммадан код ұзындықтарын жасаңыз.
+   - Орталық процессорға сәйкес келетін детерминирленген байланысы бар канондық кестелерді құрастырыңыз
+     zstd шығысы.
+5. FSE кестелері (LL/ML/OF)
+   - Жиілік санауын қалыпқа келтіру.
+   - FSE декодтау/кодтау кестелерін анықтау.
+6. Битті ағынды жазушы
+   - Бума биттері little-endian (LSB-бірінші).
+   - байт шекаралары бойынша жағу; тек нөлдері бар тақта.
+   - Мәндерді мәлімделген бит еніне бүркемелеу және сыйымдылықты тексеруді орындау.
+7. Блок пен жақтауды құрастыру
+   - Блок тақырыптарын шығару (түрі, өлшемі, соңғы блоктың жалауы).
+   - Литералдар мен тізбектерді қысылған блоктарға сериялау.
+   - Стандартты zstd кадр тақырыптарын және қосымша бақылау сомасын шығарыңыз.
 
-## Decoding pipeline (high level)
+## Декодтау құбыры (жоғары деңгей)
 
-1. Frame parse
-   - Validate magic bytes, window settings, and frame header fields.
-2. Bitstream reader
-   - Read LSB-first bit sequences with strict bounds checks.
-3. Literal decode
-   - Decode literal blocks (raw, RLE, or Huffman) into the literal buffer.
-4. Sequence decode
-   - Decode LL/ML/OF values using FSE tables.
-   - Reconstruct matches using the sliding window.
-5. Output and checksum
-   - Write reconstructed bytes into the output buffer.
-   - Verify optional checksums when enabled.
+1. Фреймді талдау
+   - Сиқырлы байттарды, терезе параметрлерін және кадр тақырыбы өрістерін растаңыз.
+2. Битті ағынды оқу құралы
+   - Қатаң шектеулерді тексеру арқылы LSB-бірінші биттік тізбектерді оқыңыз.
+3. Әріптік декодтау
+   - Литералдық блоктарды (raw, RLE немесе Huffman) әріптік буферге декодтау.
+4. Тізбекті декодтау
+   - FSE кестелерін пайдаланып LL/ML/OF мәндерін декодтау.
+   - Сырғымалы терезе арқылы сәйкестіктерді қалпына келтіріңіз.
+5. Шығару және бақылау сомасы
+   - Шығару буферіне қайта құрылған байтты жазыңыз.
+   - Қосылған кезде қосымша бақылау сомасын тексеріңіз.
 
-## Buffer lifetimes and ownership
+## Буфердің қызмет ету мерзімі және меншік құқығы- Енгізу буфері: хост -> құрылғы, тек оқуға арналған.
+- Тізбекті буфер: сәйкестіктерді табу арқылы жасалған және энтропиямен тұтынылатын құрылғы
+  кодтау; кросс-блокты қайта пайдалану жоқ.
+- Литералды буфер: әрбір блок үшін шығарылатын және блоктан кейін шығарылатын құрылғы
+  эмиссия.
+- Шығару буфері: құрылғы соңғы кадр байттарын хост оларды көшіргенше ұстайды
+  шығып.
+- Scratch буферлері: ядролар бойынша қайта пайдаланылады, бірақ әрқашан детерминирленген түрде қайта жазылады.
 
-- Input buffer: host -> device, read-only.
-- Sequence buffer: device, produced by match-finding and consumed by entropy
-  coding; no cross-block reuse.
-- Literal buffer: device, produced for each block and released after block
-  emission.
-- Output buffer: device, holds the final frame bytes until the host copies them
-  out.
-- Scratch buffers: reused across kernels, but always overwritten deterministically.
+## Ядролық жауапкершілік
 
-## Kernel responsibilities
+- Сәйкестіктерді табу ядролары: сәйкестіктерді табу және реттіліктерді шығару (LL/ML/OF + литералдар).
+- Хаффман ядроларды құрастыру: код ұзындықтарын және канондық кестелерді шығару.
+- FSE құрастыру ядролары: LL/ML/OF кестелері мен күй машиналарын құрастыру.
+- кодтау ядроларын блоктау: литералдар мен тізбектерді биттік ағынға сериялау.
+- Ядроларды декодтауды блоктау: биттік ағынды талдау және литералдарды/тізбектерді қайта құру.
 
-- Match finding kernels: find matches and emit sequences (LL/ML/OF + literals).
-- Huffman build kernels: derive code lengths and canonical tables.
-- FSE build kernels: build LL/ML/OF tables and state machines.
-- Block encode kernels: serialize literals and sequences into the bitstream.
-- Block decode kernels: parse bitstream and reconstruct literals/sequences.
+## Детерминизм және паритеттік шектеулер
 
-## Determinism and parity constraints
-
-- Canonical table builds must use the same ordering and tie-breaking as CPU
+- Канондық кесте құрастырулары орталық процессормен бірдей реттілік пен байланыстыруды қолдануы керек
   zstd.
-- No atomics or reductions that depend on thread scheduling for any output byte.
-- Bitstream packing is little-endian, LSB-first; byte alignment pads with zeros.
-- All bounds checks are explicit; invalid inputs fail deterministically.
+- Кез келген шығыс байты үшін ағынды жоспарлауға тәуелді атомдар немесе қысқартулар жоқ.
+- Битті ағынды орау - little-endian, LSB-бірінші; нөлдері бар байтты туралау тақталары.
+- Барлық шекаралық тексерулер анық; жарамсыз енгізулер детерминирленген түрде сәтсіздікке ұшырайды.
 
-## Validation
+## Валидация
 
-- CPU golden vectors for the bitstream writer/reader.
-- Corpus parity tests comparing GPU and CPU outputs.
-- Fuzz coverage for malformed frames and boundary conditions.
+- биттік ағынды жазушы/оқушыға арналған CPU алтын векторлары.
+- GPU және CPU шығыстарын салыстыратын корпус паритеттік сынақтары.
+- Дұрыс емес пішімделген жақтаулар мен шекаралық шарттарды жабу.
 
-## Benchmarking
+## Салыстыру
 
-Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
-compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
-without a Metal-capable device; capture the output alongside hardware details
-when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
-`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
+`cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` іске қосыңыз
+пайдалы жүктеме өлшемдері бойынша CPU мен GPU кодтау кідірісін салыстырыңыз. Сынақ хосттарда өткізіп жібереді
+металдан тұратын құрылғысыз; шығысты аппараттық құрал мәліметтерімен бірге түсіріңіз
+GPU түсіру шектерін реттеу кезінде. Norito бірдей кесуді жүзеге асырады
+`gpu_zstd::encode_all`, сондықтан тікелей қоңырау шалушылар эвристикалық қақпаға сәйкес келеді.

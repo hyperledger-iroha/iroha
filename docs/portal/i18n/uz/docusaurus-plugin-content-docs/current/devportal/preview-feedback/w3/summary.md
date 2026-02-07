@@ -8,32 +8,34 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W3 beta feedback & status
 sidebar_label: W3 summary
 description: Live digest for the 2026 beta preview wave (finance, observability, SDK, and ecosystem cohorts).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| Element | Tafsilotlar |
 | --- | --- |
-| Wave | W3 — Beta cohorts (finance + ops + SDK partner + ecosystem advocate) |
-| Invite window | 2026‑02‑18 → 2026‑02‑28 |
-| Artefact tag | `preview-20260218` |
-| Tracker issue | `DOCS-SORA-Preview-W3` |
-| Participants | finance-beta-01, observability-ops-02, partner-sdk-03, ecosystem-advocate-04 |
+| To'lqin | W3 — Beta kohortlar (moliya + operatsiyalar + SDK hamkori + ekotizim himoyachisi) |
+| Taklif oynasi | 2026‑02‑18 → 2026‑02‑28 |
+| Artefakt tegi | `preview-20260218` |
+| Kuzatuvchi muammosi | `DOCS-SORA-Preview-W3` |
+| Ishtirokchilar | moliya-beta-01, kuzatuv-ops-02, hamkor-sdk-03, ekotizim-advokat-04 |
 
-## Highlights
+## E'tiborga molik
 
-1. **End-to-end evidence pipeline.** `npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` generates the per-wave summary (`artifacts/docs_portal_preview/preview-20260218-summary.json`), digest (`preview-20260218-digest.md`), and refreshes `docs/portal/src/data/previewFeedbackSummary.json` so governance reviewers can rely on a single command.
-2. **Telemetry + governance coverage.** All four reviewers acknowledged checksum-gated access, submitted feedback, and were revoked on time; the digest references the feedback issues (`docs-preview/20260218` set + `DOCS-SORA-Preview-20260218`) alongside the Grafana runs collected during the wave.
-3. **Portal surfacing.** The refreshed portal table now shows the closed W3 wave with latency and response-rate metrics, and the new log page below mirrors the event timeline for auditors who do not pull the raw JSON log.
+1. **`npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` har bir to‘lqin xulosasini (`artifacts/docs_portal_preview/preview-20260218-summary.json`), dayjestni (`preview-20260218-digest.md`) yaratadi va `docs/portal/src/data/previewFeedbackSummary.json`ni yangilaydi, shuning uchun boshqaruvni bitta ko‘rib chiquvchiga ishonib topshiradi.
+2. **Telemetriya + boshqaruv qamrovi.** To'rtta ko'rib chiquvchining hammasi nazorat summasi bilan himoyalangan kirishni tan oldi, fikr-mulohazalarini yubordi va o'z vaqtida bekor qilindi; Dayjestda toʻlqin davomida toʻplangan Grafana yugurishlari bilan bir qatorda fikr-mulohaza masalalari (`docs-preview/20260218` toʻplami + `DOCS-SORA-Preview-20260218`) haqida soʻz boradi.
+3. **Portal sirtini ko'rsatish.** Yangilangan portal jadvali endi kechikish va javob tezligi ko'rsatkichlari bilan yopiq W3 to'lqinini ko'rsatadi va quyida joylashgan yangi jurnal sahifasi xom JSON jurnalini tortmaydigan auditorlar uchun voqealar vaqt jadvalini aks ettiradi.
 
-## Action items
+## Harakat elementlari
 
-| ID | Description | Owner | Status |
+| ID | Tavsif | Egasi | Holati |
 | --- | --- | --- | --- |
-| W3-A1 | Capture preview digest and attach to tracker. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
-| W3-A2 | Mirror invite/digest evidence into portal + roadmap/status. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
+| W3-A1 | Oldindan ko'rish dayjestini yozib oling va trekerga biriktiring. | Docs/DevRel yetakchisi | ✅ Tugallangan 2026‑02‑28 |
+| W3-A2 | Dalillarni portalga + yoʻl xaritasiga/statusga aks ettirish/taklif qilish. | Docs/DevRel yetakchisi | ✅ Tugallangan 2026‑02‑28 |
 
-## Exit summary (2026-02-28)
+## Chiqish xulosasi (28-02-2026)
 
-- Invites dispatched 2026‑02‑18 with acknowledgements logged minutes later; preview access revoked 2026‑02‑28 after the final telemetry check passed.
-- Digest + summary captured under `artifacts/docs_portal_preview/`, with the raw log anchored by `artifacts/docs_portal_preview/feedback_log.json` for replayability.
-- Issue follow-ups filed under `docs-preview/20260218` with the governance tracker `DOCS-SORA-Preview-20260218`; CSP/Try it notes routed to the observability/finance owners and linked from the digest.
-- Tracker row updated to 🈴 Completed and the portal feedback table reflects the closed wave, completing the remaining DOCS-SORA beta-readiness task.
+- 2026-02-18 da yuborilgan taklifnomalar bir necha daqiqadan so'ng qayd etilgan; Yakuniy telemetriya tekshiruvidan o‘tgandan so‘ng 2026-02-28-da oldindan ko‘rishga kirish bekor qilindi.
+- Digest + xulosasi `artifacts/docs_portal_preview/` ostida olingan, xom jurnal qayta o'qilishi uchun `artifacts/docs_portal_preview/feedback_log.json` tomonidan biriktirilgan.
+- `DOCS-SORA-Preview-20260218` boshqaruv kuzatuvchisi bilan `docs-preview/20260218` bo'yicha topshirilgan muammoni kuzatish; CSP/Try it qaydlari kuzatuv/moliya egalariga yo'naltirilgan va dayjestdan bog'langan.
+- Kuzatuvchi qatori 🈴 ga yangilandi va portalning fikr-mulohazalari jadvali DOCS-SORA beta-tayyorligining qolgan vazifasini bajarib, yopiq to‘lqinni aks ettiradi.

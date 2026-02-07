@@ -11,62 +11,63 @@ id: preview-feedback-w1-plan
 title: W1 partner preflight plan
 sidebar_label: W1 plan
 description: Tasks, owners, and evidence checklist for the partner preview cohort.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| Элемент | Ентекле |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Target window | Q2 2025 week 3 |
-| Artefact tag (planned) | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
+| Тулҡын | W1 — Партнерҙар һәм I18NT000000002X интеграторҙары |
+| Маҡсатлы тәҙрә | 2025 йылдың 3-сө аҙнаһы 3 |
+| Артефакт билдәһе (планлаштырылған) | `preview-2025-04-12` |
+| Трекер мәсьәләһе | `DOCS-SORA-Preview-W1` |
 
-## Objectives
+## Маҡсаттар
 
-1. Secure legal + governance approvals for partner preview terms.
-2. Stage the Try it proxy and telemetry snapshots used in the invite bundle.
-3. Refresh the checksum-verified preview artefact and probe results.
-4. Finalise the partner roster + request templates before invites are sent.
+1. Хәүефле хоҡуҡи + идара итеү раҫлау өсөн партнер алдан ҡарау шарттары.
+2. Сәхнәгә Тырышып, уны прокси һәм телеметрия снимоктары ҡулланылған саҡырыу өйөмө.
+3. Яңыртыу тикшерелгән суммаһы тикшерелгән алдан ҡарау артефакт һәм зонд һөҙөмтәләре.
+4. Партнер исемлеге + запрос ҡалыптары саҡырыуҙар ебәрелгәнсе.
 
-## Task breakdown
+## Эш өҙөлгән
 
-| ID | Task | Owner | Due | Status | Notes |
+| ID | Эш | Хужа | Ауыр | Статус | Иҫкәрмәләр |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtain legal approval for the preview terms addendum | Docs/DevRel lead → Legal | 2025‑04‑05 | ✅ Completed | Legal ticket `DOCS-SORA-Preview-W1-Legal` signed off 2025‑04‑05; PDF attached to the tracker. |
-| W1-P2 | Capture Try it proxy staging window (2025‑04‑10) and validate proxy health | Docs/DevRel + Ops | 2025‑04‑06 | ✅ Completed | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` executed 2025‑04‑06; CLI transcript + `.env.tryit-proxy.bak` archived. |
-| W1-P3 | Build preview artefact (`preview-2025-04-12`), run `scripts/preview_verify.sh` + `npm run probe:portal`, archive descriptor/checksums | Portal TL | 2025‑04‑08 | ✅ Completed | Artefact + verification logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`; probe output attached to tracker. |
-| W1-P4 | Review partner intake forms (`DOCS-SORA-Preview-REQ-P01…P08`), confirm contacts + NDAs | Governance liaison | 2025‑04‑07 | ✅ Completed | All eight requests approved (last two cleared 2025‑04‑11); approvals linked in tracker. |
-| W1-P5 | Draft invite copy (based on `docs/examples/docs_preview_invite_template.md`), set `<preview_tag>` and `<request_ticket>` for each partner | Docs/DevRel lead | 2025‑04‑08 | ✅ Completed | Invite draft sent 2025‑04‑12 15:00 UTC alongside artefact links. |
+| W1-P1 | Алдан ҡарау шарттары өсөн хоҡуҡи раҫлау алыу | Док/ДевРель лидеры → Юридик | 2025‐04‐05 | ✅ Төҙөлгән | Юридик билет `DOCS-SORA-Preview-W1-Legal` ҡул ҡуйҙы 2025‐04‐05; PDF трекерға беркетелгән. |
+| W1-P2 | 2025 йылдың 10-сы (2025‐04‐10) һәм прокси-һаулыҡ һаҡлау | Док/ДевРель + Ops | 2025‐04‐06 | ✅ Төҙөлгән | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` 2025-04‐06-ны башҡарылған; CLI стенограммаһы + `.env.tryit-proxy.bak` архивланған. |
+| W1-P3 | Алдан ҡарау артефактын төҙөү (`preview-2025-04-12`), `scripts/preview_verify.sh` + I18NI00000022Х, архив дескрипторы/чекумдар | Портал ТЛ | 2025‐04‐08 | ✅ Төҙөлгән | Артефакт + тикшерелгән журналдар һаҡлана I18NI000000023X; зонд сығышы трекерға беркетелгән. |
+| W1-P4 | Обзор партнер ҡулланыу формалары (I18NI000000024X), контакттар раҫлау + NDAs | Идара итеү бәйләнеше | 2025‐04‐07 | ✅ Төҙөлгән | Һигеҙ үтенес тә раҫланған (һуңғы ике 2025-04‐11-се таҙартылған); раҫлауҙар трекер бәйләнгән. |
+| W1-P5 | Сказникты саҡырыу күсермә (`docs/examples/docs_preview_invite_template.md` нигеҙендә), `<preview_tag>` һәм I18NI000000027X һәр партнер өсөн билдәләнгән | Док/ДевРел лидеры | 2025‐04‐08 | ✅ Төҙөлгән | 2025 йылдың 04-12 15:00UTC-һы артефакт һылтанмалары менән бер рәттән саҡырыу проекты ебәргән. |
 
-## Preflight checklist
+## осоу алдынан тикшерелгән исемлек
 
-> Tip: run `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` to execute steps 1‑5 automatically (build, checksum verification, portal probe, link checker, and Try it proxy update). The script records a JSON log you can attach to the tracker issue.
+> Кәңәш: эшләү I18NI000000028X аҙымдарҙы башҡарыу өсөн 1‐5 автоматик рәүештә (төҙөлөш, чемпионат тикшерелгән, порталь зонд, һылтанма тикшерергә, һәм уны һынап ҡарағыҙ, уны прокси яңыртыу). Сценарийҙа JSON журналын теркәйһегеҙ, һеҙ трекер мәсьәләһенә беркетергә мөмкин.
 
-1. `npm run build` (with `DOCS_RELEASE_TAG=preview-2025-04-12`) to regenerate `build/checksums.sha256` and `build/release.json`.
-2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
+.
+2. I18NI000000033X.
 3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` and archive `build/link-report.json` beside the descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (or provide the appropriate target via `--tryit-target`); commit the updated `.env.tryit-proxy` and keep the `.bak` for rollback.
-6. Update the W1 tracker issue with log paths (descriptor checksum, probe output, Try it proxy change, Grafana snapshots).
+4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` һәм архив I18NI0000000036X тасуирлаусы янында.
+5. I18NI000000037X (йәки I18NI000000038X аша тейешле маҡсат менән тәьмин итеү); яңыртылған I18NI000000039X эшен ҡылыу һәм I18NI000000040X өсөн кире ҡайтарыу өсөн һаҡлау.
+6. Яңыртыу W1 трекер мәсьәләһе менән лог юлдар (дестриптор чемпионат, зонд сығарыу, һынап ҡарағыҙ, уны прокси үҙгәрештәр, I18NT00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 штатының снимоктары)) һынап ҡарағыҙ, һынап ҡарағыҙ.
 
-## Evidence checklist
+## Дәлилдәр тикшерелгән исемлек
 
-- [x] Signed legal approval (PDF or ticket link) attached to `DOCS-SORA-Preview-W1`.
-- [x] Grafana screenshots for `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] `preview-2025-04-12` descriptor + checksum log stored under `artifacts/docs_preview/W1/`.
-- [x] Invite roster table with `invite_sent_at` timestamps populated (see tracker W1 log).
-- [x] Feedback artifacts mirrored in [`preview-feedback/w1/log.md`](./log.md) with one row per partner (updated 2025-04-26 with roster/telemetry/issue data).
+- [x] Ҡул ҡуйылған хоҡуҡи раҫлау (PDF йәки билет һылтанмаһы) беркетелгән I18NI000000041X.
+- [x] I18NI0000000042X өсөн Grafana скриншоттары, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
+- [x] I18NI000000045X дескрипторы + I18NI000000046X XX буйынса һаҡланған чемпионерҙар суммаһы журналы.
+- [x] I18NI000000047X ваҡыт маркалары менән яҙылған исемлек өҫтәлен халыҡ менән тәьмин итеү (ҡара: Tracker W1 журналы).
+- [x] Кире бәйләнеш артефакттары көҙгө [I18NI000000048X](./log.md) бер рәт менән партнер (яңыртылған 2025-04-26 менән исемлек/телеметрия/эш мәғлүмәттәре).
 
-Update this plan as tasks progress; the tracker references it to keep the roadmap
-auditable.
+Яңыртыу был планда бурыстар алға китеш; трекер юл картаһын һаҡлау өсөн уға һылтанма яһай
+аудитлы.
 
-## Feedback workflow
+## Кире бәйләнеш эш ағымы
 
-1. For each reviewer, duplicate the template in
-   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   fill the metadata, and store the completed copy under
+1. Һәр рецензент өсөн 1990 йылда ҡалыпты ҡабатлағыҙ.
+   [I18NI000000049X X] (../../../../../examples/docs_preview_feedback_form.md, 1990 й.
+   метамағлүмәттәр тултырырға, һәм тултырылған күсермәһе буйынса һаҡлау буйынса .
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Summarise invites, telemetry checkpoints, and open issues inside the live log at
-   [`preview-feedback/w1/log.md`](./log.md) so governance reviewers can replay the entire wave
-   without leaving the repository.
-3. When knowledge-check or survey exports arrive, attach them in the artefact path noted in the log
-   and cross-link the tracker issue.
+2. Йәмғеһе саҡыра, телеметрия тикшерелгән пункттар, һәм асыҡ мәсьәләләр эсендә тура эфир журналы .
+   [I18NI000000051X] (I18NU000000009X X) шулай идара итеү рецензенттары бөтә тулҡынды ҡабатлай ала
+   һаҡлағыстан сыҡмайынса.
+3. Ҡасан белем-тикшерергә йәки тикшерелгән экспорт килгән, уларҙы беркетергә артефакт юлында билдәләнгән логта .
+   һәм cross-link трекер мәсьәләһе.

@@ -6,40 +6,42 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Volunteer Briefs
 description: Submit, lint, and publish citizen briefs for Ministry blacklist reviews.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import VolunteerLintStatusTable from '@site/src/components/VolunteerLintStatusTable';
+VolunteerLintStatusTable-г '@site/src/components/VolunteerLintStatusTable'-ээс импортлох;
 
-## Overview
+## Тойм
 
-Volunteer briefs capture the support/oppose/context viewpoints that the Ministry of Information reviews whenever blacklist or policy changes are proposed. Every submission must follow the canonical schema implemented by `iroha_data_model::ministry::VolunteerBriefV1` (version `1`) so that:
+Сайн дурынхны товч мэдээлэл нь хар жагсаалт эсвэл бодлогод өөрчлөлт оруулах санал гаргах бүрт Мэдээллийн яамнаас хянадаг дэмжлэг/эсрэг/контекст үзэл бодлыг тусгасан болно. Илгээлт бүр нь `iroha_data_model::ministry::VolunteerBriefV1` (`1` хувилбар)-ын хэрэгжүүлсэн каноник схемийг дагаж мөрдөх ёстой бөгөөд ингэснээр:
 
-1. Governance dashboards can compare fact tables deterministically.
-2. Conflict-of-interest disclosures are enforced before publication.
-3. Off-topic or astroturfed submissions are suppressed without removing them from the audit trail.
+1. Засаглалын хяналтын самбар нь баримтын хүснэгтийг тодорхой байдлаар харьцуулах боломжтой.
+2. Ашиг сонирхлын зөрчлийн талаарх мэдээллийг нийтлэхээс өмнө мөрддөг.
+3. Сэдвээс гадуурх эсвэл зурхайн материалаар оруулсан материалыг аудитын мөрөөс хасахгүйгээр дардаг.
 
-Use the template in `docs/source/ministry/volunteer_brief_template.md` or the `cargo xtask ministry-transparency ingest` helper to build a payload. The CLI validates the Norito struct, lints moderation tags, and emits a summary showing how many fact rows, citations, and disclosures were accepted.
+Ачаалал үүсгэхийн тулд `docs/source/ministry/volunteer_brief_template.md` дээрх загвар эсвэл `cargo xtask ministry-transparency ingest` туслагчийг ашиглана уу. CLI нь Norito бүтцийг баталгаажуулж, модераторын шошго, хэчнээн баримтын мөр, ишлэл, тодруулгыг хүлээн авсныг харуулсан хураангуйг гаргадаг.
 
-## Publication pipeline & SLA
+## Нийтлэлийн шугам ба SLA
 
-| Stage | Window | Details |
+| Үе шат | Цонх | Дэлгэрэнгүй |
 |-------|--------|---------|
-| Intake & validation | T+0 to 6 hours | Payloads are uploaded through the volunteer form or the CLI. `VolunteerBriefV1::validate` enforces the schema (version, RFC 3339 timestamp, disclosure policy, digest formatting). Failures are rejected immediately with actionable error codes. |
-| Translation & moderation | T+6 to 24 hours | Reviewers apply moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, etc.), redact contacts, and flag off-topic entries. Tags are stored in the Norito payload so downstream automation can suppress or highlight entries. |
-| Portal publication | T+24 to 48 hours | Valid briefs are published alongside the corresponding proposal page under **Volunteer Opinions**. Off-topic entries remain in the raw archive but are excluded from aggregate stance counts. |
+| Хэрэглээ ба баталгаажуулалт | T+0-ээс 6 цаг хүртэл | Ачааллыг сайн дурын маягт эсвэл CLI-ээр дамжуулан байршуулдаг. `VolunteerBriefV1::validate` нь схемийг хэрэгжүүлдэг (хувилбар, RFC3339 цагийн тэмдэг, тодруулгын бодлого, дижест формат). Алдаа дутагдлыг үйлдэл хийх боломжтой алдааны кодоор нэн даруй үгүйсгэдэг. |
+| Орчуулга, зохицуулалт | T+6-аас 24 цаг хүртэл | Шүүгчид зохицуулах шошго (`needs-translation`, `duplicate`, `policy-escalation` гэх мэт) хэрэглэж, харилцагчдыг засварлаж, сэдвээс гадуурх оруулгуудыг тэмдэглэдэг. Шошгуудыг Norito ачаалалд хадгалдаг тул доод автоматжуулалт нь оруулгуудыг дарах эсвэл тодруулах боломжтой. |
+| Портал хэвлэл | T+24-аас 48 цаг хүртэл | Хүчин төгөлдөр тоймыг **Сайн дурынхны санал бодол** дор харгалзах саналын хуудасны хамт нийтэлсэн. Сэдвээс гадуурх бичлэгүүд түүхий архивт үлдэх боловч нийт байр сууриа тоолоход хасагдсан болно. |
 
-Expedited handling (≤12 hours) is triggered automatically when the `policy-escalation` or `astroturf` tags are present. Operators can audit compliance via the Volunteer Briefs Grafana panel, which tracks the time between `submitted_at` and portal publication.
+`policy-escalation` эсвэл `astroturf` шошготой үед хурдасгасан зохицуулалт (≤12 цаг) автоматаар идэвхждэг. Операторууд `submitted_at` болон портал нийтлэлийн хоорондох хугацааг хянадаг Сайн дурын ажилтнуудын Grafana самбараар дамжуулан дагаж мөрдөж байгаа эсэхийг шалгаж болно.
 
-## Deliverables
+## Хүргэлт
 
-- **Schema & docs:** `VolunteerBriefV1` lives in the shared data model, and the detailed field guide plus example payload reside in `docs/source/ministry/volunteer_brief_template.md` and `docs/examples/ministry/volunteer_brief_template.json`.
-- **Validation tooling:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` runs the same lints used by the portal build; `ingest --volunteer <file>` remains available when you want to stage an entire bundle for publication.
-- **Portal surfacing:** Each proposal page links to the decoded support/oppose/context briefs, making citizen opinions visible without downloading raw JSON. Moderation metadata is rendered alongside the brief so jurors understand why an entry may have been delayed or excluded.
+- **Схем ба баримт бичиг:** `VolunteerBriefV1` нь хуваалцсан өгөгдлийн загварт амьдардаг бөгөөд талбарын нарийвчилсан гарын авлага болон ачааллын жишээ нь `docs/source/ministry/volunteer_brief_template.md` болон `docs/examples/ministry/volunteer_brief_template.json` дээр байрладаг.
+- **Баталгаажуулах хэрэгсэл:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` нь портал бүтээхэд ашигладаг ижил хулдаасуудыг ажиллуулдаг; `ingest --volunteer <file>` нь таныг бүхэл бүтэн багцыг хэвлүүлэхийг хүсвэл ашиглах боломжтой хэвээр байна.
+- **Порталын нүүр царай:** Саналын хуудас бүр кодыг тайлсан дэмжлэг/сөрөг/контекст тоймтой холбогдож, JSON-г татаж авахгүйгээр иргэдийн санал бодлыг харуулдаг. Зохицуулах мета өгөгдлүүдийг товч танилцуулгын хажууд үзүүлснээр тангарагтны шүүгчид яагаад бичлэг хойшлогдсон эсвэл хасагдсан болохыг ойлгох болно.
 
-Refer to the roadmap item **MINFO-3 — Volunteer interest panel infrastructure** if additional automation (e.g., bulk import APIs or extended analytics) is required.
+Нэмэлт автоматжуулалт (жишээ нь, бөөнөөр импортлох API эсвэл өргөтгөсөн аналитик) шаардлагатай бол **MINFO-3 — Сайн дурынхны сонирхлын самбарын дэд бүтэц**-ийн замын зургийн зүйлийг харна уу.
 
-## Lint status dashboard
+## Lint төлөвийн хяналтын самбар
 
-The portal build now runs `npm run generate:volunteer-lint`, which invokes `cargo xtask ministry-transparency volunteer-validate --json-output …` across every checked-in volunteer brief. The resulting manifest is rendered below so reviewers can confirm each proposal’s lint status before publishing.
+Портал бүтээц нь одоо `npm run generate:volunteer-lint`-г ажиллуулж байгаа бөгөөд энэ нь бүртгэгдсэн сайн дурын ажилтны танилцуулга болгонд `cargo xtask ministry-transparency volunteer-validate --json-output …`-ийг дууддаг. Үр дүнгийн манифестийг доор үзүүлснээр хянагч нийтлэхээс өмнө санал бүрийн хулсны статусыг баталгаажуулах боломжтой.
 
 <VolunteerLintStatusTable />

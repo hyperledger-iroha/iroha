@@ -11,68 +11,60 @@ id: payment-settlement-plan
 title: SNS Payment & Settlement Plan
 sidebar_label: Payment & settlement plan
 description: Playbook for routing SNS registrar revenue, reconciling steward/treasury splits, and producing evidence bundles.
+translator: machine-google-reviewed
 ---
 
-> Canonical source: [`docs/source/sns/payment_settlement_plan.md`](../../../source/sns/payment_settlement_plan.md).
+> ཀེ་ནོ་ནིག་འབྱུང་ཁུངས་: [I18NI0000004X](../../../source/sns/payment_settlement_plan.md).
 
-Roadmap task **SN-5 — Payment & Settlement Service** introduces a deterministic
-payment layer for the Sora Name Service. Every registration, renewal, or refund
-must emit a structured Norito payload so treasury, stewards, and governance can
-replay the financial flows without spreadsheets. This page distills the spec
-for portal audiences.
+ལམ་སྟོན་ལཱ་ **SN-5 — དངུལ་སྤྲོད་དང་གཞི་སྒྲིག་ཞབས་ཏོག་** གིས་ ཐག་བཅད་ཅིག་ ངོ་སྤྲོད་འབདཝ་ཨིན།
+སོ་ར་མིང་ཞབས་ཏོག་དོན་ལུ་ དངུལ་སྤྲོད་བང་རིམ། ཐོ་འགོད་དང་བསྐྱར་གསོ་ ཡང་ན་ དངུལ་ལོག་ཆ་ཚད།
+བཀོད་སྒྲིག་འབད་ཡོད་པའི་ I18NT0000000X གླ་ཆ་འདི་ དངུལ་ཁང་དང་ བདག་འཛིན་ དེ་ལས་ གཞུང་སྐྱོང་ ཀེན་འབད་དགོ།
+ཤོག་ཁྲམ་མེད་པར་ དངུལ་འབྲེལ་གྱི་རྒྱུན་འབབ་ཚུ་ ལོག་གཏང་། ཤོག་ལེབ་འདི་གིས་ ཁྱད་ཚད་འདི་ གཏན་འབེབས་བཟོཝ་ཨིན།
+དྲྭ་ཚིགས་ལྟདམོ་ལྟ་མི་ཚུ་གི་དོན་ལུ་ཨིན།
 
-## Revenue model
+## ཡོང་འབབ་དཔེ་ཚད།
 
-- Base fee (`gross_fee`) derives from the registrar pricing matrix.  
-- Treasury receives `gross_fee × 0.70`, stewards receive the remainder minus
-  referral bonuses (capped at 10 %).  
-- Optional holdbacks allow governance to pause steward payouts during disputes.  
-- Settlement bundles expose a `ledger_projection` block with the concrete
-  `Transfer` ISIs so automation can post XOR movements straight into Torii.
+- གཞི་རྟེན་འཐུས་ (`gross_fee`) འདི་ ཐོ་བཀོད་གོང་ཚད་ཀྱི་མེ་ཊིགསི་ལས་འབྱུངམ་ཨིན།  
+- དངུལ་ཁང་ལུ་ I18NI000000006X ཐོབ་ཡོདཔ་ད་ བདག་འཛིན་པ་ཚུ་ལུ་ ལྷག་ལུས་ཕབ་རྩིས་ཐོབ་ཡོདཔ་ཨིན།
+  བརྡ་སྤྲོད་ཀྱི་ བོནསི་ (༡༠% ལུ་ བརྡབ་བཏང་ཡོདཔ།  
+- གདམ་ཁའི་རྒྱབ་ཚུ་གིས་ གཞུང་སྐྱོང་གིས་ རྩོད་གཞི་ཚུ་ བྱུང་པའི་སྐབས་ བདག་འཛིན་གྱི་ དངུལ་ཕོགས་ཚུ་ བཀག་ཆ་འབད་བཅུགཔ་ཨིན།  
+- གཞིས་ཆགས་བསྡུ་སྒྲིག I18NI000000007X གི་བཀག་ཆ་འདི་ བརྟན་བཞུགས་དང་གཅིག་ཁར་ གསལ་སྟོན་འབདཝ་ཨིན།
+  I18NI000000008X ISIs དེ་འདྲའི་རང་བཞིན་གྱིས་ XOR འགུལ་སྐྱོད་ཚུ་ I18NT000000001X ནང་ལུ་ ཕྲང་ཏང་ཏ་སྦེ་བཙུགས་ཚུགས།
 
-## Services & automation
+## ཞབས་ཞུ་དང་རང་འཇུག།
 
-| Component | Purpose | Evidence |
-|-----------|---------|----------|
-| `sns_settlementd` | Applies policy, signs bundles, surfaces `/v1/sns/settlements`. | JSON bundle + hash. |
-| Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli app sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
-| Reconciliation job | Daily diff + monthly statement under `docs/source/sns/reports/`. | Markdown + JSON digest. |
-| Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |
+| ཆ་ཤས་ | དམིགས་ཡུལ། | སྒྲུབ་བྱེད་ |
+|-----------------------------------------|
+| I18NI0000009X | སྲིད་བྱུས་དང་ རྟགས་མཚན་གྱི་བང་སྒྲིག་ ཁ་ཐོག་ `/v1/sns/settlements` ལག་ལེན་འཐབ་ཨིན། | JSON བང་རིམ་ + ཧེ། |
+| གཞིས་ཆགས་ཀྱི་གྱལ་དང་རྩོམ་པ་པོ། | བརྡ་སྟོན་པའི་གྱལ་རིམ་ + ལག་དེབ་ཕུལ་མི་ `iroha_cli app sns settlement ledger` གིས་ བཏང་ཡོདཔ། | Bundle hash ↔ tx ཧ་ཤི་ གསལ་སྡུད། |
+| མཐུན་སྒྲིལ་ལས་ཀ | ཉིན་བསྟར་ཁྱད་པར་+ ཟླ་རིམ་གསལ་བཤད། I18NI000000012X གི་འོག་ལུ་ཨིན། | Markdown + JSON ཟས་བཅུད་འཇལ། |
+| དངུལ་ལོག་ཡིག་ཆའི་ཡིག་ཆ། | གཞུང་སྐྱོང་གིས་ ཆ་འཇོག་འབད་མི་ `/settlements/{id}/refund` བརྒྱུད་དེ་ དངུལ་ལོག་སྤྲོད་ཡོདཔ། | I18NI000000014X + ཤོག་འཛིན་། |
 
-CI helpers mirror these flows:
+CI རོགས་རམ་འབད་མི་ཚུ་གིས་ འ་ནི་རྒྱུན་འགྲུལ་ཚུ་ མཐོང་སྣང་བཟོཝ་ཨིན།
 
-```bash
-# Quote & ledger projection
-iroha_cli app sns settlement quote --selector makoto.sora --term-years 1 --pricing hot-tier-a
+I18NF0000002X
 
-# Emit transfers for automation/pipeline
-iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05/makoto.sora.json
+## བལྟ་རྟོག་དང་སྙན་ཞུ།
 
-# Produce a reconciliation statement
-iroha_cli app sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
-```
+- དྲ་རྒྱའི་དོན་ལུ་ I18NI0000015X དང་ དངུལ་ཁང་གི་དོན་ལུ་ vs གི་དོན་ལུ་ཨིན།
+  བཀག་འཛིན་བསྡོམས་རྩིས་དང་ བརྡ་སྤྲོད་ཀྱི་གླ་ཆ་ གྱལ་གཏིང་ཚད་ དེ་ལས་ དངུལ་ལོག་སྤྲོད་ནིའི་ བར་ཆད་ཚུ་ཨིན།
+- ཉེན་བརྡ་: `dashboards/alerts/sns_payment_settlement_rules.yml` བལྟ་རྟོག་པ་ཚུ་ བསྒུགས་བཞག་ཡོདཔ།
+  ལོ་ཚད་དང་ མཐུན་སྒྲིག་འཐུས་ཤོར་ དེ་ལས་ ལེཌ་ཇར་ཌིཕཊ་ཚུ་ཨིན།
+- spescify: ཉིན་བསྟར་གྱི་ཟས་འཇུ་མི་ (I18NI0000017X) ཟླ་རིམ་ནང་ བཤུད་སྒྲིལ་འབད་ནི།
+  སྙན་ཞུ་ (`settlement_YYYYMM.md`) དེ་ གིཊ་དང་ གཉིས་ཆ་ར་ལུ་ སྐྱེལ་བཙུགས་འབད་ཡོདཔ་ཨིན།
+  གཞུང་སྐྱོང་དངོས་པོའི་ཚོང་ཁང་ (`s3://sora-governance/sns/settlements/<period>/`).
+- གཞུང་ལམ་གྱི་སྦུང་ཚན་ཚུ་གིས་ བརྡ་བཀོད་ཚུ་ བསྡུ་སྒྲིག་དང་ སི་ཨེལ་ཨའི་ དྲན་ཐོ་ དེ་ལས་ ཚོགས་སྡེ་གི་ཧེ་མའི་ ཆ་འཇོག་ཚུ།
+  མཚན་རྟགས་བཀོད་ཡོདཔ།
 
-## Observability & reporting
+## བཤུད་བརྙན་ཐོ་ཡིག་།
 
-- Dashboards: `dashboards/grafana/sns_payment_settlement.json` for treasury vs
-  steward totals, referral payouts, queue depth, and refund latency.
-- Alerts: `dashboards/alerts/sns_payment_settlement_rules.yml` monitors pending
-  age, reconciliation failures, and ledger drift.
-- Statements: daily digests (`settlement_YYYYMMDD.{json,md}`) roll into monthly
-  reports (`settlement_YYYYMM.md`) which are uploaded both to Git and the
-  governance object store (`s3://sora-governance/sns/settlements/<period>/`).
-- Governance packets bundle dashboards, CLI logs, and approvals before council
-  sign-off.
+༡ བཟོ་དཔེ་ + རྩིས་ཁྲ་གྲོགས་རམ་པ་ཚུ་དང་ གནས་རིམ་གྱི་བཱན་ཌལ་ཅིག་བཟུང་།
+2. བང་རིམ་ + རྩོམ་པ་ གློག་ཐག་བརྡ་རྟགས་དང་ ལུས་སྦྱོང་དང་མཉམ་དུ་ `sns_settlementd` འགོ་བཙུགས།
+   ཉེན་བརྡ་བརྟག་དཔྱད་ (I18NI0000021X).
+༣ ཟླ་རིམ་གྱི་གསལ་བསྒྲགས་ཊེམ་པེལེཊི་སྤྲོད་མི་ གྲོགས་རམ་པ་ དང་ གསལ་བཤད་ཊེམ་པེལེཊི་ཚུ་ བཀྲམ་སྤེལ་འབད་ནི། མེ་ལོང་ནང་གི་ ཅ་རྙིང་ཚུ་
+   I18NI0000002X.
+༤ མཉམ་འབྲེལ་པ་ བསྐྱར་སྦྱོང་ (གཞིས་ཆགས་ཟླཝ་ཆ་ཚང་) འབད་དེ་ འཛིན་བཟུང་འབད།
+   གཞུང་སྐྱོང་ཚོགས་རྒྱན་ SN-5 མཇུག་བསྡུའི་རྟགས་བཀོད།
 
-## Rollout checklist
-
-1. Prototype quote + ledger helpers and capture a staging bundle.
-2. Launch `sns_settlementd` with queue + writer, wire dashboards, and exercise
-   alert tests (`promtool test rules ...`).
-3. Deliver refund helper plus monthly statement template; mirror artefacts into
-   `docs/portal/docs/sns/reports/`.
-4. Run a partner rehearsal (full month of settlements) and capture the
-   governance vote marking SN-5 as complete.
-
-Refer back to the source document for the exact schema definitions, open
-questions, and future amendments.
+ལས་རིམ་ངེས་འཛིན་ངེས་ཏིག་ཚུ་གི་དོན་ལུ་ འབྱུང་ཁུངས་ཡིག་ཆ་ལུ་ལོག་གཏང་ ཁ་ཕྱེ་ ཁ་ཕྱེ་།
+དྲི་བ་དང་མ་འོངས་པའི་བཅོས་སྒྱུར་ནི།

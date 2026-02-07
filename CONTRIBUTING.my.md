@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 71baf5d038cbe6518fd294fcc1b279dff8aaf092e4a83f6159b699a378e51467
 source_last_modified: "2025-12-29T18:16:34.772429+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Contributing Guide
+# နောင်တော်ကြီး လမ်းညွှန်
 
-Thank you for taking the time to contribute to Iroha 2!
+Iroha 2 သို့ အချိန်ပေး၍ ပံ့ပိုးပေးသည့်အတွက် ကျေးဇူးတင်ပါသည်။
 
-Please read this guide to learn how you can contribute and which guidelines we expect you to follow. This includes the guidelines about code and documentation as well as our conventions regarding git workflow.
+သင်မည်ကဲ့သို့ ပါဝင်ကူညီနိုင်ပုံနှင့် မည်သည့်လမ်းညွှန်ချက်များကို သင်လိုက်နာရန် ကျွန်ုပ်တို့ မျှော်လင့်ထားကြောင်း လေ့လာရန် ဤလမ်းညွှန်ချက်ကို ဖတ်ရှုပါ။ ၎င်းတွင် ကုဒ်နှင့် စာရွက်စာတမ်းများဆိုင်ရာ လမ်းညွှန်ချက်များအပြင် git အလုပ်အသွားအလာနှင့်ပတ်သက်၍ ကျွန်ုပ်တို့၏သဘောတူညီချက်များ ပါဝင်သည်။
 
-Reading these guidelines will save you time later.
+ဤလမ်းညွှန်ချက်များကိုဖတ်ခြင်းသည် သင့်အား အချိန်ကုန်သက်သာစေမည်ဖြစ်သည်။
 
-## How Can I Contribute?
+## ဘယ်လိုပံ့ပိုးပေးနိုင်မလဲ။
 
-There are a lot of ways you could contribute to our project:
+ကျွန်ုပ်တို့၏ပရောဂျက်တွင် သင်ပါဝင်ကူညီနိုင်သည့် နည်းလမ်းများစွာရှိပါသည်။
 
-- Report [bugs](#reporting-bugs) and [vulnerabilities](#reporting-vulnerabilities)
-- [Suggest improvements](#suggesting-improvements) and implement them
-- [Ask questions](#asking-questions) and engage with the community
+- သတင်းပို့ရန် [bug](#reporting-bugs) နှင့် [vulnerabilities](#reporting-vulnerabilities)
+- [တိုးတက်မှုများကို အကြံပြုခြင်း](#suggesting-improvements) နှင့် ၎င်းတို့ကို အကောင်အထည်ဖော်ပါ။
+- [မေးခွန်းများမေးပါ](#asking-questions) အသိုင်းအဝိုင်းနှင့် ထိတွေ့ဆက်ဆံပါ။
 
-New to our project? [Make your first contribution](#your-first-code-contribution)!
+ကျွန်ုပ်တို့၏ ပရောဂျက်အတွက် အသစ်လား။ [သင်၏ပထမဆုံးအလှူငွေကိုလုပ်ပါ](#your-first-code-contribution)။
 
 ### TL;DR
 
-- Find [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
-- Fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Fix your issue of choice.
-- Ensure you follow our [style guides](#style-guides) for code and documentation.
-- Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
-  - Note: Tests that exercise the IVM executor will automatically synthesize a minimal, deterministic executor bytecode if `defaults/executor.to` is not present. No pre-step is required to run tests. To generate the canonical bytecode for parity, you can run:
+- [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240) ကိုရှာပါ။
+- ခက်ရင်း [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main)။
+- သင်၏ရွေးချယ်မှုပြဿနာကိုဖြေရှင်းပါ။
+- ကုဒ်နှင့် စာရွက်စာတမ်းများအတွက် ကျွန်ုပ်တို့၏ [စတိုင်လမ်းညွှန်များ] (#style-guides) ကို သေချာလိုက်နာပါ။
+- [စမ်းသပ်မှုများ](https://doc.rust-lang.org/cargo/commands/cargo-test.html) ရေးပါ။ ၎င်းတို့အားလုံး (`cargo test --workspace`) ကျော်သွားကြောင်း သေချာပါစေ။ SM cryptography stack ကိုထိပါက၊ စိတ်ကြိုက်ရွေးချယ်နိုင်သော fuzz/property harness ကိုလုပ်ဆောင်ရန် `cargo test -p iroha_crypto --features "sm sm_proptest"` ကိုဖွင့်ပါ။
+  - မှတ်ချက်- IVM ကို ကျင့်သုံးသော စမ်းသပ်မှုများသည် I18NI000000117X မရှိပါက အနည်းငယ်မျှသာ၊ အဆုံးအဖြတ်ပေးသည့် executor bytecode ကို အလိုအလျောက် ပေါင်းစပ်ပေးပါမည်။ စမ်းသပ်မှုများ လုပ်ဆောင်ရန် အကြိုအဆင့် မလိုအပ်ပါ။ ညီမျှမှုအတွက် canonical bytecode ကိုထုတ်လုပ်ရန်၊ သင်သည် လုပ်ဆောင်နိုင်သည်-
     - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
-- If you change derive/proc-macro crates, run the trybuild UI suites via
-  `make check-proc-macro-ui` (or
-  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh
-  `.stderr` fixtures when diagnostics change to keep messages stable.
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute fmt/clippy/build/test with `--locked` plus `swift test`; expect `cargo test --workspace` to take hours and use `--skip-tests` only for quick local loops. See `docs/source/dev_workflow.md` for the full runbook.
-- Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs on touched crates, or new public items without doc comments (the guard refreshes `docs/source/agents/missing_docs_inventory.{json,md}` via `scripts/inventory_missing_docs.py`). Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and metrics/dashboards. Keep TODO enforcement via `make check-todo-guard` so TODO markers are not dropped without accompanying docs/tests. `make check-env-config-surface` regenerates the env-toggle inventory and now fails when new **production** env shims appear relative to `AGENTS_BASE_REF`; set `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional additions in the migration tracker. `make check-serde-guard` refreshes the serde inventory and fails on stale snapshots or new production `serde`/`serde_json` hits; set `SERDE_GUARD_ALLOW=1` only with an approved migration plan. Keep large deferrals visible via TODO breadcrumbs and follow-up tickets instead of deferring silently. Run `make check-std-only` to catch `no_std`/`wasm32` cfgs and `make check-status-sync` to ensure `roadmap.md` open items remain open-only and that roadmap/status changes land together; set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`. For a single invocation, use `make agents-preflight` to run all guardrails together.
-- Run local serialization guards before pushing: `make guards`.
-  - This denies direct `serde_json` in production code, disallows new direct serde deps outside allowlist, and prevents ad‑hoc AoS/NCB helpers outside `crates/norito`.
-- Optionally dry-run Norito feature matrix locally: `make norito-matrix` (uses a fast subset).
-  - For full coverage, run `scripts/run_norito_feature_matrix.sh` without `--fast`.
-  - To include a downstream smoke per combo (default crate `iroha_data_model`): `make norito-matrix-downstream` or `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
-- For proc-macro crates, add a `trybuild` UI harness (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) and commit `.stderr` diagnostics for the failing cases. Keep diagnostics stable and non-panicking; refresh fixtures with `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` and guard them with `cfg(all(feature = "trybuild-tests", not(coverage)))`.
-- Perform pre-commit routine like formatting & artifacts regeneration (see [`pre-commit.sample`](./hooks/pre-commit.sample))
-- With the `upstream` set to track [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, `git push <your-fork>`, and [create a pull request](https://github.com/hyperledger-iroha/iroha/compare) to the `main` branch. Ensure it follows the [pull request guidelines](#pull-request-etiquette).
+- သင်သည် derive/proc-macro သေတ္တာများကို ပြောင်းပါက၊ trybuild UI suites မှတစ်ဆင့် run ပါ။
+  `make check-proc-macro-ui` (သို့မဟုတ်
+  `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) နှင့် refresh
+  မက်ဆေ့ဂျ်များကို တည်ငြိမ်စေရန်အတွက် အမှားရှာဖွေမှုများ ပြောင်းလဲသောအခါ `.stderr` တပ်ဆင်မှုများ။
+- `make dev-workflow` (`scripts/dev_workflow.sh` ပတ်ပတ်လည်တွင် ပတ်ထားသော) ကိုဖွင့်၍ `--locked` နှင့် `swift test` ဖြင့် fmt/clippy/build/test ကိုလုပ်ဆောင်ရန်၊ `cargo test --workspace` သည် နာရီများကြာပြီး `--skip-tests` ကို အမြန်စက်တွင်းလှည့်ကွက်များအတွက်သာ အသုံးပြုရန် မျှော်လင့်ပါသည်။ Runbook အပြည့်အစုံအတွက် `docs/source/dev_workflow.md` ကိုကြည့်ပါ။
+- `make check-agents-guardrails` နှင့် `Cargo.lock` တည်းဖြတ်မှုများနှင့် အလုပ်ခွင်သေတ္တာအသစ်များကို ပိတ်ဆို့ရန်၊ `make check-dependency-discipline` သည် မှီခိုမှုအသစ်များတွင် ပျက်ကွက်စေရန် အထူးတလည်ခွင့်ပြုထားခြင်းမရှိပါက၊ `make check-missing-docs` နှင့် `make check-missing-docs` တွင် ပျောက်ဆုံးနေသော I1018NI0၊ ထိမိသောသေတ္တာများ သို့မဟုတ် doc မှတ်ချက်များမပါဘဲ အများသူငှာအသစ်သောအရာများ (အစောင့်သည် `docs/source/agents/missing_docs_inventory.{json,md}` ကို `scripts/inventory_missing_docs.py` မှတစ်ဆင့် ပြန်လည်စတင်သည်)။ ယူနစ်စမ်းသပ်မှုများကို ရည်ညွှန်းခြင်းမရှိပါက ပြောင်းလဲထားသောလုပ်ဆောင်ချက်များသည် `make check-tests-guard` ကိုထည့်ပါ (`#[cfg(test)]`/`#[test]` လိုင်းအတွင်း သို့မဟုတ် သေတ္တာ `tests/`၊ ရှိပြီးသား လွှမ်းခြုံမှုအရေအတွက်များ) နှင့် `make check-docs-tests-metrics` နှင့် စမ်းသပ်ထားသော ပြောင်းလဲမှုများ၊ လမ်းများနှင့် တွဲလုပ်မည်၊ မက်ထရစ်များ/ဒိုင်ခွက်များ။ ပူးတွဲပါစာရွက်စာတမ်းများ/စစ်ဆေးမှုများမပါဘဲ TODO အမှတ်အသားများကို `make check-todo-guard` မှတစ်ဆင့် TODO ပြဋ္ဌာန်းချက်ကို ဆက်လက်ထားရှိပါ။ `make check-env-config-surface` သည် env-toggle inventory ကို ပြန်လည်ထုတ်ပေးပြီး **ထုတ်လုပ်ရေး** env shims အသစ်များ `AGENTS_BASE_REF` နှင့် ဆက်စပ်နေချိန်တွင် ယခုပျက်ကွက်ပါသည်။ ရွှေ့ပြောင်းခြင်းခြေရာခံကိရိယာတွင် ရည်ရွယ်ချက်ရှိရှိ ထပ်လောင်းထည့်မှုများကို မှတ်တမ်းတင်ပြီးမှသာ `ENV_CONFIG_GUARD_ALLOW=1` ကို သတ်မှတ်ပါ။ `make check-serde-guard` သည် serde စာရင်းကို ပြန်လည်ဆန်းသစ်စေပြီး ပျက်ယွင်းနေသော လျှပ်တစ်ပြက်ရိုက်ချက်များ သို့မဟုတ် ထုတ်လုပ်မှုအသစ် `serde`/`serde_json` hits များတွင် မအောင်မြင်ပါ။ အတည်ပြုထားသော ရွှေ့ပြောင်းနေထိုင်မှု အစီအစဉ်ဖြင့်သာ `SERDE_GUARD_ALLOW=1` ကို သတ်မှတ်ပါ။ တိတ်တဆိတ် ရွှေ့ဆိုင်းမည့်အစား TODO ပေါင်မုန့်နှင့် နောက်ဆက်တွဲ လက်မှတ်များမှတစ်ဆင့် မြင်နိုင်သော ကြီးမားသော ရွှေ့ဆိုင်းမှုများကို ထားပါ။ `roadmap.md` ဖွင့်ထားသည့်အရာများသည် ပွင့်လင်းမြင်သာစွာရှိနေပြီး လမ်းပြမြေပုံ/အခြေအနေသည် တူညီကြောင်းသေချာစေရန်အတွက် `make check-std-only` ကိုဖွင့်ပြီး `no_std`/`wasm32` cfgs နှင့် `make check-status-sync`။ `AGENTS_BASE_REF` ကို ပင်ထိုးပြီးနောက် ရှားပါးသော အခြေအနေအတွက်သာ typo fixes အတွက်သာ `STATUS_SYNC_ALLOW_UNPAIRED=1` ကို သတ်မှတ်ပါ။ ခေါ်ဆိုမှုတစ်ခုတည်းအတွက်၊ အကာအရံအားလုံးကို အတူတကွလုပ်ဆောင်ရန် `make agents-preflight` ကို အသုံးပြုပါ။
+- `make guards` ကို မတွန်းမီ ဒေသတွင်း အမှတ်စဉ် အစောင့်များကို ဖွင့်ပါ။
+  - ၎င်းသည် ထုတ်လုပ်မှုကုဒ်တွင် တိုက်ရိုက် `serde_json` ကို ငြင်းဆိုထားပြီး ခွင့်ပြုစာရင်းပြင်ပတွင် တိုက်ရိုက် serde deps အသစ်များကို ခွင့်မပြုသည့်အပြင် `crates/norito` ပြင်ပတွင် ad-hoc AoS/NCB အထောက်အကူများကို တားဆီးထားသည်။
+- ရွေးချယ်နိုင်သည် Norito လုပ်ဆောင်ချက် matrix- `make norito-matrix` (အမြန်အမျိုးအစားခွဲကို အသုံးပြုသည်)။
+  - အပြည့်အဝလွှမ်းခြုံမှုအတွက်၊ `--fast` မပါဘဲ `scripts/run_norito_feature_matrix.sh` ကိုဖွင့်ပါ။
+  - ပေါင်းစပ်မှုတစ်ခုစီတွင် ရေအောက်မီးခိုးတစ်ခုပါဝင်ရန် (မူလသေတ္တာ `iroha_data_model`): `make norito-matrix-downstream` သို့မဟုတ် `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`။
+- ပရိုစီ-မက်ခရိုသေတ္တာများအတွက်၊ `trybuild` UI ကြိုး (`tests/ui.rs` + `tests/ui/pass`/`tests/ui/fail`) ထည့်ပြီး `.stderr` ရောဂါရှာဖွေမှုများကို ပြုလုပ်ပါ။ ရောဂါရှာဖွေမှုများကို တည်ငြိမ်စေပြီး ထိတ်လန့်ခြင်းမရှိစေပါ။ `TRYBUILD=overwrite cargo test -p <crate> -F trybuild-tests` ဖြင့် ပြင်ဆင်ပြီး `cfg(all(feature = "trybuild-tests", not(coverage)))` ဖြင့် ကာကွယ်ပါ။
+- ဖော်မတ်ချခြင်းနှင့် ရှေးဟောင်းပစ္စည်းများ ပြန်လည်ထုတ်လုပ်ခြင်းကဲ့သို့ အကြိုလုပ်ဆောင်မှု ပုံမှန်အတိုင်းလုပ်ဆောင်ပါ ( [`pre-commit.sample`](./hooks/pre-commit.sample ကိုကြည့်ပါ))
+- `upstream` ကို ခြေရာခံရန် သတ်မှတ်ထားသဖြင့် [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha), `git pull -r upstream main`, `git commit -s`, I1018X, Pull တောင်းဆိုချက်](https://github.com/hyperledger-iroha/iroha/compare) `main` ဌာနခွဲသို့။ ၎င်းသည် [ဆွဲရန်တောင်းဆိုမှုလမ်းညွှန်ချက်များ](#pull-request-etiquette)ကို လိုက်နာကြောင်း သေချာပါစေ။
 
-### AGENTS workflow quickstart
+### Agents အလုပ်အသွားအလာ အမြန်စတင်သည်။
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `docs/source/dev_workflow.md`). It wraps `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (tests can take several hours), and `swift test`.
-- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations; rerun the full sequence before opening a pull request.
-- Guardrails: avoid touching `Cargo.lock`, adding new workspace members, introducing new dependencies, adding new `#[allow(missing_docs)]` shims, omitting crate-level docs, skipping tests when changing functions, dropping TODO markers without docs/tests, or reintroducing `no_std`/`wasm32` cfgs without approval. Run `make check-agents-guardrails` (or `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) plus `make check-dependency-discipline`, `make check-missing-docs` (refreshes `docs/source/agents/missing_docs_inventory.{json,md}`), `make check-tests-guard` (fails when production functions change without unit-test evidence—either tests change in the diff or existing tests must reference the function), `make check-docs-tests-metrics` (fails when roadmap changes lack docs/tests/metrics updates), `make check-todo-guard`, `make check-env-config-surface` (fails on stale inventories or new production env toggles; override with `ENV_CONFIG_GUARD_ALLOW=1` only after updating docs), and `make check-serde-guard` (fails on stale serde inventories or new production serde hits; override with `SERDE_GUARD_ALLOW=1` only with an approved migration plan) locally for early signal, `make check-std-only` for the std-only guard, and keep `roadmap.md`/`status.md` in sync with `make check-status-sync` (set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`). Use `make agents-preflight` if you want a single command to run all guards before opening a PR.
+- `make dev-workflow` ကိုဖွင့်ပါ (`scripts/dev_workflow.sh`၊ `docs/source/dev_workflow.md` တွင် မှတ်တမ်းတင်ထားသည်) ၎င်းသည် `cargo fmt --all`၊ `cargo clippy --workspace --all-targets --locked -- -D warnings`၊ `cargo build/test --workspace --locked` (စမ်းသပ်မှုများ နာရီပေါင်းများစွာ ကြာနိုင်သည်) နှင့် `swift test` တို့ ပါဝင်သည်။
+- ပိုမိုမြန်ဆန်စွာ ထပ်လုပ်ရန်အတွက် `scripts/dev_workflow.sh --skip-tests` သို့မဟုတ် `--skip-swift` ကိုသုံးပါ။ ဆွဲတင်တောင်းဆိုမှုကို မဖွင့်မီ စီးရီးအပြည့်အစုံကို ပြန်ဖွင့်ပါ။
+- Guardrails- `Cargo.lock` ကိုထိခြင်း၊ အလုပ်ခွင်အဖွဲ့ဝင်အသစ်များထည့်ခြင်း၊ မှီခိုမှုအသစ်များမိတ်ဆက်ခြင်း၊ `#[allow(missing_docs)]` shims အသစ်များထည့်ခြင်း၊ crate-level docs များကို ချန်လှပ်ထားခြင်း၊ လုပ်ဆောင်ချက်များကိုပြောင်းလဲသည့်အခါ စမ်းသပ်မှုများကို ကျော်သွားခြင်း၊ docs/tests များမပါဘဲ TODO အမှတ်အသားများကို ချပေးခြင်း သို့မဟုတ် ပြန်လည်စတင်ပါ။ ခွင့်ပြုချက်မရှိဘဲ `no_std`/`wasm32` cfgs။ `make check-agents-guardrails` (သို့မဟုတ် `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) နှင့် `make check-dependency-discipline`၊ `make check-missing-docs` (`docs/source/agents/missing_docs_inventory.{json,md}` ကို ပြန်လည်စတင်သည်)၊ `make check-tests-guard` ကိုဖွင့်ပါ — (လက်ရှိစမ်းသပ်မှုဆိုင်ရာ အထောက်အထားများ ပြောင်းလဲခြင်းမရှိဘဲ ယူနစ်တွင် ကွဲလွဲနေပါက စမ်းသပ်မှုများ မအောင်မြင်ပါ လုပ်ဆောင်ချက်ကို ကိုးကားပါ)၊ `make check-docs-tests-metrics` (docs/tests/metrics အပ်ဒိတ်များမရှိခြင်း)၊ `make check-todo-guard`၊ `make check-env-config-surface` (ကျန်ရှိသောစာရင်းများတွင် ပျက်ကွက်ခြင်း သို့မဟုတ် ထုတ်လုပ်မှုအသစ် env toggles များ၊ I18NI0000000 ဖြင့်သာ ကျော်လွန်သည်)၊ နှင့် 22 ပြီးနောက် `make check-serde-guard` (ဟောင်းနွမ်းသော serde သိုလှောင်မှုများ သို့မဟုတ် ထုတ်လုပ်မှု serde hits အသစ်များကြောင့် ပျက်ကွက်သည်; `SERDE_GUARD_ALLOW=1` ဖြင့်သာ အတည်ပြုထားသော ရွှေ့ပြောင်းခြင်းအစီအစဉ်ဖြင့်သာ ထပ်ရေးပါ) အစောပိုင်းအချက်ပြမှုအတွက် စက်တွင်းရှိ၊ `make check-std-only`၊ std-only guard အတွက်၊ သိမ်းဆည်းထားပါ `roadmap.md`/`status.md` သည် `make check-status-sync` နှင့် ထပ်တူပြုခြင်း (`STATUS_SYNC_ALLOW_UNPAIRED=1` ကို `AGENTS_BASE_REF` ပင်ထိုးပြီးနောက် ရှားပါးသော အခြေအနေအတွက်သာ typo ပြုပြင်ခြင်းများအတွက်သာ သတ်မှတ်ထားသည်)။ PR ကိုမဖွင့်မီ အစောင့်အားလုံးကို run ရန် တစ်ခုတည်းသော command တစ်ခုတည်းကို လိုချင်ပါက `make agents-preflight` ကို အသုံးပြုပါ။
 
-### Reporting Bugs
+### အမှားအယွင်းများကို သတင်းပို့ခြင်း။
 
-A *bug* is an error, design flaw, failure or fault in Iroha that causes it to produce an incorrect, unexpected, or unintended result or behaviour.
+*bug* သည် Iroha တွင် အမှားအယွင်း၊ ဒီဇိုင်းချို့ယွင်းချက်၊ ချို့ယွင်းချက် သို့မဟုတ် ချို့ယွင်းချက်တစ်ခုဖြစ်ပြီး ၎င်းသည် မှားယွင်းသော၊ မမျှော်လင့်ထားသော သို့မဟုတ် မရည်ရွယ်ဘဲ ရလဒ် သို့မဟုတ် အပြုအမူကို ဖြစ်ပေါ်စေသည်။
 
-We track Iroha bugs via [GitHub Issues](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) labeled with the `Bug` tag.
+ကျွန်ုပ်တို့သည် I18NI000000212X တဂ်ဖြင့် တံဆိပ်တပ်ထားသော [GitHub Issues](https://github.com/hyperledger-iroha/iroha/issues?q=is%3Aopen+is%3Aissue+label%3ABug) မှတစ်ဆင့် Iroha ကို ခြေရာခံပါသည်။
 
-When you create a new issue, there is a template for you to fill in. Here's the checklist of what you should do when you are reporting bugs:
-- [ ] Add the `Bug` tag
-- [ ] Explain the issue
-- [ ] Provide a minimum working example
-- [ ] Attach a screenshot
+ပြဿနာအသစ်တစ်ခုကို ဖန်တီးသောအခါတွင်၊ ဖြည့်စွက်ရန် နမူနာပုံစံတစ်ခုရှိပါသည်။ ဤအရာသည် ချွတ်ယွင်းချက်သတင်းပို့သည့်အခါ သင်လုပ်ဆောင်ရမည့်အရာများ၏ စစ်ဆေးစာရင်းဖြစ်သည်။
+- [ ] `Bug` tag ကိုထည့်ပါ။
+- [ ] ပြဿနာကို ရှင်းပြပါ။
+- [ ] အနည်းဆုံး အလုပ်နမူနာတစ်ခုပေးပါ။
+- [ ] ဖန်သားပြင်ဓာတ်ပုံကို ပူးတွဲပါ။
 
-<details> <summary>Minimum working example</summary>
+<details> <summary>အနိမ့်ဆုံး အလုပ်နမူနာ</summary>
 
-For each bug, you should provide a [minimum working example](https://en.wikipedia.org/wiki/Minimal_working_example). For example:
+ချွတ်ယွင်းချက်တစ်ခုစီအတွက်၊ သင်သည် [အနိမ့်ဆုံး လုပ်ဆောင်နိုင်သော ဥပမာ](https://en.wikipedia.org/wiki/Minimal_working_example) ကို ပေးသင့်သည်။ ဥပမာ-
 
 ```
 # Minting negative Assets with value spec `Numeric`.
@@ -98,30 +99,30 @@ not to be able to mint negative values
 </details>
 
 ---
-**Note:** Issues such as outdated documentation, insufficient documentation, or feature requests should use the `Documentation` or `Enhancement` labels. They are not bugs.
+**မှတ်ချက်-** ခေတ်မမီတော့သော စာရွက်စာတမ်းများ၊ စာရွက်စာတမ်းမလုံလောက်ခြင်း သို့မဟုတ် လုပ်ဆောင်ချက်တောင်းဆိုချက်များကဲ့သို့သော ပြဿနာများသည် `Documentation` သို့မဟုတ် `Enhancement` အညွှန်းများကို အသုံးပြုသင့်သည်။ ၎င်းတို့သည် ပိုးကောင်များမဟုတ်ပါ။
 
 ---
 
-### Reporting Vulnerabilities
+### အားနည်းချက်များကို အစီရင်ခံခြင်း။
 
-While we are proactive in preventing security problems, it is possible that you might come across a security vulnerability before we do.
+ကျွန်ုပ်တို့သည် လုံခြုံရေးပြဿနာများကို ကြိုတင်ကာကွယ်ရာတွင် တက်ကြွစွာလုပ်ဆောင်နေသော်လည်း ကျွန်ုပ်တို့မလုပ်ဆောင်မီတွင် လုံခြုံရေးဆိုင်ရာ အားနည်းချက်တစ်ခုကို သင်တွေ့လာရနိုင်သည်။
 
-- Before the First Major Release (2.0) all vulnerabilities are considered bugs, so feel free to submit them as bugs [following the instructions above](#reporting-bugs).
-- After the First Major Release, use our [bug bounty program](https://hackerone.com/hyperledger) to submit vulnerabilities and get your reward.
+- First Major Release (2.0) မတိုင်မီတွင် အားနည်းချက်များအားလုံးကို bug များအဖြစ် ယူဆထားသောကြောင့် ၎င်းတို့အား bugs အဖြစ် [အထက်ပါညွှန်ကြားချက်များအတိုင်း](#reporting-bugs) အဖြစ် လွတ်လပ်စွာ တင်ပြနိုင်ပါသည်။
+- ပထမဆုံး Major Release ပြီးနောက်၊ အားနည်းချက်များကို တင်ပြပြီး သင်၏ဆုလာဘ်ကို ရယူရန် ကျွန်ုပ်တို့၏ [bug bounty program] (https://hackerone.com/hyperledger) ကို အသုံးပြုပါ။
 
-:exclamation: To minimize the damage caused by an unpatched security vulnerability, you should disclose the vulnerability directly to Hyperledger as soon as possible and **avoid disclosing the same vulnerability publicly** for a reasonable period of time.
+:exclamation- ပြုပြင်မွမ်းမံထားသော လုံခြုံရေး အားနည်းချက်ကြောင့် ပျက်စီးဆုံးရှုံးမှုကို လျှော့ချရန်၊ အားနည်းချက်ကို Hyperledger သို့ အမြန်ဆုံး ထုတ်ဖော်သင့်ပြီး **တူညီသော အားနည်းချက်ကို လူသိရှင်ကြား ထုတ်ပြန်ခြင်းမှ ရှောင်ကြဉ်ပါ** အချိန်ကာလတစ်ခုအထိ ရှောင်ကျဉ်ပါ။
 
-If you have any questions regarding our handling of security vulnerabilities, please feel free to contact any of the currently active maintainers in Rocket.Chat private messages.
+ကျွန်ုပ်တို့၏ လုံခြုံရေးအားနည်းချက်များကို ကိုင်တွယ်ဖြေရှင်းခြင်းနှင့်ပတ်သက်၍ သင့်တွင်မေးခွန်းများရှိပါက Rocket.Chat သီးသန့်မက်ဆေ့ချ်များတွင် လက်ရှိအသုံးပြုနေသော ထိန်းသိမ်းသူများထံ ဆက်သွယ်နိုင်ပါသည်။
 
-### Suggesting Improvements
+### တိုးတက်မှုများကို အကြံပြုခြင်း။
 
-Create [an issue](https://github.com/hyperledger-iroha/iroha/issues/new) on GitHub with the appropriate tags (`Optimization`, `Enhancement`) and describe the improvement you are suggesting. You may leave this idea for us or someone else to develop, or you may implement it yourself.
+သင့်လျော်သောတဂ်များ (`Optimization`၊ `Enhancement`) ဖြင့် GitHub တွင် [ပြဿနာတစ်ခု](https://github.com/hyperledger-iroha/iroha/issues/new) ဖန်တီးပြီး သင်အကြံပြုနေသော တိုးတက်မှုကို ဖော်ပြပါ။ သင်သည် ဤအကြံဉာဏ်ကို ကျွန်ုပ်တို့ သို့မဟုတ် အခြားသူတစ်ဦးဦးအတွက် ချန်ထားခဲ့နိုင်သည်၊ သို့မဟုတ် သင်ကိုယ်တိုင် အကောင်အထည်ဖော်နိုင်သည်။
 
-If you intend to implement the suggestion yourself, do the following:
+အကြံပြုချက်ကို သင်ကိုယ်တိုင် အကောင်အထည်ဖော်ရန် ရည်ရွယ်ထားပါက အောက်ပါတို့ကို လုပ်ဆောင်ပါ။
 
-1. Assign the issue you created to yourself **before** you start working on it.
-2. Work on the feature you suggested and follow our [guidelines for code and documentation](#style-guides).
-3. When you are ready to open a pull request, make sure you follow the [pull request guidelines](#pull-request-etiquette) and mark it as implementing the previously created issue:
+1. သင်စတင်လုပ်ဆောင်ခြင်းမပြုမီ ** သင်ကိုယ်တိုင်ဖန်တီးထားသောပြဿနာကို တာဝန်ပေးပါ။
+2. သင်အကြံပြုထားသည့် အင်္ဂါရပ်ကို လုပ်ဆောင်ပြီး ကျွန်ုပ်တို့၏ [ကုဒ်နှင့် စာရွက်စာတမ်းများအတွက် လမ်းညွှန်ချက်များ](#style-guides) ကို လိုက်နာပါ။
+3. ဆွဲယူတောင်းဆိုချက်ကို ဖွင့်ရန် အသင့်ဖြစ်သောအခါ၊ သင်သည် [ဆွဲရန် တောင်းဆိုချက်လမ်းညွှန်ချက်များ](#pull-request-etiquette) ကို လိုက်နာကြောင်း သေချာစေပြီး ၎င်းအား ယခင်ဖန်တီးထားသော ပြဿနာကို အကောင်အထည်ဖော်ခြင်းအဖြစ် အမှတ်အသားပြုပါ။
 
    ```
    feat: Description of the feature
@@ -131,157 +132,153 @@ If you intend to implement the suggestion yourself, do the following:
    Closes #1234
    ```
 
-4. If your change requires an API change, use the `api-changes` tag.
+4. သင့်ပြောင်းလဲမှုသည် API ပြောင်းလဲမှုတစ်ခု လိုအပ်ပါက၊ `api-changes` တဂ်ကို အသုံးပြုပါ။
 
-   **Note:** features that require API changes may take longer to implement and approve as they require Iroha library makers to update their code.
+   **မှတ်ချက်-** API အပြောင်းအလဲများ လိုအပ်သည့် အင်္ဂါရပ်များသည် ၎င်းတို့၏ကုဒ်ကို အပ်ဒိတ်လုပ်ရန် Iroha စာကြည့်တိုက်ပြုလုပ်သူများ လိုအပ်သောကြောင့် အကောင်အထည်ဖော်ရန်နှင့် အတည်ပြုရန် အချိန်ပိုကြာနိုင်သည်။### မေးခွန်းများမေးခြင်း။
 
-### Asking Questions
+မေးခွန်းသည် ချို့ယွင်းချက်မဟုတ်၊ အင်္ဂါရပ် သို့မဟုတ် ပိုမိုကောင်းမွန်အောင်ပြုလုပ်ရန် တောင်းဆိုသည့် မည်သည့်ဆွေးနွေးမှုမဆိုဖြစ်သည်။
 
-A question is any discussion that is neither a bug nor a feature or optimization request.
+<details> <summary> မေးခွန်းတစ်ခုကို ဘယ်လိုမေးရမလဲ။ </sumary>
 
-<details> <summary> How do I ask a question? </summary>
+သင့်မေးခွန်းများကို [ကျွန်ုပ်တို့၏ လက်ငင်းစာတိုပေးပို့ခြင်းပလပ်ဖောင်းများထဲမှတစ်ခု](#contact) တွင် ဝန်ထမ်းများနှင့် အသိုင်းအဝိုင်းအဖွဲ့ဝင်များက သင့်အား အချိန်မီကူညီနိုင်စေရန် ကျေးဇူးပြု၍ ပို့စ်တင်ပါ။
 
-Please post your questions to [one of our instant messaging platforms](#contact) so that the staff and members of the community could help you in a timely manner.
-
-You, as part of the aforementioned community, should consider helping others too. If you decide to help, please do so in a [respectful manner](CODE_OF_CONDUCT.md).
+အထက်ဖော်ပြပါ အသိုက်အဝန်း၏ တစ်စိတ်တစ်ပိုင်းအနေဖြင့် သင်သည် အခြားသူများကို ကူညီရန်လည်း ထည့်သွင်းစဉ်းစားသင့်သည်။ ကူညီရန် ဆုံးဖြတ်ပါက၊ ကျေးဇူးပြု၍ [လေးစားသောပုံစံ](CODE_OF_CONDUCT.md)။
 
 </details>
 
-## Your First Code Contribution
+## သင်၏ပထမဆုံးကုဒ်ပါဝင်မှု
 
-1. Find a beginner-friendly issue among issues with the [good-first-issue](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) label.
-2. Make sure that no one else is working on the issues you have chosen by checking that it is not assigned to anybody.
-3. Assign the issue to yourself so that others can see that someone is working on it.
-4. Read our [Rust Style Guide](#rust-style-guide) before you start writing code.
-5. When you are ready to commit your changes, read the [pull request guidelines](#pull-request-etiquette).
+1. [good-first-issue](https://github.com/hyperledger-iroha/iroha/labels/good%20first%20issue) တံဆိပ်ပါသည့် ပြဿနာများကြားတွင် စတင်ရန် အဆင်ပြေသော ပြဿနာကို ရှာပါ။
+2. မည်သူ့ကိုမျှ တာဝန်မပေးကြောင်း စစ်ဆေးခြင်းဖြင့် သင်ရွေးချယ်ထားသော ကိစ္စရပ်များတွင် အခြားမည်သူမျှ လုပ်ဆောင်မည်မဟုတ်ကြောင်း သေချာပါစေ။
+3. တစ်စုံတစ်ဦးသည် ၎င်းတွင် လုပ်ဆောင်နေကြောင်း အခြားသူများ သိမြင်နိုင်စေရန် သင့်ကိုယ်သင် တာဝန်ပေးပါ။
+4. ကုဒ်မရေးမီ ကျွန်ုပ်တို့၏ [Rrust Style Guide](#rust-style-guide) ကိုဖတ်ပါ။
+5. သင်၏ပြောင်းလဲမှုများကိုလုပ်ဆောင်ရန်အဆင်သင့်ဖြစ်သောအခါ၊ [ဆွဲရန်တောင်းဆိုမှုလမ်းညွှန်ချက်များ](#pull-request-etiquette) ကိုဖတ်ပါ။
 
-## Pull Request Etiquette
+## တောင်းဆိုမှု ကျင့်ဝတ်ကို ဆွဲထုတ်ပါ။
 
-Please [fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions. When working with **PRs from forks**, check [this manual](https://help.github.com/articles/checking-out-pull-requests-locally).
+ကျေးဇူးပြု၍ [လမ်းခွဲ](https://docs.github.com/en/get-started/quickstart/fork-a-repo) [သိုလှောင်ရာ](https://github.com/hyperledger-iroha/iroha/tree/main) နှင့် [အင်္ဂါရပ်ဌာနခွဲတစ်ခုဖန်တီးပါ](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) သင်၏ပံ့ပိုးကူညီမှုများအတွက်။ Forks မှ **PRs** နှင့်အလုပ်လုပ်သောအခါ၊ [ဤလမ်းညွှန်ချက်](https://help.github.com/articles/checking-out-pull-requests-locally) ကိုစစ်ဆေးပါ။
 
-#### Working on code contribution:
-- Follow the [Rust Style Guide](#rust-style-guide) and the [Documentation Style Guide](#documentation-style-guide).
-- Ensure that the code you've written is covered by tests. If you fixed a bug, please turn the minimum working example that reproduces the bug into a test.
-- When touching derive/proc-macro crates, run `make check-proc-macro-ui` (or
-  filter with `PROC_MACRO_UI_CRATES="crate1 crate2"`) so trybuild UI fixtures
-  stay in sync and diagnostics remain stable.
-- Document new public APIs (crate-level `//!` and `///` on new items), and run
-  `make check-missing-docs` to verify the guardrail. Call out the docs/tests you
-  added in your pull request description.
+#### ကုဒ်ပံ့ပိုးကူညီမှုကို လုပ်ဆောင်နေသည်-
+- [Rrust Style Guide](#rust-style-guide) နှင့် [Documentation Style Guide](#documentation-style-guide) ကို လိုက်နာပါ။
+- သင်ရေးထားသောကုဒ်ကို စစ်ဆေးမှုများဖြင့် အကျုံးဝင်ကြောင်း သေချာပါစေ။ ချွတ်ယွင်းချက်တစ်ခုကို သင်ပြင်ထားပါက၊ ကျေးဇူးပြု၍ ကျေးဇူးပြု၍ ချွတ်ယွင်းချက်မျိုးပွားစေသည့် အနိမ့်ဆုံးအလုပ်နမူနာကို စမ်းသပ်မှုတစ်ခုအဖြစ် ပြောင်းလဲပါ။
+- derive/proc-macro သေတ္တာများကို ထိသောအခါ၊ `make check-proc-macro-ui` ကို run (သို့မဟုတ်
+  `PROC_MACRO_UI_CRATES="crate1 crate2"` ဖြင့် စစ်ထုတ်ခြင်း) ထို့ကြောင့် trybuild UI တပ်ဆင်မှုများ
+  ထပ်တူကျပြီး ရောဂါရှာဖွေမှုများ တည်ငြိမ်နေပါသည်။
+- ပစ္စည်းအသစ်များတွင် အများသူငှာ API အသစ်များ (crate-level `//!` နှင့် `///`) ကို မှတ်တမ်းတင်ပြီး run
+  guardrail ကိုစစ်ဆေးရန် `make check-missing-docs`။ Docs/tests များကို ခေါ်ဆိုပါ။
+  သင်၏ဆွဲထုတ်တောင်းဆိုမှုဖော်ပြချက်တွင် ထည့်သွင်းထားသည်။
 
-#### Committing your work:
-- Follow the [Git Style Guide](#git-workflow).
-- Squash your commits [either before](https://www.git-tower.com/learn/git/faq/git-squash/) or [during the merge](https://rietta.com/blog/github-merge-types/).
-- If during the preparation of your pull request your branch got out of date, rebase it locally with `git pull --rebase upstream main`. Alternatively, you may use the drop-down menu for the `Update branch` button and choose the `Update with rebase` option.
+#### မင်းရဲ့ အလုပ်ကို ကတိတည်တယ် ။
+- [Git Style Guide](#git-workflow) ကို လိုက်နာပါ။
+- သင်၏ကတိကဝတ်များကို [အရင်က](https://www.git-tower.com/learn/git/faq/git-squash/) သို့မဟုတ် [ပေါင်းစည်းစဉ်](https://rietta.com/blog/github-merge-types/)။
+- သင်၏ဆွဲတင်တောင်းဆိုမှုကို ပြင်ဆင်နေစဉ်အတွင်း သင့်ဌာနခွဲသည် ခေတ်နောက်ကျသွားပါက၊ ၎င်းကို ပြည်တွင်းတွင် `git pull --rebase upstream main` ဖြင့် ပြန်လည်အခြေခံပါ။ တစ်နည်းအားဖြင့် သင်သည် `Update branch` ခလုတ်အတွက် drop-down menu ကိုသုံးနိုင်ပြီး `Update with rebase` ရွေးချယ်မှုကို ရွေးချယ်နိုင်သည်။
 
-  In the interest of making this process easier for everyone, try not to have more than a handful of commits for a pull request, and avoid re-using feature branches.
+  လူတိုင်းအတွက် ဤလုပ်ငန်းစဉ်ကို ပိုမိုလွယ်ကူစေရန်အတွက်၊ ဆွဲထုတ်ရန် တောင်းဆိုချက်တစ်ခုအတွက် ကတိကဝတ်လက်တစ်ဆုပ်စာထက် မပိုစေရန်နှင့် အင်္ဂါရပ်အကိုင်းအခက်များကို ပြန်လည်အသုံးပြုခြင်းကို ရှောင်ကြဉ်ပါ။
 
-#### Creating a pull request:
-- Use an appropriate pull request description by following the guidance in the [Pull Request Etiquette](#pull-request-etiquette) section. Avoid deviating from these guidelines if possible.
-- Add an appropriately formatted [pull request title](#pull-request-titles).
-- If you feel like your code isn't ready to merge, but you want the maintainers to look through it, create a draft pull request.
+#### ဆွဲတင်တောင်းဆိုမှုကို ဖန်တီးနေသည်-
+- [Pull Request Etiquette](#pull-request-etiquette) ကဏ္ဍတွင် လမ်းညွှန်ချက်ကို လိုက်နာခြင်းဖြင့် သင့်လျော်သော ဆွဲယူတောင်းဆိုမှု ဖော်ပြချက်ကို အသုံးပြုပါ။ ဖြစ်နိုင်ရင် ဒီလမ်းညွှန်ချက်တွေကို ရှောင်ပါ။
+- သင့်လျော်စွာ ဖော်မတ်လုပ်ထားသည့် [ဆွဲရန် တောင်းဆိုချက်ခေါင်းစဉ်](#pull-request-titles) ထည့်ပါ။
+- သင့်ကုဒ်ကို ပေါင်းစည်းရန် အဆင်သင့်မဖြစ်သေးဟု ခံစားရပါက၊ သို့သော် ထိန်းသိမ်းသူများသည် ၎င်းကို ဖြတ်ကျော်ကြည့်ရှုစေလိုလျှင် မူကြမ်းဆွဲရန် တောင်းဆိုချက်ကို ဖန်တီးပါ။
 
-#### Merging your work:
-- A pull request must pass all automated checks before being merged. At a minimum, the code must be formatted, passing all tests, as well as having no outstanding `clippy` lints.
-- A pull request cannot be merged without two approving reviews from the active maintainers.
-- Each pull request will automatically notify the code owners. An up to date list of current maintainers can be found in [MAINTAINERS.md](MAINTAINERS.md).
+#### သင့်လုပ်ငန်းကို ပေါင်းစည်းခြင်း-
+- ပေါင်းစည်းခြင်းမပြုမီ ဆွဲတင်တောင်းဆိုမှုတစ်ခုသည် အလိုအလျောက်စစ်ဆေးမှုအားလုံးကို ကျော်ဖြတ်ရပါမည်။ အနည်းဆုံး၊ ကုဒ်ကို ဖော်မတ်လုပ်ထားရမည်ဖြစ်ပြီး၊ စမ်းသပ်မှုအားလုံးကို ဖြတ်ကျော်ရမည်ဖြစ်ပြီး၊ ထူးခြားသော `clippy` lint များ မရှိပါ။
+- တက်ကြွသောထိန်းသိမ်းသူများထံမှ အတည်ပြုချက်နှစ်ခုမရရှိဘဲ ဆွဲယူတောင်းဆိုချက်တစ်ခုကို ပေါင်းစည်း၍မရပါ။
+- ဆွဲယူတောင်းဆိုမှုတစ်ခုစီသည် ကုဒ်ပိုင်ရှင်များကို အလိုအလျောက်အကြောင်းကြားပါမည်။ နောက်ဆုံးပေါ် လက်ရှိထိန်းသိမ်းသူစာရင်းကို [MAINTAINERS.md](MAINTAINERS.md) တွင် ရှာတွေ့နိုင်ပါသည်။
 
-#### Review etiquette:
-- Do not resolve a conversation on your own. Let the reviewer make a decision.
-- Acknowledge review comments and engage with the reviewer (agree, disagree, clarify, explain, etc.). Do not ignore comments.
-- For simple code change suggestions, if you apply them directly, you can resolve the conversation.
-- Avoid overwriting your previous commits when pushing new changes. It obfuscates what changed since the last review and forces the reviewer to start from scratch. Commits are squashed before merging automatically.
+#### ပြန်လည်သုံးသပ်ခြင်း ကျင့်ဝတ်-
+- စကားဝိုင်းကို ကိုယ်တိုင်မဖြေရှင်းပါနဲ့။ သုံးသပ်သူ ဆုံးဖြတ်ချက်ချပါစေ။
+- သုံးသပ်ချက်မှတ်ချက်များကို အသိအမှတ်ပြုပြီး ဝေဖန်သုံးသပ်သူနှင့် ထိတွေ့ဆက်ဆံပါ (သဘောတူ၊ သဘောမတူ၊ ရှင်းလင်း၊ ရှင်းပြ၊ စသည်ဖြင့်)။ မှတ်ချက်များကို လျစ်လျူမရှုပါနှင့်။
+- ရိုးရှင်းသောကုဒ်ပြောင်းလဲမှုအကြံပြုချက်များအတွက်၊ ၎င်းတို့ကို တိုက်ရိုက်အသုံးပြုပါက၊ သင်သည် စကားဝိုင်းကို ဖြေရှင်းနိုင်ပါသည်။
+- အပြောင်းအလဲအသစ်များကို တွန်းအားပေးသည့်အခါ သင်၏ယခင်ကတိကဝတ်များကို ထပ်ရေးခြင်းမှ ရှောင်ကြဉ်ပါ။ ၎င်းသည် နောက်ဆုံးသုံးသပ်ချက်မှစ၍ ပြောင်းလဲသွားသည်ကို ရှုပ်ထွေးစေပြီး သုံးသပ်သူကို အစမှစတင်ရန် တွန်းအားပေးသည်။ အလိုအလျောက်ပေါင်းစည်းခြင်းမပြုမီ ကတိကဝတ်များကို ဖြိုခွဲသည်။
 
-### Pull Request Titles
+### ခေါင်းစဉ်များတောင်းဆိုမှုကို ဆွဲထုတ်ပါ။
 
-We parse the titles of all the merged pull requests to generate changelogs. We also check that the title follows the convention via the *`check-PR-title`* check.
+ပြောင်းလဲမှုမှတ်တမ်းများထုတ်လုပ်ရန်အတွက် ပေါင်းစပ်ဆွဲယူတောင်းဆိုချက်အားလုံး၏ ခေါင်းစဉ်များကို ကျွန်ုပ်တို့ ခွဲခြမ်းစိတ်ဖြာပါသည်။ ခေါင်းစဉ်သည် *`check-PR-title`* စစ်ဆေးမှုမှတစ်ဆင့် စည်းဝေးကြီးနှင့် ကိုက်ညီမှုရှိမရှိကိုလည်း စစ်ဆေးပါသည်။
 
-To pass the *`check-PR-title`* check, the pull request title must adhere to the following guidelines:
+*`check-PR-title`* စစ်ဆေးမှုကို ကျော်ဖြတ်ရန်၊ ဆွဲတင်တောင်းဆိုမှုခေါင်းစဉ်သည် အောက်ပါလမ်းညွှန်ချက်များကို လိုက်နာရပါမည်-
 
-<details> <summary> Expand to read the detailed title guidelines</summary>
+<details> <summary> အသေးစိတ်ခေါင်းစဉ်လမ်းညွှန်ချက်များကို ဖတ်ရန် ချဲ့ထွင်ပါ</summary>
 
-1. Follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) format.
+1. [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) ဖော်မတ်ကို လိုက်နာပါ။
 
-2. If the pull request has a single commit, the PR title should be the same as the commit message.
-
-</details>
-
-### Git Workflow
-
-- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) the [repository](https://github.com/hyperledger-iroha/iroha/tree/main) and [create a feature branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository) for your contributions.
-- [Configure the remote](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork) to sync your fork with the [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha/tree/main).
-- Use the [Git Rebase Workflow](https://git-rebase.io/). Avoid using `git pull`. Use `git pull --rebase` instead.
-- Use the provided [git hooks](./hooks/) to ease the development process.
-
-Follow these commit guidelines:
-
-- **Sign-off every commit**. If you don't, [DCO](https://github.com/apps/dco) will not let you merge.
-
-  Use `git commit -s` to automatically add `Signed-off-by: $NAME <$EMAIL>` as the final line of your commit message. Your name and email should be the same as specified in your GitHub account.
-
-  We also encourage you to sign your commits with GPG key using `git commit -sS` ([learn more](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)).
-
-  You may use [the `commit-msg` hook](./hooks/) to automatically sign-off your commits.
-
-- Commit messages must follow [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) and the same naming schema as for [pull request titles](#pull-request-titles). This means:
-  - **Use present tense** ("Add feature", not "Added feature")
-  - **Use imperative mood** ("Deploy to docker..." not "Deploys to docker...")
-- Write a meaningful commit message.
-- Try keeping a commit message short.
-- If you need to have a longer commit message:
-  - Limit the first line of your commit message to 50 characters or less.
-  - The first line of your commit message should contain the summary of the work you've done. If you need more than one line, leave a blank line between each paragraph and describe your changes in the middle. The last line must be the sign-off.
-- If you modify the Schema (check by generating the schema with `kagami schema` and diff), you should make all changes to the schema in a separate commit with the message `[schema]`.
-- Try to stick to one commit per meaningful change.
-  - If you fixed several issues in one PR, give them separate commits.
-  - As mentioned previously, changes to the `schema` and the API should be done in appropriate commits separate from the rest of your work.
-  - Add tests for functionality in the same commit as that functionality.
-
-## Tests and Benchmarks
-
-- To run the source-code based tests, execute [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) in the Iroha root. Note that this is a long process.
-- To run benchmarks, execute [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) from the Iroha root. To help debug benchmark outputs, set the `debug_assertions` environment variable like so: `RUSTFLAGS="--cfg debug_assertions" cargo bench`.
-- If you are working on a particular component, be mindful that when you run `cargo test` in a [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html), it will only run the tests for that workspace, which usually doesn't include any [integration tests](https://www.testingxperts.com/blog/what-is-integration-testing).
-- If you want to test your changes on a minimal network, the provided [`docker-compose.yml`](defaults/docker-compose.yml) creates a network of 4 Iroha peers in docker containers that can be used to test consensus and asset propagation-related logic. We recommend interacting with that network using either [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python), or the included Iroha client CLI.
-- Do not remove failing tests. Even tests that are ignored will be run in our pipeline eventually.
-- If possible, please benchmark your code both before and after making your changes, as a significant performance regression can break existing users' installations.
-
-### Serialization guard checks
-
-Run `make guards` to validate repository policies locally:
-
-- Deny-list direct `serde_json` in production sources (prefer `norito::json`).
-- Forbid direct `serde`/`serde_json` dependencies/imports outside the allowlist.
-- Prevent reintroduction of ad‑hoc AoS/NCB helpers outside `crates/norito`.
-
-### Debugging tests
-
-<details> <summary> Expand to learn how to change the log level or write logs to a JSON.</summary>
-
-If one of your tests is failing, you may want to decrease the maximum logging level. By default, Iroha only logs `INFO` level messages, but retains the ability to produce both `DEBUG` and `TRACE` level logs. This setting can be changed either using the `LOG_LEVEL` environment variable for code-based tests, or using the `/configuration` endpoint on one of the peers in a deployed network.
-
-While logs printed in the `stdout` are sufficient, you may find it more convenient to produce `json`-formatted logs into a separate file and parse them using either [node-bunyan](https://www.npmjs.com/package/bunyan) or [rust-bunyan](https://crates.io/crates/bunyan).
-
-Set the `LOG_FILE_PATH` environment variable to an appropriate location to store the logs and parse them using the above packages.
+2. ဆွဲထုတ်ခြင်းတောင်းဆိုချက်တွင် commit တစ်ခုရှိလျှင် PR ခေါင်းစဉ်သည် commit message နှင့် အတူတူပင်ဖြစ်သင့်သည်။
 
 </details>
 
-### Debugging using tokio console
+### Git အလုပ်အသွားအလာ
 
-<details> <summary> Expand to learn how to compile Iroha with tokio console support.</summary>
+- [Fork](https://docs.github.com/en/get-started/quickstart/fork-a-repo) [သိုလှောင်ရာ](https://github.com/hyperledger-iroha/iroha/tree/main) နှင့် [အင်္ဂါရပ်ဌာနခွဲတစ်ခုဖန်တီးပါ](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository)။
+- [Hyperledger Iroha repository](https://github.com/hyperledger-iroha/iroha/tree/main) နှင့် သင့်ခက်ရင်းကို စင့်ခ်လုပ်ရန် [အဝေးထိန်းကို စီစဉ်သတ်မှတ်ပါ](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/configuring-a-remote-repository-for-a-fork)။
+- [Git Rebase Workflow](https://git-rebase.io/) ကိုသုံးပါ။ `git pull` ကို ရှောင်ပါ။ ၎င်းအစား `git pull --rebase` ကိုသုံးပါ။
+- ဖွံ့ဖြိုးတိုးတက်မှုလုပ်ငန်းစဉ်ကို သက်သာစေရန် ပံ့ပိုးပေးထားသော [git hooks](./hooks/) ကို အသုံးပြုပါ။
 
-Sometimes it might be helpful for debugging to analyze tokio tasks using [tokio-console](https://github.com/tokio-rs/console).
+ဤကတိကဝတ်လမ်းညွှန်ချက်များကို လိုက်နာပါ-
 
-In this case you should compile Iroha with support of tokio console like that:
+- ** ကတိကဝတ်တိုင်းကို လက်မှတ်ရေးထိုးခြင်း**။ သင်မဟုတ်ပါက၊ [DCO](https://github.com/apps/dco) သည် သင့်အား ပေါင်းစည်းခွင့်မပြုပါ။
+
+  `Signed-off-by: $NAME <$EMAIL>` ကို သင်၏ commit message ၏ နောက်ဆုံးစာကြောင်းအဖြစ် အလိုအလျောက်ထည့်ရန် `git commit -s` ကိုသုံးပါ။ သင့်အမည်နှင့် အီးမေးလ်သည် သင့် GitHub အကောင့်တွင် သတ်မှတ်ထားသည့်အတိုင်း တူညီရပါမည်။
+
+  `git commit -sS` ([ပိုမိုလေ့လာရန်](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)) ကို အသုံးပြု၍ GPG သော့ဖြင့် လက်မှတ်ရေးထိုးရန်လည်း သင့်အား တိုက်တွန်းပါသည်။
+
+  သင်၏ ကတိပြုမှုများကို အလိုအလျောက် ဖြတ်တောက်ရန် [`commit-msg` ချိတ်](./hooks/) ကို အသုံးပြုနိုင်သည်။
+
+- Commit messages များသည် [သမားရိုးကျ commits](https://www.conventionalcommits.org/en/v1.0.0/#commit-message-with-multi-paragraph-body-and-multiple-footers) နှင့် [pull request titles](#pull-request-titles) အတွက် တူညီသော အမည်ပေးသည့် အစီအစဉ်ကို လိုက်နာရပါမည်။ ဆိုလိုသည်မှာ-
+  - **ပစ္စုပ္ပန်ကာလကိုသုံးပါ** ("အင်္ဂါရပ်ကိုထည့်ပါ"၊ "ထည့်ထားသောအင်္ဂါရပ်" မဟုတ်ဘဲ)
+  - **မဖြစ်မနေစိတ်ဓာတ်ကိုသုံးပါ** ("Docker သို့ Deploy..." မဟုတ်ဘဲ "Docker သို့ Deploy...")
+- အဓိပ္ပါယ်ရှိသော စာတိုကိုရေးပါ။
+- ကွန်မန့်စာတိုကို တိုတိုလေးထားကြည့်ပါ။
+- သင့်တွင် ပိုရှည်သော မက်ဆေ့ချ်တစ်ခု လိုအပ်ပါက၊
+  - သင်၏ commit မက်ဆေ့ချ်၏ ပထမစာကြောင်းကို စာလုံး 50 သို့မဟုတ် ထိုထက်နည်းအောင် ကန့်သတ်ပါ။
+  - သင်၏ commit message ၏ ပထမစာကြောင်းတွင် သင်လုပ်ဆောင်ခဲ့သော အလုပ်၏ အကျဉ်းချုပ် ပါဝင်သင့်သည်။ စာကြောင်းတစ်ခုထက်ပိုလိုလျှင် စာပိုဒ်တစ်ခုစီကြားတွင် ကွက်လပ်တစ်ခုချန်ပြီး အလယ်တွင် သင်၏ပြောင်းလဲမှုများကို ဖော်ပြပါ။ နောက်ဆုံးစာကြောင်းသည် sign-off ဖြစ်ရပါမည်။
+- အကယ်၍ သင်သည် Schema ကိုမွမ်းမံမည် (`kagami schema` နှင့် diff ဖြင့် schema ကိုဖန်တီးခြင်းဖြင့်စစ်ဆေးပါ)၊ သင်သည် `[schema]` မက်ဆေ့ဂျ်ဖြင့် သီးခြား ကတိကဝတ်တစ်ခုတွင် schema သို့ ပြောင်းလဲမှုများအားလုံးကို ပြုလုပ်သင့်သည်။
+- အဓိပ္ပါယ်ရှိသော အပြောင်းအလဲတစ်ခုအတွက် ကတိတစ်ခုတွင် စွဲမြဲစွာကြိုးစားပါ။
+  - PR တစ်ခုတွင် ပြဿနာများစွာကို သင်ဖြေရှင်းခဲ့လျှင် ၎င်းတို့အား သီးခြား ကတိကဝတ်များ ပေးပါ။
+  - ယခင်ကဖော်ပြခဲ့သည့်အတိုင်း၊ `schema` နှင့် API ကို အပြောင်းအလဲများကို သင့်အလုပ်၏ကျန်နှင့် သီးခြားသင့်လျော်သော ကတိပြုချက်များတွင် လုပ်ဆောင်သင့်သည်။
+  - ထိုလုပ်ဆောင်ချက်ကဲ့သို့တူညီသော commit တွင်လုပ်ဆောင်နိုင်စွမ်းအတွက်စမ်းသပ်မှုများထည့်ပါ။
+
+## စမ်းသပ်မှုများနှင့် စံသတ်မှတ်ချက်များ
+
+- အရင်းအမြစ်-ကုဒ်အခြေခံစမ်းသပ်မှုများကို လုပ်ဆောင်ရန်၊ Iroha အမြစ်တွင် [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) ကို လုပ်ဆောင်ပါ။ ဤသည်မှာ ရှည်လျားသော လုပ်ငန်းစဉ်ဖြစ်သည်ကို သတိပြုပါ။
+- စံသတ်မှတ်ချက်များကို လုပ်ဆောင်ရန်၊ Iroha အမြစ်မှ [`cargo bench`](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) ကို လုပ်ဆောင်ပါ။ စံသတ်မှတ်ထားသော ရလဒ်များကို အမှားရှာပြင်ရန် ကူညီရန်၊ `debug_assertions` ကဲ့သို့သော ပတ်ဝန်းကျင်ပြောင်းလဲမှုအား သတ်မှတ်ပါ- `RUSTFLAGS="--cfg debug_assertions" cargo bench`။
+- အကယ်၍ သင်သည် သီးခြားအစိတ်အပိုင်းတစ်ခုကို လုပ်ဆောင်နေပါက၊ [workspace] (https://doc.rust-lang.org/cargo/reference/workspaces.html) တွင် `cargo test` ကို run သောအခါ၊ ၎င်းသည် [integration tests](https://www.testingxperts.com/blog/what-is-integration-testing) မပါဝင်သည့် ထို workspace အတွက်သာ စမ်းသပ်မှုများကို လုပ်ဆောင်မည်ကို သတိပြုပါ။
+- အနည်းဆုံးကွန်ရက်တစ်ခုပေါ်တွင် သင်၏ပြောင်းလဲမှုများကို စမ်းသပ်လိုပါက၊ ပံ့ပိုးပေးထားသော [`docker-compose.yml`](defaults/docker-compose.yml) သည် အများသဘောတူဆန္ဒနှင့် ပိုင်ဆိုင်မှုဖြန့်ကျက်ခြင်းဆိုင်ရာ ယုတ္တိဗေဒဆိုင်ရာ ချိတ်ဆက်အသုံးပြုသူ 4 Iroha ကွန်ရက်ကို ဖန်တီးပေးပါသည်။ [`iroha-python`](https://github.com/hyperledger-iroha/iroha-python) သို့မဟုတ် Iroha ကလိုင်းယင့် CLI ကို အသုံးပြု၍ ထိုကွန်ရက်နှင့် အပြန်အလှန် တုံ့ပြန်ရန် ကျွန်ုပ်တို့ အကြံပြုပါသည်။
+- မအောင်မြင်သောစာမေးပွဲများကိုမဖယ်ရှားပါနှင့်။ လျစ်လျူရှုထားသည့် စမ်းသပ်မှုများကိုပင် ကျွန်ုပ်တို့၏ပိုက်လိုင်းတွင် နောက်ဆုံးတွင် လုပ်ဆောင်မည်ဖြစ်သည်။
+- ဖြစ်နိုင်လျှင် သိသာထင်ရှားသော စွမ်းဆောင်ရည်ဆုတ်ယုတ်မှုသည် ရှိပြီးသားအသုံးပြုသူများ၏ တပ်ဆင်မှုများကို ချိုးဖျက်နိုင်သောကြောင့် သင့်အပြောင်းအလဲများမပြုလုပ်မီနှင့် အပြီးတွင် သင့်ကုဒ်ကို စံအမှတ်အသားပြုပါ။
+
+### နံပါတ်စဉ်တပ်ပြီး စစ်ဆေးမှုများ
+
+သိုလှောင်မှုမူဝါဒများကို စက်တွင်းတွင် အတည်ပြုရန် `make guards` ကို ဖွင့်ပါ-
+
+- ထုတ်လုပ်မှုရင်းမြစ်များတွင် တိုက်ရိုက် `serde_json` (`norito::json` ကို ဦးစားပေး) စာရင်းကို ငြင်းပယ်ပါ။
+- ခွင့်ပြုစာရင်းပြင်ပတွင် တိုက်ရိုက် `serde`/`serde_json` မှီခိုမှုများ/တင်သွင်းမှုများကို တားမြစ်ပါ။
+- `crates/norito` ပြင်ပတွင် ad-hoc AoS/NCB အကူအညီများကို ပြန်လည်ထည့်သွင်းခြင်းကို တားဆီးပါ။
+
+### အမှားရှာပြင်ခြင်း စမ်းသပ်မှုများ
+
+<details> <summary> မှတ်တမ်းအဆင့်ကို မည်သို့ပြောင်းလဲရမည်ကို လေ့လာရန် သို့မဟုတ် မှတ်တမ်းများကို JSON တစ်ခုသို့ ရေးရန် ချဲ့ထွင်ပါ။</summary>
+
+သင့်စမ်းသပ်မှုတစ်ခုမှ ပျက်ကွက်ပါက၊ သင်သည် အများဆုံး မှတ်တမ်းအဆင့်ကို လျှော့ချလိုပေမည်။ မူရင်းအားဖြင့်၊ Iroha သည် `INFO` အဆင့်မက်ဆေ့ဂျ်များကိုသာ မှတ်တမ်းတင်ထားသော်လည်း `DEBUG` နှင့် `TRACE` အဆင့်မှတ်တမ်းနှစ်ခုလုံးကို ထုတ်လုပ်နိုင်စွမ်းကို ဆက်လက်ထိန်းသိမ်းထားသည်။ ဤဆက်တင်ကို ကုဒ်အခြေခံစမ်းသပ်မှုများအတွက် `LOG_LEVEL` ပတ်၀န်းကျင် ကိန်းရှင်ကို အသုံးပြု၍ သို့မဟုတ် `/configuration` အဆုံးမှတ်ကို အသုံးပြု၍ အသုံးချထားသော ကွန်ရက်ရှိ သက်တူရွယ်တူများထဲမှ တစ်ဦးအပေါ်တွင် ပြောင်းလဲနိုင်သည်။`stdout` တွင် ရိုက်နှိပ်ထားသော မှတ်တမ်းများသည် လုံလောက်သော်လည်း၊ `json` ဖော်မတ်လုပ်ထားသည့် မှတ်တမ်းများကို သီးခြားဖိုင်တစ်ခုအဖြစ် ဖန်တီးကာ [node-bunyan](https://www.npmjs.com/package/bunyan) သို့မဟုတ် [rust-bunyan](I1001000) ကို အသုံးပြု၍ ခွဲခြမ်းစိပ်ဖြာရန် ပိုမိုအဆင်ပြေနိုင်သည်။
+
+မှတ်တမ်းများကိုသိမ်းဆည်းရန်နှင့် အထက်ပါပက်ကေ့ဂျ်များကိုအသုံးပြု၍ ၎င်းတို့ကိုခွဲခြမ်းစိတ်ဖြာရန် `LOG_FILE_PATH` ပတ်ဝန်းကျင်ပြောင်းလဲမှုအား သင့်လျော်သောတည်နေရာတစ်ခုအဖြစ် သတ်မှတ်ပါ။
+
+</details>
+
+### tokio ကွန်ဆိုးလ်ကို အသုံးပြု၍ အမှားရှာပြင်ခြင်း။
+
+<details> <summary> Iroha ကို tokio ကွန်ဆိုးလ်ပံ့ပိုးမှုဖြင့် မည်သို့စုစည်းရမည်ကို လေ့လာရန် ချဲ့ထွင်ပါ။</summary>
+
+[tokio-console](https://github.com/tokio-rs/console) ကိုအသုံးပြု၍ tokio လုပ်ဆောင်ချက်များကိုခွဲခြမ်းစိတ်ဖြာရန် အမှားရှာပြင်ခြင်းအတွက် တစ်ခါတစ်ရံ အထောက်အကူဖြစ်နိုင်သည်။
+
+ဤကိစ္စတွင် သင်သည် Iroha ကို ထိုကဲ့သို့သော tokio console ၏ပံ့ပိုးမှုဖြင့် စုစည်းသင့်သည်-
 
 ```bash
 RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
 ```
 
-Port for tokio console can by configured through `LOG_TOKIO_CONSOLE_ADDR` configuration parameter (or environment variable).
-Using tokio console require log level to be `TRACE`, can be enabled through configuration parameter or environment variable `LOG_LEVEL`.
+tokio ကွန်ဆိုးလ်အတွက် ဆိပ်ကမ်းသည် `LOG_TOKIO_CONSOLE_ADDR` ဖွဲ့စည်းမှုဘောင် (သို့မဟုတ် ပတ်ဝန်းကျင် ပြောင်းလဲမှု) မှတဆင့် configure လုပ်နိုင်ပါသည်။
+tokio ကွန်ဆိုးလ်ကို အသုံးပြုခြင်းသည် မှတ်တမ်းအဆင့် `TRACE` ဖြစ်ရန် လိုအပ်ပြီး၊ ဖွဲ့စည်းမှုဘောင် သို့မဟုတ် ပတ်ဝန်းကျင်ပြောင်းလဲမှု `LOG_LEVEL` မှတဆင့် ဖွင့်နိုင်သည်။
 
-Example of running Iroha with tokio console support using `scripts/test_env.sh`:
+`scripts/test_env.sh` ကို အသုံးပြု၍ tokio ကွန်ဆိုးလ်ပံ့ပိုးမှုဖြင့် Iroha ကို အသုံးပြုခြင်း ဥပမာ-
 
 ```bash
 # 1. Compile Iroha
@@ -294,27 +291,27 @@ tokio-console http://127.0.0.1:5555
 
 </details>
 
-### Profiling
+### စာရင်းသွင်းခြင်း။
 
-<details> <summary> Expand to learn how to profile Iroha. </summary>
+<details> <summary> ပရိုဖိုင် Iroha ကို လေ့လာရန် ချဲ့ထွင်ပါ။ </sumary>
 
-To optimize performance it's useful to profile Iroha.
+စွမ်းဆောင်ရည်ပိုကောင်းအောင်ပြုလုပ်ရန် ၎င်းသည် Iroha ပရိုဖိုင်အတွက် အသုံးဝင်သည်။
 
-Profiling builds currently require a nightly toolchain. To prepare one, compile Iroha with the `profiling` profile and feature using `cargo +nightly`:
+ပရိုဖိုင်းတည်ဆောက်မှုများသည် လောလောဆယ်တွင် ညစဉ် toolchain လိုအပ်ပါသည်။ တစ်ခုပြင်ဆင်ရန်၊ Iroha ကို `profiling` ပရိုဖိုင်နှင့်အင်္ဂါရပ်ဖြင့် `cargo +nightly` ကိုစုစည်းပါ။
 
 ```bash
 RUSTFLAGS="-C force-frame-pointers=on" cargo +nightly -Z build-std build --target your-desired-target --profile profiling --features profiling
 ```
 
-Then start Iroha and attach profiler of your choice to the Iroha pid.
+ထို့နောက် Iroha ကို စတင်ပြီး သင်နှစ်သက်ရာ ပရိုဖိုင်ကို Iroha pid သို့ ပူးတွဲပါ။
 
-Alternatively it's possible to build Iroha inside docker with profiler support and profile Iroha this way.
+တနည်းအားဖြင့် ပရိုဖိုင်းပံ့ပိုးမှုနှင့် ပရိုဖိုင် Iroha ဖြင့် docker အတွင်း Iroha ကို တည်ဆောက်နိုင်သည်။
 
 ```bash
 docker build -f Dockerfile.glibc --build-arg="PROFILE=profiling" --build-arg='RUSTFLAGS=-C force-frame-pointers=on' --build-arg='FEATURES=profiling' --build-arg='CARGOFLAGS=-Z build-std' -t iroha:profiling .
 ```
 
-E.g. using perf (available only on linux):
+E.g. perf ကိုအသုံးပြုခြင်း (linux တွင်သာရရှိနိုင်သည်)
 
 ```bash
 # to capture profile
@@ -323,15 +320,15 @@ sudo perf record -g -p <PID>
 sudo perf report
 ```
 
-To be able to observe profile of the executor during Iroha profiling, executor should be compiled without stripping symbols.
-It can be done by running:
+Iroha ပရိုဖိုင်ပြုလုပ်နေစဉ်အတွင်း executor ၏ ပရိုဖိုင်ကို စောင့်ကြည့်နိုင်စေရန်၊ executor သည် သင်္ကေတများကို မဖယ်ရှားဘဲ စုစည်းထားသင့်သည်။
+၎င်းကို run ခြင်းဖြင့်လုပ်ဆောင်နိုင်သည်-
 
 ```bash
 # compile executor without optimizations
 cargo run --bin kagami -- ivm build ./path/to/executor --out-file executor.to
 ```
 
-With profiling feature enabled Iroha exposes endpoint to scrap pprof profiles:
+ပရိုဖိုင်ပြုလုပ်ခြင်းအင်္ဂါရပ်ကို Iroha ကိုဖွင့်ထားခြင်းဖြင့် အဆုံးမှတ်ကို pprof ပရိုဖိုင်များကို ဖျက်ပစ်သည်-
 
 ```bash
 # profile Iroha for 30 seconds and download the profile data
@@ -342,92 +339,92 @@ go tool pprof -web profile.pb
 
 </details>
 
-## Style Guides
+## ပုံစံလမ်းညွှန်များ
 
-Please follow these guidelines when you make code contributions to our project:
+ကျွန်ုပ်တို့၏ပရောဂျက်အတွက် ကုဒ်ပံ့ပိုးမှုများပြုလုပ်သည့်အခါ ဤလမ်းညွှန်ချက်များကို လိုက်နာပါ-
 
-### Git Style Guide
+### Git စတိုင်လမ်းညွှန်
 
-:book: [Read git guidelines](#git-workflow)
+:book: [git လမ်းညွှန်ချက်များကိုဖတ်ရန်](#git-workflow)
 
-### Rust Style Guide
+### သံချေးပုံစံလမ်းညွှန်
 
-<details> <summary> :book: Read code guidelines</summary>
+<details> <summary> :book- ကုဒ်လမ်းညွှန်ချက်များကို ဖတ်ပါ</summary>
 
-- Use `cargo fmt --all` (edition 2024) to format code.
+- ကုဒ်ဖော်မတ်လုပ်ရန် `cargo fmt --all` (edition 2024) ကိုသုံးပါ။
 
-Code guidelines:
+ကုဒ်လမ်းညွှန်ချက်များ-
 
-- Unless otherwise specified, refer to [Rust best practices](https://github.com/mre/idiomatic-rust).
-- Use the `mod.rs` style. [Self-named modules](https://rust-lang.github.io/rust-clippy/master/) will not pass static analysis, except as [`trybuild`](https://crates.io/crates/trybuild) tests.
-- Use a domain-first modules structure.
+- အခြားသတ်မှတ်ထားခြင်းမရှိပါက၊ [Rrust အကောင်းဆုံးအလေ့အကျင့်များ](https://github.com/mre/idiomatic-rust) ကို ကိုးကားပါ။
+- `mod.rs` စတိုင်ကို သုံးပါ။ [`trybuild`](https://crates.io/crates/trybuild) စမ်းသပ်မှုများမှလွဲ၍ [မိမိကိုယ်တိုင်အမည်ပေးထားသော မော်ဂျူးများ](https://rust-lang.github.io/rust-clippy/master/) သည် တည်ငြိမ်သော ခွဲခြမ်းစိတ်ဖြာမှုကို ကျော်ဖြတ်မည်မဟုတ်ပါ။
+- domain-first modules တည်ဆောက်ပုံကိုသုံးပါ။
 
-  Example: don't do `constants::logger`. Instead, invert the hierarchy, putting the object for which it is used first: `iroha_logger::constants`.
-- Use [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) with an explicit error message or proof of infallibility instead of `unwrap`.
-- Never ignore an error. If you can't `panic` and can't recover, it at least needs to be recorded in the log.
-- Prefer to return a `Result` instead of `panic!`.
-- Group related functionality spatially, preferably inside appropriate modules.
+  ဥပမာ- `constants::logger` မလုပ်ပါနဲ့။ ယင်းအစား၊ ၎င်းကို ဦးစွာအသုံးပြုသည့်အရာအား `iroha_logger::constants` ဖြင့် အထက်အောက်ပြောင်းလိုက်ပါ။
+- `unwrap` အစား ပြတ်ပြတ်သားသား အမှားအယွင်း မက်ဆေ့ချ် သို့မဟုတ် မှားယွင်းနိုင်ချေရှိသော အထောက်အထားဖြင့် [`expect`](https://learning-rust.github.io/docs/unwrap-and-expect/) ကို သုံးပါ။
+- အမှားတစ်ခုကို ဘယ်တော့မှ လစ်လျူမရှုပါနဲ့။ အကယ်၍ သင်သည် `panic` ကိုမလုပ်ဆောင်နိုင်ပါက ပြန်လည်ရယူ၍မရပါက၊ ၎င်းကို အနည်းဆုံးမှတ်တမ်းတွင် မှတ်တမ်းတင်ထားရန် လိုအပ်ပါသည်။
+- `panic!` အစား `Result` ကို ပြန်လိုချင်ပါသည်။
+- သင့်လျော်သော မော်ဂျူးများအတွင်း နေရာဒေသအလိုက် အုပ်စုဖွဲ့ဆက်စပ်လုပ်ဆောင်နိုင်စွမ်းကို ဦးစားပေးပါ။
 
-  For example, instead of having a block with `struct` definitions and then `impl`s for each individual struct, it is better to have the `impl`s related to that `struct` next to it.
-- Declare before implementation: `use` statements and constants at the top, unit tests at the bottom.
-- Try to avoid `use` statements if the imported name is used only once. This makes moving your code into a different file easier.
-- Do not silence `clippy` lints indiscriminately. If you do, explain your reasoning with a comment (or `expect` message).
-- Prefer  `#[outer_attribute]` to `#![inner_attribute]` if either is available.
-- If your function doesn't mutate any of its inputs (and it shouldn't mutate anything else), mark it as `#[must_use]`.
-- Avoid `Box<dyn Error>` if possible (we prefer strong typing).
-- If your function is a getter/setter, mark it `#[inline]`.
-- If your function is a constructor (i.e., it's creating a new value from the input parameters and calls `default()`), mark it `#[inline]`.
-- Avoid tying your code to concrete data structures; `rustc` is smart enough to turn a `Vec<InstructionExpr>` into `impl IntoIterator<Item = InstructionExpr>` and vice versa when it needs to.
+  ဥပမာအားဖြင့်၊ `struct` အဓိပ္ပါယ်ဖွင့်ဆိုချက်များနှင့် ပိတ်ဆို့ခြင်းတစ်ခုစီရှိပြီးနောက် struct တစ်ခုချင်းစီအတွက် `impl`s အစား၊ ၎င်းနှင့်ဆက်စပ်သော `impl`s များဘေးတွင်ရှိနေခြင်းက ပိုကောင်းပါသည်။
+- အကောင်အထည်မဖော်မီတွင် ကြေညာပါ- `use` ကြေညာချက်များနှင့် ကိန်းသေများ၊ အောက်ခြေရှိ ယူနစ်စမ်းသပ်မှုများ။
+- တင်သွင်းသောအမည်ကို တစ်ကြိမ်သာအသုံးပြုပါက `use` ကြေညာချက်များကို ရှောင်ရှားကြည့်ပါ။ ၎င်းသည် သင့်ကုဒ်ကို အခြားဖိုင်တစ်ခုသို့ ရွှေ့ရန် ပိုမိုလွယ်ကူစေသည်။
+- `clippy` ကို တိတ်တဆိတ် သိမ်းကျုံး နှုတ်ဆိတ်ခြင်း မပြုပါနှင့်။ သင်ဖြစ်လျှင် သင့်အကြောင်းပြချက်ကို မှတ်ချက် (သို့မဟုတ် `expect` မက်ဆေ့ဂျ်) ဖြင့် ရှင်းပြပါ။
+- တစ်ခုခုရနိုင်လျှင် `#[outer_attribute]` မှ `#![inner_attribute]` ကို ဦးစားပေးပါ။
+- အကယ်၍ သင့်လုပ်ဆောင်ချက်သည် ၎င်း၏ထည့်သွင်းမှုများမှ မပြောင်းလဲပါက (အခြားမည်သည့်အရာမှ မပြောင်းသင့်ပါ)၊ ၎င်းကို `#[must_use]` အဖြစ် အမှတ်အသားပြုပါ။
+- ဖြစ်နိုင်လျှင် `Box<dyn Error>` ကို ရှောင်ကြဉ်ပါ (ကျွန်ုပ်တို့သည် အားပြင်းသောစာရိုက်ခြင်းကို နှစ်သက်သည်)။
+- သင့်လုပ်ဆောင်ချက်သည် getter/setter ဖြစ်ပါက၊ `#[inline]` ကို အမှတ်အသားပြုပါ။
+- အကယ်၍ သင့်လုပ်ဆောင်ချက်သည် constructor (ဆိုလိုသည်မှာ၊ ၎င်းသည် input parameters များမှ တန်ဖိုးအသစ်တစ်ခုဖန်တီးနေပြီး `default()`) သည် `#[inline]` ကို အမှတ်အသားပြုပါ။
+- သင့်ကုဒ်ကို ခိုင်မာသောဒေတာတည်ဆောက်ပုံများနှင့် ချိတ်ခြင်းမှ ရှောင်ကြဉ်ပါ။ `rustc` သည် `Vec<InstructionExpr>` ကို `impl IntoIterator<Item = InstructionExpr>` သို့ ပြောင်းရန်နှင့် လိုအပ်သည့်အခါ အပြန်အလှန်ပြောင်းရန် လုံလောက်သော စမတ်ဖြစ်သည်။
 
-Naming guidelines:
-- Use only full words in *public* structure, variable, method, trait, constant, and module names. However, abbreviations are allowed if:
-  - The name is local (e.g. closure arguments).
-  - The name is abbreviated by Rust convention (e.g. `len`, `typ`).
-  - The name is an accepted abbreviation (e.g. `tx`, `wsv` etc); see the [project glossary](https://docs.iroha.tech/reference/glossary.html) for canonical abbreviations.
-  - The full name would have been shadowed by a local variable (e.g. `msg <- message`).
-  - The full name would have made the code cumbersome with more than 5-6 words in it (e.g. `WorldStateViewReceiverTrait -> WSVRecvTrait`).
-- If you change naming conventions, make sure that the new name that you've chosen is _much_ clearer than what we had before.
+အမည်ပေးခြင်း လမ်းညွှန်ချက်များ
+- * အများသူငှာ* တည်ဆောက်ပုံ၊ ပြောင်းလဲနိုင်သော၊ နည်းလမ်း၊ စရိုက်၊ ကိန်းသေနှင့် မော်ဂျူးအမည်များတွင် စကားလုံးအပြည့်အစုံကိုသာ အသုံးပြုပါ။ သို့ရာတွင်၊ အတိုကောက်များကို ခွင့်ပြုပါက-
+  - အမည်သည် ဒေသန္တရဖြစ်သည် (ဥပမာ ပိတ်ခြင်းဆိုင်ရာ အကြောင်းပြချက်များ)။
+  - အမည်ကို Rust ကွန်ဗင်းရှင်း (ဥပမာ `len`၊ `typ`) ဖြင့် အတိုချုံးထားသည်။
+  - အမည်သည် လက်ခံထားသော အတိုကောက်တစ်ခု (ဥပမာ `tx`၊ `wsv` စသည်)။ Canonical အတိုကောက်များအတွက် [project glossary](https://docs.iroha.tech/reference/glossary.html) ကို ကြည့်ပါ။
+  - အမည်အပြည့်အစုံကို ဒေသန္တရကိန်းရှင် (ဥပမာ `msg <- message`) ဖြင့် အရိပ်ထိုးထားမည်ဖြစ်သည်။
+  - အမည်အပြည့်အစုံသည် ၎င်းတွင် စကားလုံး 5-6 လုံးထက်ပိုသော ကုဒ်ကို ရှုပ်ထွေးစေလိမ့်မည် (ဥပမာ `WorldStateViewReceiverTrait -> WSVRecvTrait`)။
+- အကယ်၍ သင်သည် အမည်ပေးခြင်းဆိုင်ရာ သဘောတူညီချက်များကို ပြောင်းလဲပါက၊ သင်ရွေးချယ်ထားသော အမည်အသစ်သည် ယခင်က ကျွန်ုပ်တို့ရှိခဲ့သည့်ထက် _much_ ပိုမိုရှင်းလင်းကြောင်း သေချာပါစေ။
 
-Comment guidelines:
-- When writing non-doc comments, instead of describing *what* your function does, try to explain *why* it does something in a particular way. This will save you and the reviewer time.
-- You may leave `TODO` markers in code as long as you reference an issue that you created for it. Not creating an issue means it doesn't get merged.
+မှတ်ချက်လမ်းညွှန်ချက်များ-
+- doc မဟုတ်သော မှတ်ချက်များရေးသောအခါ၊ သင်၏လုပ်ဆောင်ချက်သည် *ဘာ*လုပ်သည်ကို ဖော်ပြမည့်အစား၊ *ဘာ့ကြောင့်* ၎င်းသည် တစ်စုံတစ်ခုလုပ်ဆောင်သည်ကို သီးခြားနည်းလမ်းဖြင့် ရှင်းပြရန်ကြိုးစားပါ။ ၎င်းသည် သင့်နှင့် သုံးသပ်သူအချိန်ကို သက်သာစေမည်ဖြစ်သည်။
+- ၎င်းအတွက် သင်ဖန်တီးထားသည့် ပြဿနာတစ်ခုကို သင်ကိုးကားသရွေ့ သင်သည် `TODO` အမှတ်အသားများကို ကုဒ်တွင် ထားခဲ့နိုင်ပါသည်။ ပြဿနာတစ်ခုကို မဖန်တီးခြင်းသည် ပေါင်းစည်းခြင်းမပြုရဟု ဆိုလိုသည်။
 
-We use pinned dependencies. Follow these guidelines for versioning:
+ကျွန်ုပ်တို့သည် ပင်ထိုးထားသော မှီခိုမှုကို အသုံးပြုသည်။ ဗားရှင်းချခြင်းအတွက် ဤလမ်းညွှန်ချက်များကို လိုက်နာပါ-
 
-- If your work depends on a particular crate, see if it wasn't already installed using [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (use `bat` or `grep`), and try to use that version, instead of the latest version.
-- Use the full version "X.Y.Z" in `Cargo.toml`.
-- Provide version bumps in a separate PR.
-
-</details>
-
-### Documentation Style Guide
-
-<details> <summary> :book: Read documentation guidelines</summary>
-
-
-- Use the [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) format.
-- Prefer the single-line comment syntax. Use `///` above inline modules and `//!` for file-based modules.
-- If you can link to a structure/module/function's docs, do it.
-- If you can provide an example of usage, do it. This [is also a test](https://doc.rust-lang.org/rustdoc/documentation-tests.html).
-- If a function can error or panic, avoid modal verbs. Example: `Fails if disk IO fails` instead of `Can possibly fail, if disk IO happens to fail`.
-- If a function can error or panic for more than one reason, use a bulleted list of failure conditions, with the appropriate `Error` variants (if any).
-- Functions *do* things. Use imperative mood.
-- Structures *are* things. Get to the point. For example `Log level for reloading from the environment` is better than `This struct encapsulates the idea of logging levels, and is used for reloading from the environment`.
-- Structures have fields, which also *are* things.
-- Modules *contain* things, and we know that. Get to the point. Example: use `Logger-related traits.` instead of `Module which contains logger-related logic`.
-
+- သင့်အလုပ်သည် သီးခြားသေတ္တာပေါ်တွင်မူတည်ပါက၊ [`cargo tree`](https://doc.rust-lang.org/cargo/commands/cargo-tree.html) (`bat` သို့မဟုတ် `grep`) ကိုအသုံးပြု၍ မတပ်ဆင်ရသေးပါက ကြည့်ရှုပြီး နောက်ဆုံးဗားရှင်းအစား ထိုဗားရှင်းကို အသုံးပြုကြည့်ပါ။
+- `Cargo.toml` တွင် "X.Y.Z" ဗားရှင်းအပြည့်အစုံကို အသုံးပြုပါ။
+- သီးခြား PR တစ်ခုတွင် ဗားရှင်းအဖုအထစ်များကို ပေးပါ။
 
 </details>
 
-## Contact
+### စာရွက်စာတမ်းပုံစံလမ်းညွှန်
 
-Our community members are active at:
+<details> <summary> :book- စာရွက်စာတမ်းလမ်းညွှန်ချက်များကို ဖတ်ပါ</summary>
 
-| Service       | Link                                                               |
-|---------------|--------------------------------------------------------------------|
-| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha       |
-| Mailing List  | https://lists.lfdecentralizedtrust.org/g/iroha                     |
-| Telegram      | https://t.me/hyperledgeriroha                                      |
-| Discord       | https://discord.com/channels/905194001349627914/905205848547155968 |
+
+- [`Rust Docs`](https://doc.rust-lang.org/cargo/commands/cargo-doc.html) ဖော်မတ်ကို သုံးပါ။
+- တစ်ကြောင်းတည်းမှတ်ချက်အထားအသိုကို ဦးစားပေးပါ။ ဖိုင်အခြေပြု မော်ဂျူးများအတွက် `///` နှင့် `//!` ကို အသုံးပြုပါ။
+- အကယ်၍ သင်သည် တည်ဆောက်ပုံ/မော်ဂျူး/လုပ်ဆောင်ချက်၏ စာရွက်စာတမ်းများနှင့် ချိတ်ဆက်နိုင်လျှင် ၎င်းကို ပြုလုပ်ပါ။
+- အသုံးပြုမှု ဥပမာတစ်ခုကို ပေးနိုင်ရင် အဲဒါကို လုပ်ပါ။ ၎င်းသည် [စမ်းသပ်မှုတစ်ခုလည်းဖြစ်သည်](https://doc.rust-lang.org/rustdoc/documentation-tests.html)။
+- လုပ်ဆောင်မှုတစ်ခုသည် အမှားအယွင်း သို့မဟုတ် ထိတ်လန့်စေနိုင်ပါက၊ modal verb များကို ရှောင်ကြဉ်ပါ။ ဥပမာ- `Can possibly fail, if disk IO happens to fail` အစား `Fails if disk IO fails`။
+- လုပ်ဆောင်ချက်တစ်ခုသည် အကြောင်းပြချက်တစ်ခုထက်ပို၍ အမှားအယွင်း သို့မဟုတ် ထိတ်လန့်စေနိုင်ပါက၊ သင့်လျော်သော `Error` မျိုးကွဲများ (ရှိပါက) ဖြင့် ကျည်ဆန်ပြထားသော ကျရှုံးမှုအခြေအနေများစာရင်းကို အသုံးပြုပါ။
+- လုပ်ဆောင်ချက်များ *do* အရာများ။ မရှိမဖြစ် စိတ်ဓာတ်ကို သုံးပါ။
+-ဖွဲ့စည်းပုံများသည် *အရာများဖြစ်သည်။ အမှတ်ရပါ။ ဥပမာ `Log level for reloading from the environment` သည် `This struct encapsulates the idea of logging levels, and is used for reloading from the environment` ထက် ပိုကောင်းသည်။
+- ဖွဲ့စည်းတည်ဆောက်ပုံများတွင် နယ်ပယ်များ ရှိသည်၊ ၎င်းသည်လည်း *အရာ* ဖြစ်သည် ။
+- မော်ဂျူးများတွင် * အရာများပါ ၀ င်သည်နှင့်ကျွန်ုပ်တို့သိသည်။ အမှတ်ရပါ။ ဥပမာ- `Module which contains logger-related logic` အစား `Logger-related traits.` ကိုသုံးပါ။
+
+
+</details>
+
+## ဆက်သွယ်ရန်
+
+ကျွန်ုပ်တို့၏ အသိုင်းအဝိုင်းအဖွဲ့ဝင်များသည် အောက်ပါနေရာတွင် တက်ကြွစွာလှုပ်ရှားနေကြသည်-
+
+| ဝန်ဆောင်မှု | လင့်ခ် |
+|----------------|--------------------------------------------------------------------------------|
+| StackOverflow | https://stackoverflow.com/questions/tagged/hyperledger-iroha |
+| စာပို့စာရင်း | https://lists.lfdecentralizedtrust.org/g/iroha |
+| ကြေးနန်းစာ | https://t.me/hyperledgeriroha |
+| သဘောထားကွဲ | https://discord.com/channels/905194001349627914/905205848547155968 |
 
 ---

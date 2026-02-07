@@ -6,21 +6,21 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 9f708c9c597c0455761049a17989369498d318be348e28f71196bb82761dd36b
 source_last_modified: "2026-01-03T18:07:58.297179+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Keep both copies aligned across releases.
+::: نوٹ کینونیکل ماخذ
+آئینہ `docs/source/sorafs/runbooks/staging_manifest_playbook.md`۔ دونوں کاپیاں ریلیز کے پار منسلک رکھیں۔
 :::
 
-## Overview
+## جائزہ
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+یہ پلے بوک پروڈکشن میں تبدیلی کو فروغ دینے سے پہلے ایک اسٹیجنگ Torii تعیناتی پر پارلیمنٹ سے متعلق چنکر پروفائل کو چالو کرنے کے ذریعے چلتی ہے۔ اس نے فرض کیا ہے کہ SoraFS گورننس چارٹر کی توثیق کی گئی ہے اور کیننیکل فکسچر ریپوزٹری میں دستیاب ہیں۔
 
-## 1. Prerequisites
+## 1. شرائط
 
-1. Sync the canonical fixtures and signatures:
+1. کیننیکل فکسچر اور دستخطوں کو ہم آہنگ کریں:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -29,8 +29,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. داخلہ لفافہ ڈائرکٹری تیار کریں جو Torii اسٹارٹ اپ (مثال کے طور پر راستہ) پر پڑھے گا: `/var/lib/iroha/admission/sorafs`۔
+3. یقینی بنائیں کہ Torii کنفیگ دریافت کیش اور داخلے کے نفاذ کو قابل بناتا ہے:
 
    ```toml
    [torii.sorafs.discovery]
@@ -48,43 +48,43 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
-## 2. Publish Admission Envelopes
+## 2۔ داخلہ لفافے شائع کریں
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. `torii.sorafs.discovery.admission.envelopes_dir` کے ذریعہ حوالہ کردہ ڈائریکٹری میں منظور شدہ فراہم کنندہ داخلہ لفافوں کاپی کریں:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. Torii کو دوبارہ شروع کریں (یا اگر آپ نے فلائی دوبارہ لوڈ کے ساتھ لوڈر کو لپیٹا ہے تو ایک سگ اپ بھیجیں)۔
+3. داخلے کے پیغامات کے لئے لاگ کو دم کریں:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. دریافت کی تشہیر کی توثیق کریں
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. دستخط شدہ فراہم کنندہ کے اشتہار پے لوڈ (Norito بائٹس) کو آپ کے ذریعہ تیار کریں
+   فراہم کنندہ پائپ لائن:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. دریافت کے اختتامی نقطہ سے استفسار کریں اور تصدیق کریں کہ اشتہار کیننیکل عرفی ناموں کے ساتھ ظاہر ہوتا ہے:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   یقینی بنائیں کہ `profile_aliases` میں پہلی اندراج کے طور پر `"sorafs.sf1@1.0.0"` شامل ہے۔
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. ورزش مینی فیسٹ اور پلان اینڈ پوائنٹس
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+1. مینی فیسٹ میٹا ڈیٹا کو بازیافت کریں (اگر داخلہ نافذ کیا جاتا ہے تو ایک اسٹریم ٹوکن کی ضرورت ہوتی ہے):
 
    ```bash
    sorafs-fetch \
@@ -95,25 +95,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. JSON آؤٹ پٹ کا معائنہ کریں اور تصدیق کریں:
+   - `chunk_profile_handle` `sorafs.sf1@1.0.0` ہے۔
+   - `manifest_digest_hex` عزم کی رپورٹ سے میل کھاتا ہے۔
+   - `chunk_digests_blake3` دوبارہ پیدا ہونے والے فکسچر کے ساتھ سیدھ میں ہے۔
 
-## 5. Telemetry Checks
+## 5. ٹیلی میٹری چیک
 
-- Confirm Prometheus exposes the new profile metrics:
+- تصدیق کریں Prometheus نئے پروفائل میٹرکس کو بے نقاب کرتا ہے:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- ڈیش بورڈز کو متوقع عرف کے تحت اسٹیجنگ فراہم کرنے والے کو دکھانا چاہئے اور براؤن آؤٹ کاؤنٹرز کو صفر پر رکھنا چاہئے جبکہ پروفائل فعال ہے۔
 
-## 6. Rollout Readiness
+## 6. رول آؤٹ تیاری
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. یو آر ایل ، مینی فیسٹ آئی ڈی ، اور ٹیلی میٹری اسنیپ شاٹ کے ساتھ ایک مختصر رپورٹ پر قبضہ کریں۔
+2. منصوبہ بند پروڈکشن ایکٹیویشن ونڈو کے ساتھ ساتھ Nexus رول آؤٹ چینل میں رپورٹ شیئر کریں۔
+3. اسٹیک ہولڈرز کے دستخط ہونے کے بعد پروڈکشن چیک لسٹ (`chunker_registry_rollout_checklist.md` میں سیکشن 4) پر آگے بڑھیں۔
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+اس پلے بوک کو اپ ڈیٹ رکھنا ہر چنکر/داخلہ رول آؤٹ کو یقینی بناتا ہے کہ اسٹیجنگ اور پروڈکشن میں ایک ہی عصبی اقدامات کی پیروی کی جائے۔

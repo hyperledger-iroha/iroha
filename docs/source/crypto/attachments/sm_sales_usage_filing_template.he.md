@@ -6,91 +6,89 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 14f32b40ff71fa4eef698eac80d8d7dd27104b46b84523d735d054dedea1c47a
 source_last_modified: "2026-01-03T18:07:57.068055+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-% SM2/SM3/SM4 Sales & Usage Filing (销售/使用备案) Template
-% Hyperledger Iroha Compliance Working Group
+% SM2/SM3/SM4 תיוק מכירות ושימוש (销售/使用备案) תבנית
+% Hyperledger Iroha קבוצת עבודה של תאימות
 % 2026-05-06
 
-# Instructions
+# הוראות
 
-Use this template when filing deployment usage with an SCA office for onshore
-operators. Provide one submission per deployment cluster or data space. Update
-the placeholders with operator-specific details and attach the evidence listed
-in the checklist.
+השתמש בתבנית זו בעת הגשת שימוש בפריסה למשרד SCA עבור היבשה
+מפעילים. ספק הגשה אחת לכל אשכול פריסה או מרחב נתונים. עדכון
+מצייני המקום עם פרטים ספציפיים למפעיל ולצרף את הראיות המפורטות
+ברשימת הבדיקה.
 
-# 1. Operator & Deployment Summary
+# 1. סיכום מפעיל ופריסה
 
-| Field | Value |
+| שדה | ערך |
 |-------|-------|
-| Operator name | {{ OPERATOR_NAME }} |
-| Business registration ID | {{ REG_ID }} |
-| Registered address | {{ ADDRESS }} |
-| Primary contact (name / title / email / phone) | {{ CONTACT }} |
-| Deployment identifier | {{ DEPLOYMENT_ID }} |
-| Deployment location(s) | {{ LOCATIONS }} |
-| Filing type | Sales / Usage (销售/使用备案) |
-| Filing date | {{ YYYY-MM-DD }} |
+| שם המפעיל | {{ OPERATOR_NAME }} |
+| מזהה רישום עסק | {{ REG_ID }} |
+| כתובת רשומה | {{ כתובת }} |
+| איש קשר ראשי (שם/כותרת/מייל/טלפון) | {{ יצירת קשר }} |
+| מזהה פריסה | {{ DEPLOYMENT_ID }} |
+| מיקומי פריסה | {{ LOCATIONS }} |
+| סוג תיוק | מכירות / שימוש (销售/使用备案) |
+| תאריך הגשה | {{ YYYY-MM-DD }} |
 
-# 2. Deployment Details
+# 2. פרטי פריסה
 
-- Software build ID / hash: `{{ BUILD_HASH }}`
-- Build source: {{ BUILD_SOURCE }} (e.g., operator-built from source, vendor-provided binary).
-- Activation date: {{ ACTIVATION_DATE }}
-- Planned maintenance windows: {{ MAINTENANCE_CADENCE }}
-- Node roles participating in SM signing:
-  | Node | Role | SM features enabled | Key vault location |
-  |------|------|---------------------|--------------------|
-  | {{ NODE_ID }} | {{ ROLE }} | {{ FEATURES }} | {{ VAULT }} |
+- מזהה בניית תוכנה / hash: `{{ BUILD_HASH }}`
+- מקור בנייה: {{ BUILD_SOURCE }} (לדוגמה, בנוי אופרטור ממקור, בינארי מסופק על ידי ספק).
+- תאריך הפעלה: {{ ACTIVATION_DATE }}
+- חלונות תחזוקה מתוכננים: {{ MAINTENANCE_CADENCE }}
+- תפקידי צומת המשתתפים בחתימת SM:
+  | צומת | תפקיד | תכונות SM מופעלות | מיקום כספת מפתח |
+  |------|------|------------------------|--------------------|
+  | {{ NODE_ID }} | {{ תפקיד }} | {{ תכונות }} | {{ כספת }} |
 
-# 3. Cryptographic Controls
+# 3. בקרות קריפטוגרפיות
 
-- Allowed algorithms: {{ ALGORITHMS }} (ensure SM set matches configuration).
-- Key lifecycle summary:
-  | Stage | Description |
+- אלגוריתמים מותרים: {{ ALGORITHMS }} (וודא שהסט SM תואם את התצורה).
+- סיכום מחזור חיים מפתח:
+  | במה | תיאור |
   |-------|-------------|
-  | Generation | {{ KEY_GENERATION }} |
-  | Storage | {{ KEY_STORAGE }} |
-  | Rotation | {{ KEY_ROTATION }} |
-  | Revocation | {{ KEY_REVOCATION }} |
-- Distinct identity (`distid`) policy: {{ DISTID_POLICY }}
-- Configuration excerpt (`crypto` section): provide Norito/JSON snapshot with hashes.
+  | דור | {{ KEY_GENERATION }} |
+  | אחסון | {{ KEY_STORAGE }} |
+  | סיבוב | {{ KEY_ROTATION }} |
+  | ביטול | {{ KEY_REVOCATION }} |
+- מדיניות זהות ברורה (`distid`): {{ DISTID_POLICY }}
+- קטע תצורה (קטע `crypto`): ספק תמונת מצב של Norito/JSON עם hashes.
 
-# 4. Telemetry & Audit Trails
+# 4. מסלולי טלמטריה וביקורת
 
-- Monitoring endpoints: {{ METRICS_ENDPOINTS }} (`/metrics`, dashboards).
-- Logged metrics: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
-  latency histograms, error counters.
-- Log retention policy: {{ LOG_RETENTION }} (≥ three years recommended).
-- Audit log storage location: {{ AUDIT_STORAGE }}
+- ניטור נקודות קצה: {{ METRICS_ENDPOINTS }} (`/metrics`, לוחות מחוונים).
+- מדדים מתועדים: `crypto.sm.verification_total`, `crypto.sm.sign_total`,
+  היסטוגרמות של חביון, מוני שגיאות.
+- מדיניות שימור יומנים: {{ LOG_RETENTION }} (≥ שלוש שנים מומלץ).
+- מיקום אחסון יומן ביקורת: {{ AUDIT_STORAGE }}
 
-# 5. Incident Response & Contacts
+# 5. תגובה לאירועים ואנשי קשר
 
-| Role | Name | Phone | Email | SLA |
+| תפקיד | שם | טלפון | דוא"ל | SLA |
 |------|------|-------|-------|-----|
-| Security operations lead | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Crypto on-call | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Legal / compliance | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
-| Vendor support (if applicable) | {{ NAME }} | {{ PHONE }} | {{ EMAIL }} | {{ SLA }} |
+| פעולות אבטחה להוביל | {{ שם }} | {{ טלפון }} | {{ דוא"ל }} | {{ SLA }} |
+| קריפטו בכוננות | {{ שם }} | {{ טלפון }} | {{ דוא"ל }} | {{ SLA }} |
+| משפטי / ציות | {{ שם }} | {{ טלפון }} | {{ דוא"ל }} | {{ SLA }} |
+| תמיכת ספק (אם רלוונטי) | {{ שם }} | {{ טלפון }} | {{ דוא"ל }} | {{ SLA }} |
 
-# 6. Attachments Checklist
+# 6. רשימת קבצים מצורפים- [ ] תמונת מצב של תצורה (Norito + JSON) עם hashes.
+- [ ] הוכחה למבנה דטרמיניסטי (hashes, SBOM, הערות לשחזור).
+- [ ] ייצוא לוח מחוונים של טלמטריה והגדרות התראות.
+- [ ] תוכנית תגובה לאירועים ומסמך מחזור כוננות.
+- [ ] אישור הכשרת מפעיל או קבלה של פנקס הפעלה.
+- [ ] הצהרת בקרת ייצוא המשקפת חפצים שנמסרו.
+- [ ] עותקים של הסכמים חוזיים רלוונטיים או ויתור על מדיניות.
 
-- [ ] Configuration snapshot (Norito + JSON) with hashes.
-- [ ] Proof of deterministic build (hashes, SBOM, reproducibility notes).
-- [ ] Telemetry dashboard exports and alert definitions.
-- [ ] Incident response plan and on-call rotation document.
-- [ ] Operator training acknowledgement or runbook receipt.
-- [ ] Export-control statement mirroring delivered artefacts.
-- [ ] Copies of relevant contractual agreements or policy waivers.
+# 7. הצהרת מפעיל
 
-# 7. Operator Declaration
+> אנו מאשרים שהפריסה הרשומה לעיל תואמת את הפרסומת של PRC
+> תקנות קריפטוגרפיה, ששירותים התומכים ב-SM פועלים לפי המתועד
+> מדיניות התגובה לאירועים וטלמטריה, וכי יהיו חפצי ביקורת
+> נשמר לשלוש שנים לפחות.
 
-> We confirm that the deployment listed above complies with PRC commercial
-> cryptography regulations, that SM-enabled services follow the documented
-> incident response and telemetry policies, and that audit artefacts will be
-> retained for at least three years.
-
-- Authorised signer: ________________________
-- Date: ________________________
-
+- חותם מורשה: __________________________
+- תאריך: __________________________

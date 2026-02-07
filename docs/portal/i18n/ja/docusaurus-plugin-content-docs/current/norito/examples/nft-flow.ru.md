@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: Выпустить, перевести и сжечь NFT
-description: Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+スラグ: /norito/examples/nft-flow
+タイトル: Выпустить、перевести и сжечь NFT
+説明: Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных иそうですね。
+ソース: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
+Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных иそうですね。
 
-## Пошаговый обход реестра
+## Полаговый обход рестра
 
-- Убедитесь, что определение NFT (например `n0#wonderland`) существует вместе с аккаунтами владельца/получателя, используемыми в сниппете (`ih58...`, `ih58...`).
-- Вызовите точку входа `nft_issue_and_transfer`, чтобы выпустить NFT, перевести его от Alice к Bob и прикрепить флаг метаданных, описывающий выпуск.
-- Проверьте состояние NFT-реестра через `iroha_cli ledger nfts list --account <id>` или эквиваленты SDK, чтобы подтвердить перевод, затем убедитесь, что актив удаляется после выполнения инструкции burn.
+- Убедитесь、что определение NFT (например `n0#wonderland`) существует вместе с аккаунтами владельца/получателя, (`ih58...`、`ih58...`) を参照してください。
+- Вызовите точку входа `nft_issue_and_transfer`、NFT のメッセージ、Alice と Bob のメッセージ、 описывающий выпуск。
+- NFT-рестра через `iroha_cli ledger nfts list --account <id>` または эквиваленты SDK、чтобы подтвердить перевод、затем убедитесь、燃えます。
 
 ## Связанные руководства SDK
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [クイックスタート Rust SDK](/sdks/rust)
+- [クイックスタート Python SDK](/sdks/python)
+- [クイックスタート JavaScript SDK](/sdks/javascript)
 
 [Скачать исходник Kotodama](/norito-snippets/nft-flow.ko)
 

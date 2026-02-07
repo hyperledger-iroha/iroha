@@ -7,42 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d04af2ad3ae5cc6a9254236f5627850aab7c6517308e9f3a09650cbc1490168
 source_last_modified: "2026-01-05T18:22:23.401292+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Connect Session Preview Runbook (IOS7 / JS4)
+# Session Preview Runbook (IOS7/JS4) ကို ချိတ်ဆက်ပါ
 
-This runbook documents the end-to-end procedure for staging, validating, and
-tearing down Connect preview sessions as required by roadmap milestones **IOS7**
-and **JS4** (`roadmap.md:1340`, `roadmap.md:1656`). Follow these steps whenever
-you demo the Connect strawman (`docs/source/connect_architecture_strawman.md`),
-exercise the queue/telemetry hooks promised in the SDK roadmaps, or collect
-evidence for `status.md`.
+ဤစာစုသည် အဆင့်လိုက်၊ မှန်ကန်ကြောင်းနှင့်၊
+လမ်းပြမြေပုံမှတ်တိုင်များ **IOS7** မှ လိုအပ်သည့်အတိုင်း Connect preview sessions များကို ဖြိုဖျက်ပါ
+နှင့် **JS4** (`roadmap.md:1340`၊ `roadmap.md:1656`)။ ဤအဆင့်များကို အချိန်တိုင်းလိုက်နာပါ။
+သင်သည် Connect strawman (`docs/source/connect_architecture_strawman.md`) ကိုသရုပ်ပြသည်။
+SDK လမ်းပြမြေပုံတွင် ကတိပြုထားသော တန်းစီခြင်း/ကြေးနန်းချိတ်များကို လေ့ကျင့်ပါ သို့မဟုတ် စုဆောင်းပါ။
+`status.md` အတွက် အထောက်အထား။
 
-## 1. Preflight Checklist
+## 1. Preflight စစ်ဆေးရန်စာရင်း
 
-| Item | Details | References |
+| ပစ္စည်း | အသေးစိတ် | ကိုးကား |
 |------|---------|------------|
-| Torii endpoint + Connect policy | Confirm the Torii base URL, `chain_id`, and Connect policy (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). Capture the JSON snapshot in the runbook ticket. | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
-| Fixture + bridge versions | Note the Norito fixture hash and bridge build you will use (Swift requires `NoritoBridge.xcframework`, JS requires `@iroha/iroha-js` ≥ the version that shipped `bootstrapConnectPreviewSession`). | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
-| Telemetry dashboards | Ensure the dashboards that chart `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, `swift.connect.session_event`, etc., are reachable (Grafana `Android/Swift Connect` board + exported Prometheus snapshots). | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
-| Evidence folders | Pick a destination such as `docs/source/status/swift_weekly_digest.md` (weekly digest) and `docs/source/sdk/swift/connect_risk_tracker.md` (risk tracker). Store logs, metrics screenshots, and acknowledgements under `docs/source/sdk/swift/readiness/archive/<date>/connect/`. | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
+| Torii အဆုံးမှတ် + ချိတ်ဆက်မှုမူဝါဒ | Torii အခြေခံ URL၊ `chain_id` နှင့် ချိတ်ဆက်မှုမူဝါဒ (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`) ကို အတည်ပြုပါ။ runbook လက်မှတ်တွင် JSON လျှပ်တစ်ပြက်ရိုက်ပါ။ | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
+| Fixture + တံတားဗားရှင်းများ | သင်အသုံးပြုမည့် Norito fixture hash and bridge build ကို သတိပြုပါ (Swift သည် `NoritoBridge.xcframework` လိုအပ်သည်၊ JS သည် `@iroha/iroha-js` ≥ `bootstrapConnectPreviewSession` လိုအပ်သည်)။ | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
+| Telemetry ဒက်ရှ်ဘုတ်များ | `connect.queue_depth`၊ `connect.queue_overflow_total`၊ `connect.resume_latency_ms`၊ `swift.connect.session_event` စသည်ဖြင့် လက်လှမ်းမီနိုင်သည် (Grafana Norito နှင့် ထုတ်ယူထားသော ဘုတ်ပြားများပါသည့် ဒက်ရှ်ဘုတ်များ Prometheus ဓာတ်ပုံများ)။ | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
+| ဖိုင်တွဲများ | `docs/source/status/swift_weekly_digest.md` (အပတ်စဉ်အကျဉ်းချုပ်) နှင့် `docs/source/sdk/swift/connect_risk_tracker.md` (risk tracker) ကဲ့သို့သော ဦးတည်ရာတစ်ခုကို ရွေးပါ။ `docs/source/sdk/swift/readiness/archive/<date>/connect/` အောက်တွင် မှတ်တမ်းများ၊ တိုင်းတာချက်များ ဖန်သားပြင်ဓာတ်ပုံများနှင့် အသိအမှတ်ပြုချက်များကို သိမ်းဆည်းပါ။ | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
 
-## 2. Bootstrap the Preview Session
+## 2. Preview Session ကို Bootstrap လုပ်ပါ။
 
-1. **Validate policy + quotas.** Call:
+1. **မူဝါဒ + ခွဲတမ်းကို အတည်ပြုပါ။** ခေါ်ဆိုရန်-
    ```js
    const status = await torii.getConnectStatus();
    console.log(status.policy.queue_max, status.policy.offline_timeout_ms);
    ```
-   Fail the run if `queue_max` or TTL differs from the config you planned to
-   test.
-2. **Generate deterministic SID/URIs.** The `@iroha/iroha-js`
-   `bootstrapConnectPreviewSession` helper ties SID/URI generation to Torii
-   session registration; use it even when Swift will drive the WebSocket layer.
+   `queue_max` သို့မဟုတ် TTL သည် သင်စီစဉ်ထားသည့် config နှင့် ကွဲပြားပါက လည်ပတ်မှု မအောင်မြင်ပါ။
+   စမ်းသပ်။
+2. **အဆုံးအဖြတ်ပေးသော SID/URI များကို ဖန်တီးပါ။** `@iroha/iroha-js`
+   `bootstrapConnectPreviewSession` အကူအညီပေးသူက SID/URI မျိုးဆက် Torii သို့ ချိတ်ဆက်သည်
+   session မှတ်ပုံတင်ခြင်း; Swift သည် WebSocket အလွှာကို မောင်းနှင်သည့်အခါတွင်ပင် ၎င်းကို အသုံးပြုပါ။
    ```js
    import {
      ToriiClient,
@@ -58,16 +59,14 @@ evidence for `status.md`.
    });
    console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
-   - Set `register: false` to dry-run QR/deep-link scenarios.
-   - Persist the returned `sidBase64Url`, deeplink URLs, and `tokens` blob in the
-     evidence folder; the governance review expects these artefacts.
-3. **Distribute secrets.** Share the deeplink URI with the wallet operator
-   (swift dApp sample, Android wallet, or QA harness). Never paste raw tokens
-   into chat; use the encrypted vault documented in the enablement packet.
+   - ခြောက်သွေ့သော QR/deep-link မြင်ကွင်းများဆီသို့ `register: false` ကို သတ်မှတ်ပါ။
+   - ပြန်ပေးထားသော `sidBase64Url`၊ deeplink URLs နှင့် `tokens` blob တို့ကို ဆက်ထားပါ
+     အထောက်အထားဖိုင်တွဲ; အုပ်ချုပ်မှုပြန်လည်သုံးသပ်ခြင်းသည် ဤအရာများကို မျှော်လင့်ပါသည်။
+3. **လျှို့ဝှက်ချက်များကို ဖြန့်ဝေပါ။** wallet operator နှင့် deeplink URI ကို မျှဝေပါ။
+   (လျင်မြန်သော dApp နမူနာ၊ Android ပိုက်ဆံအိတ် သို့မဟုတ် QA ကြိုး)။ တိုကင်အစိမ်းကို ဘယ်တော့မှ မထည့်ပါနဲ့။
+   စကားပြောခန်းထဲသို့; enablement packet တွင် မှတ်တမ်းတင်ထားသော ကုဒ်ဝှက်ထားသော တဲကို အသုံးပြုပါ။
 
-## 3. Drive the Session
-
-1. **Open the WebSocket.** Swift clients typically use:
+## 3. Session ကို မောင်းနှင်ပါ။1. **WebSocket ကိုဖွင့်ပါ။** Swift clients များသည် ပုံမှန်အားဖြင့်-
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
@@ -79,77 +78,75 @@ evidence for `status.md`.
    })
    try client.open()
    ```
-   Reference `docs/connect_swift_integration.md` for additional setup (bridge
-   imports, concurrency adapters).
-2. **Approve + sign flows.** DApps call `ConnectSession.requestSignature(...)`,
-   while wallets respond via `approveSession` / `reject`. Each approval must log
-   the hashed alias + permissions to match the Connect governance charter.
-3. **Exercise queue + resume paths.** Toggle network connectivity or suspend the
-   wallet to ensure the bounded queue and replay hooks log entries. JS/Android
-   SDKs emit `ConnectQueueError.overflow(limit)` /
-   `.expired(ttlMs)` when they drop frames; Swift should observe the same once
-   IOS7 queue scaffolding lands (`docs/source/connect_architecture_strawman.md`).
-   After you record at least one reconnect, run
+   ထပ်လောင်းထည့်သွင်းမှုအတွက် အကိုးအကား `docs/connect_swift_integration.md` (တံတား
+   တင်သွင်းမှုများ၊ တူညီသော အဒက်တာများ)။
+2. **Approve + sign flows.** DApps ခေါ်ဆိုမှု `ConnectSession.requestSignature(...)`၊
+   ပိုက်ဆံအိတ်များသည် `approveSession` / `reject` မှတစ်ဆင့် တုံ့ပြန်နေစဉ်။ အတည်ပြုချက်တစ်ခုစီတိုင်းတွင် မှတ်တမ်းရှိရမည်။
+   ချိတ်ဆက်အုပ်ချုပ်မှု ပဋိဉာဉ်နှင့် ကိုက်ညီရန် hashed alias + ခွင့်ပြုချက်များ။
+3. **လေ့ကျင့်ခန်းတန်းစီခြင်း + လမ်းကြောင်းများကို ပြန်လည်စတင်ပါ။** ကွန်ရက်ချိတ်ဆက်မှုကို ပြောင်းရန် သို့မဟုတ် ဆိုင်းငံ့ရန်
+   ကန့်သတ်ထားသော တန်းစီခြင်းကို သေချာစေရန် ပိုက်ဆံအိတ်နှင့် ချိတ်များ မှတ်တမ်းများကို ပြန်ဖွင့်ပါ။ JS/Android
+   SDK များသည် `ConnectQueueError.overflow(limit)` ကို ထုတ်လွှတ်သည် /
+   ဘောင်များချသောအခါ `.expired(ttlMs)`၊ Swift သည် တစ်ကြိမ်တည်းကို သတိပြုသင့်သည်။
+   IOS7 တန်းစီငြမ်းမြေများ (`docs/source/connect_architecture_strawman.md`)။
+   သင်သည် အနည်းဆုံး ပြန်လည်ချိတ်ဆက်မှုတစ်ခုကို မှတ်တမ်းတင်ပြီးနောက် လုပ်ဆောင်ပါ။
    ```bash
    iroha connect queue inspect --sid "$SID" --root ~/.iroha/connect --metrics
    ```
-   (or pass the export directory returned by `ConnectSessionDiagnostics`) and
-   attach the rendered table/JSON to the runbook ticket. The CLI reads the same
-   `state.json` / `metrics.ndjson` pair that `ConnectQueueStateTracker` produces,
-   so governance reviewers can trace drill evidence without bespoke tooling.
+   (သို့မဟုတ် `ConnectSessionDiagnostics` ဖြင့် ပြန်ပေးသော ပို့ကုန်လမ်းညွှန်ကို ကျော်ဖြတ်ပါ) နှင့်
+   ပြန်ဆိုထားသောဇယား/JSON ကို runbook လက်မှတ်တွင် ပူးတွဲပါ။ CLI က ဒီလိုပဲ ဖတ်တယ်။
+   `state.json` / `metrics.ndjson` အတွဲ `ConnectQueueStateTracker` ထုတ်လုပ်သည်၊
+   ထို့ကြောင့် အုပ်ချုပ်မှုပြန်လည်သုံးသပ်သူများသည် စိတ်ကြိုက်ကိရိယာမပါဘဲ တူးဖေါ်သောအထောက်အထားများကို ခြေရာခံနိုင်သည်။
 
 ## 4. Telemetry & Observability
 
-- **Metrics to capture:**
-  - `connect.queue_depth{direction}` gauge (should stay below policy cap).
-  - `connect.queue_dropped_total{reason="overflow|ttl"}` counter (non-zero only
-    during fault-injection).
-  - `connect.resume_latency_ms` histogram (record the p95 after forcing a
-    reconnect).
-  - `connect.replay_success_total` / `connect.replay_error_total`.
-  - Swift-specific `swift.connect.session_event` and
-    `swift.connect.frame_latency` exports (`docs/source/sdk/swift/telemetry_redaction.md`).
-- **Dashboards:** Update the Connect board bookmarks with annotation markers.
-  Attach screenshots (or JSON exports) to the evidence folder alongside the raw
-  OTLP/Prometheus snapshots pulled via the telemetry exporter CLI.
-- **Alerting:** If any Sev 1/2 thresholds trigger (per `docs/source/android_support_playbook.md` §5),
-  page the SDK Program Lead and document the PagerDuty incident ID in the runbook
-  ticket before continuing.
+- **ဖမ်းယူရန် မက်ထရစ်များ-**
+  - `connect.queue_depth{direction}` gauge (မူဝါဒထုပ်အောက်တွင်ရှိနေသင့်သည်)။
+  - `connect.queue_dropped_total{reason="overflow|ttl"}` ကောင်တာ (သုညမဟုတ်သော သီးသန့်
+    မှားယွင်းထိုးသွင်းနေစဉ်)။
+  - `connect.resume_latency_ms` histogram (အတင်းအကျပ်ခိုင်းပြီးနောက် p95 ကို မှတ်တမ်းတင်ပါ။
+    ပြန်လည်ချိတ်ဆက်ပါ။)
+  - `connect.replay_success_total`/`connect.replay_error_total`။
+  - Swift-တိကျသော `swift.connect.session_event` နှင့်
+    `swift.connect.frame_latency` တင်ပို့မှု (`docs/source/sdk/swift/telemetry_redaction.md`)။
+- **ဒိုင်ခွက်များ-** မှတ်ချက်အမှတ်အသားများဖြင့် ချိတ်ဆက်ဘုတ်ခ်များကို အပ်ဒိတ်လုပ်ပါ။
+  ဖန်သားပြင်ဓာတ်ပုံများ (သို့မဟုတ် JSON ထုတ်ယူမှုများ) ကို အကြမ်းထည်နှင့်အတူ အထောက်အထားဖိုင်တွဲတွင် ပူးတွဲပါ။
+  OTLP/Prometheus တယ်လီမီတာတင်ပို့သူ CLI မှတစ်ဆင့် ဆွဲယူထားသော လျှပ်တစ်ပြက်ဓာတ်ပုံများ။
+- **သတိပေးချက်-** မည်သည့် Sev1/2 သတ်မှတ်ချက်များ အစပျိုးပါက (`docs/source/android_support_playbook.md` §5)၊
+  SDK ပရိုဂရမ် ဦးဆောင်သည့် စာမျက်နှာတွင် PagerDuty အဖြစ်အပျက် ID ကို runbook တွင် မှတ်တမ်းတင်ပါ။
+  လက်မှတ်မဆက်မီ။
 
 ## 5. Cleanup & Rollback
 
-1. **Delete staged sessions.** Always delete preview sessions so queue depth
-   alarms remain meaningful:
+1. **အဆင့်သတ်မှတ်ထားသော ဆက်ရှင်များကို ဖျက်ပါ။** အကြိုကြည့်ရှုသည့် ဆက်ရှင်များကို အမြဲတမ်း ဖျက်ပါ ထို့ကြောင့် တန်းစီခြင်း၏ အနက်
+   နှိုးစက်များသည် အဓိပ္ပါယ်ရှိနေဆဲဖြစ်သည်-
    ```js
    await client.deleteConnectSession(preview.sidBase64Url);
    ```
-   For Swift-only test runs, call the same endpoint through the Rust/CLI helper.
-2. **Purge journals.** Remove any persisted queue journals
-   (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB stores, etc.) so the
-   next run starts clean. Record the file hash before deletion if you need to
-   debug a replay issue.
-3. **File incident notes.** Summarise the run in:
-   - `docs/source/status/swift_weekly_digest.md` (deltas block),
-   - `docs/source/sdk/swift/connect_risk_tracker.md` (clear or downgrade CR-2
-     once telemetry is in place),
-   - the JS SDK changelog or recipe if new behaviour was validated.
-4. **Escalate failures:**
-   - Queue overflow without injected faults ⇒ file a bug against the SDK whose
-     policy diverged from Torii.
-   - Resume errors ⇒ attach `connect.queue_depth` + `connect.resume_latency_ms`
-     snapshots to the incident report.
-   - Governance mismatches (tokens reused, TTL exceeded) ⇒ raise with the SDK
-     Program Lead and annotate `roadmap.md` during the next revision.
+   Swift-only test runs အတွက် Rust/CLI helper မှတဆင့် တူညီသော endpoint ကို ခေါ်ဆိုပါ။
+2. **ဂျာနယ်များကို ဖယ်ရှားပါ။** တန်းစီနေသော ဂျာနယ်များကို ဖယ်ရှားပါ။
+   (`ApplicationSupport/ConnectQueue/<sid>.to`၊ IndexedDB စတိုးဆိုင်များ စသည်ဖြင့်)
+   နောက်ပြေးတာက သန့်ရှင်းတယ်။ လိုအပ်ပါက မဖျက်မီ ဖိုင် hash ကို မှတ်တမ်းတင်ပါ။
+   ပြန်ဖွင့်သည့် ပြဿနာကို အမှားရှာပါ။
+3. ** ဖိုင်ဖြစ်ရပ်မှတ်စုများ။** လည်ပတ်မှုကို အကျဉ်းချုပ်ဖော်ပြပါ-
+   - `docs/source/status/swift_weekly_digest.md` (မြစ်ဝကျွန်းပေါ်ရပ်ကွက်)၊
+   - `docs/source/sdk/swift/connect_risk_tracker.md` (CR-2 ကို ရှင်းပါ သို့မဟုတ် အဆင့်နှိမ့်ချပါ။
+     တယ်လီမီတာ တခါတည်း ၊
+   - အမူအကျင့်အသစ်ကိုအတည်ပြုပါက JS SDK ပြောင်းလဲမှုမှတ်တမ်း သို့မဟုတ် စာရွက်။
+4. **မအောင်မြင်မှုများကို တိုးမြင့်စေသည်-**
+   - ထိုးသွင်းအမှားအယွင်းမရှိဘဲ တန်းစီပြည့်လျှံနေသော ⇒ ချွတ်ယွင်းချက်တစ်ခုကို SDK တွင်တင်ပါ။
+     မူဝါဒသည် Torii မှ ကွဲပြားသည်။
+   - အမှားများကို ပြန်လည်စတင်ရန် ⇒ `connect.queue_depth` + `connect.resume_latency_ms` ပူးတွဲပါ
+     ဖြစ်စဉ်မှတ်တမ်းဓာတ်ပုံများ။
+   - အုပ်ချုပ်မှုမတူညီမှုများ (တိုကင်များကို ပြန်သုံးသည်၊ TTL ကျော်လွန်သွားသည်) ⇒ SDK ဖြင့် မြှင့်တင်ခြင်း
+     ပရိုဂရမ်ကို ဦးဆောင်ပြီး `roadmap.md` ကို နောက်တစ်ကြိမ် ပြင်ဆင်မှုအတွင်း မှတ်သားပါ။
 
-## 6. Evidence Checklist
-
-| Artefact | Location |
+## 6. အထောက်အထားစစ်ဆေးမှုစာရင်း| Artefact | တည်နေရာ |
 |----------|----------|
 | SID/deeplink/tokens JSON | `docs/source/sdk/swift/readiness/archive/<date>/connect/session.json` |
-| Dashboard exports (`connect.queue_depth`, etc.) | `.../metrics/` subfolder |
-| PagerDuty / incident IDs | `.../notes.md` |
-| Cleanup confirmation (Torii delete, journal wipe) | `.../cleanup.log` |
+| ဒက်ရှ်ဘုတ် တင်ပို့မှု (`connect.queue_depth`, etc.) | `.../metrics/` ဖိုင်တွဲခွဲ |
+| PagerDuty / အဖြစ်အပျက် IDs | `.../notes.md` |
+| ရှင်းလင်းချက်အတည်ပြုချက် (Torii ဖျက်ရန်၊ ဂျာနယ်ရှင်းလင်းခြင်း) | `.../cleanup.log` |
 
-Completing this checklist satisfies the “docs/runbooks updated” exit criterion
-for IOS7/JS4 and gives governance reviewers a deterministic trail for every
-Connect preview session.
+ဤစစ်ဆေးစာရင်းကို ဖြည့်သွင်းခြင်းသည် “docs/runbooks အပ်ဒိတ်လုပ်ထားသော” ထွက်ပေါက်သတ်မှတ်ချက်ကို ကျေနပ်စေသည်။
+IOS7/JS4 အတွက် အုပ်ချုပ်မှုပြန်လည်သုံးသပ်သူများကို လူတိုင်းအတွက် အဆုံးအဖြတ်ပေးသည့်လမ်းကြောင်းကို ပေးသည်။
+အစမ်းကြည့်ရှုခြင်းကဏ္ဍကို ချိတ်ဆက်ပါ။

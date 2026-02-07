@@ -9,27 +9,28 @@ source_last_modified: "2025-12-29T18:16:35.174056+00:00"
 translation_last_reviewed: 2026-02-07
 title: SNS metrics & onboarding kit
 description: Dashboard, pricing, and automation artifacts referenced by roadmap item SN-8.
+translator: machine-google-reviewed
 ---
 
-# SNS Metrics & Onboarding Kit
+# SNS ko'rsatkichlari va ishga tushirish to'plami
 
-Roadmap item **SN-8** bundles two promises:
+Yo‘l xaritasi **SN-8** bandi ikkita va’dani birlashtiradi:
 
-1. Publish dashboards that expose registrations, renewals, ARPU, disputes, and
-   freeze windows for `.sora`, `.nexus`, and `.dao`.
-2. Ship an onboarding kit so registrars and stewards can wire DNS, pricing, and
-   APIs consistently before any suffix goes live.
+1. Roʻyxatga olishlar, yangilanishlar, ARPU, nizolarni va
+   `.sora`, `.nexus` va `.dao` uchun oynalarni muzlatish.
+2. Roʻyxatga oluvchilar va styuardlar DNS, narxlar va maʼlumotlarni ulashlari uchun bortga joylashtirish toʻplamini yuboring.
+   APIlar har qanday qo'shimcha jonli efirga o'tishdan oldin.
 
-This page mirrors the source version
+Bu sahifa manba versiyasini aks ettiradi
 [`docs/source/sns/onboarding_kit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/onboarding_kit.md)
-so external reviewers can follow the same procedure.
+shuning uchun tashqi sharhlovchilar xuddi shu tartibni bajarishlari mumkin.
 
-## 1. Metric bundle
+## 1. Metrik to'plam
 
-### Grafana dashboard & portal embed
+### Grafana asboblar paneli va portalni o'rnatish
 
-- Import `dashboards/grafana/sns_suffix_analytics.json` into Grafana (or another
-  analytics host) via the standard API:
+- `dashboards/grafana/sns_suffix_analytics.json`ni Grafana (yoki boshqa) ga import qiling
+  analytics host) standart API orqali:
 
 ```bash
 curl -H "Content-Type: application/json" \
@@ -38,31 +39,31 @@ curl -H "Content-Type: application/json" \
      --data-binary @dashboards/grafana/sns_suffix_analytics.json
 ```
 
-- The same JSON powers this portal page’s iframe (see **SNS KPI Dashboard**).
-  Whenever you bump the dashboard, run
-  `npm run build && npm run serve-verified-preview` inside `docs/portal` to
-  confirm both Grafana and the embed stay in sync.
+- Xuddi shu JSON ushbu portal sahifasining iframe-ga quvvat beradi (qarang: **SNS KPI asboblar paneli**).
+  Har safar asboblar paneliga urilganda yuguring
+  `npm run build && npm run serve-verified-preview` `docs/portal` ichida
+  ikkala Grafana va o'rnatish sinxronlanganligini tasdiqlang.
 
-### Panels & evidence
+### Panellar va dalillar
 
-| Panel | Metrics | Governance evidence |
+| Panel | Ko'rsatkichlar | Boshqaruv dalillari |
 |-------|---------|---------------------|
-| Registrations & renewals | `sns_registrar_status_total` (success + renewal resolver labels) | Per-suffix throughput + SLA tracking. |
-| ARPU / net units | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | Finance can match registrar manifests to revenue. |
-| Disputes & freezes | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | Shows active freezes, arbitration cadence, and guardian workload. |
-| SLA/error rates | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | Highlights API regressions before they impact customers. |
-| Bulk manifest tracker | `sns_bulk_release_manifest_total`, payment metrics with `manifest_id` labels | Connects CSV drops to settlement tickets. |
+| Ro'yxatga olish va yangilash | `sns_registrar_status_total` (muvaffaqiyat + yangilash hal qiluvchi yorliqlari) | Har bir qo'shimchaning o'tkazish qobiliyati + SLA kuzatuvi. |
+| ARPU / aniq birliklar | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | Moliya ro'yxatga oluvchi manifestlari bilan daromadga mos kelishi mumkin. |
+| Munozaralar va muzlatishlar | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | Faol muzlatishlar, arbitraj ritmi va vasiyning ish yukini ko'rsatadi. |
+| SLA/xato stavkalari | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | Mijozlarga ta'sir qilishdan oldin API regressiyalarini ta'kidlaydi. |
+| Ommaviy manifest kuzatuvchisi | `sns_bulk_release_manifest_total`, `manifest_id` yorliqlari bilan toʻlov koʻrsatkichlari | CSV tomchilarini hisob-kitob chiptalariga ulaydi. |
 
-Export a PDF/CSV from Grafana (or the embedded iframe) during the monthly KPI
-review and attach it to the relevant annex entry under
-`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Stewards also capture the SHA-256
-of the exported bundle under `docs/source/sns/reports/` (for example,
-`steward_scorecard_2026q1.md`) so audits can replay the evidence path.
+Oylik KPI davomida Grafana (yoki o'rnatilgan iframe) dan PDF/CSVni eksport qiling
+ko'rib chiqing va tegishli ilova yozuviga ilova qiling
+`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Styuardlar SHA-256 ni ham qo'lga olishadi
+`docs/source/sns/reports/` ostida eksport qilingan to'plamning (masalan,
+`steward_scorecard_2026q1.md`) shuning uchun auditlar dalillar yo'lini takrorlashi mumkin.
 
-### Annex automation
+### Ilovani avtomatlashtirish
 
-Generate annex files directly from the dashboard export so reviewers get a
-consistent digest:
+Qo'shimcha fayllarni to'g'ridan-to'g'ri boshqaruv paneli eksportidan yarating, shunda sharhlovchilar bir
+izchil hazm qilish:
 
 ```bash
 cargo xtask sns-annex \
@@ -75,77 +76,77 @@ cargo xtask sns-annex \
   --portal-entry docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md
 ```
 
-- The helper hashes the export, captures the UID/tags/panel count, and writes a
-  Markdown annex under `docs/source/sns/reports/.<suffix>/<cycle>.md` (see the
-  `.sora/2026-03` sample committed alongside this doc).
-- `--dashboard-artifact` copies the export into
-  `artifacts/sns/regulatory/<suffix>/<cycle>/` so the annex references the
-  canonical evidence path; use `--dashboard-label` only when you need to point
-  at an out-of-band archive.
-- `--regulatory-entry` points at the governing memo. The helper inserts (or
-  replaces) a `KPI Dashboard Annex` block that records the annex path, dashboard
-  artefact, digest, and timestamp so evidence stays in sync after re-runs.
-- `--portal-entry` keeps the Docusaurus copy (`docs/portal/docs/sns/regulatory/*.md`)
-  aligned so reviewers do not have to diff separate annex summaries manually.
-- If you skip `--regulatory-entry`/`--portal-entry`, attach the generated file to
-  the memos manually and still upload the PDF/CSV snapshots captured from Grafana.
-- For recurring exports, list the suffix/cycle pairs in
-  `docs/source/sns/regulatory/annex_jobs.json` and run
-  `python3 scripts/run_sns_annex_jobs.py --verbose`. The helper walks every entry,
-  copies the dashboard export (defaulting to `dashboards/grafana/sns_suffix_analytics.json`
-  when unspecified), and refreshes the annex block inside each regulatory (and,
-  when available, portal) memo in one pass.
-- Run `python3 scripts/check_sns_annex_schedule.py --jobs docs/source/sns/regulatory/annex_jobs.json --regulatory-root docs/source/sns/regulatory --report-root docs/source/sns/reports` (or `make check-sns-annex`) to prove the job list stays sorted/deduped, each memo carries the matching `sns-annex` marker, and the annex stub exists. The helper writes `artifacts/sns/annex_schedule_summary.json` beside the locale/hash summaries used in governance packets.
-This removes manual copy/paste steps and keeps SN-8 annex evidence consistent while
-guarding schedule, marker, and localization drift in CI.
+- Yordamchi eksportni xeshlaydi, UID/teglar/panellar sonini oladi va yozadi
+  `docs/source/sns/reports/.<suffix>/<cycle>.md` ostida Markdown ilovasi (qarang
+  Ushbu hujjat bilan birga tuzilgan `.sora/2026-03` namunasi).
+- `--dashboard-artifact` eksportni ko'chiradi
+  `artifacts/sns/regulatory/<suffix>/<cycle>/` shuning uchun ilovada havola qilingan
+  kanonik dalillar yo'li; faqat ishora qilish kerak bo'lganda `--dashboard-label` dan foydalaning
+  tarmoqdan tashqari arxivda.
+- `--regulatory-entry` boshqaruv eslatmasiga ishora qiladi. Yordamchi qo'shimchalar (yoki
+  o'rnini bosadi) ilova yo'lini, asboblar panelini qayd qiluvchi `KPI Dashboard Annex` bloki
+  artefakt, dayjest va vaqt tamg'asi, shuning uchun dalillar qayta ishlagandan keyin sinxron bo'lib qoladi.
+- `--portal-entry` Docusaurus nusxasini saqlaydi (`docs/portal/docs/sns/regulatory/*.md`)
+  ko'rib chiquvchilar alohida ilova xulosalarini qo'lda farqlashlari shart bo'lmasligi uchun tekislangan.
+- Agar siz `--regulatory-entry`/`--portal-entry` ni o'tkazib yuborsangiz, yaratilgan faylni ilovaga biriktiring.
+  eslatmalarni qo'lda va hali ham Grafana dan olingan PDF/CSV snapshotlarini yuklang.
+- Takroriy eksport uchun qo'shimchalar/sikl juftlarini ro'yxatlang
+  `docs/source/sns/regulatory/annex_jobs.json` va ishga tushiring
+  `python3 scripts/run_sns_annex_jobs.py --verbose`. Yordamchi har bir kirishda yuradi,
+  asboblar paneli eksportidan nusxa ko'chiradi (standart `dashboards/grafana/sns_suffix_analytics.json`
+  aniqlanmagan bo'lsa) va har bir me'yoriy hujjat ichidagi ilova blokini yangilaydi (va,
+  mavjud bo'lganda, portal) bir o'tishda eslatma.
+- Ish ro'yxati tartiblangan/deduced bo'lib qolishi, har bir eslatma mos keladigan `sns-annex` belgisi va ilova stubkasi mavjudligini isbotlash uchun `python3 scripts/check_sns_annex_schedule.py --jobs docs/source/sns/regulatory/annex_jobs.json --regulatory-root docs/source/sns/regulatory --report-root docs/source/sns/reports` (yoki `make check-sns-annex`) ni ishga tushiring. Yordamchi boshqaruv paketlarida ishlatiladigan mahalliy til/xesh xulosalari yoniga `artifacts/sns/annex_schedule_summary.json` ni yozadi.
+Bu qo'lda nusxa ko'chirish/joylashtirish bosqichlarini olib tashlaydi va SN-8 ilova dalillarini doimiy ravishda saqlaydi
+CIda qo'riqlash jadvali, marker va lokalizatsiya drifti.
 
-## 2. Onboarding kit components
+## 2. O'rnatish to'plami komponentlari
 
-### Suffix wiring
+### Suffiks simlari
 
-- Registry schema + selector rules:
+- Ro'yxatga olish kitobi sxemasi + selektor qoidalari:
   [`docs/source/sns/registry_schema.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registry_schema.md)
-  and [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md).
-- DNS skeleton helper:
+  va [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md).
+- DNS skeleti yordamchisi:
   [`scripts/sns_zonefile_skeleton.py`](https://github.com/hyperledger-iroha/iroha/blob/master/scripts/sns_zonefile_skeleton.py)
-  with the rehearsal flow captured in the
-  [gateway/DNS runbook](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_owner_runbook.md).
-- For every registrar launch, file a short note under
-  `docs/source/sns/reports/` summarising selector samples, GAR proofs, and DNS hashes.
+  da olingan repetisiya oqimi bilan
+  [shlyuz/DNS runbook](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_owner_runbook.md).
+- Har bir registrator ishga tushirilishi uchun ostida qisqa eslatma yozing
+  `docs/source/sns/reports/` selektor namunalarini, GAR dalillarini va DNS xeshlarini umumlashtiradi.
 
-### Pricing cheatsheet
+### Narxlar jadvali
 
-| Label length | Base fee (USD equiv) |
-|--------------|---------------------|
+| Yorliq uzunligi | Asosiy to'lov (AQSh dollari ekviv) |
+|-------------|--------------------|
 | 3 | $240 |
 | 4 | $90 |
 | 5 | $30 |
 | 6–9 | $12 |
 | 10+ | $8 |
 
-Suffix coefficients: `.sora` = 1.0×, `.nexus` = 0.8×, `.dao` = 1.3×.  
-Term multipliers: 2‑year −5 %, 5‑year −12 %; grace window = 30 days, redemption
-= 60 days (20 % fee, min $5, max $200). Record negotiated deviations in the
-registrar ticket.
+Suffiks koeffitsientlari: `.sora` = 1,0×, `.nexus` = 0,8×, `.dao` = 1,3×.  
+Muddat ko'paytiruvchilar: 2‑yil −5%, 5‑yil −12%; inoyat oynasi = 30 kun, sotib olish
+= 60 kun (20% to'lov, min $5, maksimal $200). Muzokara qilingan og'ishlarni qayd qiling
+registrator chiptasi.
 
-### Premium auctions vs renewals
+### Premium auktsionlar va yangilanishlar
 
-1. **Premium pool** — sealed-bid commit/reveal (SN-3). Track bids with
-   `sns_premium_commit_total`, and publish the manifest under
+1. **Premium pul ** — muhrlangan taklifni topshirish/oshkor qilish (SN-3). Takliflarni kuzatib boring
+   `sns_premium_commit_total` va manifestni ostida nashr eting
    `docs/source/sns/reports/`.
-2. **Dutch reopen** — after grace + redemption expire, start a 7‑day Dutch sale
-   at 10× that decays 15 % per day. Label manifests with `manifest_id` so the
-   dashboard can surface progress.
-3. **Renewals** — monitor `sns_registrar_status_total{resolver="renewal"}` and
-   capture the autorenew checklist (notifications, SLA, fallback payment rails)
-   inside the registrar ticket.
+2. **Gollandiya qayta ochiladi** — imtiyoz + sotib olish muddati tugagandan so‘ng, 7 kunlik Gollandiya savdosini boshlang
+   10 × da, bu kuniga 15% ni yemiradi. Yorliq `manifest_id` bilan namoyon bo'ladi, shuning uchun
+   asboblar paneli yuzaki siljishi mumkin.
+3. **Yangilanishlar** — monitor `sns_registrar_status_total{resolver="renewal"}` va
+   avtoyangilash nazorat ro'yxatini yozib oling (bildirishnomalar, SLA, zaxira to'lov relslari)
+   registrator chiptasi ichida.
 
-### Developer APIs & automation
+### Ishlab chiquvchilar uchun API va avtomatlashtirish
 
-- API contracts: [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md).
-- Bulk helper & CSV schema:
+- API shartnomalari: [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md).
+- Ommaviy yordamchi va CSV sxemasi:
   [`docs/source/sns/bulk_onboarding_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/bulk_onboarding_toolkit.md).
-- Example command:
+- Misol buyruq:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -155,27 +156,27 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --submit-token-file ~/.config/sora/tokens/registrar.token
 ```
 
-Include the manifest ID (`--submission-log` output) in the KPI dashboard filter
-so finance can reconcile revenue panels per release.
+Manifest identifikatorini (`--submission-log` chiqishi) KPI asboblar paneli filtriga kiriting
+shuning uchun moliya har bir reliz uchun daromad panellarini moslashtirishi mumkin.
 
-### Evidence bundle
+### Dalillar to'plami
 
-1. Registrar ticket with contacts, suffix scope, and payment rails.
-2. DNS/resolver evidence (zonefile skeletons + GAR proofs).
-3. Pricing worksheet + any overrides approved by governance.
-4. API/CLI smoke-test artefacts (`curl` samples, CLI transcripts).
-5. KPI dashboard screenshot + CSV export, attached to the monthly annex.
+1. Kontaktlar, qo'shimchalar doirasi va to'lov relslari bilan registrator chiptasi.
+2. DNS/resolver dalillari (zonaviy fayl skeletlari + GAR dalillari).
+3. Narxlar ish varag'i + boshqaruv tomonidan tasdiqlangan har qanday bekor qilish.
+4. API/CLI tutun sinovi artefaktlari (`curl` namunalari, CLI transkriptlari).
+5. KPI asboblar paneli skrinshoti + CSV eksporti, oylik ilovaga biriktirilgan.
 
-## 3. Launch checklist
+## 3. Tekshirish ro'yxatini ishga tushirish
 
-| Step | Owner | Artefact |
+| Qadam | Egasi | Artefakt |
 |------|-------|----------|
-| Dashboard imported | Product Analytics | Grafana API response + dashboard UID |
-| Portal embed validated | Docs/DevRel | `npm run build` logs + preview screenshot |
-| DNS rehearsal complete | Networking/Ops | `sns_zonefile_skeleton.py` outputs + runbook log |
-| Registrar automation dry run | Registrar Eng | `sns_bulk_onboard.py` submissions log |
-| Governance evidence filed | Governance Council | Annex link + SHA-256 of exported dashboard |
+| Boshqaruv paneli import qilindi | Mahsulot tahlili | Grafana API javob + asboblar paneli UID |
+| Portal kiritilishi tasdiqlandi | Docs/DevRel | `npm run build` jurnallari + oldindan ko'rish skrinshoti |
+| DNS repetisiyasi tugallandi | Tarmoq/Ops | `sns_zonefile_skeleton.py` chiqishlari + runbook jurnali |
+| Registrator avtomatlashtirish quruq ish | Registrator Eng | `sns_bulk_onboard.py` yuborishlar jurnali |
+| Boshqaruv dalillari topshirildi | Boshqaruv Kengashi | Eksport qilingan asboblar panelining ilova havolasi + SHA-256 |
 
-Complete the checklist before activating a registrar or suffix. The signed
-bundle clears the SN-8 roadmap gate and gives auditors a single reference when
-reviewing marketplace launches.
+Ro'yxatga oluvchi yoki qo'shimchani faollashtirishdan oldin nazorat ro'yxatini to'ldiring. Imzolangan
+bundle SN-8 yo'l xaritasi eshigini tozalaydi va auditorlarga qachon bitta ma'lumot beradi
+bozorni ishga tushirishni ko'rib chiqish.
